@@ -10,7 +10,6 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::permissions::ReadDenyMatcher;
 use codex_protocol::protocol::NetworkAccess;
-use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_preserving_symlinks;
@@ -535,26 +534,6 @@ pub fn effective_file_system_sandbox_policy(
     }
 }
 
-fn merge_read_only_access_with_additional_reads(
-    read_only_access: &ReadOnlyAccess,
-    extra_reads: Vec<AbsolutePathBuf>,
-) -> ReadOnlyAccess {
-    match read_only_access {
-        ReadOnlyAccess::FullAccess => ReadOnlyAccess::FullAccess,
-        ReadOnlyAccess::Restricted {
-            include_platform_defaults,
-            readable_roots,
-        } => {
-            let mut merged = readable_roots.clone();
-            merged.extend(extra_reads);
-            ReadOnlyAccess::Restricted {
-                include_platform_defaults: *include_platform_defaults,
-                readable_roots: dedup_absolute_paths(merged),
-            }
-        }
-    }
-}
-
 fn merge_network_access(
     base_network_access: bool,
     additional_permissions: &AdditionalPermissionProfile,
@@ -590,7 +569,7 @@ fn sandbox_policy_with_additional_permissions(
         return sandbox_policy.clone();
     }
 
-    let (extra_reads, extra_writes) = additional_permission_roots(additional_permissions);
+    let (_extra_reads, extra_writes) = additional_permission_roots(additional_permissions);
 
     match sandbox_policy {
         SandboxPolicy::DangerFullAccess => SandboxPolicy::DangerFullAccess,
@@ -606,7 +585,6 @@ fn sandbox_policy_with_additional_permissions(
         },
         SandboxPolicy::WorkspaceWrite {
             writable_roots,
-            read_only_access,
             network_access,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
@@ -615,22 +593,14 @@ fn sandbox_policy_with_additional_permissions(
             merged_writes.extend(extra_writes);
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: dedup_absolute_paths(merged_writes),
-                read_only_access: merge_read_only_access_with_additional_reads(
-                    read_only_access,
-                    extra_reads,
-                ),
                 network_access: merge_network_access(*network_access, additional_permissions),
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
             }
         }
-        SandboxPolicy::ReadOnly {
-            access,
-            network_access,
-        } => {
+        SandboxPolicy::ReadOnly { network_access } => {
             if extra_writes.is_empty() {
                 SandboxPolicy::ReadOnly {
-                    access: merge_read_only_access_with_additional_reads(access, extra_reads),
                     network_access: merge_network_access(*network_access, additional_permissions),
                 }
             } else {
@@ -639,10 +609,6 @@ fn sandbox_policy_with_additional_permissions(
                 // UnderDevelopment, it's a useful approximation of the desired behavior.
                 SandboxPolicy::WorkspaceWrite {
                     writable_roots: dedup_absolute_paths(extra_writes),
-                    read_only_access: merge_read_only_access_with_additional_reads(
-                        access,
-                        extra_reads,
-                    ),
                     network_access: merge_network_access(*network_access, additional_permissions),
                     exclude_tmpdir_env_var: false,
                     exclude_slash_tmp: false,

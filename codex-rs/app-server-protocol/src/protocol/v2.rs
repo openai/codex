@@ -83,7 +83,6 @@ use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitReachedType as CoreRateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
-use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
@@ -806,10 +805,6 @@ pub struct AppsConfig {
 }
 
 const fn default_enabled() -> bool {
-    true
-}
-
-const fn default_include_platform_defaults() -> bool {
     true
 }
 
@@ -1720,54 +1715,7 @@ pub enum NetworkAccess {
     Enabled,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[ts(tag = "type")]
-#[ts(export_to = "v2/")]
-pub enum ReadOnlyAccess {
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    Restricted {
-        #[serde(default = "default_include_platform_defaults")]
-        include_platform_defaults: bool,
-        #[serde(default)]
-        readable_roots: Vec<AbsolutePathBuf>,
-    },
-    #[default]
-    FullAccess,
-}
-
-impl ReadOnlyAccess {
-    pub fn to_core(&self) -> CoreReadOnlyAccess {
-        match self {
-            ReadOnlyAccess::Restricted {
-                include_platform_defaults,
-                readable_roots,
-            } => CoreReadOnlyAccess::Restricted {
-                include_platform_defaults: *include_platform_defaults,
-                readable_roots: readable_roots.clone(),
-            },
-            ReadOnlyAccess::FullAccess => CoreReadOnlyAccess::FullAccess,
-        }
-    }
-}
-
-impl From<CoreReadOnlyAccess> for ReadOnlyAccess {
-    fn from(value: CoreReadOnlyAccess) -> Self {
-        match value {
-            CoreReadOnlyAccess::Restricted {
-                include_platform_defaults,
-                readable_roots,
-            } => ReadOnlyAccess::Restricted {
-                include_platform_defaults,
-                readable_roots,
-            },
-            CoreReadOnlyAccess::FullAccess => ReadOnlyAccess::FullAccess,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
@@ -1776,8 +1724,6 @@ pub enum SandboxPolicy {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ReadOnly {
-        #[serde(default)]
-        access: ReadOnlyAccess,
         #[serde(default)]
         network_access: bool,
     },
@@ -1793,7 +1739,36 @@ pub enum SandboxPolicy {
         #[serde(default)]
         writable_roots: Vec<AbsolutePathBuf>,
         #[serde(default)]
-        read_only_access: ReadOnlyAccess,
+        network_access: bool,
+        #[serde(default)]
+        exclude_tmpdir_env_var: bool,
+        #[serde(default)]
+        exclude_slash_tmp: bool,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum SandboxPolicyDeserialize {
+    DangerFullAccess,
+    #[serde(rename_all = "camelCase")]
+    ReadOnly {
+        #[serde(default)]
+        network_access: bool,
+        #[serde(default)]
+        access: Option<LegacyReadOnlyAccess>,
+    },
+    #[serde(rename_all = "camelCase")]
+    ExternalSandbox {
+        #[serde(default)]
+        network_access: NetworkAccess,
+    },
+    #[serde(rename_all = "camelCase")]
+    WorkspaceWrite {
+        #[serde(default)]
+        writable_roots: Vec<AbsolutePathBuf>,
+        #[serde(default)]
+        read_only_access: Option<LegacyReadOnlyAccess>,
         #[serde(default)]
         network_access: bool,
         #[serde(default)]
@@ -1803,19 +1778,68 @@ pub enum SandboxPolicy {
     },
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum LegacyReadOnlyAccess {
+    FullAccess,
+    Restricted,
+}
+
+impl<'de> Deserialize<'de> for SandboxPolicy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match SandboxPolicyDeserialize::deserialize(deserializer)? {
+            SandboxPolicyDeserialize::DangerFullAccess => Ok(SandboxPolicy::DangerFullAccess),
+            SandboxPolicyDeserialize::ReadOnly {
+                network_access,
+                access,
+            } => {
+                if matches!(access, Some(LegacyReadOnlyAccess::Restricted)) {
+                    return Err(serde::de::Error::custom(
+                        "readOnly.access is no longer supported; use permissionProfile for restricted reads",
+                    ));
+                }
+                Ok(SandboxPolicy::ReadOnly { network_access })
+            }
+            SandboxPolicyDeserialize::ExternalSandbox { network_access } => {
+                Ok(SandboxPolicy::ExternalSandbox { network_access })
+            }
+            SandboxPolicyDeserialize::WorkspaceWrite {
+                writable_roots,
+                read_only_access,
+                network_access,
+                exclude_tmpdir_env_var,
+                exclude_slash_tmp,
+            } => {
+                if matches!(read_only_access, Some(LegacyReadOnlyAccess::Restricted)) {
+                    return Err(serde::de::Error::custom(
+                        "workspaceWrite.readOnlyAccess is no longer supported; use permissionProfile for restricted reads",
+                    ));
+                }
+                Ok(SandboxPolicy::WorkspaceWrite {
+                    writable_roots,
+                    network_access,
+                    exclude_tmpdir_env_var,
+                    exclude_slash_tmp,
+                })
+            }
+        }
+    }
+}
+
 impl SandboxPolicy {
     pub fn to_core(&self) -> codex_protocol::protocol::SandboxPolicy {
         match self {
             SandboxPolicy::DangerFullAccess => {
                 codex_protocol::protocol::SandboxPolicy::DangerFullAccess
             }
-            SandboxPolicy::ReadOnly {
-                access,
-                network_access,
-            } => codex_protocol::protocol::SandboxPolicy::ReadOnly {
-                access: access.to_core(),
-                network_access: *network_access,
-            },
+            SandboxPolicy::ReadOnly { network_access } => {
+                codex_protocol::protocol::SandboxPolicy::ReadOnly {
+                    network_access: *network_access,
+                }
+            }
             SandboxPolicy::ExternalSandbox { network_access } => {
                 codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
                     network_access: match network_access {
@@ -1826,13 +1850,11 @@ impl SandboxPolicy {
             }
             SandboxPolicy::WorkspaceWrite {
                 writable_roots,
-                read_only_access,
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: writable_roots.clone(),
-                read_only_access: read_only_access.to_core(),
                 network_access: *network_access,
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
@@ -1847,13 +1869,9 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
             codex_protocol::protocol::SandboxPolicy::DangerFullAccess => {
                 SandboxPolicy::DangerFullAccess
             }
-            codex_protocol::protocol::SandboxPolicy::ReadOnly {
-                access,
-                network_access,
-            } => SandboxPolicy::ReadOnly {
-                access: ReadOnlyAccess::from(access),
-                network_access,
-            },
+            codex_protocol::protocol::SandboxPolicy::ReadOnly { network_access } => {
+                SandboxPolicy::ReadOnly { network_access }
+            }
             codex_protocol::protocol::SandboxPolicy::ExternalSandbox { network_access } => {
                 SandboxPolicy::ExternalSandbox {
                     network_access: match network_access {
@@ -1864,13 +1882,11 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
             }
             codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots,
-                read_only_access,
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => SandboxPolicy::WorkspaceWrite {
                 writable_roots,
-                read_only_access: ReadOnlyAccess::from(read_only_access),
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
@@ -7692,7 +7708,6 @@ mod tests {
     use codex_protocol::items::WebSearchItem;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
     use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
-    use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
     use codex_protocol::user_input::UserInput as CoreUserInput;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
@@ -8898,13 +8913,8 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_policy_round_trips_read_only_access() {
-        let readable_root = test_absolute_path();
+    fn sandbox_policy_round_trips_read_only_network_access() {
         let v2_policy = SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: false,
-                readable_roots: vec![readable_root.clone()],
-            },
             network_access: true,
         };
 
@@ -8912,10 +8922,6 @@ mod tests {
         assert_eq!(
             core_policy,
             codex_protocol::protocol::SandboxPolicy::ReadOnly {
-                access: CoreReadOnlyAccess::Restricted {
-                    include_platform_defaults: false,
-                    readable_roots: vec![readable_root],
-                },
                 network_access: true,
             }
         );
@@ -9539,14 +9545,9 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_policy_round_trips_workspace_write_read_only_access() {
-        let readable_root = test_absolute_path();
+    fn sandbox_policy_round_trips_workspace_write_access() {
         let v2_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
-            read_only_access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: false,
-                readable_roots: vec![readable_root.clone()],
-            },
             network_access: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -9557,10 +9558,6 @@ mod tests {
             core_policy,
             codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
-                read_only_access: CoreReadOnlyAccess::Restricted {
-                    include_platform_defaults: false,
-                    readable_roots: vec![readable_root],
-                },
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -9572,40 +9569,78 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_policy_deserializes_legacy_read_only_without_access_field() {
-        let policy: SandboxPolicy = serde_json::from_value(json!({
-            "type": "readOnly"
+    fn sandbox_policy_deserializes_legacy_read_only_full_access_field() {
+        let policy = serde_json::from_value::<SandboxPolicy>(json!({
+            "type": "readOnly",
+            "access": {
+                "type": "fullAccess"
+            },
+            "networkAccess": true
         }))
-        .expect("read-only policy should deserialize");
+        .expect("read-only policy should ignore legacy fullAccess field");
         assert_eq!(
             policy,
             SandboxPolicy::ReadOnly {
-                access: ReadOnlyAccess::FullAccess,
-                network_access: false,
+                network_access: true
             }
         );
     }
 
     #[test]
-    fn sandbox_policy_deserializes_legacy_workspace_write_without_read_only_access_field() {
-        let policy: SandboxPolicy = serde_json::from_value(json!({
+    fn sandbox_policy_deserializes_legacy_workspace_write_full_access_field() {
+        let writable_root = absolute_path("/workspace");
+        let policy = serde_json::from_value::<SandboxPolicy>(json!({
+            "type": "workspaceWrite",
+            "writableRoots": [writable_root],
+            "readOnlyAccess": {
+                "type": "fullAccess"
+            },
+            "networkAccess": true,
+            "excludeTmpdirEnvVar": true,
+            "excludeSlashTmp": true
+        }))
+        .expect("workspace-write policy should ignore legacy fullAccess field");
+        assert_eq!(
+            policy,
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![absolute_path("/workspace")],
+                network_access: true,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            }
+        );
+    }
+
+    #[test]
+    fn sandbox_policy_rejects_legacy_read_only_restricted_access_field() {
+        let err = serde_json::from_value::<SandboxPolicy>(json!({
+            "type": "readOnly",
+            "access": {
+                "type": "restricted",
+                "includePlatformDefaults": false,
+                "readableRoots": []
+            }
+        }))
+        .expect_err("read-only policy should reject removed restricted access field");
+        assert!(err.to_string().contains("readOnly.access"));
+    }
+
+    #[test]
+    fn sandbox_policy_rejects_legacy_workspace_write_restricted_read_access_field() {
+        let err = serde_json::from_value::<SandboxPolicy>(json!({
             "type": "workspaceWrite",
             "writableRoots": [],
+            "readOnlyAccess": {
+                "type": "restricted",
+                "includePlatformDefaults": false,
+                "readableRoots": []
+            },
             "networkAccess": false,
             "excludeTmpdirEnvVar": false,
             "excludeSlashTmp": false
         }))
-        .expect("workspace-write policy should deserialize");
-        assert_eq!(
-            policy,
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![],
-                read_only_access: ReadOnlyAccess::FullAccess,
-                network_access: false,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            }
-        );
+        .expect_err("workspace-write policy should reject removed restricted readOnlyAccess field");
+        assert!(err.to_string().contains("workspaceWrite.readOnlyAccess"));
     }
 
     #[test]

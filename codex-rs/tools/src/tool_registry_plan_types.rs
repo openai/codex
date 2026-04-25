@@ -19,8 +19,6 @@ pub enum ToolHandlerKind {
     DynamicTool,
     FollowupTaskV2,
     Goal,
-    JsRepl,
-    JsReplReset,
     ListAgentsV2,
     ListDir,
     Mcp,

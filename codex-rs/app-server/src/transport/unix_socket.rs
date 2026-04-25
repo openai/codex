@@ -11,8 +11,7 @@ use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::tungstenite::protocol::Role;
+use tokio_tungstenite::accept_async;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
@@ -76,8 +75,13 @@ async fn run_control_socket_acceptor(
 
         let transport_event_tx = transport_event_tx.clone();
         tokio::spawn(async move {
-            let websocket_stream =
-                WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
+            let websocket_stream = match accept_async(stream).await {
+                Ok(websocket_stream) => websocket_stream,
+                Err(err) => {
+                    warn!("failed to upgrade control socket websocket connection: {err}");
+                    return;
+                }
+            };
             let (websocket_writer, websocket_reader) = websocket_stream.split();
             run_websocket_connection(websocket_writer, websocket_reader, transport_event_tx).await;
         });

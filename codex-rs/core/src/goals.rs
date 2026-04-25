@@ -8,6 +8,7 @@ use crate::StateDbHandle;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
+use crate::state::TurnState;
 use crate::tasks::RegularTask;
 use anyhow::Context;
 use codex_features::Feature;
@@ -21,7 +22,9 @@ use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadGoalUpdatedEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::validate_thread_goal_objective;
 use codex_rollout::state_db::reconcile_rollout;
+use codex_thread_store::LocalThreadStore;
 use codex_utils_template::Template;
 use futures::future::BoxFuture;
 use std::sync::Arc;
@@ -348,9 +351,7 @@ impl Session {
             anyhow::bail!("goals feature is disabled");
         }
 
-        let Some(state_db) = self.state_db_for_thread_goals().await? else {
-            return Ok(None);
-        };
+        let state_db = self.require_state_db_for_thread_goals().await?;
         state_db
             .get_thread_goal(self.conversation_id)
             .await
@@ -375,9 +376,9 @@ impl Session {
         let state_db = self.require_state_db_for_thread_goals().await?;
         let objective = objective.map(|objective| objective.trim().to_string());
         if let Some(objective) = objective.as_deref()
-            && objective.is_empty()
+            && let Err(err) = validate_thread_goal_objective(objective)
         {
-            anyhow::bail!("goal objective must not be empty");
+            anyhow::bail!("{err}");
         }
 
         self.account_thread_goal_wall_clock_usage(
@@ -498,9 +499,7 @@ impl Session {
         } = request;
         validate_goal_budget(token_budget)?;
         let objective = objective.trim();
-        if objective.is_empty() {
-            anyhow::bail!("goal objective must not be empty");
-        }
+        validate_thread_goal_objective(objective).map_err(anyhow::Error::msg)?;
 
         let state_db = self.require_state_db_for_thread_goals().await?;
         self.account_thread_goal_wall_clock_usage(
@@ -733,6 +732,16 @@ impl Session {
             true
         } else {
             false
+        }
+    }
+
+    async fn clear_reserved_goal_continuation_turn(&self, turn_state: &Arc<Mutex<TurnState>>) {
+        let mut active_turn_guard = self.active_turn.lock().await;
+        if let Some(active_turn) = active_turn_guard.as_ref()
+            && active_turn.tasks.is_empty()
+            && Arc::ptr_eq(&active_turn.turn_state, turn_state)
+        {
+            *active_turn_guard = None;
         }
     }
 
@@ -1181,13 +1190,8 @@ impl Session {
             }
         };
         if !goal_is_current {
-            let mut active_turn_guard = self.active_turn.lock().await;
-            if let Some(active_turn) = active_turn_guard.as_ref()
-                && active_turn.tasks.is_empty()
-                && Arc::ptr_eq(&active_turn.turn_state, &turn_state)
-            {
-                *active_turn_guard = None;
-            }
+            self.clear_reserved_goal_continuation_turn(&turn_state)
+                .await;
             return;
         }
         {
@@ -1200,9 +1204,20 @@ impl Session {
         let turn_context = self
             .new_default_turn_with_sub_id(uuid::Uuid::new_v4().to_string())
             .await;
-        self.mark_thread_goal_continuation_turn_started(turn_context.sub_id.clone())
-            .await;
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+            .await;
+        let still_reserved = {
+            let active_turn = self.active_turn.lock().await;
+            active_turn.as_ref().is_some_and(|active_turn| {
+                active_turn.tasks.is_empty() && Arc::ptr_eq(&active_turn.turn_state, &turn_state)
+            })
+        };
+        if !still_reserved {
+            self.clear_reserved_goal_continuation_turn(&turn_state)
+                .await;
+            return;
+        }
+        self.mark_thread_goal_continuation_turn_started(turn_context.sub_id.clone())
             .await;
         self.start_task(turn_context, Vec::new(), RegularTask::new())
             .await;
@@ -1304,13 +1319,19 @@ impl Session {
             state_db
         } else if let Some(state_db) = self.goal_runtime.state_db.lock().await.clone() {
             state_db
+        } else if let Some(local_store) = self
+            .services
+            .thread_store
+            .as_any()
+            .downcast_ref::<LocalThreadStore>()
+        {
+            local_store.state_db().await.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "thread goals require a local persisted thread with a state database"
+                )
+            })?
         } else {
-            codex_state::StateRuntime::init(
-                config.sqlite_home.clone(),
-                config.model_provider_id.clone(),
-            )
-            .await
-            .context("failed to initialize sqlite state db for thread goals")?
+            anyhow::bail!("thread goals require a local persisted thread with a state database");
         };
 
         let thread_metadata_present = state_db

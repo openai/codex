@@ -429,10 +429,10 @@ impl PermissionProfile {
         }
     }
 
-    pub fn from_legacy_sandbox_policy(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Self {
+    pub fn from_legacy_sandbox_policy(sandbox_policy: &SandboxPolicy) -> Self {
         Self::from_runtime_permissions_with_enforcement(
             SandboxEnforcement::from_legacy_sandbox_policy(sandbox_policy),
-            &FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, cwd),
+            &FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy),
             NetworkSandboxPolicy::from(sandbox_policy),
         )
     }
@@ -1765,10 +1765,8 @@ mod tests {
     #[test]
     fn permission_profile_round_trip_preserves_disabled_sandbox() -> Result<()> {
         let cwd = tempdir()?;
-        let permission_profile = PermissionProfile::from_legacy_sandbox_policy(
-            &SandboxPolicy::DangerFullAccess,
-            cwd.path(),
-        );
+        let permission_profile =
+            PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::DangerFullAccess);
 
         assert_eq!(permission_profile, PermissionProfile::Disabled);
         assert_eq!(
@@ -1839,8 +1837,7 @@ mod tests {
         let sandbox_policy = SandboxPolicy::ExternalSandbox {
             network_access: crate::protocol::NetworkAccess::Restricted,
         };
-        let permission_profile =
-            PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy, cwd.path());
+        let permission_profile = PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy);
 
         assert_eq!(
             permission_profile,

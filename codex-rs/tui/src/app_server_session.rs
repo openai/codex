@@ -1602,10 +1602,9 @@ mod tests {
 
     #[test]
     fn turn_start_permission_overrides_send_profiles_only_for_embedded_runtime_overrides() {
-        let cwd = test_path_buf("/tmp/project");
         let workspace_write = SandboxPolicy::new_workspace_write_policy();
         let workspace_write_profile =
-            PermissionProfile::from_legacy_sandbox_policy(&workspace_write, &cwd);
+            PermissionProfile::from_legacy_sandbox_policy(&workspace_write);
 
         let (sandbox, profile) = turn_start_permission_overrides(
             ThreadParamsMode::Embedded,
@@ -1628,7 +1627,6 @@ mod tests {
             workspace_write.clone(),
             Some(PermissionProfile::from_legacy_sandbox_policy(
                 &workspace_write,
-                &cwd,
             )),
         );
         assert_eq!(sandbox, Some(workspace_write.into()));
@@ -1642,13 +1640,12 @@ mod tests {
             external_sandbox.clone(),
             Some(PermissionProfile::from_legacy_sandbox_policy(
                 &external_sandbox,
-                &cwd,
             )),
         );
         assert_eq!(sandbox, None);
         assert_eq!(
             profile,
-            Some(PermissionProfile::from_legacy_sandbox_policy(&external_sandbox, &cwd).into())
+            Some(PermissionProfile::from_legacy_sandbox_policy(&external_sandbox).into())
         );
     }
 
@@ -1733,7 +1730,6 @@ mod tests {
             permission_profile: Some(
                 codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
                     &codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
-                    &test_path_buf("/tmp/project"),
                 )
                 .into(),
             ),
@@ -1782,7 +1778,6 @@ mod tests {
             SandboxPolicy::new_read_only_policy(),
             Some(PermissionProfile::from_legacy_sandbox_policy(
                 &SandboxPolicy::new_read_only_policy(),
-                std::path::Path::new("/tmp/project"),
             )),
             test_path_buf("/tmp/project").abs(),
             Vec::new(),
@@ -1816,7 +1811,6 @@ mod tests {
             SandboxPolicy::new_read_only_policy(),
             Some(PermissionProfile::from_legacy_sandbox_policy(
                 &SandboxPolicy::new_read_only_policy(),
-                std::path::Path::new("/tmp/project"),
             )),
             test_path_buf("/tmp/project").abs(),
             Vec::new(),

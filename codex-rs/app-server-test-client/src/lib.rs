@@ -48,7 +48,6 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
-use codex_app_server_protocol::ReadOnlyAccess;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
@@ -743,7 +742,6 @@ async fn trigger_zsh_fork_multi_cmd_approval(
             };
             turn_params.approval_policy = Some(AskForApproval::OnRequest);
             turn_params.sandbox_policy = Some(SandboxPolicy::ReadOnly {
-                access: ReadOnlyAccess::FullAccess,
                 network_access: false,
             });
 
@@ -885,7 +883,6 @@ async fn trigger_cmd_approval(
             experimental_api: true,
             approval_policy: Some(AskForApproval::OnRequest),
             sandbox_policy: Some(SandboxPolicy::ReadOnly {
-                access: ReadOnlyAccess::FullAccess,
                 network_access: false,
             }),
             dynamic_tools,
@@ -912,7 +909,6 @@ async fn trigger_patch_approval(
             experimental_api: true,
             approval_policy: Some(AskForApproval::OnRequest),
             sandbox_policy: Some(SandboxPolicy::ReadOnly {
-                access: ReadOnlyAccess::FullAccess,
                 network_access: false,
             }),
             dynamic_tools,

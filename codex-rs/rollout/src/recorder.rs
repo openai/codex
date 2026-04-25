@@ -913,7 +913,7 @@ impl RolloutRecorder {
         Ok(InitialHistory::Resumed(ResumedHistory {
             conversation_id,
             history: items,
-            rollout_path: path.to_path_buf(),
+            rollout_path: Some(path.to_path_buf()),
         }))
     }
 

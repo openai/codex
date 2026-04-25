@@ -14,7 +14,6 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::NetworkAccess;
-use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize;
@@ -767,10 +766,6 @@ fn read_only_additional_permissions_can_enable_network_without_writes() {
     .expect("absolute temp dir");
     let policy = sandbox_policy_with_additional_permissions(
         &SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: true,
-                readable_roots: vec![path.clone()],
-            },
             network_access: false,
         },
         &PermissionProfile {
@@ -778,7 +773,7 @@ fn read_only_additional_permissions_can_enable_network_without_writes() {
                 enabled: Some(true),
             }),
             file_system: Some(FileSystemPermissions::from_read_write_roots(
-                Some(vec![path.clone()]),
+                Some(vec![path]),
                 Some(Vec::new()),
             )),
         },
@@ -787,10 +782,6 @@ fn read_only_additional_permissions_can_enable_network_without_writes() {
     assert_eq!(
         policy,
         SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: true,
-                readable_roots: vec![path],
-            },
             network_access: true,
         }
     );

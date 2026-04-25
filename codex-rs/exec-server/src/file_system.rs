@@ -1,10 +1,12 @@
 use async_trait::async_trait;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
@@ -57,8 +59,13 @@ pub struct FileSystemSandboxContext {
 
 impl FileSystemSandboxContext {
     pub fn from_legacy_sandbox_policy(sandbox_policy: SandboxPolicy, cwd: AbsolutePathBuf) -> Self {
-        let permissions =
-            PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy, cwd.as_path());
+        let file_system_sandbox_policy =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, &cwd);
+        let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+            &file_system_sandbox_policy,
+            NetworkSandboxPolicy::from(&sandbox_policy),
+        );
         Self::from_permission_profile_with_cwd(permissions, cwd)
     }
 

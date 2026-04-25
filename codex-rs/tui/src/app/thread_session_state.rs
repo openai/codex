@@ -172,9 +172,14 @@ mod tests {
             codex_config::Constrained::allow_any(AskForApproval::OnRequest);
         app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
         let expected_sandbox_policy = SandboxPolicy::new_workspace_write_policy();
-        let expected_permission_profile = PermissionProfile::from_legacy_sandbox_policy(
-            &expected_sandbox_policy,
-            &main_session.cwd,
+        let expected_file_system_policy =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+                &expected_sandbox_policy,
+                &main_session.cwd,
+            );
+        let expected_permission_profile = PermissionProfile::from_runtime_permissions(
+            &expected_file_system_policy,
+            NetworkSandboxPolicy::from(&expected_sandbox_policy),
         );
         app.chat_widget.handle_thread_session(main_session.clone());
         app.chat_widget
