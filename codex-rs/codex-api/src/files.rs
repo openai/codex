@@ -110,11 +110,16 @@ struct CreateFileResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 struct DownloadLinkResponse {
+    #[serde(default = "download_link_success_status")]
     status: String,
     download_url: Option<String>,
     file_name: Option<String>,
     mime_type: Option<String>,
     error_message: Option<String>,
+}
+
+fn download_link_success_status() -> String {
+    "success".to_string()
 }
 
 #[derive(Deserialize)]
@@ -792,6 +797,35 @@ mod tests {
             }
         ));
         assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn get_openai_file_download_info_defaults_missing_status_to_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/backend-api/files/file_123/download"))
+            .and(header("authorization", "Bearer token"))
+            .and(header("chatgpt-account-id", "account_id"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "download_url": format!("{}/download/file_123", server.uri()),
+                "file_name": "hello.txt",
+                "mime_type": "text/plain",
+            })))
+            .mount(&server)
+            .await;
+
+        let info = get_openai_file_download_info(&base_url_for(&server), &chatgpt_auth(), "file_123")
+            .await
+            .expect("download info should resolve");
+
+        assert_eq!(
+            info,
+            OpenAiFileDownloadInfo {
+                download_url: format!("{}/download/file_123", server.uri()),
+                file_name: Some("hello.txt".to_string()),
+                mime_type: Some("text/plain".to_string()),
+            }
+        );
     }
 
     #[tokio::test]
