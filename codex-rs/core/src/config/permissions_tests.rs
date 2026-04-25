@@ -30,6 +30,18 @@ fn normalize_absolute_path_for_platform_simplifies_windows_verbatim_paths() {
     assert_eq!(parsed, PathBuf::from(r"D:\c\x\worktrees\2508\swift-base"));
 }
 
+#[test]
+fn windows_verbatim_path_prefix_does_not_count_as_glob_syntax() {
+    assert!(!contains_glob_chars_for_platform(
+        r"\\?\D:\c\x\worktrees\2508\swift-base",
+        /*is_windows*/ true,
+    ));
+    assert!(contains_glob_chars_for_platform(
+        r"\\?\D:\c\x\worktrees\2508\**\*.env",
+        /*is_windows*/ true,
+    ));
+}
+
 #[tokio::test]
 async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Result<()> {
     let temp_dir = TempDir::new()?;

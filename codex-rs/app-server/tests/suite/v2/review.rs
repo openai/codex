@@ -261,6 +261,7 @@ async fn review_start_rejects_empty_base_branch() -> Result<()> {
 
 #[cfg_attr(target_os = "windows", ignore = "flaky on windows CI")]
 #[tokio::test]
+#[cfg_attr(windows, ignore = "temporary CI isolation for #19606 Windows hang")]
 async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<()> {
     let review_payload = json!({
         "findings": [],
