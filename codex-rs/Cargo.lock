@@ -2405,7 +2405,6 @@ dependencies = [
  "codex-utils-string",
  "codex-utils-template",
  "codex-windows-sandbox",
- "core-foundation 0.9.4",
  "core_test_support",
  "csv",
  "ctor 0.6.3",
@@ -2456,7 +2455,6 @@ dependencies = [
  "walkdir",
  "which 8.0.0",
  "whoami",
- "windows-sys 0.52.0",
  "wiremock",
  "zstd 0.13.3",
 ]
@@ -2787,7 +2785,6 @@ version = "0.0.0"
 dependencies = [
  "cc",
  "clap",
- "codex-config",
  "codex-core",
  "codex-protocol",
  "codex-sandboxing",
