@@ -1,4 +1,3 @@
-use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use codex_api::download_openai_file;
 use codex_login::CodexAuth;
@@ -51,25 +50,6 @@ fn should_materialize_codex_apps_file_download(
 }
 
 pub(crate) async fn maybe_materialize_codex_apps_file_download_result(
-    sess: &Session,
-    turn_context: &TurnContext,
-    server: &str,
-    codex_apps_meta: Option<&JsonMap<String, JsonValue>>,
-    result: CallToolResult,
-) -> CallToolResult {
-    let auth = sess.services.auth_manager.auth().await;
-    maybe_materialize_codex_apps_file_download_result_with_auth(
-        turn_context,
-        &sess.conversation_id.to_string(),
-        auth.as_ref(),
-        server,
-        codex_apps_meta,
-        result,
-    )
-    .await
-}
-
-async fn maybe_materialize_codex_apps_file_download_result_with_auth(
     turn_context: &TurnContext,
     session_id: &str,
     auth: Option<&CodexAuth>,
@@ -302,7 +282,7 @@ mod tests {
             meta: None,
         };
 
-        let result = maybe_materialize_codex_apps_file_download_result_with_auth(
+        let result = maybe_materialize_codex_apps_file_download_result(
             &turn_context,
             "session-1",
             Some(&CodexAuth::create_dummy_chatgpt_auth_for_testing()),
