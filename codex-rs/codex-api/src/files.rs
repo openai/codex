@@ -128,7 +128,10 @@ pub async fn download_openai_file(
     auth: &impl AuthProvider,
     download_url: &str,
 ) -> Result<Vec<u8>, OpenAiFileError> {
-    let resolved_url = resolve_openai_file_download_url(base_url, download_url)?;
+    let resolved_url = Url::parse(download_url).map_err(|source| OpenAiFileError::InvalidUrl {
+        url: download_url.to_string(),
+        source,
+    })?;
     let request_builder = if should_attach_auth_to_openai_file_url(&resolved_url, base_url) {
         authorized_request(auth, reqwest::Method::GET, resolved_url.as_str())
     } else {
@@ -456,36 +459,6 @@ async fn response_bytes(
             source,
         })?;
     Ok(bytes.to_vec())
-}
-
-fn resolve_openai_file_download_url(
-    base_url: &str,
-    download_url: &str,
-) -> Result<Url, OpenAiFileError> {
-    match Url::parse(download_url) {
-        Ok(url) => Ok(url),
-        Err(url::ParseError::RelativeUrlWithoutBase) => {
-            let normalized_base_url = if base_url.ends_with('/') {
-                base_url.to_string()
-            } else {
-                format!("{base_url}/")
-            };
-            let base =
-                Url::parse(&normalized_base_url).map_err(|source| OpenAiFileError::InvalidUrl {
-                    url: normalized_base_url.clone(),
-                    source,
-                })?;
-            base.join(download_url)
-                .map_err(|source| OpenAiFileError::InvalidUrl {
-                    url: download_url.to_string(),
-                    source,
-                })
-        }
-        Err(source) => Err(OpenAiFileError::InvalidUrl {
-            url: download_url.to_string(),
-            source,
-        }),
-    }
 }
 
 fn should_attach_auth_to_openai_file_url(download_url: &Url, base_url: &str) -> bool {
