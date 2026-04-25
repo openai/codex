@@ -6,6 +6,7 @@ small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::path_utils;
+use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::tools::sandboxing::ToolError;
 #[cfg(target_os = "macos")]
@@ -41,6 +42,29 @@ pub(crate) fn build_sandbox_command(
         env: env.clone(),
         additional_permissions,
     })
+}
+
+pub(crate) fn exec_env_for_sandbox_permissions(
+    env: &HashMap<String, String>,
+    sandbox_permissions: SandboxPermissions,
+) -> HashMap<String, String> {
+    let mut env = env.clone();
+    if sandbox_permissions.requires_escalated_permissions()
+        && env.contains_key(PROXY_ACTIVE_ENV_KEY)
+    {
+        for key in PROXY_ENV_KEYS {
+            env.remove(*key);
+        }
+        // Only macOS injects a Codex-owned SSH wrapper for the managed SOCKS proxy.
+        #[cfg(target_os = "macos")]
+        if env
+            .get(PROXY_GIT_SSH_COMMAND_ENV_KEY)
+            .is_some_and(|command| command.starts_with(CODEX_PROXY_GIT_SSH_COMMAND_MARKER))
+        {
+            env.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
+        }
+    }
+    env
 }
 
 /// POSIX-only helper: for commands produced by `Shell::derive_exec_args`

@@ -14,10 +14,12 @@ use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::tools::runtimes::build_sandbox_command;
+use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
+use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::MatchOptions;
@@ -113,18 +115,19 @@ pub(super) async fn try_run_zsh_fork(
         return Ok(None);
     }
 
-    let command = build_sandbox_command(
-        command,
-        &req.cwd,
-        &req.env,
-        req.additional_permissions.clone(),
-    )?;
+    let env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
+    let command =
+        build_sandbox_command(command, &req.cwd, &env, req.additional_permissions.clone())?;
     let options = ExecOptions {
         expiration: req.timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
     };
     let sandbox_exec_request = attempt
-        .env_for(command, options, req.network.as_ref())
+        .env_for(
+            command,
+            options,
+            managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions),
+        )
         .map_err(|err| ToolError::Codex(err.into()))?;
     let crate::sandboxing::ExecRequest {
         command,
