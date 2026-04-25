@@ -13,12 +13,12 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookSource;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
@@ -62,7 +62,8 @@ pub struct TurnResolvedConfigFact {
     pub session_source: SessionSource,
     pub model: String,
     pub model_provider: String,
-    pub sandbox_policy: SandboxPolicy,
+    pub permission_profile: PermissionProfile,
+    pub permission_profile_cwd: PathBuf,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub reasoning_summary: Option<ReasoningSummary>,
     pub service_tier: Option<ServiceTier>,
