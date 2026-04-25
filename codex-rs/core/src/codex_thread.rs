@@ -278,7 +278,6 @@ impl CodexThread {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText { text: message }],
-            end_turn: None,
             phase: None,
         };
         let pending_item = match pending_message_input_item(&message) {

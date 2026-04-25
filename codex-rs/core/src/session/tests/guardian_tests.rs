@@ -571,7 +571,6 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
                 content: vec![ContentItem::InputText {
                     text: "stale developer message".to_string(),
                 }],
-                end_turn: None,
                 phase: None,
             },
             ResponseItem::Message {
@@ -580,7 +579,6 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
                 content: vec![ContentItem::InputText {
                     text: "summary".to_string(),
                 }],
-                end_turn: None,
                 phase: None,
             },
         ],

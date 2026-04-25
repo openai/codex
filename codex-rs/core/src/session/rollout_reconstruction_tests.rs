@@ -19,7 +19,6 @@ fn user_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
-        end_turn: None,
         phase: None,
     }
 }
@@ -31,7 +30,6 @@ fn assistant_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
-        end_turn: None,
         phase: None,
     }
 }
@@ -50,7 +48,6 @@ fn inter_agent_assistant_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: serde_json::to_string(&communication).unwrap(),
         }],
-        end_turn: None,
         phase: None,
     }
 }

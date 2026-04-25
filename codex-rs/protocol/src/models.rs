@@ -690,10 +690,6 @@ pub enum ResponseItem {
         id: Option<String>,
         role: String,
         content: Vec<ContentItem>,
-        // Do not use directly, no available consistently across all providers.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        end_turn: Option<bool>,
         // Optional output-message phase (for example: "commentary", "final_answer").
         // Availability varies by provider/model, so downstream consumers must
         // preserve fallback behavior when this is absent.
@@ -1047,7 +1043,6 @@ impl From<ResponseInputItem> for ResponseItem {
                 role,
                 content,
                 id: None,
-                end_turn: None,
                 phase: None,
             },
             ResponseInputItem::FunctionCallOutput { call_id, output } => {

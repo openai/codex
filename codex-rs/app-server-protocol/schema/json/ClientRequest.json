@@ -2292,12 +2292,6 @@
               },
               "type": "array"
             },
-            "end_turn": {
-              "type": [
-                "boolean",
-                "null"
-              ]
-            },
             "id": {
               "type": [
                 "string",

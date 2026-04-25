@@ -1605,7 +1605,6 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
                     id: None,
                     role: "user".to_string(),
                     content: vec![ContentItem::InputText { text: user_turn }],
-                    end_turn: None,
                     phase: None,
                 }),
                 RolloutItem::ResponseItem(ResponseItem::Message {
@@ -1614,7 +1613,6 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
                     content: vec![ContentItem::OutputText {
                         text: assistant_turn,
                     }],
-                    end_turn: None,
                     phase: None,
                 }),
             ]
