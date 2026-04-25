@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::CodexThread;
@@ -51,7 +52,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
-use test_case::test_case;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
@@ -578,16 +578,6 @@ enum ScenarioGroup {
     WorkspaceWrite,
     ApplyPatch,
     UnifiedExec,
-}
-
-impl ScenarioGroup {
-    const ALL: &'static [Self] = &[
-        Self::DangerFullAccess,
-        Self::ReadOnly,
-        Self::WorkspaceWrite,
-        Self::ApplyPatch,
-        Self::UnifiedExec,
-    ];
 }
 
 struct CommandResult {
@@ -1680,38 +1670,29 @@ fn scenarios() -> Vec<ScenarioSpec> {
     ]
 }
 
-macro_rules! approval_matrix_group_tests {
-    ($(($group:ident, $case_name:literal)),+ $(,)?) => {
-        const TESTED_SCENARIO_GROUPS: &[ScenarioGroup] = &[$(ScenarioGroup::$group),+];
-
-        $(#[test_case(ScenarioGroup::$group ; $case_name)])+
-        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        async fn approval_matrix_covers_group(group: ScenarioGroup) -> Result<()> {
-            run_scenario_group(group).await
-        }
-    };
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_matrix_covers_danger_full_access_modes() -> Result<()> {
+    run_scenario_group(ScenarioGroup::DangerFullAccess).await
 }
 
-approval_matrix_group_tests! {
-    (DangerFullAccess, "danger_full_access"),
-    (ReadOnly, "read_only"),
-    (WorkspaceWrite, "workspace_write"),
-    (ApplyPatch, "apply_patch"),
-    (UnifiedExec, "unified_exec"),
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_matrix_covers_read_only_modes() -> Result<()> {
+    run_scenario_group(ScenarioGroup::ReadOnly).await
 }
 
-#[test]
-fn approval_matrix_group_tests_cover_all_groups() {
-    assert_eq!(TESTED_SCENARIO_GROUPS, ScenarioGroup::ALL);
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_matrix_covers_workspace_write_modes() -> Result<()> {
+    run_scenario_group(ScenarioGroup::WorkspaceWrite).await
+}
 
-    for group in ScenarioGroup::ALL {
-        assert!(
-            scenarios()
-                .iter()
-                .any(|scenario| scenario_group(scenario) == *group),
-            "expected at least one approval scenario for {group:?}",
-        );
-    }
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_matrix_covers_apply_patch_modes() -> Result<()> {
+    run_scenario_group(ScenarioGroup::ApplyPatch).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_matrix_covers_unified_exec_modes() -> Result<()> {
+    run_scenario_group(ScenarioGroup::UnifiedExec).await
 }
 
 async fn run_scenario_group(group: ScenarioGroup) -> Result<()> {
@@ -1724,7 +1705,9 @@ async fn run_scenario_group(group: ScenarioGroup) -> Result<()> {
     assert!(!scenarios.is_empty(), "expected scenarios for {group:?}");
 
     for scenario in scenarios {
-        run_scenario(&scenario).await?;
+        run_scenario(&scenario)
+            .await
+            .with_context(|| format!("approval scenario failed: {}", scenario.name))?;
     }
 
     Ok(())
