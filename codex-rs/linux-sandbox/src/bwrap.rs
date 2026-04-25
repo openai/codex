@@ -1779,7 +1779,7 @@ mod tests {
             NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH,
         )
         .expect("bwrap fs args");
-        assert_eq!(args.preserved_files.len(), 1);
+        assert!(args.preserved_files.is_empty());
         assert_eq!(
             synthetic_mount_target_paths(&args),
             vec![
@@ -1791,7 +1791,6 @@ mod tests {
                 PathBuf::from("/dev/.codex"),
             ]
         );
-        let null_fd = args.preserved_files[0].as_raw_fd().to_string();
         assert_eq!(
             args.args,
             vec![
@@ -1806,11 +1805,14 @@ mod tests {
                 "--bind".to_string(),
                 "/".to_string(),
                 "/".to_string(),
-                // Mask the default preserved .codex subpath under that writable
+                // Mask the default preserved paths under that writable
                 // root. Because the root is `/` in this test, the carveout path
                 // appears as `/.codex`, `/.agents`, and `/.git`.
-                "--ro-bind-data".to_string(),
-                null_fd.clone(),
+                "--perms".to_string(),
+                "555".to_string(),
+                "--tmpfs".to_string(),
+                "/.git".to_string(),
+                "--remount-ro".to_string(),
                 "/.git".to_string(),
                 "--perms".to_string(),
                 "555".to_string(),
@@ -1829,8 +1831,11 @@ mod tests {
                 "--bind".to_string(),
                 "/dev".to_string(),
                 "/dev".to_string(),
-                "--ro-bind-data".to_string(),
-                null_fd,
+                "--perms".to_string(),
+                "555".to_string(),
+                "--tmpfs".to_string(),
+                "/dev/.git".to_string(),
+                "--remount-ro".to_string(),
                 "/dev/.git".to_string(),
                 "--perms".to_string(),
                 "555".to_string(),
