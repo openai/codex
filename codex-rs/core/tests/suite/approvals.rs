@@ -571,6 +571,25 @@ struct ScenarioSpec {
     expectation: Expectation,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ScenarioGroup {
+    DangerFullAccess,
+    ReadOnly,
+    WorkspaceWrite,
+    ApplyPatch,
+    UnifiedExec,
+}
+
+impl ScenarioGroup {
+    const ALL: &'static [Self] = &[
+        Self::DangerFullAccess,
+        Self::ReadOnly,
+        Self::WorkspaceWrite,
+        Self::ApplyPatch,
+        Self::UnifiedExec,
+    ];
+}
+
 struct CommandResult {
     exit_code: Option<i64>,
     stdout: String,
@@ -1661,63 +1680,72 @@ fn scenarios() -> Vec<ScenarioSpec> {
     ]
 }
 
-#[test_case("danger_full_access_on_request_allows_outside_write" ; "danger_full_access_on_request_allows_outside_write")]
-#[test_case("danger_full_access_on_request_allows_outside_write_gpt_5_1_no_exit" ; "danger_full_access_on_request_allows_outside_write_gpt_5_1_no_exit")]
-#[test_case("danger_full_access_on_request_allows_network" ; "danger_full_access_on_request_allows_network")]
-#[test_case("danger_full_access_on_request_allows_network_gpt_5_1_no_exit" ; "danger_full_access_on_request_allows_network_gpt_5_1_no_exit")]
-#[test_case("trusted_command_unless_trusted_runs_without_prompt" ; "trusted_command_unless_trusted_runs_without_prompt")]
-#[test_case("trusted_command_unless_trusted_runs_without_prompt_gpt_5_1_no_exit" ; "trusted_command_unless_trusted_runs_without_prompt_gpt_5_1_no_exit")]
-#[test_case("cat_redirect_unless_trusted_requires_approval" ; "cat_redirect_unless_trusted_requires_approval")]
-#[test_case("cat_redirect_on_request_requires_approval" ; "cat_redirect_on_request_requires_approval")]
-#[test_case("danger_full_access_on_failure_allows_outside_write" ; "danger_full_access_on_failure_allows_outside_write")]
-#[test_case("danger_full_access_on_failure_allows_outside_write_gpt_5_1_no_exit" ; "danger_full_access_on_failure_allows_outside_write_gpt_5_1_no_exit")]
-#[test_case("danger_full_access_unless_trusted_requests_approval" ; "danger_full_access_unless_trusted_requests_approval")]
-#[test_case("danger_full_access_unless_trusted_requests_approval_gpt_5_1_no_exit" ; "danger_full_access_unless_trusted_requests_approval_gpt_5_1_no_exit")]
-#[test_case("danger_full_access_never_allows_outside_write" ; "danger_full_access_never_allows_outside_write")]
-#[test_case("danger_full_access_never_allows_outside_write_gpt_5_1_no_exit" ; "danger_full_access_never_allows_outside_write_gpt_5_1_no_exit")]
-#[test_case("read_only_on_request_requires_approval" ; "read_only_on_request_requires_approval")]
-#[test_case("read_only_on_request_requires_approval_gpt_5_1_no_exit" ; "read_only_on_request_requires_approval_gpt_5_1_no_exit")]
-#[test_case("trusted_command_on_request_read_only_runs_without_prompt" ; "trusted_command_on_request_read_only_runs_without_prompt")]
-#[test_case("trusted_command_on_request_read_only_runs_without_prompt_gpt_5_1_no_exit" ; "trusted_command_on_request_read_only_runs_without_prompt_gpt_5_1_no_exit")]
-#[test_case("read_only_on_request_blocks_network" ; "read_only_on_request_blocks_network")]
-#[test_case("read_only_on_request_denied_blocks_execution" ; "read_only_on_request_denied_blocks_execution")]
-#[test_case("read_only_on_failure_escalates_after_sandbox_error" ; "read_only_on_failure_escalates_after_sandbox_error")]
-#[test_case("read_only_on_failure_escalates_after_sandbox_error_gpt_5_1_no_exit" ; "read_only_on_failure_escalates_after_sandbox_error_gpt_5_1_no_exit")]
-#[test_case("read_only_on_request_network_escalates_when_approved" ; "read_only_on_request_network_escalates_when_approved")]
-#[test_case("read_only_on_request_network_escalates_when_approved_gpt_5_1_no_exit" ; "read_only_on_request_network_escalates_when_approved_gpt_5_1_no_exit")]
-#[test_case("apply_patch_shell_command_requires_patch_approval" ; "apply_patch_shell_command_requires_patch_approval")]
-#[test_case("apply_patch_function_auto_inside_workspace" ; "apply_patch_function_auto_inside_workspace")]
-#[test_case("apply_patch_function_danger_allows_outside_workspace" ; "apply_patch_function_danger_allows_outside_workspace")]
-#[test_case("apply_patch_function_outside_requires_patch_approval" ; "apply_patch_function_outside_requires_patch_approval")]
-#[test_case("apply_patch_function_outside_denied_blocks_patch" ; "apply_patch_function_outside_denied_blocks_patch")]
-#[test_case("apply_patch_shell_command_outside_requires_patch_approval" ; "apply_patch_shell_command_outside_requires_patch_approval")]
-#[test_case("apply_patch_function_unless_trusted_requires_patch_approval" ; "apply_patch_function_unless_trusted_requires_patch_approval")]
-#[test_case("apply_patch_function_never_rejects_outside_workspace" ; "apply_patch_function_never_rejects_outside_workspace")]
-#[test_case("read_only_unless_trusted_requires_approval" ; "read_only_unless_trusted_requires_approval")]
-#[test_case("read_only_unless_trusted_requires_approval_gpt_5_1_no_exit" ; "read_only_unless_trusted_requires_approval_gpt_5_1_no_exit")]
-#[test_case("read_only_never_reports_sandbox_failure" ; "read_only_never_reports_sandbox_failure")]
-#[test_case("trusted_command_never_runs_without_prompt" ; "trusted_command_never_runs_without_prompt")]
-#[test_case("workspace_write_on_request_allows_workspace_write" ; "workspace_write_on_request_allows_workspace_write")]
-#[test_case("workspace_write_network_disabled_blocks_network" ; "workspace_write_network_disabled_blocks_network")]
-#[test_case("workspace_write_on_request_requires_approval_outside_workspace" ; "workspace_write_on_request_requires_approval_outside_workspace")]
-#[test_case("workspace_write_network_enabled_allows_network" ; "workspace_write_network_enabled_allows_network")]
-#[test_case("workspace_write_on_failure_escalates_outside_workspace" ; "workspace_write_on_failure_escalates_outside_workspace")]
-#[test_case("workspace_write_unless_trusted_requires_approval_outside_workspace" ; "workspace_write_unless_trusted_requires_approval_outside_workspace")]
-#[test_case("workspace_write_never_blocks_outside_workspace" ; "workspace_write_never_blocks_outside_workspace")]
-#[test_case("unified exec on request no approval for safe command" ; "unified_exec_on_request_no_approval_for_safe_command")]
-#[test_case("unified exec on request escalated requires approval" ; "unified_exec_on_request_escalated_requires_approval")]
-#[test_case("unified exec on request requires approval unless trusted" ; "unified_exec_on_request_requires_approval_unless_trusted")]
-#[test_case("safe command with heredoc and redirect still requires approval" ; "safe_command_with_heredoc_and_redirect_still_requires_approval")]
-#[test_case("compound command with one safe command still requires approval" ; "compound_command_with_one_safe_command_still_requires_approval")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approval_matrix_covers_scenario(scenario_name: &str) -> Result<()> {
+macro_rules! approval_matrix_group_tests {
+    ($(($group:ident, $case_name:literal)),+ $(,)?) => {
+        const TESTED_SCENARIO_GROUPS: &[ScenarioGroup] = &[$(ScenarioGroup::$group),+];
+
+        $(#[test_case(ScenarioGroup::$group ; $case_name)])+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn approval_matrix_covers_group(group: ScenarioGroup) -> Result<()> {
+            run_scenario_group(group).await
+        }
+    };
+}
+
+approval_matrix_group_tests! {
+    (DangerFullAccess, "danger_full_access"),
+    (ReadOnly, "read_only"),
+    (WorkspaceWrite, "workspace_write"),
+    (ApplyPatch, "apply_patch"),
+    (UnifiedExec, "unified_exec"),
+}
+
+#[test]
+fn approval_matrix_group_tests_cover_all_groups() {
+    assert_eq!(TESTED_SCENARIO_GROUPS, ScenarioGroup::ALL);
+
+    for group in ScenarioGroup::ALL {
+        assert!(
+            scenarios()
+                .iter()
+                .any(|scenario| scenario_group(scenario) == *group),
+            "expected at least one approval scenario for {group:?}",
+        );
+    }
+}
+
+async fn run_scenario_group(group: ScenarioGroup) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let scenario = scenarios()
+    let scenarios = scenarios()
         .into_iter()
-        .find(|scenario| scenario.name == scenario_name)
-        .unwrap_or_else(|| panic!("missing approval scenario: {scenario_name}"));
-    run_scenario(&scenario).await
+        .filter(|scenario| scenario_group(scenario) == group)
+        .collect::<Vec<_>>();
+    assert!(!scenarios.is_empty(), "expected scenarios for {group:?}");
+
+    for scenario in scenarios {
+        run_scenario(&scenario).await?;
+    }
+
+    Ok(())
+}
+
+fn scenario_group(scenario: &ScenarioSpec) -> ScenarioGroup {
+    match &scenario.action {
+        ActionKind::ApplyPatchFunction { .. } | ActionKind::ApplyPatchShell { .. } => {
+            ScenarioGroup::ApplyPatch
+        }
+        ActionKind::RunUnifiedExecCommand { .. } => ScenarioGroup::UnifiedExec,
+        ActionKind::WriteFile { .. }
+        | ActionKind::FetchUrlNoProxy { .. }
+        | ActionKind::FetchUrl { .. }
+        | ActionKind::RunCommand { .. } => match &scenario.sandbox_policy {
+            SandboxPolicy::DangerFullAccess => ScenarioGroup::DangerFullAccess,
+            SandboxPolicy::ReadOnly { .. } => ScenarioGroup::ReadOnly,
+            SandboxPolicy::WorkspaceWrite { .. } => ScenarioGroup::WorkspaceWrite,
+            SandboxPolicy::ExternalSandbox { .. } => ScenarioGroup::WorkspaceWrite,
+        },
+    }
 }
 
 async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
