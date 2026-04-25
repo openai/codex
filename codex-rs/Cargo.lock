@@ -2699,6 +2699,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-feedback-log-sink"
+version = "0.0.0"
+dependencies = [
+ "codex-state",
+ "pretty_assertions",
+ "prost 0.14.3",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "codex-file-search"
 version = "0.0.0"
 dependencies = [
