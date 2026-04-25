@@ -74,7 +74,7 @@ impl App {
                 thread_id,
                 Some(objective),
                 Some(ThreadGoalStatus::Active),
-                Some(None),
+                /*token_budget*/ None,
             )
             .await;
         if self.current_displayed_thread_id() != Some(thread_id) {
