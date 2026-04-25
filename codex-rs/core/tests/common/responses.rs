@@ -40,12 +40,14 @@ use crate::test_codex::ApplyPatchModelOutput;
 #[derive(Debug, Clone)]
 pub struct ResponseMock {
     requests: Arc<Mutex<Vec<ResponsesRequest>>>,
+    requests_updated: Arc<Notify>,
 }
 
 impl ResponseMock {
     fn new() -> Self {
         Self {
             requests: Arc::new(Mutex::new(Vec::new())),
+            requests_updated: Arc::new(Notify::new()),
         }
     }
 
@@ -79,6 +81,20 @@ impl ResponseMock {
         self.requests()
             .iter()
             .find_map(|req| req.function_call_output_text(call_id))
+    }
+
+    pub async fn wait_for_function_call_output_text(&self, call_id: &str) -> String {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let requests_updated = self.requests_updated.notified();
+                if let Some(output) = self.function_call_output_text(call_id) {
+                    return output;
+                }
+                requests_updated.await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {call_id} output"))
     }
 }
 
@@ -579,14 +595,17 @@ impl Match for ModelsMock {
 
 impl Match for ResponseMock {
     fn matches(&self, request: &wiremock::Request) -> bool {
-        self.requests
-            .lock()
-            .unwrap()
-            .push(ResponsesRequest(request.clone()));
+        {
+            self.requests
+                .lock()
+                .unwrap()
+                .push(ResponsesRequest(request.clone()));
+        }
 
         // Enforce invariant checks on every request body captured by the mock.
         // Panic on orphan tool outputs or calls to catch regressions early.
         validate_request_body_invariants(request);
+        self.requests_updated.notify_waiters();
         true
     }
 }

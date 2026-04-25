@@ -300,9 +300,9 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
     }
 
     let exec_output = responses
-        .function_call_output_text("exec-call")
-        .map(|output| json!({ "output": output }))
-        .unwrap_or_else(|| panic!("expected exec-call output"));
+        .wait_for_function_call_output_text("exec-call")
+        .await;
+    let exec_output = json!({ "output": exec_output });
     let (exit_code, stdout) = parse_result(&exec_output);
     assert!(exit_code.is_none() || exit_code == Some(0));
     assert!(stdout.contains("folder-grant-ok"));
@@ -463,9 +463,9 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
     }
 
     let patch_output = responses
-        .function_call_output_text("apply-patch-call")
-        .map(|output| json!({ "output": output }))
-        .unwrap_or_else(|| panic!("expected apply-patch-call output"));
+        .wait_for_function_call_output_text("apply-patch-call")
+        .await;
+    let patch_output = json!({ "output": patch_output });
     let (exit_code, stdout) = parse_result(&patch_output);
     assert!(exit_code.is_none() || exit_code == Some(0));
     assert!(
