@@ -708,7 +708,7 @@ mod tests {
             &chatgpt_auth(),
             &format!("{}/download/file_123", server.uri()),
             &path,
-            4,
+            /*max_size_bytes*/ 4,
         )
         .await
         .expect_err("download should fail");
