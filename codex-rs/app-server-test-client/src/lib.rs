@@ -140,6 +140,14 @@ struct Cli {
     #[arg(long, value_name = "json-or-@file", global = true)]
     dynamic_tools: Option<String>,
 
+    /// Base instructions override sent via `thread/start` or `thread/resume`.
+    #[arg(long, value_name = "text", global = true)]
+    base_instructions: Option<String>,
+
+    /// Developer instructions override sent via `thread/start` or `thread/resume`.
+    #[arg(long, value_name = "text", global = true)]
+    developer_instructions: Option<String>,
+
     #[command(subcommand)]
     command: CliCommand,
 }
@@ -273,16 +281,40 @@ enum CliCommand {
     },
 }
 
+#[derive(Clone, Debug, Default)]
+struct ThreadInstructionOverrides {
+    base_instructions: Option<String>,
+    developer_instructions: Option<String>,
+}
+
+impl ThreadInstructionOverrides {
+    fn apply_to_thread_start(&self, params: &mut ThreadStartParams) {
+        params.base_instructions = self.base_instructions.clone();
+        params.developer_instructions = self.developer_instructions.clone();
+    }
+
+    fn apply_to_thread_resume(&self, params: &mut ThreadResumeParams) {
+        params.base_instructions = self.base_instructions.clone();
+        params.developer_instructions = self.developer_instructions.clone();
+    }
+}
+
 pub async fn run() -> Result<()> {
     let Cli {
         codex_bin,
         url,
         config_overrides,
         dynamic_tools,
+        base_instructions,
+        developer_instructions,
         command,
     } = Cli::parse();
 
     let dynamic_tools = parse_dynamic_tools_arg(&dynamic_tools)?;
+    let instruction_overrides = ThreadInstructionOverrides {
+        base_instructions,
+        developer_instructions,
+    };
 
     match command {
         CliCommand::Serve { listen, kill } => {
@@ -293,7 +325,13 @@ pub async fn run() -> Result<()> {
         CliCommand::SendMessage { user_message } => {
             ensure_dynamic_tools_unused(&dynamic_tools, "send-message")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            send_message(&endpoint, &config_overrides, user_message).await
+            send_message(
+                &endpoint,
+                &config_overrides,
+                &instruction_overrides,
+                user_message,
+            )
+            .await
         }
         CliCommand::SendMessageV2 {
             experimental_api,
@@ -303,6 +341,7 @@ pub async fn run() -> Result<()> {
             send_message_v2_endpoint(
                 &endpoint,
                 &config_overrides,
+                &instruction_overrides,
                 user_message,
                 experimental_api,
                 &dynamic_tools,
@@ -317,6 +356,7 @@ pub async fn run() -> Result<()> {
             resume_message_v2(
                 &endpoint,
                 &config_overrides,
+                &instruction_overrides,
                 thread_id,
                 user_message,
                 &dynamic_tools,
@@ -326,7 +366,13 @@ pub async fn run() -> Result<()> {
         CliCommand::ThreadResume { thread_id } => {
             ensure_dynamic_tools_unused(&dynamic_tools, "thread-resume")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            thread_resume_follow(&endpoint, &config_overrides, thread_id).await
+            thread_resume_follow(
+                &endpoint,
+                &config_overrides,
+                &instruction_overrides,
+                thread_id,
+            )
+            .await
         }
         CliCommand::Watch => {
             ensure_dynamic_tools_unused(&dynamic_tools, "watch")?;
@@ -335,15 +381,35 @@ pub async fn run() -> Result<()> {
         }
         CliCommand::TriggerCmdApproval { user_message } => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            trigger_cmd_approval(&endpoint, &config_overrides, user_message, &dynamic_tools).await
+            trigger_cmd_approval(
+                &endpoint,
+                &config_overrides,
+                &instruction_overrides,
+                user_message,
+                &dynamic_tools,
+            )
+            .await
         }
         CliCommand::TriggerPatchApproval { user_message } => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            trigger_patch_approval(&endpoint, &config_overrides, user_message, &dynamic_tools).await
+            trigger_patch_approval(
+                &endpoint,
+                &config_overrides,
+                &instruction_overrides,
+                user_message,
+                &dynamic_tools,
+            )
+            .await
         }
         CliCommand::NoTriggerCmdApproval => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            no_trigger_cmd_approval(&endpoint, &config_overrides, &dynamic_tools).await
+            no_trigger_cmd_approval(
+                &endpoint,
+                &config_overrides,
+                &instruction_overrides,
+                &dynamic_tools,
+            )
+            .await
         }
         CliCommand::SendFollowUpV2 {
             first_message,
@@ -353,6 +419,7 @@ pub async fn run() -> Result<()> {
             send_follow_up_v2(
                 &endpoint,
                 &config_overrides,
+                &instruction_overrides,
                 first_message,
                 follow_up_message,
                 &dynamic_tools,
@@ -368,6 +435,7 @@ pub async fn run() -> Result<()> {
             trigger_zsh_fork_multi_cmd_approval(
                 &endpoint,
                 &config_overrides,
+                &instruction_overrides,
                 user_message,
                 min_approvals,
                 abort_on,
@@ -416,6 +484,7 @@ pub async fn run() -> Result<()> {
                 codex_bin,
                 url,
                 &config_overrides,
+                &instruction_overrides,
                 model,
                 workspace,
                 script,
@@ -631,12 +700,14 @@ struct SendMessagePolicies<'a> {
 async fn send_message(
     endpoint: &Endpoint,
     config_overrides: &[String],
+    instruction_overrides: &ThreadInstructionOverrides,
     user_message: String,
 ) -> Result<()> {
     let dynamic_tools = None;
     send_message_v2_with_policies(
         endpoint,
         config_overrides,
+        instruction_overrides,
         user_message,
         SendMessagePolicies {
             command_name: "send-message",
@@ -656,9 +727,11 @@ pub async fn send_message_v2(
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
 ) -> Result<()> {
     let endpoint = Endpoint::SpawnCodex(codex_bin.to_path_buf());
+    let instruction_overrides = ThreadInstructionOverrides::default();
     send_message_v2_endpoint(
         &endpoint,
         config_overrides,
+        &instruction_overrides,
         user_message,
         /*experimental_api*/ true,
         dynamic_tools,
@@ -669,6 +742,7 @@ pub async fn send_message_v2(
 async fn send_message_v2_endpoint(
     endpoint: &Endpoint,
     config_overrides: &[String],
+    instruction_overrides: &ThreadInstructionOverrides,
     user_message: String,
     experimental_api: bool,
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
@@ -680,6 +754,7 @@ async fn send_message_v2_endpoint(
     send_message_v2_with_policies(
         endpoint,
         config_overrides,
+        instruction_overrides,
         user_message,
         SendMessagePolicies {
             command_name: "send-message-v2",
@@ -695,6 +770,7 @@ async fn send_message_v2_endpoint(
 async fn trigger_zsh_fork_multi_cmd_approval(
     endpoint: &Endpoint,
     config_overrides: &[String],
+    instruction_overrides: &ThreadInstructionOverrides,
     user_message: Option<String>,
     min_approvals: usize,
     abort_on: Option<usize>,
@@ -717,10 +793,12 @@ async fn trigger_zsh_fork_multi_cmd_approval(
             let initialize = client.initialize()?;
             println!("< initialize response: {initialize:?}");
 
-            let thread_response = client.thread_start(ThreadStartParams {
+            let mut thread_params = ThreadStartParams {
                 dynamic_tools: dynamic_tools.clone(),
                 ..Default::default()
-            })?;
+            };
+            instruction_overrides.apply_to_thread_start(&mut thread_params);
+            let thread_response = client.thread_start(thread_params)?;
             println!("< thread/start response: {thread_response:?}");
 
             client.command_approval_behavior = match abort_on {
@@ -800,6 +878,7 @@ async fn trigger_zsh_fork_multi_cmd_approval(
 async fn resume_message_v2(
     endpoint: &Endpoint,
     config_overrides: &[String],
+    instruction_overrides: &ThreadInstructionOverrides,
     thread_id: String,
     user_message: String,
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
@@ -810,10 +889,12 @@ async fn resume_message_v2(
         let initialize = client.initialize()?;
         println!("< initialize response: {initialize:?}");
 
-        let resume_response = client.thread_resume(ThreadResumeParams {
+        let mut resume_params = ThreadResumeParams {
             thread_id,
             ..Default::default()
-        })?;
+        };
+        instruction_overrides.apply_to_thread_resume(&mut resume_params);
+        let resume_response = client.thread_resume(resume_params)?;
         println!("< thread/resume response: {resume_response:?}");
 
         let turn_response = client.turn_start(TurnStartParams {
@@ -836,16 +917,19 @@ async fn resume_message_v2(
 async fn thread_resume_follow(
     endpoint: &Endpoint,
     config_overrides: &[String],
+    instruction_overrides: &ThreadInstructionOverrides,
     thread_id: String,
 ) -> Result<()> {
     with_client("thread-resume", endpoint, config_overrides, |client| {
         let initialize = client.initialize()?;
         println!("< initialize response: {initialize:?}");
 
-        let resume_response = client.thread_resume(ThreadResumeParams {
+        let mut resume_params = ThreadResumeParams {
             thread_id,
             ..Default::default()
-        })?;
+        };
+        instruction_overrides.apply_to_thread_resume(&mut resume_params);
+        let resume_response = client.thread_resume(resume_params)?;
         println!("< thread/resume response: {resume_response:?}");
         println!("< streaming notifications until process is terminated");
 
@@ -868,6 +952,7 @@ async fn watch(endpoint: &Endpoint, config_overrides: &[String]) -> Result<()> {
 async fn trigger_cmd_approval(
     endpoint: &Endpoint,
     config_overrides: &[String],
+    instruction_overrides: &ThreadInstructionOverrides,
     user_message: Option<String>,
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
 ) -> Result<()> {
@@ -877,6 +962,7 @@ async fn trigger_cmd_approval(
     send_message_v2_with_policies(
         endpoint,
         config_overrides,
+        instruction_overrides,
         message,
         SendMessagePolicies {
             command_name: "trigger-cmd-approval",
@@ -894,6 +980,7 @@ async fn trigger_cmd_approval(
 async fn trigger_patch_approval(
     endpoint: &Endpoint,
     config_overrides: &[String],
+    instruction_overrides: &ThreadInstructionOverrides,
     user_message: Option<String>,
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
 ) -> Result<()> {
@@ -903,6 +990,7 @@ async fn trigger_patch_approval(
     send_message_v2_with_policies(
         endpoint,
         config_overrides,
+        instruction_overrides,
         message,
         SendMessagePolicies {
             command_name: "trigger-patch-approval",
@@ -920,12 +1008,14 @@ async fn trigger_patch_approval(
 async fn no_trigger_cmd_approval(
     endpoint: &Endpoint,
     config_overrides: &[String],
+    instruction_overrides: &ThreadInstructionOverrides,
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
 ) -> Result<()> {
     let prompt = "Run `touch should_not_trigger_approval.txt`";
     send_message_v2_with_policies(
         endpoint,
         config_overrides,
+        instruction_overrides,
         prompt.to_string(),
         SendMessagePolicies {
             command_name: "no-trigger-cmd-approval",
@@ -941,6 +1031,7 @@ async fn no_trigger_cmd_approval(
 async fn send_message_v2_with_policies(
     endpoint: &Endpoint,
     config_overrides: &[String],
+    instruction_overrides: &ThreadInstructionOverrides,
     user_message: String,
     policies: SendMessagePolicies<'_>,
 ) -> Result<()> {
@@ -952,10 +1043,12 @@ async fn send_message_v2_with_policies(
             let initialize = client.initialize_with_experimental_api(policies.experimental_api)?;
             println!("< initialize response: {initialize:?}");
 
-            let thread_response = client.thread_start(ThreadStartParams {
+            let mut thread_params = ThreadStartParams {
                 dynamic_tools: policies.dynamic_tools.clone(),
                 ..Default::default()
-            })?;
+            };
+            instruction_overrides.apply_to_thread_start(&mut thread_params);
+            let thread_response = client.thread_start(thread_params)?;
             println!("< thread/start response: {thread_response:?}");
             let mut turn_params = TurnStartParams {
                 thread_id: thread_response.thread.id.clone(),
@@ -983,6 +1076,7 @@ async fn send_message_v2_with_policies(
 async fn send_follow_up_v2(
     endpoint: &Endpoint,
     config_overrides: &[String],
+    instruction_overrides: &ThreadInstructionOverrides,
     first_message: String,
     follow_up_message: String,
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
@@ -991,10 +1085,12 @@ async fn send_follow_up_v2(
         let initialize = client.initialize()?;
         println!("< initialize response: {initialize:?}");
 
-        let thread_response = client.thread_start(ThreadStartParams {
+        let mut thread_params = ThreadStartParams {
             dynamic_tools: dynamic_tools.clone(),
             ..Default::default()
-        })?;
+        };
+        instruction_overrides.apply_to_thread_start(&mut thread_params);
+        let thread_response = client.thread_start(thread_params)?;
         println!("< thread/start response: {thread_response:?}");
 
         let first_turn_params = TurnStartParams {
@@ -1189,6 +1285,7 @@ fn live_elicitation_timeout_pause(
     codex_bin: Option<PathBuf>,
     url: Option<String>,
     config_overrides: &[String],
+    instruction_overrides: &ThreadInstructionOverrides,
     model: String,
     workspace: PathBuf,
     script: Option<PathBuf>,
@@ -1234,10 +1331,12 @@ fn live_elicitation_timeout_pause(
     let initialize = client.initialize()?;
     println!("< initialize response: {initialize:?}");
 
-    let thread_response = client.thread_start(ThreadStartParams {
+    let mut thread_params = ThreadStartParams {
         model: Some(model),
         ..Default::default()
-    })?;
+    };
+    instruction_overrides.apply_to_thread_start(&mut thread_params);
+    let thread_response = client.thread_start(thread_params)?;
     println!("< thread/start response: {thread_response:?}");
 
     let thread_id = thread_response.thread.id;
