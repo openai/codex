@@ -7,6 +7,7 @@ use crate::context::PersonalitySpecInstructions;
 use crate::context::RealtimeEndInstructions;
 use crate::context::RealtimeStartInstructions;
 use crate::context::RealtimeStartWithInstructions;
+use crate::context::UserInstructions;
 use crate::session::PreviousTurnSettings;
 use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
@@ -215,6 +216,17 @@ pub(crate) fn build_settings_update_items(
     // inputs or add explicit replay events so fork/resume can diff everything
     // deterministically.
     let contextual_user_message = build_environment_update_item(previous, next, shell);
+    let user_instructions_message = if previous.and_then(|prev| prev.user_instructions.as_ref())
+        == next.user_instructions.as_ref()
+    {
+        None
+    } else {
+        let text = next.user_instructions.clone().unwrap_or_default();
+        Some(ContextualUserFragment::into(UserInstructions {
+            text,
+            directory: next.cwd.to_string_lossy().into_owned(),
+        }))
+    };
     let developer_update_sections = [
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.
@@ -228,9 +240,12 @@ pub(crate) fn build_settings_update_items(
     .flatten()
     .collect();
 
-    let mut items = Vec::with_capacity(2);
+    let mut items = Vec::with_capacity(3);
     if let Some(developer_message) = build_developer_update_item(developer_update_sections) {
         items.push(developer_message);
+    }
+    if let Some(user_instructions_message) = user_instructions_message {
+        items.push(user_instructions_message);
     }
     if let Some(contextual_user_message) = contextual_user_message {
         items.push(contextual_user_message);

@@ -626,6 +626,9 @@ impl Session {
             .map(|turn_environment| turn_environment.cwd.clone())
             .unwrap_or_else(|| session_configuration.cwd.clone());
         let per_turn_config = Self::build_per_turn_config(&session_configuration, cwd.clone());
+        let user_instructions = AgentsMdManager::new(&per_turn_config)
+            .user_instructions(environment.as_deref())
+            .await;
         {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
@@ -686,6 +689,7 @@ impl Session {
             goal_tools_supported,
         );
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
+        turn_context.user_instructions = user_instructions;
 
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
