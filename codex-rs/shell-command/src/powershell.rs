@@ -182,11 +182,7 @@ fn quote_argument(arg: &str) -> String {
 #[cfg(windows)]
 #[allow(dead_code)]
 pub(crate) fn try_find_powershellish_executable_blocking() -> Option<AbsolutePathBuf> {
-    if let Some(pwsh_path) = try_find_pwsh_executable_blocking() {
-        Some(pwsh_path)
-    } else {
-        try_find_powershell_executable_blocking()
-    }
+    try_find_pwsh_executable_blocking().or_else(try_find_powershell_executable_blocking)
 }
 
 /// This function attempts to find a powershell.exe executable on the system.
