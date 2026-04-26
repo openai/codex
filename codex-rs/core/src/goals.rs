@@ -1307,6 +1307,7 @@ impl Session {
                 content: vec![ContentItem::InputText {
                     text: continuation_prompt(&goal),
                 }],
+                phase: None,
             }],
         })
     }
@@ -1452,6 +1453,7 @@ fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
         content: vec![ContentItem::InputText {
             text: budget_limit_prompt(goal),
         }],
+        phase: None,
     }
 }
 
