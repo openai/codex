@@ -21,7 +21,7 @@ impl serde_json::ser::Formatter for AsciiJsonFormatter {
             }
 
             if start < index {
-                writer.write_all(fragment[start..index].as_bytes())?;
+                writer.write_all(&fragment.as_bytes()[start..index])?;
             }
 
             let mut utf16 = [0; 2];
@@ -32,7 +32,7 @@ impl serde_json::ser::Formatter for AsciiJsonFormatter {
         }
 
         if start < fragment.len() {
-            writer.write_all(fragment[start..].as_bytes())?;
+            writer.write_all(&fragment.as_bytes()[start..])?;
         }
 
         Ok(())
