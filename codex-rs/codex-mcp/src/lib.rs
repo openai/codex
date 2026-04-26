@@ -1,8 +1,8 @@
-pub use mcp_connection_manager::McpConnectionManager;
-pub use mcp_runtime::McpRuntimeEnvironment;
-pub use mcp_runtime::SandboxState;
-pub use mcp_tools::ToolInfo;
+pub use connection_manager::McpConnectionManager;
 pub use rmcp_client::MCP_SANDBOX_STATE_META_CAPABILITY;
+pub use runtime::McpRuntimeEnvironment;
+pub use runtime::SandboxState;
+pub use tools::ToolInfo;
 
 pub use mcp::CODEX_APPS_MCP_SERVER_NAME;
 pub use mcp::McpConfig;
@@ -36,12 +36,12 @@ pub use mcp::should_retry_without_scopes;
 pub use codex_apps::filter_non_codex_apps_mcp_tools_only;
 pub use mcp::mcp_permission_prompt_is_auto_approved;
 pub use mcp::qualified_mcp_tool_name_prefix;
-pub use mcp_tools::declared_openai_file_input_param_names;
+pub use tools::declared_openai_file_input_param_names;
 
 pub(crate) mod codex_apps;
+pub(crate) mod connection_manager;
+pub(crate) mod elicitation;
 pub(crate) mod mcp;
-pub(crate) mod mcp_connection_manager;
-pub(crate) mod mcp_elicitation;
-pub(crate) mod mcp_runtime;
-pub(crate) mod mcp_tools;
 pub(crate) mod rmcp_client;
+pub(crate) mod runtime;
+pub(crate) mod tools;

@@ -3,7 +3,7 @@
 //! This module contains data that describes the runtime environment in which MCP
 //! servers execute, plus the sandbox state payload sent to capable servers and a
 //! tiny shared metrics helper. Transport startup and orchestration live in
-//! [`crate::rmcp_client`] and [`crate::mcp_connection_manager`].
+//! [`crate::rmcp_client`] and [`crate::connection_manager`].
 
 use std::path::PathBuf;
 use std::sync::Arc;

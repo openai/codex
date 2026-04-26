@@ -4,7 +4,7 @@
 //! initializing the server, listing raw tools, applying per-server tool filters,
 //! and exposing cached startup snapshots while a client is still connecting.
 //! Higher-level aggregation and resource/tool APIs live in
-//! [`crate::mcp_connection_manager`].
+//! [`crate::connection_manager`].
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -25,15 +25,15 @@ use crate::codex_apps::normalize_codex_apps_callable_name;
 use crate::codex_apps::normalize_codex_apps_callable_namespace;
 use crate::codex_apps::normalize_codex_apps_tool_title;
 use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
+use crate::elicitation::ElicitationRequestManager;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
-use crate::mcp_elicitation::ElicitationRequestManager;
-use crate::mcp_runtime::McpRuntimeEnvironment;
-use crate::mcp_runtime::emit_duration;
-use crate::mcp_tools::ToolFilter;
-use crate::mcp_tools::ToolInfo;
-use crate::mcp_tools::filter_tools;
-use crate::mcp_tools::tool_with_model_visible_input_schema;
+use crate::runtime::McpRuntimeEnvironment;
+use crate::runtime::emit_duration;
+use crate::tools::ToolFilter;
+use crate::tools::ToolInfo;
+use crate::tools::filter_tools;
+use crate::tools::tool_with_model_visible_input_schema;
 use anyhow::Result;
 use anyhow::anyhow;
 use async_channel::Sender;

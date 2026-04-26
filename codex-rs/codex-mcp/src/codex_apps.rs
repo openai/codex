@@ -10,9 +10,9 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
-use crate::mcp_runtime::emit_duration;
-use crate::mcp_tools::MCP_TOOLS_CACHE_WRITE_DURATION_METRIC;
-use crate::mcp_tools::ToolInfo;
+use crate::runtime::emit_duration;
+use crate::tools::MCP_TOOLS_CACHE_WRITE_DURATION_METRIC;
+use crate::tools::ToolInfo;
 use codex_login::CodexAuth;
 use codex_utils_plugins::mcp_connector::is_connector_id_allowed;
 use codex_utils_plugins::mcp_connector::sanitize_name;
