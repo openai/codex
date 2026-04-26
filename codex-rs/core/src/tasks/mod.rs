@@ -15,6 +15,8 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
+use tracing::Span;
+use tracing::field;
 use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
@@ -191,6 +193,11 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// Returns the tracing name for a spawned task span.
     fn span_name(&self) -> &'static str;
 
+    /// Returns whether turn token usage should be recorded on this task's turn span.
+    fn records_turn_token_usage_on_span(&self) -> bool {
+        false
+    }
+
     /// Executes the task until completion or cancellation.
     ///
     /// Implementations typically stream protocol events using `session` and
@@ -228,6 +235,8 @@ pub(crate) trait AnySessionTask: Send + Sync + 'static {
 
     fn span_name(&self) -> &'static str;
 
+    fn records_turn_token_usage_on_span(&self) -> bool;
+
     fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
@@ -253,6 +262,10 @@ where
 
     fn span_name(&self) -> &'static str {
         SessionTask::span_name(self)
+    }
+
+    fn records_turn_token_usage_on_span(&self) -> bool {
+        SessionTask::records_turn_token_usage_on_span(self)
     }
 
     fn run(
@@ -361,6 +374,12 @@ impl Session {
             thread.id = %self.conversation_id,
             turn.id = %turn_context.sub_id,
             model = %turn_context.model_info.slug,
+            codex.turn.token_usage.input_tokens = field::Empty,
+            codex.turn.token_usage.cached_input_tokens = field::Empty,
+            codex.turn.token_usage.non_cached_input_tokens = field::Empty,
+            codex.turn.token_usage.output_tokens = field::Empty,
+            codex.turn.token_usage.reasoning_output_tokens = field::Empty,
+            codex.turn.token_usage.total_tokens = field::Empty,
         );
         let handle = tokio::spawn(
             async move {
@@ -548,14 +567,20 @@ impl Session {
         let mut token_usage_at_turn_start = None;
         let mut turn_had_memory_citation = false;
         let mut turn_tool_calls = 0_u64;
+        let mut records_turn_token_usage_on_span = false;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             if let Some(at) = active.as_mut()
-                && at.remove_task(&turn_context.sub_id)
+                && let Some(removed_task) = at.remove_task(&turn_context.sub_id)
             {
-                should_clear_active_turn = true;
-                let turn_state = Arc::clone(&at.turn_state);
-                Some(turn_state)
+                records_turn_token_usage_on_span = removed_task.records_turn_token_usage_on_span;
+                if removed_task.active_turn_is_empty {
+                    should_clear_active_turn = true;
+                    let turn_state = Arc::clone(&at.turn_state);
+                    Some(turn_state)
+                } else {
+                    None
+                }
             } else {
                 None
             }
@@ -634,6 +659,33 @@ impl Session {
                     - token_usage_at_turn_start.total_tokens)
                     .max(0),
             };
+            if records_turn_token_usage_on_span {
+                let current_span = Span::current();
+                current_span.record(
+                    "codex.turn.token_usage.input_tokens",
+                    turn_token_usage.input_tokens,
+                );
+                current_span.record(
+                    "codex.turn.token_usage.cached_input_tokens",
+                    turn_token_usage.cached_input(),
+                );
+                current_span.record(
+                    "codex.turn.token_usage.non_cached_input_tokens",
+                    turn_token_usage.non_cached_input(),
+                );
+                current_span.record(
+                    "codex.turn.token_usage.output_tokens",
+                    turn_token_usage.output_tokens,
+                );
+                current_span.record(
+                    "codex.turn.token_usage.reasoning_output_tokens",
+                    turn_token_usage.reasoning_output_tokens,
+                );
+                current_span.record(
+                    "codex.turn.token_usage.total_tokens",
+                    turn_token_usage.total_tokens,
+                );
+            }
             self.services
                 .analytics_events_client
                 .track_turn_token_usage(TurnTokenUsageFact {

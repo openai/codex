@@ -563,6 +563,91 @@ async fn process_sse_emits_completed_telemetry() {
     });
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn turn_and_completed_response_spans_record_token_usage() {
+    let buffer: &'static Mutex<Vec<u8>> = Box::leak(Box::new(Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_level(true)
+        .with_ansi(false)
+        .with_max_level(Level::TRACE)
+        .with_span_events(FmtSpan::FULL)
+        .with_writer(MockWriter::new(buffer))
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let server = start_mock_server().await;
+
+    mount_sse_once(
+        &server,
+        sse(vec![serde_json::json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp1",
+                "usage": {
+                    "input_tokens": 3,
+                    "input_tokens_details": { "cached_tokens": 1 },
+                    "output_tokens": 5,
+                    "output_tokens_details": { "reasoning_tokens": 2 },
+                    "total_tokens": 9
+                }
+            }
+        })]),
+    )
+    .await;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .disable(Feature::GhostCommit)
+                .expect("test config should allow feature update");
+        })
+        .build(&server)
+        .await
+        .unwrap();
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let logs = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+
+    assert!(
+        logs.lines().any(|line| {
+            line.contains("handle_responses{otel.name=\"completed\"")
+                && line.contains("gen_ai.usage.input_tokens=3")
+                && line.contains("gen_ai.usage.cache_read.input_tokens=1")
+                && line.contains("gen_ai.usage.output_tokens=5")
+                && line.contains("codex.usage.reasoning_output_tokens=2")
+                && line.contains("codex.usage.total_tokens=9")
+        }),
+        "missing completed response span token usage\nlogs:\n{logs}"
+    );
+    assert!(
+        logs.lines().any(|line| {
+            line.contains("turn{otel.name=\"session_task.turn\"")
+                && line.contains("codex.turn.token_usage.input_tokens=3")
+                && line.contains("codex.turn.token_usage.cached_input_tokens=1")
+                && line.contains("codex.turn.token_usage.non_cached_input_tokens=2")
+                && line.contains("codex.turn.token_usage.output_tokens=5")
+                && line.contains("codex.turn.token_usage.reasoning_output_tokens=2")
+                && line.contains("codex.turn.token_usage.total_tokens=9")
+        }),
+        "missing regular turn span token usage\nlogs:\n{logs}"
+    );
+}
+
 #[tokio::test]
 async fn handle_responses_span_records_response_kind_and_tool_name() {
     let buffer: &'static Mutex<Vec<u8>> = Box::leak(Box::new(Mutex::new(Vec::new())));
