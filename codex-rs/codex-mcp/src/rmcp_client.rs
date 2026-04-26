@@ -61,15 +61,15 @@ use rmcp::model::InitializeRequestParams;
 use rmcp::model::ProtocolVersion;
 use tokio_util::sync::CancellationToken;
 
+/// MCP server capability indicating that Codex should include [`SandboxState`]
+/// in tool-call request `_meta` under this key.
+pub const MCP_SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
+
 pub(crate) const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
 pub(crate) const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str =
     "codex.mcp.tools.fetch_uncached.duration_ms";
 pub(crate) const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
-
-/// MCP server capability indicating that Codex should include [`SandboxState`]
-/// in tool-call request `_meta` under this key.
-pub const MCP_SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
 
 #[derive(Clone)]
 pub(crate) struct ManagedClient {
@@ -307,6 +307,58 @@ pub(crate) fn elicitation_capability_for_server(
     })
 }
 
+pub(crate) async fn list_tools_for_client_uncached(
+    server_name: &str,
+    client: &Arc<RmcpClient>,
+    timeout: Option<Duration>,
+    server_instructions: Option<&str>,
+) -> Result<Vec<ToolInfo>> {
+    let resp = client
+        .list_tools_with_connector_ids(/*params*/ None, timeout)
+        .await?;
+    let tools = resp
+        .tools
+        .into_iter()
+        .map(|tool| {
+            let callable_name = normalize_codex_apps_callable_name(
+                server_name,
+                &tool.tool.name,
+                tool.connector_id.as_deref(),
+                tool.connector_name.as_deref(),
+            );
+            let callable_namespace = normalize_codex_apps_callable_namespace(
+                server_name,
+                tool.connector_name.as_deref(),
+            );
+            let connector_name = tool.connector_name;
+            let connector_description = tool.connector_description;
+            let mut tool_def = tool.tool;
+            if let Some(title) = tool_def.title.as_deref() {
+                let normalized_title =
+                    normalize_codex_apps_tool_title(server_name, connector_name.as_deref(), title);
+                if tool_def.title.as_deref() != Some(normalized_title.as_str()) {
+                    tool_def.title = Some(normalized_title);
+                }
+            }
+            ToolInfo {
+                server_name: server_name.to_owned(),
+                callable_name,
+                callable_namespace,
+                server_instructions: server_instructions.map(str::to_string),
+                tool: tool_def,
+                connector_id: tool.connector_id,
+                connector_name,
+                plugin_display_names: Vec::new(),
+                connector_description,
+            }
+        })
+        .collect();
+    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        return Ok(filter_disallowed_codex_apps_tools(tools));
+    }
+    Ok(tools)
+}
+
 fn resolve_bearer_token(
     server_name: &str,
     bearer_token_env_var: Option<&str>,
@@ -536,56 +588,4 @@ async fn make_rmcp_client(
             .map_err(StartupOutcomeError::from)
         }
     }
-}
-
-pub(crate) async fn list_tools_for_client_uncached(
-    server_name: &str,
-    client: &Arc<RmcpClient>,
-    timeout: Option<Duration>,
-    server_instructions: Option<&str>,
-) -> Result<Vec<ToolInfo>> {
-    let resp = client
-        .list_tools_with_connector_ids(/*params*/ None, timeout)
-        .await?;
-    let tools = resp
-        .tools
-        .into_iter()
-        .map(|tool| {
-            let callable_name = normalize_codex_apps_callable_name(
-                server_name,
-                &tool.tool.name,
-                tool.connector_id.as_deref(),
-                tool.connector_name.as_deref(),
-            );
-            let callable_namespace = normalize_codex_apps_callable_namespace(
-                server_name,
-                tool.connector_name.as_deref(),
-            );
-            let connector_name = tool.connector_name;
-            let connector_description = tool.connector_description;
-            let mut tool_def = tool.tool;
-            if let Some(title) = tool_def.title.as_deref() {
-                let normalized_title =
-                    normalize_codex_apps_tool_title(server_name, connector_name.as_deref(), title);
-                if tool_def.title.as_deref() != Some(normalized_title.as_str()) {
-                    tool_def.title = Some(normalized_title);
-                }
-            }
-            ToolInfo {
-                server_name: server_name.to_owned(),
-                callable_name,
-                callable_namespace,
-                server_instructions: server_instructions.map(str::to_string),
-                tool: tool_def,
-                connector_id: tool.connector_id,
-                connector_name,
-                plugin_display_names: Vec::new(),
-                connector_description,
-            }
-        })
-        .collect();
-    if server_name == CODEX_APPS_MCP_SERVER_NAME {
-        return Ok(filter_disallowed_codex_apps_tools(tools));
-    }
-    Ok(tools)
 }

@@ -22,7 +22,6 @@ use sha1::Digest;
 use sha1::Sha1;
 
 pub(crate) const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 2;
-const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexAppsToolsCacheKey {
@@ -49,13 +48,6 @@ pub fn filter_non_codex_apps_mcp_tools_only(
         .collect()
 }
 
-fn sha1_hex(s: &str) -> String {
-    let mut hasher = Sha1::new();
-    hasher.update(s.as_bytes());
-    let sha1 = hasher.finalize();
-    format!("{sha1:x}")
-}
-
 #[derive(Clone)]
 pub(crate) struct CodexAppsToolsCacheContext {
     pub(crate) codex_home: PathBuf,
@@ -70,12 +62,6 @@ impl CodexAppsToolsCacheContext {
             .join(CODEX_APPS_TOOLS_CACHE_DIR)
             .join(format!("{user_key_hash}.json"))
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CodexAppsToolsDiskCache {
-    schema_version: u8,
-    tools: Vec<ToolInfo>,
 }
 
 pub(crate) enum CachedCodexAppsToolsLoad {
@@ -254,4 +240,19 @@ pub(crate) fn filter_disallowed_codex_apps_tools(tools: Vec<ToolInfo>) -> Vec<To
                 .is_none_or(is_connector_id_allowed)
         })
         .collect()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CodexAppsToolsDiskCache {
+    schema_version: u8,
+    tools: Vec<ToolInfo>,
+}
+
+const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
+
+fn sha1_hex(s: &str) -> String {
+    let mut hasher = Sha1::new();
+    hasher.update(s.as_bytes());
+    let sha1 = hasher.finalize();
+    format!("{sha1:x}")
 }

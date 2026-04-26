@@ -22,10 +22,6 @@ use tracing::warn;
 
 use crate::mcp::sanitize_responses_api_tool_name;
 
-const MCP_TOOL_NAME_DELIMITER: &str = "__";
-const MAX_TOOL_NAME_LENGTH: usize = 64;
-const CALLABLE_NAME_HASH_LEN: usize = 12;
-const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
 pub(crate) const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str =
     "codex.mcp.tools.cache_write.duration_ms";
 
@@ -125,52 +121,6 @@ pub(crate) fn tool_with_model_visible_input_schema(tool: &Tool) -> Tool {
         tool.input_schema = Arc::new(input_schema);
     }
     tool
-}
-
-fn mask_input_schema_for_file_path_params(input_schema: &mut JsonValue, file_params: &[String]) {
-    let Some(properties) = input_schema
-        .as_object_mut()
-        .and_then(|schema| schema.get_mut("properties"))
-        .and_then(JsonValue::as_object_mut)
-    else {
-        return;
-    };
-
-    for field_name in file_params {
-        let Some(property_schema) = properties.get_mut(field_name) else {
-            continue;
-        };
-        mask_input_property_schema(property_schema);
-    }
-}
-
-fn mask_input_property_schema(schema: &mut JsonValue) {
-    let Some(object) = schema.as_object_mut() else {
-        return;
-    };
-
-    let mut description = object
-        .get("description")
-        .and_then(JsonValue::as_str)
-        .map(str::to_string)
-        .unwrap_or_default();
-    let guidance = "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here.";
-    if description.is_empty() {
-        description = guidance.to_string();
-    } else if !description.contains(guidance) {
-        description = format!("{description} {guidance}");
-    }
-
-    let is_array = object.get("type").and_then(JsonValue::as_str) == Some("array")
-        || object.get("items").is_some();
-    object.clear();
-    object.insert("description".to_string(), JsonValue::String(description));
-    if is_array {
-        object.insert("type".to_string(), JsonValue::String("array".to_string()));
-        object.insert("items".to_string(), serde_json::json!({ "type": "string" }));
-    } else {
-        object.insert("type".to_string(), JsonValue::String("string".to_string()));
-    }
 }
 
 pub(crate) fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<ToolInfo> {
@@ -285,6 +235,57 @@ struct CallableToolCandidate {
     raw_tool_identity: String,
     callable_namespace: String,
     callable_name: String,
+}
+
+const MCP_TOOL_NAME_DELIMITER: &str = "__";
+const MAX_TOOL_NAME_LENGTH: usize = 64;
+const CALLABLE_NAME_HASH_LEN: usize = 12;
+const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
+
+fn mask_input_schema_for_file_path_params(input_schema: &mut JsonValue, file_params: &[String]) {
+    let Some(properties) = input_schema
+        .as_object_mut()
+        .and_then(|schema| schema.get_mut("properties"))
+        .and_then(JsonValue::as_object_mut)
+    else {
+        return;
+    };
+
+    for field_name in file_params {
+        let Some(property_schema) = properties.get_mut(field_name) else {
+            continue;
+        };
+        mask_input_property_schema(property_schema);
+    }
+}
+
+fn mask_input_property_schema(schema: &mut JsonValue) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+
+    let mut description = object
+        .get("description")
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
+        .unwrap_or_default();
+    let guidance = "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here.";
+    if description.is_empty() {
+        description = guidance.to_string();
+    } else if !description.contains(guidance) {
+        description = format!("{description} {guidance}");
+    }
+
+    let is_array = object.get("type").and_then(JsonValue::as_str) == Some("array")
+        || object.get("items").is_some();
+    object.clear();
+    object.insert("description".to_string(), JsonValue::String(description));
+    if is_array {
+        object.insert("type".to_string(), JsonValue::String("array".to_string()));
+        object.insert("items".to_string(), serde_json::json!({ "type": "string" }));
+    } else {
+        object.insert("type".to_string(), JsonValue::String("string".to_string()));
+    }
 }
 
 fn sha1_hex(s: &str) -> String {

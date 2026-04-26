@@ -30,30 +30,6 @@ use rmcp::model::RequestId;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 
-type ResponderMap = HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>;
-
-pub(crate) fn elicitation_is_rejected_by_policy(approval_policy: AskForApproval) -> bool {
-    match approval_policy {
-        AskForApproval::Never => true,
-        AskForApproval::OnFailure => false,
-        AskForApproval::OnRequest => false,
-        AskForApproval::UnlessTrusted => false,
-        AskForApproval::Granular(granular_config) => !granular_config.allows_mcp_elicitations(),
-    }
-}
-
-fn can_auto_accept_elicitation(elicitation: &CreateElicitationRequestParams) -> bool {
-    match elicitation {
-        CreateElicitationRequestParams::FormElicitationParams {
-            requested_schema, ..
-        } => {
-            // Auto-accept confirm/approval elicitations without schema requirements.
-            requested_schema.properties.is_empty()
-        }
-        CreateElicitationRequestParams::UrlElicitationParams { .. } => false,
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct ElicitationRequestManager {
     requests: Arc<Mutex<ResponderMap>>,
@@ -186,5 +162,29 @@ impl ElicitationRequestManager {
             }
             .boxed()
         })
+    }
+}
+
+pub(crate) fn elicitation_is_rejected_by_policy(approval_policy: AskForApproval) -> bool {
+    match approval_policy {
+        AskForApproval::Never => true,
+        AskForApproval::OnFailure => false,
+        AskForApproval::OnRequest => false,
+        AskForApproval::UnlessTrusted => false,
+        AskForApproval::Granular(granular_config) => !granular_config.allows_mcp_elicitations(),
+    }
+}
+
+type ResponderMap = HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>;
+
+fn can_auto_accept_elicitation(elicitation: &CreateElicitationRequestParams) -> bool {
+    match elicitation {
+        CreateElicitationRequestParams::FormElicitationParams {
+            requested_schema, ..
+        } => {
+            // Auto-accept confirm/approval elicitations without schema requirements.
+            requested_schema.properties.is_empty()
+        }
+        CreateElicitationRequestParams::UrlElicitationParams { .. } => false,
     }
 }
