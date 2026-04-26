@@ -62,7 +62,6 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::TokenUsage;
@@ -964,12 +963,16 @@ fn sandbox_policy_mode(permission_profile: &PermissionProfile, cwd: &Path) -> &'
         PermissionProfile::Disabled => "full_access",
         PermissionProfile::External { .. } => "external_sandbox",
         PermissionProfile::Managed { .. } => {
-            match permission_profile.to_legacy_sandbox_policy(cwd) {
-                Ok(SandboxPolicy::DangerFullAccess) => "full_access",
-                Ok(SandboxPolicy::ReadOnly { .. }) => "read_only",
-                Ok(SandboxPolicy::WorkspaceWrite { .. }) => "workspace_write",
-                Ok(SandboxPolicy::ExternalSandbox { .. }) => "external_sandbox",
-                Err(_) => "workspace_write",
+            let file_system_policy = permission_profile.file_system_sandbox_policy();
+            if file_system_policy.has_full_disk_write_access() {
+                "full_access"
+            } else if file_system_policy
+                .get_writable_roots_with_cwd(cwd)
+                .is_empty()
+            {
+                "read_only"
+            } else {
+                "workspace_write"
             }
         }
     }
