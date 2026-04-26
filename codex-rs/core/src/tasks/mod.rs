@@ -5,6 +5,7 @@ mod review;
 mod undo;
 mod user_shell;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -31,6 +32,8 @@ use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use codex_analytics::TurnGitMetadataFact;
+use codex_analytics::TurnGitWorkspaceMetadata;
 use codex_analytics::TurnTokenUsageFact;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -149,6 +152,44 @@ fn emit_turn_memory_metric(
 
 fn bool_tag(value: bool) -> &'static str {
     if value { "true" } else { "false" }
+}
+
+fn git_workspaces_from_turn_metadata(
+    metadata: serde_json::Value,
+) -> Option<BTreeMap<String, TurnGitWorkspaceMetadata>> {
+    let workspaces = metadata.get("workspaces")?.as_object()?;
+    let git_workspaces = workspaces
+        .iter()
+        .filter_map(|(workspace_path, workspace_metadata)| {
+            serde_json::from_value::<TurnGitWorkspaceMetadata>(workspace_metadata.clone())
+                .ok()
+                .map(|metadata| (workspace_path.clone(), metadata))
+        })
+        .collect::<BTreeMap<_, _>>();
+    if git_workspaces.is_empty() {
+        None
+    } else {
+        Some(git_workspaces)
+    }
+}
+
+fn track_turn_git_metadata_analytics(sess: &Session, turn_context: &TurnContext) {
+    if !sess.enabled(Feature::GeneralAnalytics) {
+        return;
+    }
+    let Some(metadata) = turn_context.turn_metadata_state.current_meta_value() else {
+        return;
+    };
+    let Some(git_workspaces) = git_workspaces_from_turn_metadata(metadata) else {
+        return;
+    };
+    sess.services
+        .analytics_events_client
+        .track_turn_git_metadata(TurnGitMetadataFact {
+            turn_id: turn_context.sub_id.clone(),
+            thread_id: sess.conversation_id.to_string(),
+            git_workspaces,
+        });
 }
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
@@ -539,10 +580,6 @@ impl Session {
         turn_context: Arc<TurnContext>,
         last_agent_message: Option<String>,
     ) {
-        turn_context
-            .turn_metadata_state
-            .cancel_git_enrichment_task();
-
         let mut pending_input = Vec::<ResponseInputItem>::new();
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
@@ -691,6 +728,10 @@ impl Session {
         {
             warn!("failed to apply goal runtime turn-finished event: {err}");
         }
+        track_turn_git_metadata_analytics(self, turn_context.as_ref());
+        turn_context
+            .turn_metadata_state
+            .cancel_git_enrichment_task();
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),
             last_agent_message,

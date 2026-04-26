@@ -6,8 +6,11 @@ use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::future::pending;
 use tempfile::TempDir;
 use tokio::process::Command;
+use tokio::time::Duration;
+use tokio::time::timeout;
 
 #[tokio::test]
 async fn build_turn_metadata_header_includes_has_changes_for_clean_repo() {
@@ -47,6 +50,28 @@ async fn build_turn_metadata_header_includes_has_changes_for_clean_repo() {
         .output()
         .await
         .expect("git commit");
+    Command::new("git")
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/openai/codex.git",
+        ])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("git remote add");
+
+    let expected_head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("git rev-parse");
+    let expected_head = String::from_utf8(expected_head.stdout)
+        .expect("git rev-parse stdout should be utf-8")
+        .trim()
+        .to_string();
 
     let header = build_turn_metadata_header(&repo_path, Some("none"))
         .await
@@ -59,6 +84,20 @@ async fn build_turn_metadata_header_includes_has_changes_for_clean_repo() {
         .cloned()
         .expect("workspace");
 
+    assert_eq!(
+        workspace
+            .get("associated_remote_urls")
+            .and_then(Value::as_object)
+            .and_then(|remotes| remotes.get("origin"))
+            .and_then(Value::as_str),
+        Some("https://github.com/openai/codex.git")
+    );
+    assert_eq!(
+        workspace
+            .get("latest_git_commit_hash")
+            .and_then(Value::as_str),
+        Some(expected_head.as_str())
+    );
     assert_eq!(
         workspace.get("has_changes").and_then(Value::as_bool),
         Some(false)
@@ -143,4 +182,39 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert_eq!(json["session_id"].as_str(), Some("session-a"));
     assert_eq!(json["thread_source"].as_str(), Some("user"));
     assert_eq!(json["turn_id"].as_str(), Some("turn-a"));
+}
+
+#[tokio::test]
+async fn current_meta_value_does_not_wait_for_pending_git_enrichment_task() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let repo_path = temp_dir.path().join("repo").abs();
+    std::fs::create_dir_all(repo_path.join(".git")).expect("create git repo marker");
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+
+    let state = TurnMetadataState::new(
+        "session-a".to_string(),
+        &SessionSource::Exec,
+        "turn-a".to_string(),
+        repo_path,
+        &sandbox_policy,
+        WindowsSandboxLevel::Disabled,
+    );
+    *state
+        .enrichment_task
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tokio::spawn(async {
+        pending::<()>().await;
+    }));
+
+    let metadata = timeout(Duration::from_millis(50), async {
+        state.current_meta_value().expect("metadata")
+    })
+    .await
+    .expect("current metadata should not wait for git enrichment");
+
+    assert_eq!(metadata["session_id"].as_str(), Some("session-a"));
+    assert_eq!(metadata["turn_id"].as_str(), Some("turn-a"));
+    assert!(metadata.get("workspaces").is_none());
+
+    state.cancel_git_enrichment_task();
 }

@@ -183,7 +183,7 @@ fn parse_git_remote_urls(stdout: &str) -> Option<BTreeMap<String, String>> {
 
         let url = url_part.trim_start();
         if !url.is_empty() {
-            remotes.insert(name.to_string(), url.to_string());
+            remotes.insert(name.to_string(), scrub_git_remote_url(url));
         }
     }
 
@@ -192,6 +192,42 @@ fn parse_git_remote_urls(stdout: &str) -> Option<BTreeMap<String, String>> {
     } else {
         Some(remotes)
     }
+}
+
+/// Removes userinfo, query, and fragment components from Git remote URLs before
+/// they are used in telemetry or persisted metadata.
+pub fn scrub_git_remote_url(url: &str) -> String {
+    let without_query_or_fragment = url.find(&['?', '#'][..]).map_or(url, |index| &url[..index]);
+
+    let Some(scheme_end) = without_query_or_fragment.find("://") else {
+        let Some((_userinfo, after_userinfo)) = without_query_or_fragment.split_once('@') else {
+            return without_query_or_fragment.to_string();
+        };
+        let Some(colon_index) = after_userinfo.find(':') else {
+            return without_query_or_fragment.to_string();
+        };
+        if after_userinfo[..colon_index].contains('/') {
+            return without_query_or_fragment.to_string();
+        }
+
+        return after_userinfo.to_string();
+    };
+
+    let authority_start = scheme_end + "://".len();
+    let after_authority_start = &without_query_or_fragment[authority_start..];
+    let authority_len = after_authority_start
+        .find(&['/', '?', '#'][..])
+        .unwrap_or(after_authority_start.len());
+    let authority = &after_authority_start[..authority_len];
+    let Some(userinfo_end) = authority.rfind('@') else {
+        return without_query_or_fragment.to_string();
+    };
+
+    format!(
+        "{}{}",
+        &without_query_or_fragment[..authority_start],
+        &without_query_or_fragment[authority_start + userinfo_end + 1..]
+    )
 }
 
 /// A minimal commit summary entry used for pickers (subject + timestamp + sha).
@@ -723,4 +759,68 @@ pub async fn current_branch_name(cwd: &Path) -> Option<String> {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|name| !name.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_git_remote_urls;
+    use super::scrub_git_remote_url;
+    use pretty_assertions::assert_eq;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn scrub_git_remote_url_removes_credentials_from_http_urls() {
+        assert_eq!(
+            scrub_git_remote_url("https://user:placeholder@example.com/org/repo.git"),
+            "https://example.com/org/repo.git"
+        );
+        assert_eq!(
+            scrub_git_remote_url("https://placeholder@example.com/org/repo.git"),
+            "https://example.com/org/repo.git"
+        );
+    }
+
+    #[test]
+    fn scrub_git_remote_url_removes_query_and_fragment() {
+        assert_eq!(
+            scrub_git_remote_url("https://example.com/org/repo.git?credential=placeholder#main"),
+            "https://example.com/org/repo.git"
+        );
+    }
+
+    #[test]
+    fn scrub_git_remote_url_removes_userinfo_from_scp_like_git_urls() {
+        assert_eq!(
+            scrub_git_remote_url("git@github.com:openai/codex.git"),
+            "github.com:openai/codex.git"
+        );
+        assert_eq!(
+            scrub_git_remote_url("placeholder@github.com:openai/codex.git"),
+            "github.com:openai/codex.git"
+        );
+        assert_eq!(
+            scrub_git_remote_url("github.com:openai/codex.git"),
+            "github.com:openai/codex.git"
+        );
+    }
+
+    #[test]
+    fn parse_git_remote_urls_scrubs_credentials() {
+        let parsed = parse_git_remote_urls(
+            "origin\thttps://user:placeholder@example.com/org/repo.git (fetch)\n\
+             origin\thttps://user:placeholder@example.com/org/repo.git (push)\n\
+             upstream\tgit@github.com:openai/codex.git (fetch)\n",
+        );
+
+        let mut expected = BTreeMap::new();
+        expected.insert(
+            "origin".to_string(),
+            "https://example.com/org/repo.git".to_string(),
+        );
+        expected.insert(
+            "upstream".to_string(),
+            "github.com:openai/codex.git".to_string(),
+        );
+        assert_eq!(parsed, Some(expected));
+    }
 }

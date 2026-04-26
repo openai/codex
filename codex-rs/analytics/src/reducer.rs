@@ -41,6 +41,8 @@ use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
+use crate::facts::TurnGitMetadataFact;
+use crate::facts::TurnGitWorkspaceMetadata;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
@@ -57,6 +59,7 @@ use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
+use codex_git_utils::scrub_git_remote_url;
 use codex_login::default_client::originator;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
@@ -66,6 +69,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::TokenUsage;
 use sha1::Digest;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -149,6 +153,7 @@ struct TurnState {
     resolved_config: Option<TurnResolvedConfigFact>,
     started_at: Option<u64>,
     token_usage: Option<TokenUsage>,
+    git_workspaces: Option<BTreeMap<String, TurnGitWorkspaceMetadata>>,
     completed: Option<CompletedTurnState>,
     steer_count: usize,
 }
@@ -210,6 +215,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::TurnTokenUsage(input) => {
                     self.ingest_turn_token_usage(*input, out);
+                }
+                CustomAnalyticsFact::TurnGitMetadata(input) => {
+                    self.ingest_turn_git_metadata(*input, out);
                 }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
@@ -350,6 +358,7 @@ impl AnalyticsReducer {
             resolved_config: None,
             started_at: None,
             token_usage: None,
+            git_workspaces: None,
             completed: None,
             steer_count: 0,
         });
@@ -372,11 +381,46 @@ impl AnalyticsReducer {
             resolved_config: None,
             started_at: None,
             token_usage: None,
+            git_workspaces: None,
             completed: None,
             steer_count: 0,
         });
         turn_state.thread_id = Some(input.thread_id);
         turn_state.token_usage = Some(input.token_usage);
+        self.maybe_emit_turn_event(&turn_id, out);
+    }
+
+    fn ingest_turn_git_metadata(
+        &mut self,
+        input: TurnGitMetadataFact,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        if input.git_workspaces.is_empty() {
+            return;
+        }
+        let turn_id = input.turn_id.clone();
+        let mut git_workspaces = input.git_workspaces;
+        for metadata in git_workspaces.values_mut() {
+            let Some(remote_urls) = metadata.associated_remote_urls.as_mut() else {
+                continue;
+            };
+            for url in remote_urls.values_mut() {
+                *url = scrub_git_remote_url(url);
+            }
+        }
+        let turn_state = self.turns.entry(turn_id.clone()).or_insert(TurnState {
+            connection_id: None,
+            thread_id: None,
+            num_input_images: None,
+            resolved_config: None,
+            started_at: None,
+            token_usage: None,
+            git_workspaces: None,
+            completed: None,
+            steer_count: 0,
+        });
+        turn_state.thread_id = Some(input.thread_id);
+        turn_state.git_workspaces = Some(git_workspaces);
         self.maybe_emit_turn_event(&turn_id, out);
     }
 
@@ -533,6 +577,7 @@ impl AnalyticsReducer {
                     resolved_config: None,
                     started_at: None,
                     token_usage: None,
+                    git_workspaces: None,
                     completed: None,
                     steer_count: 0,
                 });
@@ -615,6 +660,7 @@ impl AnalyticsReducer {
                     resolved_config: None,
                     started_at: None,
                     token_usage: None,
+                    git_workspaces: None,
                     completed: None,
                     steer_count: 0,
                 });
@@ -634,6 +680,7 @@ impl AnalyticsReducer {
                             resolved_config: None,
                             started_at: None,
                             token_usage: None,
+                            git_workspaces: None,
                             completed: None,
                             steer_count: 0,
                         });
@@ -933,6 +980,7 @@ fn codex_turn_event_params(
         subagent_tool_call_count: None,
         web_search_count: None,
         image_generation_count: None,
+        git_workspaces: turn_state.git_workspaces.clone(),
         input_tokens: token_usage
             .as_ref()
             .map(|token_usage| token_usage.input_tokens),

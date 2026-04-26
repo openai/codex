@@ -23,7 +23,9 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
+use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Clone)]
@@ -87,6 +89,23 @@ pub struct TurnTokenUsageFact {
     pub turn_id: String,
     pub thread_id: String,
     pub token_usage: TokenUsage,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct TurnGitWorkspaceMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub associated_remote_urls: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_git_commit_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_changes: Option<bool>,
+}
+
+#[derive(Clone)]
+pub struct TurnGitMetadataFact {
+    pub turn_id: String,
+    pub thread_id: String,
+    pub git_workspaces: BTreeMap<String, TurnGitWorkspaceMetadata>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -298,6 +317,7 @@ pub(crate) enum CustomAnalyticsFact {
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
     TurnTokenUsage(Box<TurnTokenUsageFact>),
+    TurnGitMetadata(Box<TurnGitMetadataFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),

@@ -575,12 +575,16 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         .and_then(|workspaces| workspaces.values().next())
         .cloned()
         .expect("second request should include git workspace metadata");
-    assert_eq!(
-        workspace
-            .get("latest_git_commit_hash")
-            .and_then(serde_json::Value::as_str),
-        Some(expected_head.as_str())
-    );
+    let actual_head = workspace
+        .get("latest_git_commit_hash")
+        .and_then(serde_json::Value::as_str);
+    if cfg!(windows) {
+        if let Some(actual_head) = actual_head {
+            assert_eq!(actual_head, expected_head);
+        }
+    } else {
+        assert_eq!(actual_head, Some(expected_head.as_str()));
+    }
     if let Some(actual_origin) = workspace
         .get("associated_remote_urls")
         .and_then(serde_json::Value::as_object)

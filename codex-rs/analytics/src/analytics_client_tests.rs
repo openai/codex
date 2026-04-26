@@ -48,6 +48,8 @@ use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
+use crate::facts::TurnGitMetadataFact;
+use crate::facts::TurnGitWorkspaceMetadata;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRequestError;
@@ -105,6 +107,7 @@ use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1771,6 +1774,7 @@ fn turn_event_serializes_expected_shape() {
             subagent_tool_call_count: None,
             web_search_count: None,
             image_generation_count: None,
+            git_workspaces: None,
             input_tokens: None,
             cached_input_tokens: None,
             output_tokens: None,
@@ -1832,6 +1836,7 @@ fn turn_event_serializes_expected_shape() {
                 "subagent_tool_call_count": null,
                 "web_search_count": null,
                 "image_generation_count": null,
+                "git_workspaces": null,
                 "input_tokens": null,
                 "cached_input_tokens": null,
                 "output_tokens": null,
@@ -2140,6 +2145,82 @@ async fn turn_lifecycle_emits_turn_event() {
         json!(13)
     );
     assert_eq!(payload["event_params"]["total_tokens"], json!(321));
+}
+
+#[tokio::test]
+async fn turn_lifecycle_includes_git_metadata_when_recorded() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut out,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ false,
+    )
+    .await;
+
+    let mut associated_remote_urls = BTreeMap::new();
+    associated_remote_urls.insert(
+        "origin".to_string(),
+        "https://user:placeholder@example.com/openai/codex.git?credential=placeholder".to_string(),
+    );
+    associated_remote_urls.insert(
+        "upstream".to_string(),
+        "git@github.com:openai/codex.git".to_string(),
+    );
+    let mut git_workspaces = BTreeMap::new();
+    git_workspaces.insert(
+        "/workspace/codex".to_string(),
+        TurnGitWorkspaceMetadata {
+            associated_remote_urls: Some(associated_remote_urls),
+            latest_git_commit_hash: Some("abc123".to_string()),
+            has_changes: Some(true),
+        },
+    );
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnGitMetadata(Box::new(
+                TurnGitMetadataFact {
+                    turn_id: "turn-2".to_string(),
+                    thread_id: "thread-2".to_string(),
+                    git_workspaces,
+                },
+            ))),
+            &mut out,
+        )
+        .await;
+    assert!(out.is_empty());
+
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut out,
+        )
+        .await;
+
+    assert_eq!(out.len(), 1);
+    let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
+    assert_eq!(
+        payload["event_params"]["git_workspaces"],
+        json!({
+            "/workspace/codex": {
+                "associated_remote_urls": {
+                    "origin": "https://example.com/openai/codex.git",
+                    "upstream": "github.com:openai/codex.git"
+                },
+                "latest_git_commit_hash": "abc123",
+                "has_changes": true
+            }
+        })
+    );
 }
 
 #[tokio::test]
