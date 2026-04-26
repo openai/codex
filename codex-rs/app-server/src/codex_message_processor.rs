@@ -2209,7 +2209,7 @@ impl CodexMessageProcessor {
         let started_network_proxy = match self.config.permissions.network.as_ref() {
             Some(spec) => match spec
                 .start_proxy(
-                    self.config.permissions.sandbox_policy.get(),
+                    self.config.permissions.permission_profile.get(),
                     /*policy_decider*/ None,
                     /*blocked_request_observer*/ None,
                     managed_network_requirements_enabled,
@@ -2290,17 +2290,11 @@ impl CodexMessageProcessor {
                     &file_system_sandbox_policy,
                     network_sandbox_policy,
                 );
-            let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
-                &effective_permission_profile,
-                &file_system_sandbox_policy,
-                network_sandbox_policy,
-                sandbox_cwd.as_path(),
-            );
             match self
                 .config
                 .permissions
-                .sandbox_policy
-                .can_set(&sandbox_policy)
+                .permission_profile
+                .can_set(&effective_permission_profile)
             {
                 Ok(()) => effective_permission_profile,
                 Err(err) => {
@@ -2320,13 +2314,29 @@ impl CodexMessageProcessor {
                         codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&policy, &sandbox_cwd);
                     let network_sandbox_policy =
                         codex_protocol::permissions::NetworkSandboxPolicy::from(&policy);
-                    codex_protocol::models::PermissionProfile::from_runtime_permissions_with_enforcement(
+                    let permission_profile =
+                        codex_protocol::models::PermissionProfile::from_runtime_permissions_with_enforcement(
                         codex_protocol::models::SandboxEnforcement::from_legacy_sandbox_policy(
                             &policy,
                         ),
                         &file_system_sandbox_policy,
                         network_sandbox_policy,
-                    )
+                    );
+                    if let Err(err) = self
+                        .config
+                        .permissions
+                        .permission_profile
+                        .can_set(&permission_profile)
+                    {
+                        let error = JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("invalid sandbox policy: {err}"),
+                            data: None,
+                        };
+                        self.outgoing.send_error(request, error).await;
+                        return;
+                    }
+                    permission_profile
                 }
                 Err(err) => {
                     let error = JSONRPCErrorError {

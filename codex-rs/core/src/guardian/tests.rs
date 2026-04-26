@@ -27,6 +27,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -1942,7 +1943,7 @@ async fn guardian_review_session_config_preserves_parent_network_proxy() {
             }),
             ..Default::default()
         }),
-        parent_config.permissions.sandbox_policy.get(),
+        parent_config.permissions.permission_profile.get(),
     )
     .expect("network proxy spec");
     parent_config.permissions.network = Some(network.clone());
@@ -2007,7 +2008,7 @@ async fn guardian_review_session_config_uses_live_network_proxy_state() {
         NetworkProxySpec::from_config_and_constraints(
             parent_network,
             /*requirements*/ None,
-            parent_config.permissions.sandbox_policy.get(),
+            parent_config.permissions.permission_profile.get(),
         )
         .expect("parent network proxy spec"),
     );
@@ -2032,7 +2033,9 @@ async fn guardian_review_session_config_uses_live_network_proxy_state() {
             NetworkProxySpec::from_config_and_constraints(
                 live_network,
                 /*requirements*/ None,
-                &SandboxPolicy::new_read_only_policy(),
+                &PermissionProfile::from_legacy_sandbox_policy(
+                    &SandboxPolicy::new_read_only_policy(),
+                ),
             )
             .expect("live network proxy spec")
         )

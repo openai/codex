@@ -3,6 +3,10 @@ use std::time::Duration;
 
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
+use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
+use codex_network_proxy::PROXY_ENV_KEYS;
+#[cfg(target_os = "macos")]
+use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -123,10 +127,24 @@ pub(crate) async fn execute_user_shell_command(
     let use_login_shell = true;
     let session_shell = session.user_shell();
     let display_command = session_shell.derive_exec_args(&command, use_login_shell);
-    let exec_env_map = create_env(
+    let mut exec_env_map = create_env(
         &turn_context.shell_environment_policy,
         Some(session.conversation_id),
     );
+    if exec_env_map.contains_key(PROXY_ACTIVE_ENV_KEY) {
+        for key in PROXY_ENV_KEYS {
+            exec_env_map.remove(*key);
+        }
+        #[cfg(target_os = "macos")]
+        if exec_env_map
+            .get(PROXY_GIT_SSH_COMMAND_ENV_KEY)
+            .is_some_and(|value| {
+                value.starts_with(codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER)
+            })
+        {
+            exec_env_map.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
+        }
+    }
     let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
         session_shell.as_ref(),

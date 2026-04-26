@@ -315,7 +315,10 @@ fn sample_turn_resolved_config(turn_id: &str) -> TurnResolvedConfigFact {
         session_source: SessionSource::Exec,
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: CorePermissionProfile::from_legacy_sandbox_policy(
+            &SandboxPolicy::new_read_only_policy(),
+        ),
+        permission_profile_cwd: PathBuf::from("/tmp"),
         reasoning_effort: None,
         reasoning_summary: None,
         service_tier: None,

@@ -845,8 +845,10 @@ impl Session {
         }
     }
 
-    fn managed_network_proxy_active_for_sandbox_policy(sandbox_policy: &SandboxPolicy) -> bool {
-        !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
+    fn managed_network_proxy_active_for_permission_profile(
+        permission_profile: &PermissionProfile,
+    ) -> bool {
+        !matches!(permission_profile, PermissionProfile::Disabled)
     }
 
     /// Builds the `x-codex-beta-features` header value for this session.
@@ -879,7 +881,7 @@ impl Session {
     async fn start_managed_network_proxy(
         spec: &crate::config::NetworkProxySpec,
         exec_policy: &codex_execpolicy::Policy,
-        sandbox_policy: &SandboxPolicy,
+        permission_profile: &PermissionProfile,
         network_policy_decider: Option<Arc<dyn codex_network_proxy::NetworkPolicyDecider>>,
         blocked_request_observer: Option<Arc<dyn codex_network_proxy::BlockedRequestObserver>>,
         managed_network_requirements_enabled: bool,
@@ -896,7 +898,7 @@ impl Session {
             .unwrap_or_else(|_| spec.clone());
         let network_proxy = spec
             .start_proxy(
-                sandbox_policy,
+                permission_profile,
                 network_policy_decider,
                 blocked_request_observer,
                 managed_network_requirements_enabled,
@@ -914,7 +916,7 @@ impl Session {
         Ok((network_proxy, session_network_proxy))
     }
 
-    async fn refresh_managed_network_proxy_for_current_sandbox_policy(&self) {
+    async fn refresh_managed_network_proxy_for_current_permission_profile(&self) {
         let Some(started_proxy) = self.services.network_proxy.as_ref() else {
             return;
         };
@@ -935,7 +937,8 @@ impl Session {
             return;
         };
 
-        let spec = match spec.recompute_for_sandbox_policy(&session_configuration.sandbox_policy())
+        let spec = match spec
+            .recompute_for_permission_profile(&session_configuration.permission_profile())
         {
             Ok(spec) => spec,
             Err(err) => {
@@ -1285,7 +1288,7 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let (previous_cwd, sandbox_policy_changed, next_cwd, codex_home, session_source) = {
+        let (previous_cwd, permission_profile_changed, next_cwd, codex_home, session_source) = {
             let mut state = self.state.lock().await;
             let updated = match state.session_configuration.apply(&updates) {
                 Ok(updated) => updated,
@@ -1296,16 +1299,17 @@ impl Session {
             };
 
             let previous_cwd = state.session_configuration.cwd.clone();
-            let previous_sandbox_policy = state.session_configuration.sandbox_policy();
-            let updated_sandbox_policy = updated.sandbox_policy();
-            let sandbox_policy_changed = previous_sandbox_policy != updated_sandbox_policy;
+            let previous_permission_profile = state.session_configuration.permission_profile();
+            let updated_permission_profile = updated.permission_profile();
+            let permission_profile_changed =
+                previous_permission_profile != updated_permission_profile;
             let next_cwd = updated.cwd.clone();
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
             state.session_configuration = updated;
             (
                 previous_cwd,
-                sandbox_policy_changed,
+                permission_profile_changed,
                 next_cwd,
                 codex_home,
                 session_source,
@@ -1318,8 +1322,8 @@ impl Session {
             &codex_home,
             &session_source,
         );
-        if sandbox_policy_changed {
-            self.refresh_managed_network_proxy_for_current_sandbox_policy()
+        if permission_profile_changed {
+            self.refresh_managed_network_proxy_for_current_permission_profile()
                 .await;
         }
 
