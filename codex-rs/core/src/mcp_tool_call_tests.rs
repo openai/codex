@@ -66,6 +66,7 @@ fn approval_metadata(
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     }
 }
 
@@ -714,6 +715,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
             .expect("_codex_apps metadata should be an object"),
         ),
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     assert_eq!(
@@ -725,7 +727,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
         ),
         Some(serde_json::json!({
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
-            MCP_TOOL_CODEX_APPS_META_KEY: {
+            CODEX_APPS_META_KEY: {
                 "call_id": "call_abc123xyz789",
                 "resource_uri": "connector://calendar/tools/calendar_create_event",
                 "contains_mcp_source": true,
@@ -755,7 +757,7 @@ async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_cod
         ),
         Some(serde_json::json!({
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
-            MCP_TOOL_CODEX_APPS_META_KEY: {
+            CODEX_APPS_META_KEY: {
                 "call_id": "call_abc123xyz789",
             },
         }))
@@ -788,6 +790,52 @@ fn mcp_tool_call_thread_id_meta_is_added_to_request_meta() {
     assert_eq!(
         with_mcp_tool_call_thread_id_meta(Some(serde_json::json!("invalid-meta")), "thread-live"),
         Some(serde_json::json!("invalid-meta"))
+    );
+}
+
+#[test]
+fn openai_file_upload_options_are_enabled_for_library_connector() {
+    let meta = serde_json::json!({
+        MCP_TOOL_OPENAI_FILE_UPLOAD_CONFIG_KEY: {
+            "store_in_library": true,
+        },
+    });
+
+    assert_eq!(
+        openai_file_upload_options_for_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            Some(OPENAI_LIBRARY_CONNECTOR_ID),
+            meta.as_object(),
+        ),
+        Some(OpenAiFileUploadOptions {
+            store_in_library: true,
+        })
+    );
+}
+
+#[test]
+fn openai_file_upload_options_ignore_untrusted_connectors() {
+    let meta = serde_json::json!({
+        MCP_TOOL_OPENAI_FILE_UPLOAD_CONFIG_KEY: {
+            "store_in_library": true,
+        },
+    });
+
+    assert_eq!(
+        openai_file_upload_options_for_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            Some("connector_third_party_drive"),
+            meta.as_object(),
+        ),
+        None
+    );
+    assert_eq!(
+        openai_file_upload_options_for_tool(
+            "docs",
+            Some(OPENAI_LIBRARY_CONNECTOR_ID),
+            meta.as_object(),
+        ),
+        None
     );
 }
 
@@ -921,6 +969,7 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let request = build_guardian_mcp_tool_review_request("call-1", &invocation, Some(&metadata));
@@ -1485,6 +1534,7 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1558,6 +1608,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1614,6 +1665,7 @@ async fn permission_request_hook_allows_mcp_tool_call() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1745,6 +1797,7 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
     let remembered_key =
         session_mcp_tool_approval_key(&invocation, Some(&metadata), AppToolApproval::Auto)
@@ -1831,6 +1884,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1884,6 +1938,7 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let mut approval_task = {
@@ -1963,6 +2018,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -2035,6 +2091,7 @@ async fn custom_approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -2107,6 +2164,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_without_annotations() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -2187,6 +2245,7 @@ async fn full_access_mode_skips_arc_monitor_for_all_approval_modes() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     for approval_mode in [
@@ -2294,6 +2353,7 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
