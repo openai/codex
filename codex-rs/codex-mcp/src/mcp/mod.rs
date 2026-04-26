@@ -34,9 +34,9 @@ use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use serde_json::Value;
 
-use crate::apps::codex_apps_tools_cache_key;
-use crate::manager::McpConnectionManager;
-use crate::runtime::McpRuntimeEnvironment;
+use crate::codex_apps::codex_apps_tools_cache_key;
+use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_runtime::McpRuntimeEnvironment;
 
 pub const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
