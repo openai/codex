@@ -22,6 +22,7 @@ fn auto_review_denial_event() -> GuardianAssessmentEvent {
 #[tokio::test]
 async fn auto_review_denials_popup_lists_stored_auto_review_denials() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
     chat.handle_codex_event(Event {
         id: "guardian-assessment".into(),
         msg: EventMsg::GuardianAssessment(auto_review_denial_event()),
@@ -37,23 +38,28 @@ async fn auto_review_denials_popup_lists_stored_auto_review_denials() {
 #[tokio::test]
 async fn approving_recent_denial_emits_structured_core_op_once() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
     chat.handle_codex_event(Event {
         id: "guardian-assessment".into(),
         msg: EventMsg::GuardianAssessment(auto_review_denial_event()),
     });
     drain_insert_history(&mut rx);
 
-    chat.approve_recent_auto_review_denial("auto-review-recent-1".to_string());
+    chat.approve_recent_auto_review_denial(thread_id, "auto-review-recent-1".to_string());
 
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::CodexOp(Op::ApproveGuardianDeniedAction { event }))
-            if event.id == "auto-review-recent-1"
+        Ok(AppEvent::SubmitThreadOp {
+            thread_id: submitted_thread_id,
+            op: Op::ApproveGuardianDeniedAction { event }
+        }) if submitted_thread_id == thread_id
+                && event.id == "auto-review-recent-1"
                 && event.status == GuardianAssessmentStatus::Denied
     );
     assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
 
-    chat.approve_recent_auto_review_denial("auto-review-recent-1".to_string());
+    chat.approve_recent_auto_review_denial(thread_id, "auto-review-recent-1".to_string());
     assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
     assert!(rx.try_recv().is_err());
 }

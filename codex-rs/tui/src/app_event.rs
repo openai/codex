@@ -178,6 +178,7 @@ pub(crate) enum AppEvent {
 
     /// Approve one retry of a recent auto-review denial selected in the TUI.
     ApproveRecentAutoReviewDenial {
+        thread_id: ThreadId,
         id: String,
     },
 
