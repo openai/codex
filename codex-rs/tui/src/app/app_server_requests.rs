@@ -4,7 +4,9 @@ use std::collections::VecDeque;
 use crate::app_command::AppCommand;
 use crate::app_command::AppCommandView;
 use crate::app_server_approval_conversions::granted_permission_profile_from_request;
+use codex_app_server_protocol::ApplyPatchApprovalResponse;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::McpServerElicitationAction;
@@ -48,10 +50,34 @@ pub(crate) enum ResolvedAppServerRequest {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecApprovalRequestKind {
+    Legacy,
+    V2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingExecApprovalRequest {
+    request_id: AppServerRequestId,
+    kind: ExecApprovalRequestKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileChangeApprovalRequestKind {
+    Legacy,
+    V2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingFileChangeApprovalRequest {
+    request_id: AppServerRequestId,
+    kind: FileChangeApprovalRequestKind,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct PendingAppServerRequests {
-    exec_approvals: HashMap<String, AppServerRequestId>,
-    file_change_approvals: HashMap<String, AppServerRequestId>,
+    exec_approvals: HashMap<String, PendingExecApprovalRequest>,
+    file_change_approvals: HashMap<String, PendingFileChangeApprovalRequest>,
     permissions_approvals: HashMap<String, AppServerRequestId>,
     user_inputs: HashMap<String, VecDeque<PendingUserInputRequest>>,
     mcp_requests: HashMap<McpLegacyRequestKey, AppServerRequestId>,
@@ -76,12 +102,23 @@ impl PendingAppServerRequests {
                     .approval_id
                     .clone()
                     .unwrap_or_else(|| params.item_id.clone());
-                self.exec_approvals.insert(approval_id, request_id.clone());
+                self.exec_approvals.insert(
+                    approval_id,
+                    PendingExecApprovalRequest {
+                        request_id: request_id.clone(),
+                        kind: ExecApprovalRequestKind::V2,
+                    },
+                );
                 None
             }
             ServerRequest::FileChangeRequestApproval { request_id, params } => {
-                self.file_change_approvals
-                    .insert(params.item_id.clone(), request_id.clone());
+                self.file_change_approvals.insert(
+                    params.item_id.clone(),
+                    PendingFileChangeApprovalRequest {
+                        request_id: request_id.clone(),
+                        kind: FileChangeApprovalRequestKind::V2,
+                    },
+                );
                 None
             }
             ServerRequest::PermissionsRequestApproval { request_id, params } => {
@@ -116,19 +153,29 @@ impl PendingAppServerRequests {
                 })
             }
             ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
-            ServerRequest::ApplyPatchApproval { request_id, .. } => {
-                Some(UnsupportedAppServerRequest {
-                    request_id: request_id.clone(),
-                    message: "Legacy patch approval requests are not available in TUI yet."
-                        .to_string(),
-                })
+            ServerRequest::ApplyPatchApproval { request_id, params } => {
+                self.file_change_approvals.insert(
+                    params.call_id.clone(),
+                    PendingFileChangeApprovalRequest {
+                        request_id: request_id.clone(),
+                        kind: FileChangeApprovalRequestKind::Legacy,
+                    },
+                );
+                None
             }
-            ServerRequest::ExecCommandApproval { request_id, .. } => {
-                Some(UnsupportedAppServerRequest {
-                    request_id: request_id.clone(),
-                    message: "Legacy command approval requests are not available in TUI yet."
-                        .to_string(),
-                })
+            ServerRequest::ExecCommandApproval { request_id, params } => {
+                let approval_id = params
+                    .approval_id
+                    .clone()
+                    .unwrap_or_else(|| params.call_id.clone());
+                self.exec_approvals.insert(
+                    approval_id,
+                    PendingExecApprovalRequest {
+                        request_id: request_id.clone(),
+                        kind: ExecApprovalRequestKind::Legacy,
+                    },
+                );
+                None
             }
         }
     }
@@ -145,30 +192,50 @@ impl PendingAppServerRequests {
             AppCommandView::ExecApproval { id, decision, .. } => self
                 .exec_approvals
                 .remove(id)
-                .map(|request_id| {
+                .map(|pending| {
+                    let result = match pending.kind {
+                        ExecApprovalRequestKind::Legacy => {
+                            serde_json::to_value(ExecCommandApprovalResponse {
+                                decision: decision.clone(),
+                            })
+                        }
+                        ExecApprovalRequestKind::V2 => {
+                            serde_json::to_value(CommandExecutionRequestApprovalResponse {
+                                decision: decision.clone().into(),
+                            })
+                        }
+                    }
+                    .map_err(|err| {
+                        format!("failed to serialize command execution approval response: {err}")
+                    })?;
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
-                        request_id,
-                        result: serde_json::to_value(CommandExecutionRequestApprovalResponse {
-                            decision: decision.clone().into(),
-                        })
-                        .map_err(|err| {
-                            format!("failed to serialize command execution approval response: {err}")
-                        })?,
+                        request_id: pending.request_id,
+                        result,
                     })
                 })
                 .transpose()?,
             AppCommandView::PatchApproval { id, decision } => self
                 .file_change_approvals
                 .remove(id)
-                .map(|request_id| {
+                .map(|pending| {
+                    let result = match pending.kind {
+                        FileChangeApprovalRequestKind::Legacy => {
+                            serde_json::to_value(ApplyPatchApprovalResponse {
+                                decision: decision.clone(),
+                            })
+                        }
+                        FileChangeApprovalRequestKind::V2 => {
+                            serde_json::to_value(FileChangeRequestApprovalResponse {
+                                decision: file_change_decision(decision)?,
+                            })
+                        }
+                    }
+                    .map_err(|err| {
+                        format!("failed to serialize file change approval response: {err}")
+                    })?;
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
-                        request_id,
-                        result: serde_json::to_value(FileChangeRequestApprovalResponse {
-                            decision: file_change_decision(decision)?,
-                        })
-                        .map_err(|err| {
-                            format!("failed to serialize file change approval response: {err}")
-                        })?,
+                        request_id: pending.request_id,
+                        result,
                     })
                 })
                 .transpose()?,
@@ -312,11 +379,11 @@ impl PendingAppServerRequests {
             ServerRequest::CommandExecutionRequestApproval { request_id, .. } => self
                 .exec_approvals
                 .values()
-                .any(|pending_request_id| pending_request_id == request_id),
+                .any(|pending| &pending.request_id == request_id),
             ServerRequest::FileChangeRequestApproval { request_id, .. } => self
                 .file_change_approvals
                 .values()
-                .any(|pending_request_id| pending_request_id == request_id),
+                .any(|pending| &pending.request_id == request_id),
             ServerRequest::PermissionsRequestApproval { request_id, .. } => self
                 .permissions_approvals
                 .values()
@@ -418,6 +485,7 @@ mod tests {
     use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+    use codex_app_server_protocol::ExecCommandApprovalResponse;
     use codex_app_server_protocol::FileChangeRequestApprovalParams;
     use codex_app_server_protocol::McpElicitationObjectType;
     use codex_app_server_protocol::McpElicitationSchema;
@@ -431,6 +499,7 @@ mod tests {
     use codex_app_server_protocol::ToolRequestUserInputAnswer;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_app_server_protocol::ToolRequestUserInputResponse;
+    use codex_app_server_protocol::{ApplyPatchApprovalResponse, ExecCommandApprovalParams};
     use codex_protocol::approvals::ElicitationAction;
     use codex_protocol::approvals::ExecPolicyAmendment;
     use codex_protocol::mcp::RequestId as McpRequestId;
@@ -481,6 +550,43 @@ mod tests {
 
         assert_eq!(resolution.request_id, AppServerRequestId::Integer(41));
         assert_eq!(resolution.result, json!({ "decision": "accept" }));
+    }
+
+    #[test]
+    fn resolves_legacy_exec_approval_through_app_server_request_id() {
+        let mut pending = PendingAppServerRequests::default();
+        let request = ServerRequest::ExecCommandApproval {
+            request_id: AppServerRequestId::Integer(42),
+            params: ExecCommandApprovalParams {
+                conversation_id: "thread-1".to_string(),
+                call_id: "call-legacy".to_string(),
+                approval_id: Some("approval-legacy".to_string()),
+                command: vec!["git".to_string(), "status".to_string()],
+                cwd: PathBuf::from("/tmp"),
+                reason: Some("Need approval".to_string()),
+                parsed_cmd: Vec::new(),
+            },
+        };
+
+        assert_eq!(pending.note_server_request(&request), None);
+
+        let resolution = pending
+            .take_resolution(&Op::ExecApproval {
+                id: "approval-legacy".to_string(),
+                turn_id: None,
+                decision: ReviewDecision::Approved,
+            })
+            .expect("legacy exec response should serialize")
+            .expect("legacy exec request should be pending");
+
+        assert_eq!(resolution.request_id, AppServerRequestId::Integer(42));
+        assert_eq!(
+            serde_json::from_value::<ExecCommandApprovalResponse>(resolution.result)
+                .expect("legacy exec response should decode"),
+            ExecCommandApprovalResponse {
+                decision: ReviewDecision::Approved,
+            }
+        );
     }
 
     #[test]
@@ -734,6 +840,41 @@ mod tests {
         assert_eq!(
             error,
             "execpolicy amendment is not a valid file change approval decision"
+        );
+    }
+
+    #[test]
+    fn resolves_legacy_patch_approval_through_app_server_request_id() {
+        let mut pending = PendingAppServerRequests::default();
+        assert_eq!(
+            pending.note_server_request(&ServerRequest::ApplyPatchApproval {
+                request_id: AppServerRequestId::Integer(43),
+                params: codex_app_server_protocol::ApplyPatchApprovalParams {
+                    conversation_id: "thread-1".to_string(),
+                    call_id: "patch-legacy".to_string(),
+                    file_changes: HashMap::new(),
+                    reason: Some("Need patch approval".to_string()),
+                    grant_root: None,
+                },
+            }),
+            None
+        );
+
+        let resolution = pending
+            .take_resolution(&Op::PatchApproval {
+                id: "patch-legacy".to_string(),
+                decision: ReviewDecision::Approved,
+            })
+            .expect("legacy patch response should serialize")
+            .expect("legacy patch request should be pending");
+
+        assert_eq!(resolution.request_id, AppServerRequestId::Integer(43));
+        assert_eq!(
+            serde_json::from_value::<ApplyPatchApprovalResponse>(resolution.result)
+                .expect("legacy patch response should decode"),
+            ApplyPatchApprovalResponse {
+                decision: ReviewDecision::Approved,
+            }
         );
     }
 

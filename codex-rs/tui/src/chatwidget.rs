@@ -82,6 +82,7 @@ use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppSummary;
+use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
 use codex_app_server_protocol::CollabAgentStatus as AppServerCollabAgentStatus;
@@ -90,6 +91,7 @@ use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ErrorNotification;
+use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::GuardianApprovalReviewAction;
 use codex_app_server_protocol::ItemCompletedNotification;
@@ -1755,6 +1757,26 @@ fn exec_approval_request_from_params(
     }
 }
 
+fn legacy_exec_approval_request_from_params(
+    params: ExecCommandApprovalParams,
+    fallback_cwd: &AbsolutePathBuf,
+) -> ExecApprovalRequestEvent {
+    ExecApprovalRequestEvent {
+        call_id: params.call_id.clone(),
+        command: params.command,
+        cwd: AbsolutePathBuf::try_from(params.cwd).unwrap_or_else(|_| fallback_cwd.clone()),
+        reason: params.reason,
+        network_approval_context: None,
+        additional_permissions: None,
+        turn_id: String::new(),
+        approval_id: params.approval_id,
+        proposed_execpolicy_amendment: None,
+        proposed_network_policy_amendments: None,
+        available_decisions: None,
+        parsed_cmd: params.parsed_cmd,
+    }
+}
+
 fn patch_approval_request_from_params(
     params: FileChangeRequestApprovalParams,
 ) -> ApplyPatchApprovalRequestEvent {
@@ -1762,6 +1784,18 @@ fn patch_approval_request_from_params(
         call_id: params.item_id,
         turn_id: params.turn_id,
         changes: HashMap::new(),
+        reason: params.reason,
+        grant_root: params.grant_root,
+    }
+}
+
+fn legacy_patch_approval_request_from_params(
+    params: ApplyPatchApprovalParams,
+) -> ApplyPatchApprovalRequestEvent {
+    ApplyPatchApprovalRequestEvent {
+        call_id: params.call_id,
+        turn_id: String::new(),
+        changes: params.file_changes,
         reason: params.reason,
         grant_root: params.grant_root,
     }
@@ -6927,10 +6961,21 @@ impl ChatWidget {
             ServerRequest::ToolRequestUserInput { params, .. } => {
                 self.on_request_user_input(request_user_input_from_params(params));
             }
+            ServerRequest::ApplyPatchApproval { params, .. } => {
+                self.on_apply_patch_approval_request(
+                    id,
+                    legacy_patch_approval_request_from_params(params),
+                );
+            }
+            ServerRequest::ExecCommandApproval { params, .. } => {
+                let fallback_cwd = self.config.cwd.clone();
+                self.on_exec_approval_request(
+                    id,
+                    legacy_exec_approval_request_from_params(params, &fallback_cwd),
+                );
+            }
             ServerRequest::DynamicToolCall { .. }
-            | ServerRequest::ChatgptAuthTokensRefresh { .. }
-            | ServerRequest::ApplyPatchApproval { .. }
-            | ServerRequest::ExecCommandApproval { .. } => {
+            | ServerRequest::ChatgptAuthTokensRefresh { .. } => {
                 if replay_kind.is_none() {
                     self.add_error_message(TUI_STUB_MESSAGE.to_string());
                 }
