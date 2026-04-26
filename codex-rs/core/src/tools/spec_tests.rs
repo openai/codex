@@ -297,31 +297,6 @@ fn build_specs_with_unavailable_tools(
 }
 
 #[tokio::test]
-async fn model_provided_unified_exec_is_blocked_for_windows_sandboxed_policies() {
-    let mut model_info = model_info_from_models_json("gpt-5.4").await;
-    model_info.shell_type = ConfigShellToolType::UnifiedExec;
-    let features = Features::with_defaults();
-    let available_models = Vec::new();
-    let config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        image_generation_tool_auth_allowed: true,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::new_workspace_write_policy(),
-        windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
-    });
-
-    let expected_shell_type = if cfg!(target_os = "windows") {
-        ConfigShellToolType::ShellCommand
-    } else {
-        ConfigShellToolType::UnifiedExec
-    };
-    assert_eq!(config.shell_type, expected_shell_type);
-}
-
-#[tokio::test]
 async fn get_memory_requires_feature_flag() {
     let config = test_config().await;
     let model_info = construct_model_info_offline("gpt-5.4", &config);

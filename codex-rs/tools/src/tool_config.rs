@@ -134,8 +134,7 @@ impl ToolsConfig {
             image_generation_tool_auth_allowed,
             web_search_mode,
             session_source,
-            sandbox_policy,
-            windows_sandbox_level,
+            ..
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_code_mode = features.enabled(Feature::CodeMode);
@@ -165,26 +164,25 @@ impl ToolsConfig {
             } else {
                 ShellCommandBackendConfig::Classic
             };
-        let unified_exec_allowed = unified_exec_allowed_in_environment(
-            cfg!(target_os = "windows"),
-            sandbox_policy,
-            *windows_sandbox_level,
-        );
+        let unified_exec_enabled = features.enabled(Feature::UnifiedExec);
+        let model_shell_type = match model_info.shell_type {
+            ConfigShellToolType::UnifiedExec if !unified_exec_enabled => {
+                ConfigShellToolType::ShellCommand
+            }
+            other => other,
+        };
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
         } else if features.enabled(Feature::ShellZshFork) {
             ConfigShellToolType::ShellCommand
-        } else if features.enabled(Feature::UnifiedExec) && unified_exec_allowed {
+        } else if unified_exec_enabled {
             if codex_utils_pty::conpty_supported() {
                 ConfigShellToolType::UnifiedExec
             } else {
                 ConfigShellToolType::ShellCommand
             }
-        } else if model_info.shell_type == ConfigShellToolType::UnifiedExec && !unified_exec_allowed
-        {
-            ConfigShellToolType::ShellCommand
         } else {
-            model_info.shell_type
+            model_shell_type
         };
 
         let apply_patch_tool_type = match model_info.apply_patch_tool_type {
@@ -318,19 +316,6 @@ impl ToolsConfig {
 
 fn supports_image_generation(model_info: &ModelInfo) -> bool {
     model_info.input_modalities.contains(&InputModality::Image)
-}
-
-fn unified_exec_allowed_in_environment(
-    is_windows: bool,
-    sandbox_policy: &SandboxPolicy,
-    windows_sandbox_level: WindowsSandboxLevel,
-) -> bool {
-    !(is_windows
-        && windows_sandbox_level != WindowsSandboxLevel::Disabled
-        && !matches!(
-            sandbox_policy,
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-        ))
 }
 
 #[cfg(test)]
