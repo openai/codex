@@ -4972,6 +4972,80 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
 }
 
 #[tokio::test]
+async fn build_settings_update_items_marks_network_disabled_when_network_is_removed() {
+    let (session, mut previous_context) = make_session_and_context().await;
+
+    let mut config = (*previous_context.config).clone();
+    let mut requirements = config.config_layer_stack.requirements().clone();
+    requirements.network = Some(Sourced::new(
+        NetworkConstraints {
+            domains: Some(NetworkDomainPermissionsToml {
+                entries: std::collections::BTreeMap::from([(
+                    "api.example.com".to_string(),
+                    NetworkDomainPermissionToml::Allow,
+                )]),
+            }),
+            ..Default::default()
+        },
+        RequirementSource::CloudRequirements,
+    ));
+    let layers = config
+        .config_layer_stack
+        .get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
+        .into_iter()
+        .cloned()
+        .collect();
+    config.config_layer_stack = ConfigLayerStack::new(
+        layers,
+        requirements,
+        config.config_layer_stack.requirements_toml().clone(),
+    )
+    .expect("rebuild previous config layer stack with network requirements");
+    previous_context.config = Arc::new(config);
+
+    let mut current_context = previous_context
+        .with_model(
+            previous_context.model_info.slug.clone(),
+            &session.services.models_manager,
+        )
+        .await;
+    let mut config = (*current_context.config).clone();
+    let mut requirements = config.config_layer_stack.requirements().clone();
+    requirements.network = None;
+    let layers = config
+        .config_layer_stack
+        .get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
+        .into_iter()
+        .cloned()
+        .collect();
+    config.config_layer_stack = ConfigLayerStack::new(
+        layers,
+        requirements,
+        config.config_layer_stack.requirements_toml().clone(),
+    )
+    .expect("rebuild current config layer stack without network requirements");
+    current_context.config = Arc::new(config);
+
+    let reference_context_item = previous_context.to_turn_context_item();
+    let update_items = session
+        .build_settings_update_items(Some(&reference_context_item), &current_context)
+        .await;
+
+    let environment_update = user_input_texts(&update_items)
+        .into_iter()
+        .find(|text| text.contains("<environment_context>"))
+        .expect("environment update item should be emitted");
+    assert!(environment_update.contains("<network enabled=\"false\" />"));
+    assert!(!environment_update.contains("<allowed>api.example.com</allowed>"));
+}
+
+#[tokio::test]
 async fn build_settings_update_items_emits_environment_item_for_time_changes() {
     let (session, previous_context) = make_session_and_context().await;
     let previous_context = Arc::new(previous_context);

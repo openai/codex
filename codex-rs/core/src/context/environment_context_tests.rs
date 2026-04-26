@@ -73,6 +73,31 @@ fn serialize_environment_context_with_network() {
 }
 
 #[test]
+fn serialize_environment_context_with_disabled_network() {
+    let context = EnvironmentContext::new(
+        Some(test_path_buf("/repo")),
+        fake_shell_name(),
+        Some("2026-02-26".to_string()),
+        Some("America/Los_Angeles".to_string()),
+        Some(NetworkContext::disabled()),
+        /*subagents*/ None,
+    );
+
+    let expected = format!(
+        r#"<environment_context>
+  <cwd>{}</cwd>
+  <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
+  <network enabled="false" />
+</environment_context>"#,
+        test_path_buf("/repo").display()
+    );
+
+    assert_eq!(context.render(), expected);
+}
+
+#[test]
 fn serialize_read_only_environment_context() {
     let context = EnvironmentContext::new(
         /*cwd*/ None,
