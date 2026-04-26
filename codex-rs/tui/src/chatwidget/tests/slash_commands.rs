@@ -883,6 +883,38 @@ async fn ctrl_o_copy_reports_when_no_agent_response_exists() {
 }
 
 #[tokio::test]
+async fn keymap_capture_can_capture_current_copy_shortcut() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let runtime_keymap = crate::keymap::RuntimeKeymap::defaults();
+    chat.open_keymap_capture(
+        "composer".to_string(),
+        "submit".to_string(),
+        crate::app_event::KeymapEditIntent::ReplaceAll,
+        &runtime_keymap,
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+
+    let AppEvent::KeymapCaptured {
+        context,
+        action,
+        key,
+        intent,
+    } = rx.try_recv().expect("captured key event")
+    else {
+        panic!("expected keymap capture event");
+    };
+    assert_eq!(context, "composer");
+    assert_eq!(action, "submit");
+    assert_eq!(key, "ctrl-o");
+    assert_eq!(intent, crate::app_event::KeymapEditIntent::ReplaceAll);
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "copy shortcut should not run while key capture is active"
+    );
+}
+
+#[tokio::test]
 async fn copy_shortcut_can_be_remapped() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let mut keymap_config = chat.config_ref().tui_keymap.clone();

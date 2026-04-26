@@ -1011,7 +1011,6 @@ impl BottomPane {
         self.is_task_running
     }
 
-    #[cfg(test)]
     pub(crate) fn has_active_view(&self) -> bool {
         !self.view_stack.is_empty()
     }
