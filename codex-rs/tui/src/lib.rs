@@ -1583,7 +1583,7 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
     reason = "TUI should no longer be displayed, so we can write to stderr."
 )]
 fn restore() {
-    if let Err(err) = tui::restore() {
+    if let Err(err) = tui::restore_after_exit() {
         eprintln!(
             "failed to restore terminal. Run `reset` or restart your terminal to recover: {err}"
         );
@@ -1602,7 +1602,7 @@ impl TerminalRestoreGuard {
     #[cfg_attr(debug_assertions, allow(dead_code))]
     fn restore(&mut self) -> color_eyre::Result<()> {
         if self.active {
-            crate::tui::restore()?;
+            crate::tui::restore_after_exit()?;
             self.active = false;
         }
         Ok(())
