@@ -734,6 +734,9 @@ pub(crate) enum AppEvent {
     SyntaxThemeSelected {
         name: String,
     },
+
+    /// Runtime syntax theme preview changed; refresh theme-derived UI colors.
+    SyntaxThemePreviewed,
 }
 
 #[derive(Debug)]

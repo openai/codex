@@ -370,20 +370,25 @@ pub(crate) fn build_theme_picker_params(
     let preview_theme_names: Vec<Option<String>> =
         items.iter().map(|item| item.search_value.clone()).collect();
     let preview_home = codex_home_owned.clone();
-    let on_selection_changed = Some(Box::new(move |idx: usize, _tx: &_| {
-        if let Some(Some(name)) = preview_theme_names.get(idx)
-            && let Some(theme) = highlight::resolve_theme_by_name(name, preview_home.as_deref())
-        {
-            highlight::set_syntax_theme(theme);
-        }
-    })
+    let on_selection_changed = Some(Box::new(
+        move |idx: usize, tx: &crate::app_event_sender::AppEventSender| {
+            if let Some(Some(name)) = preview_theme_names.get(idx)
+                && let Some(theme) = highlight::resolve_theme_by_name(name, preview_home.as_deref())
+            {
+                highlight::set_syntax_theme(theme);
+                tx.send(AppEvent::SyntaxThemePreviewed);
+            }
+        },
+    )
         as Box<dyn Fn(usize, &crate::app_event_sender::AppEventSender) + Send + Sync>);
 
     // Restore original theme on cancel.
-    let on_cancel = Some(Box::new(move |_tx: &_| {
-        highlight::set_syntax_theme(original_theme.clone());
-    })
-        as Box<dyn Fn(&crate::app_event_sender::AppEventSender) + Send + Sync>);
+    let on_cancel = Some(
+        Box::new(move |tx: &crate::app_event_sender::AppEventSender| {
+            highlight::set_syntax_theme(original_theme.clone());
+            tx.send(AppEvent::SyntaxThemePreviewed);
+        }) as Box<dyn Fn(&crate::app_event_sender::AppEventSender) + Send + Sync>,
+    );
     SelectionViewParams {
         title: Some("Select Syntax Theme".to_string()),
         subtitle: Some(theme_picker_subtitle(
