@@ -26,6 +26,7 @@ use codex_app_server_protocol::AdditionalFileSystemPermissions;
 use codex_app_server_protocol::AdditionalNetworkPermissions;
 use codex_app_server_protocol::AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
+use codex_app_server_protocol::CommandAction;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -2409,7 +2410,7 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
     assert_eq!(app.chat_widget.has_active_view(), false);
     assert_eq!(
         app.chat_widget.pending_thread_approvals(),
-        &["Robie [explorer]".to_string()]
+        &["Robie [explorer]: echo hello".to_string()]
     );
 
     app.side_threads.remove(&side_thread_id);
@@ -2534,6 +2535,47 @@ async fn inactive_thread_exec_approval_splits_shell_wrapped_command() {
             script.to_string(),
         ]
     );
+}
+
+#[tokio::test]
+async fn refresh_pending_thread_approvals_falls_back_to_command_actions() -> anyhow::Result<()> {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let main_thread_id = ThreadId::new();
+    let agent_thread_id = ThreadId::new();
+
+    app.active_thread_id = Some(main_thread_id);
+    app.side_threads.insert(
+        agent_thread_id,
+        SideThreadContext {
+            side_parent_id: main_thread_id,
+            label: "Robie [explorer]".to_string(),
+            turns: Vec::new(),
+            pending_history: Vec::new(),
+        },
+    );
+
+    let mut request = exec_approval_request(
+        agent_thread_id,
+        "turn-approval",
+        "call-approval",
+        /*approval_id*/ None,
+    );
+    let ServerRequest::CommandExecutionRequestApproval { params, .. } = &mut request else {
+        panic!("expected exec approval request");
+    };
+    params.command = None;
+    params.command_actions = Some(vec![CommandAction::Unknown {
+        command: "git status --short".to_string(),
+    }]);
+
+    app.handle_thread_request(agent_thread_id, request).await?;
+
+    assert_eq!(
+        app.chat_widget.pending_thread_approvals(),
+        &["Robie [explorer]: git status --short".to_string()]
+    );
+
+    Ok(())
 }
 
 #[tokio::test]

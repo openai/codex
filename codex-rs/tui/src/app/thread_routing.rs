@@ -7,6 +7,56 @@
 use super::*;
 
 impl App {
+    fn pending_thread_approval_summary(&self, request: &ServerRequest) -> Option<String> {
+        match request {
+            ServerRequest::CommandExecutionRequestApproval { params, .. } => {
+                if let Some(network_approval_context) = params.network_approval_context.as_ref() {
+                    Some(format!(
+                        "network access to {}",
+                        network_approval_context.host
+                    ))
+                } else if let Some(command) = params
+                    .command
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|command| !command.is_empty())
+                {
+                    Some(command.to_string())
+                } else {
+                    params.command_actions.as_ref().and_then(|actions| {
+                        actions.iter().find_map(|action| match action {
+                            codex_app_server_protocol::CommandAction::Read { command, .. }
+                            | codex_app_server_protocol::CommandAction::ListFiles {
+                                command, ..
+                            }
+                            | codex_app_server_protocol::CommandAction::Search {
+                                command, ..
+                            }
+                            | codex_app_server_protocol::CommandAction::Unknown { command } => {
+                                let command = command.trim();
+                                (!command.is_empty()).then(|| command.to_string())
+                            }
+                        })
+                    })
+                }
+            }
+            ServerRequest::FileChangeRequestApproval { .. } => {
+                Some("apply_patch edits".to_string())
+            }
+            ServerRequest::PermissionsRequestApproval { params, .. } => params
+                .reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty())
+                .map(|reason| format!("permissions request: {reason}"))
+                .or_else(|| Some("permissions request".to_string())),
+            ServerRequest::McpServerElicitationRequest { params, .. } => {
+                Some(format!("input for {}", params.server_name))
+            }
+            _ => None,
+        }
+    }
+
     pub(super) async fn shutdown_current_thread(&mut self, app_server: &mut AppServerSession) {
         if let Some(thread_id) = self.chat_widget.thread_id() {
             // Clear any in-flight rollback guard when switching threads.
@@ -736,31 +786,18 @@ impl App {
 
     pub(super) async fn refresh_pending_thread_approvals(&mut self) {
         let side_parent_thread_id = self.active_side_parent_thread_id();
-        let channels: Vec<(ThreadId, Arc<Mutex<ThreadEventStore>>)> = self
-            .thread_event_channels
-            .iter()
-            .map(|(thread_id, channel)| (*thread_id, Arc::clone(&channel.store)))
-            .collect();
-
-        let mut pending_thread_ids = Vec::new();
-        for (thread_id, store) in channels {
-            if Some(thread_id) == self.active_thread_id || Some(thread_id) == side_parent_thread_id
-            {
-                continue;
-            }
-
-            let store = store.lock().await;
-            if store.has_pending_thread_approvals() {
-                pending_thread_ids.push(thread_id);
-            }
-        }
-
-        pending_thread_ids.sort_by_key(ThreadId::to_string);
-
-        let threads = pending_thread_ids
+        let mut threads = self
+            .pending_inactive_thread_requests()
+            .await
             .into_iter()
-            .map(|thread_id| self.thread_label(thread_id))
-            .collect();
+            .filter(|(thread_id, _)| Some(*thread_id) != side_parent_thread_id)
+            .filter_map(|(thread_id, request)| {
+                self.pending_thread_approval_summary(&request)
+                    .map(|summary| format!("{}: {summary}", self.thread_label(thread_id)))
+            })
+            .collect::<Vec<_>>();
+        threads.sort();
+        threads.dedup();
 
         self.chat_widget.set_pending_thread_approvals(threads);
     }
