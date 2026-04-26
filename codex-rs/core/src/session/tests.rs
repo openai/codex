@@ -551,6 +551,86 @@ fn assistant_message_stream_parsers_seed_plan_parser_across_added_and_delta_boun
     assert!(tail.plan_segments.is_empty());
 }
 
+fn make_mcp_tool(
+    server_name: &str,
+    tool_name: &str,
+    connector_id: Option<&str>,
+    connector_name: Option<&str>,
+) -> ToolInfo {
+    let tool_namespace = if server_name == codex_mcp::CODEX_APPS_MCP_SERVER_NAME {
+        connector_name
+            .map(codex_connectors::metadata::sanitize_name)
+            .map(|connector_name| format!("mcp__{server_name}__{connector_name}"))
+            .unwrap_or_else(|| server_name.to_string())
+    } else {
+        format!("mcp__{server_name}__")
+    };
+
+    ToolInfo {
+        server_name: server_name.to_string(),
+        callable_name: tool_name.to_string(),
+        callable_namespace: tool_namespace,
+        server_instructions: None,
+        tool: rmcp::model::Tool {
+            name: tool_name.to_string().into(),
+            title: None,
+            description: Some(format!("Test tool: {tool_name}").into()),
+            input_schema: Arc::new(rmcp::model::JsonObject::default()),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        },
+        connector_id: connector_id.map(str::to_string),
+        connector_name: connector_name.map(str::to_string),
+        plugin_display_names: Vec::new(),
+        connector_description: None,
+    }
+}
+
+#[test]
+fn explicit_connectors_missing_from_tools_requests_startup_wait() {
+    let connector_ids = HashSet::from(["slack".to_string()]);
+
+    assert!(explicitly_enabled_connectors_missing_from_tools(
+        &connector_ids,
+        &HashMap::new(),
+    ));
+}
+
+#[test]
+fn explicit_connectors_present_in_tools_skip_startup_wait() {
+    let connector_ids = HashSet::from(["slack".to_string()]);
+    let mcp_tools = HashMap::from([(
+        "mcp__codex_apps__slack_search".to_string(),
+        make_mcp_tool(
+            codex_mcp::CODEX_APPS_MCP_SERVER_NAME,
+            "slack_search",
+            Some("slack"),
+            Some("Slack"),
+        ),
+    )]);
+
+    assert!(!explicitly_enabled_connectors_missing_from_tools(
+        &connector_ids,
+        &mcp_tools,
+    ));
+}
+
+#[test]
+fn explicit_connectors_ignore_non_app_tool_matches() {
+    let connector_ids = HashSet::from(["slack".to_string()]);
+    let mcp_tools = HashMap::from([(
+        "mcp__rmcp__slack_search".to_string(),
+        make_mcp_tool("rmcp", "slack_search", Some("slack"), Some("Slack")),
+    )]);
+
+    assert!(explicitly_enabled_connectors_missing_from_tools(
+        &connector_ids,
+        &mcp_tools,
+    ));
+}
 #[test]
 fn validated_network_policy_amendment_host_allows_normalized_match() {
     let amendment = NetworkPolicyAmendment {

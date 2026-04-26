@@ -9,6 +9,8 @@ use anyhow::Result;
 use anyhow::bail;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_mcp::codex_apps_tools_cache_key;
+use codex_models_manager::bundled_models_response;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use core_test_support::apps_test_server::AppsTestServer;
@@ -22,6 +24,8 @@ use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
+use sha1::Digest;
+use sha1::Sha1;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
@@ -331,6 +335,173 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
     assert!(
         calendar_description.contains("This tool is part of plugin `sample`."),
         "expected plugin app provenance in tool description: {calendar_description:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_plugin_mentions_wait_for_plugin_apps_to_finish_starting() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_with_connector_name_and_tools_list_delay(
+        &server,
+        "Google Calendar",
+        Duration::from_secs(1),
+    )
+    .await?;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let user_key = codex_apps_tools_cache_key(Some(&auth));
+    let user_key_json = serde_json::to_string(&user_key)?;
+    let mut hasher = Sha1::new();
+    hasher.update(user_key_json.as_bytes());
+    let cache_path = codex_home
+        .path()
+        .join("cache/codex_apps_tools")
+        .join(format!("{:x}.json", hasher.finalize()));
+    std::fs::create_dir_all(
+        cache_path
+            .parent()
+            .expect("codex apps tools cache path should have a parent"),
+    )?;
+    std::fs::write(
+        &cache_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": 2,
+            "tools": [],
+        }))?,
+    )?;
+    write_plugin_app_plugin(codex_home.as_ref());
+
+    let mut builder = test_codex()
+        .with_home(codex_home)
+        .with_auth(auth)
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Apps)
+                .expect("test config should allow feature update");
+            config.chatgpt_base_url = apps_server.chatgpt_base_url;
+        });
+    let codex = builder.build(&server).await?.codex;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![codex_protocol::user_input::UserInput::Mention {
+                name: "sample".into(),
+                path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = mock.single_request();
+    let developer_messages = request.message_input_texts("developer");
+    assert!(
+        developer_messages
+            .iter()
+            .any(|text| text.contains("Apps from this plugin")),
+        "expected plugin app guidance after waiting for codex apps startup: {developer_messages:?}"
+    );
+
+    let request_tools = tool_names(&request.body_json());
+    assert!(
+        request_tools
+            .iter()
+            .any(|name| name == "mcp__codex_apps__google_calendar"),
+        "expected plugin app namespace after waiting for codex apps startup: {request_tools:?}"
+    );
+    assert!(
+        request
+            .tool_by_name("mcp__codex_apps__google_calendar", "_create_event")
+            .is_some(),
+        "expected plugin app create tool after waiting for codex apps startup: {request_tools:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_plugin_mentions_directly_expose_plugin_apps_with_tool_search() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    write_plugin_app_plugin(codex_home.as_ref());
+
+    let mut builder = test_codex()
+        .with_home(codex_home)
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model("gpt-5.4")
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Apps)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::ToolSearch)
+                .expect("test config should allow feature update");
+            config.chatgpt_base_url = apps_server.chatgpt_base_url;
+            config.model = Some("gpt-5.4".to_string());
+
+            let mut model_catalog = bundled_models_response()
+                .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+            let model = model_catalog
+                .models
+                .iter_mut()
+                .find(|model| model.slug == "gpt-5.4")
+                .expect("gpt-5.4 exists in bundled models.json");
+            model.supports_search_tool = true;
+            config.model_catalog = Some(model_catalog);
+        });
+    let codex = builder.build(&server).await?.codex;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![codex_protocol::user_input::UserInput::Mention {
+                name: "sample".into(),
+                path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request_tools = tool_names(&mock.single_request().body_json());
+    assert!(
+        !request_tools.iter().any(|name| name == "tool_search"),
+        "expected explicit plugin mention to bypass tool_search and expose its app tools directly: {request_tools:?}"
+    );
+    assert!(
+        request_tools
+            .iter()
+            .any(|name| name == "mcp__codex_apps__calendar"),
+        "expected explicit plugin mention to directly expose its app namespace: {request_tools:?}"
+    );
+    assert!(
+        mock.single_request()
+            .tool_by_name("mcp__codex_apps__calendar", "_create_event")
+            .is_some(),
+        "expected explicit plugin mention to directly expose its app create tool: {request_tools:?}"
     );
 
     Ok(())
