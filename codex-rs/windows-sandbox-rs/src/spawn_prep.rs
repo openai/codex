@@ -13,6 +13,7 @@ use crate::identity::SandboxCreds;
 use crate::identity::require_logon_sandbox_creds;
 use crate::logging::log_start;
 use crate::path_normalization::canonicalize_path;
+use crate::path_normalization::unsupported_windows_sandbox_workspace_reason;
 use crate::policy::SandboxPolicy;
 use crate::policy::parse_policy;
 use crate::sandbox_utils::ensure_codex_home_exists;
@@ -101,6 +102,9 @@ fn prepare_spawn_context_common(
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
     ) {
         anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
+    }
+    if let Some(reason) = unsupported_windows_sandbox_workspace_reason(cwd) {
+        anyhow::bail!(reason);
     }
 
     normalize_null_device_env(env_map);

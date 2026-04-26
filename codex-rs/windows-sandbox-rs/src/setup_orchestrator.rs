@@ -15,6 +15,7 @@ use crate::allow::compute_allow_paths;
 use crate::helper_materialization::helper_bin_dir;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
+use crate::path_normalization::unsupported_windows_sandbox_workspace_reason;
 use crate::policy::SandboxPolicy;
 use crate::setup_error::SetupErrorCode;
 use crate::setup_error::SetupFailure;
@@ -164,6 +165,9 @@ fn run_setup_refresh_inner(
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
     ) {
         return Ok(());
+    }
+    if let Some(reason) = unsupported_windows_sandbox_workspace_reason(request.command_cwd) {
+        anyhow::bail!(reason);
     }
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
     let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
