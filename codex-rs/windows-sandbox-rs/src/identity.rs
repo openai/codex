@@ -1,5 +1,6 @@
 use crate::dpapi;
 use crate::logging::debug_log;
+use crate::path_normalization::unsupported_workspace_root_reason;
 use crate::policy::SandboxPolicy;
 use crate::setup::gather_read_roots;
 use crate::setup::gather_write_roots;
@@ -12,7 +13,8 @@ use crate::setup::SandboxNetworkIdentity;
 use crate::setup::SandboxUserRecord;
 use crate::setup::SandboxUsersFile;
 use crate::setup::SetupMarker;
-use anyhow::anyhow;
+use crate::setup_error::failure;
+use crate::SetupErrorCode;
 use anyhow::Context;
 use anyhow::Result;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -32,6 +34,22 @@ struct SandboxIdentity {
 pub struct SandboxCreds {
     pub username: String,
     pub password: String,
+}
+
+fn ensure_supported_workspace_roots<'a>(
+    paths: impl IntoIterator<Item = &'a Path>,
+) -> Result<()> {
+    for path in paths {
+        if let Some(reason) = unsupported_workspace_root_reason(path) {
+            return Err(failure(
+                SetupErrorCode::HelperUnknownError,
+                format!(
+                    "Windows sandbox only supports local drive workspaces; {reason}. Move the workspace to a local drive or run outside the Windows sandbox."
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Returns true when the on-disk setup artifacts exist and match the current
@@ -148,6 +166,13 @@ pub fn require_logon_sandbox_creds(
     let needed_write = write_roots_override
         .map(<[PathBuf]>::to_vec)
         .unwrap_or_else(|| gather_write_roots(policy, policy_cwd, command_cwd, env_map));
+    ensure_supported_workspace_roots(
+        [policy_cwd, command_cwd]
+            .into_iter()
+            .chain(needed_read.iter().map(PathBuf::as_path))
+            .chain(needed_write.iter().map(PathBuf::as_path))
+            .chain(deny_write_paths_override.iter().map(PathBuf::as_path)),
+    )?;
     let network_identity = SandboxNetworkIdentity::from_policy(policy, proxy_enforced);
     let desired_offline_proxy_settings =
         offline_proxy_settings_from_env(env_map, network_identity);

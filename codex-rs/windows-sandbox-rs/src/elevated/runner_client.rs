@@ -71,7 +71,7 @@ impl RunnerTransport {
 
 pub(crate) fn spawn_runner_transport(
     codex_home: &Path,
-    cwd: &Path,
+    _cwd: &Path,
     sandbox_creds: &SandboxCreds,
     log_dir: Option<&Path>,
 ) -> Result<RunnerTransport> {
@@ -94,7 +94,11 @@ pub(crate) fn spawn_runner_transport(
     );
     let mut cmdline_vec = to_wide(&runner_full_cmd);
     let exe_w = to_wide(&runner_cmdline);
-    let cwd_w = to_wide(cwd);
+    let runner_launch_cwd = runner_exe
+        .parent()
+        .unwrap_or(codex_home)
+        .to_path_buf();
+    let cwd_w = to_wide(runner_launch_cwd.as_os_str());
     let user_w = to_wide(&sandbox_creds.username);
     let domain_w = to_wide(".");
     let password_w = to_wide(&sandbox_creds.password);

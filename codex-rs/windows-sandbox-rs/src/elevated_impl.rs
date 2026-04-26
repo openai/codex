@@ -321,7 +321,8 @@ mod windows_impl {
         );
         let mut cmdline_vec: Vec<u16> = to_wide(&runner_full_cmd);
         let exe_w: Vec<u16> = to_wide(&runner_cmdline);
-        let cwd_w: Vec<u16> = to_wide(cwd);
+        let runner_launch_cwd = runner_exe.parent().unwrap_or(codex_home).to_path_buf();
+        let cwd_w: Vec<u16> = to_wide(runner_launch_cwd.as_os_str());
 
         // Minimal CPWL launch: inherit env, no desktop override, no handle inheritance.
         let env_block: Option<Vec<u16>> = None;
@@ -336,9 +337,10 @@ mod windows_impl {
 
         log_note(
             &format!(
-                "runner launch: exe={} cmdline={} cwd={}",
+                "runner launch: exe={} cmdline={} cwd={} requested_cwd={}",
                 runner_exe.display(),
                 runner_full_cmd,
+                runner_launch_cwd.display(),
                 cwd.display()
             ),
             logs_base_dir,
