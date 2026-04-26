@@ -38,6 +38,7 @@ mod windows_impl {
     use crate::logging::log_note;
     use crate::logging::log_start;
     use crate::logging::log_success;
+    use crate::path_normalization::ensure_sandbox_local_path;
     use crate::policy::SandboxPolicy;
     use crate::policy::parse_policy;
     use crate::token::convert_string_sid_to_sid;
@@ -241,6 +242,7 @@ mod windows_impl {
             write_roots_override,
             deny_write_paths_override,
         } = request;
+        ensure_sandbox_local_path(cwd, "sandbox workspace")?;
         let policy = parse_policy(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);

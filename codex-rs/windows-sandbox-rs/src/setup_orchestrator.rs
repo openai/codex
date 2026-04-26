@@ -15,6 +15,8 @@ use crate::allow::compute_allow_paths;
 use crate::helper_materialization::helper_bin_dir;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
+use crate::path_normalization::ensure_sandbox_local_path;
+use crate::path_normalization::ensure_sandbox_local_paths;
 use crate::policy::SandboxPolicy;
 use crate::setup_error::SetupErrorCode;
 use crate::setup_error::SetupFailure;
@@ -165,7 +167,7 @@ fn run_setup_refresh_inner(
     ) {
         return Ok(());
     }
-    let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
+    let (read_roots, write_roots) = build_payload_roots(&request, &overrides)?;
     let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
     let network_identity =
         SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
@@ -741,7 +743,7 @@ pub fn run_elevated_setup(
             format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
         )
     })?;
-    let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
+    let (read_roots, write_roots) = build_payload_roots(&request, &overrides)?;
     let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
     let network_identity =
         SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
@@ -772,7 +774,8 @@ pub fn run_elevated_setup(
 fn build_payload_roots(
     request: &SandboxSetupRequest<'_>,
     overrides: &SetupRootOverrides,
-) -> (Vec<PathBuf>, Vec<PathBuf>) {
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+    ensure_sandbox_local_path(request.command_cwd, "sandbox workspace")?;
     let write_roots = if let Some(roots) = overrides.write_roots.as_deref() {
         canonical_existing(roots)
     } else {
@@ -810,7 +813,9 @@ fn build_payload_roots(
     read_roots = filter_ssh_config_dependency_roots(read_roots);
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
-    (read_roots, write_roots)
+    ensure_sandbox_local_paths(read_roots.iter(), "sandbox readable roots")?;
+    ensure_sandbox_local_paths(write_roots.iter(), "sandbox writable roots")?;
+    Ok((read_roots, write_roots))
 }
 
 fn build_payload_deny_write_paths(
@@ -1416,7 +1421,8 @@ mod tests {
                 proxy_enforced: false,
             },
             &super::SetupRootOverrides::default(),
-        );
+        )
+        .expect("build payload roots");
         let expected_helper =
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
         let expected_cwd = dunce::canonicalize(&command_cwd).expect("canonical workspace");
@@ -1466,7 +1472,8 @@ mod tests {
                 write_roots: None,
                 deny_write_paths: None,
             },
-        );
+        )
+        .expect("build payload roots");
         let expected_helper =
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
         let expected_cwd = dunce::canonicalize(&command_cwd).expect("canonical workspace");
@@ -1513,7 +1520,8 @@ mod tests {
                 write_roots: None,
                 deny_write_paths: None,
             },
-        );
+        )
+        .expect("build payload roots");
         let expected_helper =
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
         let expected_cwd = dunce::canonicalize(&command_cwd).expect("canonical workspace");

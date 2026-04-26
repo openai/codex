@@ -4,6 +4,7 @@ use crate::ipc_framed::Message;
 use crate::ipc_framed::SpawnRequest;
 use crate::ipc_framed::read_frame;
 use crate::ipc_framed::write_frame;
+use crate::path_normalization::ensure_sandbox_local_path;
 use crate::runner_pipe::PIPE_ACCESS_INBOUND;
 use crate::runner_pipe::PIPE_ACCESS_OUTBOUND;
 use crate::runner_pipe::connect_pipe;
@@ -75,6 +76,7 @@ pub(crate) fn spawn_runner_transport(
     sandbox_creds: &SandboxCreds,
     log_dir: Option<&Path>,
 ) -> Result<RunnerTransport> {
+    ensure_sandbox_local_path(cwd, "sandbox workspace")?;
     let (pipe_in_name, pipe_out_name) = pipe_pair();
     let h_pipe_in =
         create_named_pipe(&pipe_in_name, PIPE_ACCESS_OUTBOUND, &sandbox_creds.username)?;
