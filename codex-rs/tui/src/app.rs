@@ -484,27 +484,6 @@ fn list_skills_response_to_core(response: SkillsListResponse) -> ListSkillsRespo
     }
 }
 
-fn trailing_run_start<T: 'static>(transcript_cells: &[Arc<dyn HistoryCell>]) -> usize {
-    let end = transcript_cells.len();
-    let mut start = end;
-
-    while start > 0
-        && transcript_cells[start - 1].is_stream_continuation()
-        && transcript_cells[start - 1].as_any().is::<T>()
-    {
-        start -= 1;
-    }
-
-    if start > 0
-        && transcript_cells[start - 1].as_any().is::<T>()
-        && !transcript_cells[start - 1].is_stream_continuation()
-    {
-        start -= 1;
-    }
-
-    start
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
     usage_line: Option<String>,

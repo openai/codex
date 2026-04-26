@@ -15,6 +15,7 @@
 //! do not write more retained rows than resize replay would later be willing to rebuild.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Instant;
 
 use codex_features::Feature;
@@ -23,7 +24,6 @@ use ratatui::text::Line;
 
 use super::App;
 use super::InitialHistoryReplayBuffer;
-use super::trailing_run_start;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
 use crate::transcript_reflow::TRANSCRIPT_REFLOW_DEBOUNCE;
@@ -41,6 +41,27 @@ struct ReflowCellDisplay {
 /// rows here are a transient render product for a single terminal width.
 pub(super) struct ReflowRenderResult {
     pub(super) lines: Vec<Line<'static>>,
+}
+
+pub(super) fn trailing_run_start<T: 'static>(transcript_cells: &[Arc<dyn HistoryCell>]) -> usize {
+    let end = transcript_cells.len();
+    let mut start = end;
+
+    while start > 0
+        && transcript_cells[start - 1].is_stream_continuation()
+        && transcript_cells[start - 1].as_any().is::<T>()
+    {
+        start -= 1;
+    }
+
+    if start > 0
+        && transcript_cells[start - 1].as_any().is::<T>()
+        && !transcript_cells[start - 1].is_stream_continuation()
+    {
+        start -= 1;
+    }
+
+    start
 }
 
 impl App {

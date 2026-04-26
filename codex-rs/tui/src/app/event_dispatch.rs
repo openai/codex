@@ -3,6 +3,7 @@
 //! This module contains the exhaustive `AppEvent` dispatcher and exit-mode handling. Large domain
 //! actions are delegated to focused app submodules so the central match remains the routing layer.
 
+use super::resize_reflow::trailing_run_start;
 use super::*;
 
 const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
