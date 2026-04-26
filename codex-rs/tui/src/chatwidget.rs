@@ -9701,32 +9701,35 @@ impl ChatWidget {
             return;
         };
 
-        let items = self
-            .recent_auto_review_denials
-            .entries()
-            .map(|event| {
-                let id = event.id.clone();
-                let summary = auto_review_denials::action_summary(&event.action);
-                let rationale = event
-                    .rationale
-                    .as_deref()
-                    .unwrap_or("Auto-review did not include a rationale.");
-                SelectionItem {
-                    name: summary.clone(),
-                    description: Some(rationale.to_string()),
-                    selected_description: Some(rationale.to_string()),
-                    search_value: Some(format!("{summary} {rationale}")),
-                    actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::ApproveRecentAutoReviewDenial {
-                            thread_id,
-                            id: id.clone(),
-                        });
-                    })],
-                    dismiss_on_select: true,
-                    ..Default::default()
-                }
-            })
-            .collect::<Vec<_>>();
+        let mut items = vec![SelectionItem {
+            name: "Command".to_string(),
+            description: Some("Rationale".to_string()),
+            is_disabled: true,
+            search_value: Some(String::new()),
+            ..Default::default()
+        }];
+        items.extend(self.recent_auto_review_denials.entries().map(|event| {
+            let id = event.id.clone();
+            let summary = auto_review_denials::action_summary(&event.action);
+            let rationale = event
+                .rationale
+                .as_deref()
+                .unwrap_or("Auto-review did not include a rationale.");
+            SelectionItem {
+                name: summary.clone(),
+                description: Some(rationale.to_string()),
+                selected_description: Some(rationale.to_string()),
+                search_value: Some(format!("{summary} {rationale}")),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::ApproveRecentAutoReviewDenial {
+                        thread_id,
+                        id: id.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            }
+        }));
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Auto-review Denials".to_string()),
@@ -9734,7 +9737,6 @@ impl ChatWidget {
             footer_hint: Some(standard_popup_hint_line()),
             items,
             is_searchable: true,
-            search_placeholder: Some("Search denied actions".to_string()),
             col_width_mode: ColumnWidthMode::AutoAllRows,
             ..Default::default()
         });
