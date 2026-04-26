@@ -1268,6 +1268,7 @@ async fn thread_list_default_sorts_by_created_at() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg_attr(windows, ignore = "temporary CI isolation for #19606 Windows hang")]
 async fn thread_list_sort_updated_at_orders_by_mtime() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;

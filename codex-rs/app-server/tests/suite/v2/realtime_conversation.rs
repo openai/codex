@@ -1547,6 +1547,7 @@ async fn webrtc_v2_text_input_is_append_only_when_response_is_cancelled() -> Res
 /// output to realtime and then requests a new `response.create` so realtime can
 /// react to that final output.
 #[tokio::test]
+#[cfg_attr(windows, ignore = "temporary CI isolation for #19606 Windows hang")]
 async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_output() -> Result<()>
 {
     skip_if_no_network!(Ok(()));

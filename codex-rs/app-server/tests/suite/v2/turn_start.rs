@@ -2794,6 +2794,7 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
 }
 
 #[tokio::test]
+#[cfg_attr(windows, ignore = "temporary CI isolation for #19606 Windows hang")]
 async fn turn_start_emits_spawn_agent_item_with_effective_role_model_metadata_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
