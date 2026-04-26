@@ -5219,7 +5219,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
     assert!(
         developer_texts
             .iter()
-            .all(|text| !text.contains("Exceeded skills context budget")),
+            .all(|text| !text.contains("Skills metadata exceeded")),
         "expected skill budget warning to stay out of the initial context, got {developer_texts:?}"
     );
     assert!(
@@ -5256,7 +5256,7 @@ fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
     assert_eq!(
         rendered.warning_message,
         Some(
-            "Warning: Exceeded skills context budget. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list."
+            "Skills metadata exceeded the context budget. Some skills were omitted from the model-visible skills list. Omitted skills: repo-skill."
                 .to_string()
         )
     );
@@ -5367,7 +5367,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
     assert!(matches!(
         warning_event.msg,
         EventMsg::Warning(WarningEvent { message })
-            if message == "Warning: Exceeded skills context budget of 2%. All skill descriptions were removed and 2 additional skills were not included in the model-visible skills list."
+            if message == "Skills metadata exceeded the 2% context budget. Some skills were omitted from the model-visible skills list. Omitted skills: admin-skill, repo-skill."
     ));
 
     let _ = session.build_initial_context(&turn_context).await;
@@ -5378,7 +5378,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
     assert!(matches!(
         warning_event.msg,
         EventMsg::Warning(WarningEvent { message })
-            if message == "Warning: Exceeded skills context budget of 2%. All skill descriptions were removed and 2 additional skills were not included in the model-visible skills list."
+            if message == "Skills metadata exceeded the 2% context budget. Some skills were omitted from the model-visible skills list. Omitted skills: admin-skill, repo-skill."
     ));
 }
 
