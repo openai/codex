@@ -1270,6 +1270,7 @@ Approved action:
     let items = vec![ResponseInputItem::Message {
         role: "developer".to_string(),
         content: vec![ContentItem::InputText { text }],
+        phase: None,
     }];
 
     if let Err(items) = sess.inject_response_items(items).await {
