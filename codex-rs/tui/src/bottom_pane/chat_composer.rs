@@ -1160,7 +1160,7 @@ impl ChatComposer {
 
     /// Convert canonical composer text into the textarea's internal representation.
     ///
-    /// Bash mode stores the leading `!` as prompt state instead of editable text,
+    /// Shell mode stores the leading `!` as prompt state instead of editable text,
     /// so full-buffer imports must absorb that prefix before rebuilding the textarea.
     fn imported_text_for_textarea(
         &mut self,
@@ -2934,7 +2934,7 @@ impl ChatComposer {
     fn shell_mode_footer_line(&self) -> Option<Line<'static>> {
         self.is_bang_shell_command()
             .then_some(())
-            .map(|_| Line::from(vec![Span::from("Bash mode").light_red()]))
+            .map(|_| Line::from(vec![Span::from("Shell mode").light_red()]))
     }
 
     /// Applies any due `PasteBurst` flush at time `now`.
@@ -4660,7 +4660,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_command_uses_bash_accent_style() {
+    fn shell_command_uses_shell_accent_style() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -4688,11 +4688,11 @@ mod tests {
         let footer_text = (0..area.width)
             .map(|x| buf[(x, footer_y)].symbol().chars().next().unwrap_or(' '))
             .collect::<String>();
-        let bash_label_x = footer_text
-            .find("Bash mode")
-            .expect("expected bash mode footer label");
+        let shell_label_x = footer_text
+            .find("Shell mode")
+            .expect("expected shell mode footer label");
         assert_eq!(
-            buf[(bash_label_x as u16, footer_y)].style().fg,
+            buf[(shell_label_x as u16, footer_y)].style().fg,
             Some(Color::LightRed)
         );
     }
