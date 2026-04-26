@@ -75,7 +75,7 @@ impl RunnerTransport {
 
 pub(crate) fn spawn_runner_transport(
     codex_home: &Path,
-    cwd: &Path,
+    _cwd: &Path,
     sandbox_creds: &SandboxCreds,
     log_dir: Option<&Path>,
 ) -> Result<RunnerTransport> {
@@ -90,6 +90,11 @@ pub(crate) fn spawn_runner_transport(
         .to_str()
         .map(str::to_owned)
         .unwrap_or_else(|| "codex-command-runner.exe".to_string());
+    // Launch the helper from a guaranteed-local directory instead of the requested workspace.
+    // Mapped drive letters can disappear in the alternate logon session used by
+    // `CreateProcessWithLogonW`, even though the runner can still switch into the real workspace
+    // later using the spawn request's `cwd`.
+    let runner_launch_cwd = runner_exe.parent().unwrap_or(codex_home);
     let runner_full_cmd = format!(
         "{} {} {}",
         quote_windows_arg(&runner_cmdline),
@@ -98,7 +103,7 @@ pub(crate) fn spawn_runner_transport(
     );
     let mut cmdline_vec = to_wide(&runner_full_cmd);
     let exe_w = to_wide(&runner_cmdline);
-    let cwd_w = to_wide(cwd);
+    let cwd_w = to_wide(runner_launch_cwd);
     let user_w = to_wide(&sandbox_creds.username);
     let domain_w = to_wide(".");
     let password_w = to_wide(&sandbox_creds.password);
