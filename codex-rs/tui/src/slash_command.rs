@@ -21,7 +21,7 @@ pub enum SlashCommand {
     #[strum(serialize = "sandbox-add-read-dir")]
     SandboxReadRoot,
     Experimental,
-    #[strum(to_string = "denials")]
+    #[strum(to_string = "autoreview")]
     AutoReviewDenials,
     Memories,
     Skills,
@@ -249,14 +249,15 @@ mod tests {
     }
 
     #[test]
-    fn auto_review_denials_command_is_denials() {
-        assert_eq!(SlashCommand::AutoReviewDenials.command(), "denials");
+    fn auto_review_denials_command_is_autoreview() {
+        assert_eq!(SlashCommand::AutoReviewDenials.command(), "autoreview");
         assert_eq!(
-            SlashCommand::from_str("denials"),
+            SlashCommand::from_str("autoreview"),
             Ok(SlashCommand::AutoReviewDenials)
         );
     }
-  
+
+    #[test]
     fn goal_command_is_available_during_task() {
         assert!(SlashCommand::Goal.available_during_task());
     }
