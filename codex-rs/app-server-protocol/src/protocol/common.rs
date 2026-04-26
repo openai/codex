@@ -701,6 +701,24 @@ macro_rules! server_request_definitions {
                     $(Self::$variant { request_id, .. } => request_id,)*
                 }
             }
+
+            pub fn response_from_result(
+                &self,
+                result: &crate::Result,
+            ) -> serde_json::Result<ServerResponse> {
+                match self {
+                    $(
+                        Self::$variant { request_id, .. } => {
+                            let response =
+                                <$response as serde::Deserialize>::deserialize(result)?;
+                            Ok(ServerResponse::$variant {
+                                request_id: request_id.clone(),
+                                response,
+                            })
+                        }
+                    )*
+                }
+            }
         }
 
         /// Typed response from the client to the server.
