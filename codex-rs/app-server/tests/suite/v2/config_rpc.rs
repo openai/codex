@@ -25,6 +25,7 @@ use codex_core::config::set_project_trust_level;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchLocation;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -168,6 +169,90 @@ view_image = false
 
     let layers = layers.expect("layers present");
     assert_layers_user_then_optional_system(&layers, user_file)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_reflects_bedrock_provider_capabilities() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+model_provider = "amazon-bedrock"
+web_search = "live"
+include_apps_instructions = true
+
+[features]
+apps = true
+plugins = true
+tool_search = true
+tool_suggest = true
+image_generation = true
+
+[model_providers.amazon-bedrock.aws]
+region = "us-west-2"
+
+[mcp_servers.docs]
+command = "docs-server"
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: true,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse {
+        config,
+        origins,
+        layers,
+    } = to_response(resp)?;
+
+    assert_eq!(config.web_search, Some(WebSearchMode::Disabled));
+    assert_eq!(
+        origins.get("web_search").expect("web_search origin").name,
+        ConfigLayerSource::ProviderCapabilities {
+            provider: "amazon-bedrock".to_string()
+        }
+    );
+    let layers = layers.expect("layers present");
+    assert!(
+        layers.iter().any(|layer| matches!(
+            &layer.name,
+            ConfigLayerSource::ProviderCapabilities { provider }
+                if provider == "amazon-bedrock"
+        )),
+        "provider capabilities layer should be present"
+    );
+    let features = config
+        .additional
+        .get("features")
+        .and_then(serde_json::Value::as_object)
+        .expect("features object");
+    for feature in [
+        "apps",
+        "plugins",
+        "tool_search",
+        "tool_suggest",
+        "image_generation",
+    ] {
+        assert_eq!(features.get(feature), Some(&json!(false)), "{feature}");
+    }
+    assert_eq!(
+        config.additional.get("include_apps_instructions"),
+        Some(&json!(false))
+    );
+    assert_eq!(config.additional.get("mcp_servers"), Some(&json!({})));
 
     Ok(())
 }

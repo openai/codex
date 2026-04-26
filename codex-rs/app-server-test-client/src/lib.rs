@@ -33,6 +33,8 @@ use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::ConfigReadParams;
+use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
@@ -234,6 +236,16 @@ enum CliCommand {
     /// List the available models from the Codex app-server.
     #[command(name = "model-list")]
     ModelList,
+    /// Read the effective config from the Codex app-server.
+    #[command(name = "config-read")]
+    ConfigRead {
+        /// Include resolved config layers in the response.
+        #[arg(long, default_value_t = false)]
+        include_layers: bool,
+        /// Optional working directory used to resolve project config layers.
+        #[arg(long, value_name = "path")]
+        cwd: Option<String>,
+    },
     /// List stored threads from the Codex app-server.
     #[command(name = "thread-list")]
     ThreadList {
@@ -389,6 +401,14 @@ pub async fn run() -> Result<()> {
             ensure_dynamic_tools_unused(&dynamic_tools, "model-list")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
             model_list(&endpoint, &config_overrides).await
+        }
+        CliCommand::ConfigRead {
+            include_layers,
+            cwd,
+        } => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "config-read")?;
+            let endpoint = resolve_endpoint(codex_bin, url)?;
+            config_read(&endpoint, &config_overrides, include_layers, cwd).await
         }
         CliCommand::ThreadList { limit } => {
             ensure_dynamic_tools_unused(&dynamic_tools, "thread-list")?;
@@ -1111,6 +1131,29 @@ async fn model_list(endpoint: &Endpoint, config_overrides: &[String]) -> Result<
     .await
 }
 
+async fn config_read(
+    endpoint: &Endpoint,
+    config_overrides: &[String],
+    include_layers: bool,
+    cwd: Option<String>,
+) -> Result<()> {
+    with_client("config-read", endpoint, config_overrides, |client| {
+        let initialize = client.initialize()?;
+        println!("< initialize response: {initialize:?}");
+
+        let response = client.config_read(ConfigReadParams {
+            include_layers,
+            cwd,
+        })?;
+        let response_json = serde_json::to_string_pretty(&response)?;
+        println!("< config/read response:");
+        println!("{response_json}");
+
+        Ok(())
+    })
+    .await
+}
+
 async fn thread_list(endpoint: &Endpoint, config_overrides: &[String], limit: u32) -> Result<()> {
     with_client("thread-list", endpoint, config_overrides, |client| {
         let initialize = client.initialize()?;
@@ -1641,6 +1684,16 @@ impl CodexClient {
         };
 
         self.send_request(request, request_id, "model/list")
+    }
+
+    fn config_read(&mut self, params: ConfigReadParams) -> Result<ConfigReadResponse> {
+        let request_id = self.request_id();
+        let request = ClientRequest::ConfigRead {
+            request_id: request_id.clone(),
+            params,
+        };
+
+        self.send_request(request, request_id, "config/read")
     }
 
     fn thread_list(&mut self, params: ThreadListParams) -> Result<ThreadListResponse> {

@@ -62,11 +62,8 @@ use codex_features::MultiAgentV2ConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
-use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
+use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
-use codex_model_provider_info::built_in_model_providers;
-use codex_model_provider_info::merge_configured_model_providers;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -107,8 +104,10 @@ use toml_edit::DocumentMut;
 pub(crate) mod agent_roles;
 pub mod edit;
 mod managed_features;
+mod model_provider_resolution;
 mod network_proxy_spec;
 mod permissions;
+pub(crate) mod provider_capabilities;
 #[cfg(test)]
 mod schema;
 pub use codex_config::Constrained;
@@ -117,9 +116,11 @@ pub use codex_config::ConstraintResult;
 pub use codex_network_proxy::NetworkProxyAuditMetadata;
 pub use codex_sandboxing::system_bwrap_warning;
 pub use managed_features::ManagedFeatures;
+pub(crate) use model_provider_resolution::resolve_model_provider_from_config_toml;
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
 pub(crate) use permissions::resolve_permission_profile;
+pub(crate) use provider_capabilities::apply_provider_capability_runtime_constraints;
 
 pub use codex_git_utils::GhostSnapshotConfig;
 
@@ -1980,30 +1981,13 @@ impl Config {
             agent_roles::load_agent_roles(fs, &cfg, &config_layer_stack, &mut startup_warnings)
                 .await?;
 
-        let openai_base_url = cfg
-            .openai_base_url
-            .clone()
-            .filter(|value| !value.is_empty());
-
-        let model_providers =
-            merge_configured_model_providers(built_in_model_providers(openai_base_url), cfg.model_providers)
-                .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;
-
-        let model_provider_id = model_provider
-            .or(config_profile.model_provider)
-            .or(cfg.model_provider)
-            .unwrap_or_else(|| "openai".to_string());
-        let model_provider = model_providers
-            .get(&model_provider_id)
-            .ok_or_else(|| {
-                let message = if model_provider_id == LEGACY_OLLAMA_CHAT_PROVIDER_ID {
-                    OLLAMA_CHAT_PROVIDER_REMOVED_ERROR.to_string()
-                } else {
-                    format!("Model provider `{model_provider_id}` not found")
-                };
-                std::io::Error::new(std::io::ErrorKind::NotFound, message)
-            })?
-            .clone();
+        let resolved_model_provider =
+            resolve_model_provider_from_config_toml(&cfg, &config_profile, model_provider)?;
+        let model_providers = resolved_model_provider.all;
+        let model_provider_id = resolved_model_provider.id;
+        let model_provider = resolved_model_provider.info;
+        let provider_capabilities =
+            create_model_provider(model_provider.clone(), /*auth_manager*/ None).capabilities();
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
@@ -2343,7 +2327,7 @@ impl Config {
             } else {
                 NetworkSandboxPolicy::from(&effective_sandbox_policy)
             };
-        let config = Self {
+        let mut config = Self {
             model,
             service_tier,
             review_model,
@@ -2544,6 +2528,7 @@ impl Config {
                 }
             },
         };
+        apply_provider_capability_runtime_constraints(&mut config, provider_capabilities)?;
         Ok(config)
         })
         .await

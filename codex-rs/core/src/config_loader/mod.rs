@@ -5,6 +5,7 @@ mod macos;
 #[cfg(test)]
 mod tests;
 
+use crate::config::provider_capabilities::add_provider_capabilities_layer;
 use crate::config_loader::layer_io::LoadedConfigLayers;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
@@ -359,12 +360,14 @@ pub async fn load_config_layers_state(
         ));
     }
 
-    Ok(ConfigLayerStack::new(
+    let stack = ConfigLayerStack::new(
         layers,
         config_requirements_toml.clone().try_into()?,
         config_requirements_toml.into_toml(),
     )?
-    .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules))
+    .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules);
+
+    add_provider_capabilities_layer(stack)
 }
 
 fn insert_layer_by_precedence(layers: &mut Vec<ConfigLayerEntry>, layer: ConfigLayerEntry) {

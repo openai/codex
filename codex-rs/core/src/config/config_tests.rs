@@ -4,10 +4,12 @@ use crate::config::ThreadStoreConfig;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
+use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::project_trust_key;
 use crate::plugins::PluginsManager;
 use assert_matches::assert_matches;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
@@ -52,9 +54,12 @@ use codex_config::types::TuiNotificationSettings;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
+use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
+use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -2143,6 +2148,119 @@ fn web_search_mode_for_turn_falls_back_when_live_is_disallowed() -> anyhow::Resu
     let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::DangerFullAccess);
 
     assert_eq!(mode, WebSearchMode::Cached);
+    Ok(())
+}
+
+#[tokio::test]
+async fn amazon_bedrock_provider_capabilities_overlay_effective_config() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+model_provider = "amazon-bedrock"
+web_search = "live"
+include_apps_instructions = true
+
+[features]
+apps = true
+plugins = true
+tool_search = true
+tool_suggest = true
+image_generation = true
+
+[model_providers.amazon-bedrock.aws]
+region = "us-west-2"
+
+[mcp_servers.docs]
+command = "docs-server"
+"#,
+    )?;
+
+    let mut config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await?;
+
+    assert_eq!(config.model_provider_id, "amazon-bedrock");
+    assert!(!config.features.enabled(Feature::Apps));
+    assert!(!config.features.enabled(Feature::Plugins));
+    assert!(!config.features.enabled(Feature::ToolSearch));
+    assert!(!config.features.enabled(Feature::ToolSuggest));
+    assert!(!config.features.enabled(Feature::ImageGeneration));
+    assert_eq!(config.web_search_mode.value(), WebSearchMode::Disabled);
+    assert!(config.mcp_servers.get().is_empty());
+    assert!(!config.include_apps_instructions);
+    assert!(
+        config
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::HighestPrecedenceFirst,
+                /*include_disabled*/ false,
+            )
+            .iter()
+            .any(|layer| matches!(
+                &layer.name,
+                ConfigLayerSource::ProviderCapabilities { provider }
+                    if provider == "amazon-bedrock"
+            ))
+    );
+    assert_eq!(
+        config
+            .config_layer_stack
+            .origins()
+            .get("web_search")
+            .expect("web_search origin")
+            .name,
+        ConfigLayerSource::ProviderCapabilities {
+            provider: "amazon-bedrock".to_string()
+        }
+    );
+
+    config.features.enable(Feature::Apps)?;
+    assert!(!config.features.enabled(Feature::Apps));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_provider_capabilities_leave_effective_config_unchanged() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+web_search = "disabled"
+include_apps_instructions = false
+
+[features]
+apps = true
+plugins = true
+tool_search = true
+tool_suggest = true
+image_generation = false
+
+[mcp_servers.docs]
+command = "docs-server"
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await?;
+
+    assert_eq!(config.model_provider_id, "openai");
+    assert!(config.features.enabled(Feature::Apps));
+    assert!(config.features.enabled(Feature::Plugins));
+    assert!(config.features.enabled(Feature::ToolSearch));
+    assert!(config.features.enabled(Feature::ToolSuggest));
+    assert!(!config.features.enabled(Feature::ImageGeneration));
+    assert_eq!(config.web_search_mode.value(), WebSearchMode::Disabled);
+    assert_eq!(
+        config.mcp_servers.get().keys().cloned().collect::<Vec<_>>(),
+        vec!["docs".to_string()]
+    );
+    assert!(!config.include_apps_instructions);
+
     Ok(())
 }
 

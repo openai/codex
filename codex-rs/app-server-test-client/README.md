@@ -18,6 +18,15 @@ cargo run -p codex-app-server-test-client -- \
 cargo run -p codex-app-server-test-client -- model-list
 ```
 
+Read the effective config, including layer metadata:
+
+```bash
+cargo run -p codex-app-server-test-client -- \
+  -c model_provider=amazon-bedrock \
+  -c model_providers.amazon-bedrock.aws.region=us-west-2 \
+  config-read --include-layers
+```
+
 ## Watching Raw Inbound Traffic
 
 Initialize a connection, then print every inbound JSON-RPC message until you stop it with

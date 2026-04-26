@@ -603,6 +603,13 @@ pub enum ConfigLayerSource {
     /// Session-layer overrides supplied via `-c`/`--config`.
     SessionFlags,
 
+    /// Derived layer that enforces provider-owned capability upper bounds.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ProviderCapabilities {
+        provider: String,
+    },
+
     /// `managed_config.toml` was designed to be a config that was loaded
     /// as the last layer on top of everything else. This scheme did not quite
     /// work out as intended, but we keep this variant as a "best effort" while
@@ -628,6 +635,7 @@ impl ConfigLayerSource {
             ConfigLayerSource::SessionFlags => 30,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => 40,
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm => 50,
+            ConfigLayerSource::ProviderCapabilities { .. } => 60,
         }
     }
 }
