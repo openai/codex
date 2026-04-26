@@ -2870,7 +2870,6 @@ dependencies = [
  "codex-plugin",
  "codex-protocol",
  "codex-rmcp-client",
- "codex-utils-absolute-path",
  "codex-utils-plugins",
  "futures",
  "pretty_assertions",
@@ -3736,6 +3735,8 @@ version = "0.0.0"
 dependencies = [
  "pretty_assertions",
  "regex-lite",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
