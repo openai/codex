@@ -21,6 +21,7 @@ use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::web_search_detail;
+use crate::line_truncation::line_width;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
@@ -1516,7 +1517,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
             ]));
         }
 
-        if !show_logo {
+        if !show_logo || text_lines.iter().any(|line| line_width(line) > text_width) {
             return with_border(text_lines);
         }
 
@@ -4177,7 +4178,10 @@ mod tests {
             codex_logo_gradient_for_bg(Some((250, 250, 250))),
             CODEX_LOGO_DARK_GRADIENT
         );
-        assert_eq!(codex_logo_gradient_for_bg(None), CODEX_LOGO_BRIGHT_GRADIENT);
+        assert_eq!(
+            codex_logo_gradient_for_bg(/*terminal_bg*/ None),
+            CODEX_LOGO_BRIGHT_GRADIENT
+        );
     }
 
     #[test]
@@ -4195,6 +4199,28 @@ mod tests {
         assert!(rendered.contains(">_ OpenAI Codex (vtest)"));
         assert!(!rendered.contains("⣿"));
         assert_eq!(rendered.lines().count(), 6);
+    }
+
+    #[test]
+    fn session_header_omits_logo_when_text_would_overflow_logo_layout() {
+        let cell = SessionHeaderHistoryCell::new(
+            "custom-model-name-with-long-label".to_string(),
+            Some(ReasoningEffortConfig::High),
+            /*show_fast_status*/ false,
+            test_path_buf("/tmp/project").abs().to_path_buf(),
+            "test",
+        );
+
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80));
+        let rendered_text = rendered.join("\n");
+
+        assert!(rendered_text.contains(">_ OpenAI Codex (vtest)"));
+        assert!(!rendered_text.contains("⣿"));
+        assert!(
+            rendered
+                .iter()
+                .all(|line| UnicodeWidthStr::width(line.as_str()) <= 80)
+        );
     }
 
     #[test]
