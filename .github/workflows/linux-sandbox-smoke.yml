@@ -1,0 +1,119 @@
+name: Linux sandbox smoke
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/linux-sandbox-smoke.yml"
+      - "codex-rs/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/linux-sandbox-smoke.yml"
+      - "codex-rs/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}${{ github.ref_name == 'main' && format('::{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
+
+jobs:
+  codex_exec:
+    name: codex exec sandbox modes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+
+      - name: Install host sandbox dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            apparmor \
+            apparmor-profiles \
+            apparmor-utils \
+            bubblewrap \
+            libcap-dev \
+            pkg-config
+
+      - name: Check host sandbox policy
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bwrap="$(command -v bwrap)"
+          bwrap_real="$(readlink -f "$bwrap")"
+          echo "bwrap=$bwrap_real"
+          if [[ "$bwrap_real" != "/usr/bin/bwrap" ]]; then
+            echo "Expected apt-installed bubblewrap at /usr/bin/bwrap."
+            exit 1
+          fi
+          bwrap --version
+
+          runner_seccomp="$(grep '^Seccomp:' /proc/self/status | tr -s '[:space:]' ' ' | cut -d' ' -f2)"
+          echo "runner.seccomp=$runner_seccomp"
+          if [[ "$runner_seccomp" != "0" ]]; then
+            echo "Linux workers must not run under an extra outer seccomp filter."
+            exit 1
+          fi
+
+          if [[ ! -r /sys/module/apparmor/parameters/enabled ]]; then
+            echo "AppArmor module status is unavailable on this Linux worker."
+            exit 1
+          fi
+          apparmor_enabled="$(cat /sys/module/apparmor/parameters/enabled)"
+          echo "apparmor.enabled=$apparmor_enabled"
+          if [[ "$apparmor_enabled" != "Y" ]]; then
+            echo "AppArmor must be enabled for the Linux sandbox smoke test."
+            exit 1
+          fi
+
+          if ! apparmor_userns="$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)"; then
+            echo "kernel.apparmor_restrict_unprivileged_userns is unavailable on this Linux worker."
+            exit 1
+          fi
+          echo "kernel.apparmor_restrict_unprivileged_userns=$apparmor_userns"
+          if [[ "$apparmor_userns" == "0" ]]; then
+            echo "AppArmor user namespace restrictions must stay enabled; do not disable them in CI."
+            exit 1
+          fi
+
+          if userns_clone="$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null)"; then
+            echo "kernel.unprivileged_userns_clone=$userns_clone"
+            if [[ "$userns_clone" != "1" ]]; then
+              echo "Linux workers must enable unprivileged user namespaces in the base image."
+              exit 1
+            fi
+          fi
+
+          profile_source="/usr/share/apparmor/extra-profiles/bwrap-userns-restrict"
+          profile_target="/etc/apparmor.d/bwrap-userns-restrict"
+          if [[ ! -r "$profile_source" ]]; then
+            echo "Ubuntu's bwrap-userns-restrict AppArmor profile is missing."
+            dpkg -L apparmor-profiles | grep bwrap || true
+            exit 1
+          fi
+
+          sudo ln -sf "$profile_source" "$profile_target"
+          sudo apparmor_parser -r "$profile_target"
+          if ! sudo grep -Eq '^bwrap \(enforce\)$' /sys/kernel/security/apparmor/profiles; then
+            echo "Ubuntu's bwrap AppArmor profile is not loaded in enforce mode."
+            sudo grep bwrap /sys/kernel/security/apparmor/profiles || true
+            exit 1
+          fi
+          if ! sudo grep -Eq '(^bwrap//.*unpriv_bwrap \(enforce\)$|^unpriv_bwrap \(enforce\)$)' /sys/kernel/security/apparmor/profiles; then
+            echo "Ubuntu's unprivileged bwrap child profile is not loaded in enforce mode."
+            sudo grep bwrap /sys/kernel/security/apparmor/profiles || true
+            exit 1
+          fi
+
+      - name: Smoke test codex exec sandbox modes
+        working-directory: codex-rs
+        env:
+          CODEX_LINUX_SANDBOX_SMOKE: 1
+          RUST_BACKTRACE: 1
+        run: cargo test -p codex-exec --test all -- linux_sandbox_smoke --nocapture

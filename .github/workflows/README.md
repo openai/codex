@@ -13,6 +13,10 @@ The workflows in this directory are split so that pull requests get fast, review
   - `cargo shear`
   - `argument-comment-lint` on Linux, macOS, and Windows
   - `tools/argument-comment-lint` package tests when the lint or its workflow wiring changes
+- `linux-sandbox-smoke.yml` is an explicit host-policy smoke test for Linux
+  sandboxing. It installs Ubuntu's `bubblewrap` and AppArmor profiles on the
+  runner, then runs `codex exec` once with the default bwrap path and once with
+  `use_legacy_landlock=true`.
 
 ## Post-Merge On `main`
 
