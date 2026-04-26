@@ -384,7 +384,33 @@ pub(crate) enum AppEvent {
         result: Result<SkillsListResponse, String>,
     },
 
+    /// Begin buffering initial resume replay rows before they are written to scrollback.
+    BeginInitialHistoryReplayBuffer,
+
     InsertHistoryCell(Box<dyn HistoryCell>),
+
+    /// Finish buffering initial resume replay after all replay events have been queued.
+    EndInitialHistoryReplayBuffer,
+
+    /// Replace the contiguous run of streaming `AgentMessageCell`s at the end of
+    /// the transcript with a single `AgentMarkdownCell` that stores the raw
+    /// markdown source and re-renders from it on resize.
+    ///
+    /// Emitted by `ChatWidget::flush_answer_stream_with_separator` after stream
+    /// finalization. The `App` handler walks backward through `transcript_cells`
+    /// to find the `AgentMessageCell` run and splices in the consolidated cell.
+    /// The `cwd` keeps local file-link display stable across the final re-render.
+    ConsolidateAgentMessage {
+        source: String,
+        cwd: PathBuf,
+    },
+
+    /// Replace the contiguous run of streaming `ProposedPlanStreamCell`s at the
+    /// end of the transcript with a single source-backed `ProposedPlanCell`.
+    ///
+    /// Emitted by `ChatWidget::on_plan_item_completed` after plan stream
+    /// finalization.
+    ConsolidateProposedPlan(String),
 
     /// Apply rollback semantics to local transcript cells.
     ///

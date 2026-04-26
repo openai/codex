@@ -17,6 +17,13 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 jobs:
   test:
+    # Even though a no-cache-hit Windows build seems to exceed the 30-minute
+    # limit on occasion, the more common reason for exceeding the limit is a
+    # true test failure in a rust_test() marked "flaky" that gets run 3x.
+    # In that case, extra time generally does not give us more signal.
+    #
+    # Ultimately we need true distributed builds (e.g.,
+    # https://www.buildbuddy.io/docs/rbe-setup/) to speed things up.
     timeout-minutes: 30
     strategy:
       fail-fast: false

@@ -32,7 +32,8 @@ fn default_enabled_features_are_stable() {
     for spec in crate::FEATURES {
         if spec.default_enabled {
             assert!(
-                matches!(spec.stage, Stage::Stable | Stage::Removed),
+                matches!(spec.stage, Stage::Stable | Stage::Removed)
+                    || spec.id == Feature::TerminalResizeReflow,
                 "feature `{}` is enabled by default but is not stable/removed ({:?})",
                 spec.key,
                 spec.stage
@@ -113,6 +114,19 @@ fn request_permissions_tool_is_under_development() {
 }
 
 #[test]
+fn terminal_resize_reflow_is_experimental_and_enabled_by_default() {
+    assert_eq!(
+        feature_for_key("terminal_resize_reflow"),
+        Some(Feature::TerminalResizeReflow)
+    );
+    assert!(matches!(
+        Feature::TerminalResizeReflow.stage(),
+        Stage::Experimental { .. }
+    ));
+    assert_eq!(Feature::TerminalResizeReflow.default_enabled(), true);
+}
+
+#[test]
 fn tool_suggest_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ToolSuggest.stage(), Stage::Stable);
     assert_eq!(Feature::ToolSuggest.default_enabled(), true);
@@ -140,15 +154,6 @@ fn browser_controls_are_stable_and_enabled_by_default() {
     assert_eq!(Feature::ComputerUse.stage(), Stage::Stable);
     assert_eq!(Feature::ComputerUse.default_enabled(), true);
     assert_eq!(feature_for_key("computer_use"), Some(Feature::ComputerUse));
-}
-
-#[test]
-fn unavailable_dummy_tools_is_under_development_and_disabled_by_default() {
-    assert_eq!(
-        Feature::UnavailableDummyTools.stage(),
-        Stage::UnderDevelopment
-    );
-    assert_eq!(Feature::UnavailableDummyTools.default_enabled(), false);
 }
 
 #[test]

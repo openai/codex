@@ -532,6 +532,9 @@ pub struct ModelAvailabilityNuxConfig {
     pub shown_count: HashMap<String, u32>,
 }
 
+/// Fallback resize-reflow row cap when Codex cannot identify a terminal-specific scrollback size.
+pub const DEFAULT_TERMINAL_RESIZE_REFLOW_FALLBACK_MAX_ROWS: usize = 1_000;
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -584,6 +587,13 @@ pub struct Tui {
     /// Startup tooltip availability NUX state persisted by the TUI.
     #[serde(default)]
     pub model_availability_nux: ModelAvailabilityNuxConfig,
+
+    /// Trim terminal resize-reflow replay to the most recent rendered terminal rows when the
+    /// transcript exceeds this cap. Omit to use Codex's terminal-specific default. Set to `0` to
+    /// keep all rendered rows.
+    #[serde(default)]
+    #[schemars(range(min = 0))]
+    pub terminal_resize_reflow_max_rows: Option<usize>,
 }
 
 const fn default_true() -> bool {
