@@ -329,6 +329,11 @@ impl CloudRequirementsService {
         let Some(auth) = self.auth_manager.auth().await else {
             return Ok(None);
         };
+        if matches!(auth, CodexAuth::AgentIdentity(_)) {
+            // AgentIdentity does not carry a human bearer token, and identity-edge
+            // only allowlists task-scoped AgentAssertion calls for the Codex runtime.
+            return Ok(None);
+        }
         let Some(plan_type) = auth.account_plan_type() else {
             return Ok(None);
         };

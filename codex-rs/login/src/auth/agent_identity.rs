@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use codex_agent_identity::AgentIdentityKey;
-use codex_agent_identity::normalize_chatgpt_base_url;
 use codex_agent_identity::register_agent_task;
 use codex_protocol::account::PlanType as AccountPlanType;
 use tokio::sync::OnceCell;
@@ -10,7 +9,7 @@ use crate::default_client::build_reqwest_client;
 
 use super::storage::AgentIdentityAuthRecord;
 
-const DEFAULT_CHATGPT_BACKEND_BASE_URL: &str = "https://chatgpt.com/backend-api";
+const AGENT_IDENTITY_AUTHAPI_BASE_URL: &str = "https://auth.openai.com/api/accounts";
 
 #[derive(Debug)]
 pub struct AgentIdentityAuth {
@@ -43,17 +42,16 @@ impl AgentIdentityAuth {
         self.process_task_id.get().map(String::as_str)
     }
 
-    pub async fn ensure_runtime(&self, chatgpt_base_url: Option<String>) -> std::io::Result<()> {
+    pub async fn ensure_runtime(&self) -> std::io::Result<()> {
         self.process_task_id
             .get_or_try_init(|| async {
-                let base_url = normalize_chatgpt_base_url(
-                    chatgpt_base_url
-                        .as_deref()
-                        .unwrap_or(DEFAULT_CHATGPT_BACKEND_BASE_URL),
-                );
-                register_agent_task(&build_reqwest_client(), &base_url, self.key())
-                    .await
-                    .map_err(std::io::Error::other)
+                register_agent_task(
+                    &build_reqwest_client(),
+                    AGENT_IDENTITY_AUTHAPI_BASE_URL,
+                    self.key(),
+                )
+                .await
+                .map_err(std::io::Error::other)
             })
             .await
             .map(|_| ())

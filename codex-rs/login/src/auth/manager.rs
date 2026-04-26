@@ -323,10 +323,10 @@ impl CodexAuth {
 
     pub async fn initialize_runtime(
         &self,
-        chatgpt_base_url: Option<String>,
+        _chatgpt_base_url: Option<String>,
     ) -> std::io::Result<()> {
         match self {
-            Self::AgentIdentity(auth) => auth.ensure_runtime(chatgpt_base_url).await,
+            Self::AgentIdentity(auth) => auth.ensure_runtime().await,
             Self::ApiKey(_) | Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => Ok(()),
         }
     }
