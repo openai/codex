@@ -13,7 +13,7 @@ use crate::identity::SandboxCreds;
 use crate::identity::require_logon_sandbox_creds;
 use crate::logging::log_start;
 use crate::path_normalization::canonicalize_path;
-use crate::path_normalization::ensure_windows_sandbox_local_path;
+use crate::path_normalization::normalize_command_cwd;
 use crate::policy::SandboxPolicy;
 use crate::policy::parse_policy;
 use crate::sandbox_utils::ensure_codex_home_exists;
@@ -104,7 +104,7 @@ fn prepare_spawn_context_common(
         anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
     }
 
-    ensure_windows_sandbox_local_path(cwd, "sandbox working directory")?;
+    let normalized_cwd = normalize_command_cwd(cwd);
 
     normalize_null_device_env(env_map);
     ensure_non_interactive_pager(env_map);
@@ -112,7 +112,7 @@ fn prepare_spawn_context_common(
         inherit_path_env(env_map);
     }
     if add_git_safe_directory {
-        inject_git_safe_directory(env_map, cwd);
+        inject_git_safe_directory(env_map, &normalized_cwd);
     }
 
     ensure_codex_home_exists(codex_home)?;
@@ -125,7 +125,7 @@ fn prepare_spawn_context_common(
 
     Ok(SpawnContext {
         policy,
-        current_dir: cwd.to_path_buf(),
+        current_dir: normalized_cwd,
         sandbox_base,
         logs_base_dir,
         is_workspace_write,
@@ -171,7 +171,8 @@ pub(crate) fn prepare_legacy_session_security(
             }
             SandboxPolicy::WorkspaceWrite { .. } => {
                 let psid_generic = LocalSid::from_string(&caps.workspace)?;
-                let workspace_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
+                let workspace_sid =
+                    workspace_cap_sid_for_cwd(codex_home, &normalize_command_cwd(cwd))?;
                 let psid_workspace = LocalSid::from_string(&workspace_sid)?;
                 let base = get_current_token_for_restriction()?;
                 let h_token = create_workspace_write_token_with_caps_from(
@@ -285,12 +286,6 @@ pub(crate) fn prepare_elevated_spawn_context(
     );
     let write_roots: Vec<PathBuf> = allow.into_iter().collect();
     let deny_write_paths: Vec<PathBuf> = deny.into_iter().collect();
-    for root in &write_roots {
-        ensure_windows_sandbox_local_path(root, "sandbox writable root")?;
-    }
-    for path in &deny_write_paths {
-        ensure_windows_sandbox_local_path(path, "sandbox protected path")?;
-    }
     let write_roots_override = if common.is_workspace_write {
         Some(write_roots.as_slice())
     } else {
@@ -299,7 +294,7 @@ pub(crate) fn prepare_elevated_spawn_context(
     let sandbox_creds = require_logon_sandbox_creds(
         &common.policy,
         sandbox_policy_cwd,
-        cwd,
+        &common.current_dir,
         env_map,
         codex_home,
         /*read_roots_override*/ None,
@@ -314,7 +309,7 @@ pub(crate) fn prepare_elevated_spawn_context(
             vec![caps.readonly.clone()],
         ),
         SandboxPolicy::WorkspaceWrite { .. } => {
-            let cap_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
+            let cap_sid = workspace_cap_sid_for_cwd(codex_home, &common.current_dir)?;
             (
                 LocalSid::from_string(&caps.workspace)?,
                 vec![caps.workspace.clone(), cap_sid],

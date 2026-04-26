@@ -15,7 +15,7 @@ use crate::allow::compute_allow_paths;
 use crate::helper_materialization::helper_bin_dir;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
-use crate::path_normalization::ensure_windows_sandbox_local_path;
+use crate::path_normalization::normalize_command_cwd;
 use crate::policy::SandboxPolicy;
 use crate::setup_error::SetupErrorCode;
 use crate::setup_error::SetupFailure;
@@ -166,24 +166,30 @@ fn run_setup_refresh_inner(
     ) {
         return Ok(());
     }
-    let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
-    let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
-    ensure_windows_sandbox_local_path(request.command_cwd, "sandbox working directory")?;
-    for root in &write_roots {
-        ensure_windows_sandbox_local_path(root, "sandbox writable root")?;
-    }
-    for path in &deny_write_paths {
-        ensure_windows_sandbox_local_path(path, "sandbox protected path")?;
-    }
-    let network_identity =
-        SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
-    let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
+    let normalized_command_cwd = normalize_command_cwd(request.command_cwd);
+    let normalized_request = SandboxSetupRequest {
+        policy: request.policy,
+        policy_cwd: request.policy_cwd,
+        command_cwd: &normalized_command_cwd,
+        env_map: request.env_map,
+        codex_home: request.codex_home,
+        proxy_enforced: request.proxy_enforced,
+    };
+    let (read_roots, write_roots) = build_payload_roots(&normalized_request, &overrides);
+    let deny_write_paths =
+        build_payload_deny_write_paths(&normalized_request, overrides.deny_write_paths);
+    let network_identity = SandboxNetworkIdentity::from_policy(
+        normalized_request.policy,
+        normalized_request.proxy_enforced,
+    );
+    let offline_proxy_settings =
+        offline_proxy_settings_from_env(normalized_request.env_map, network_identity);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
         online_username: ONLINE_USERNAME.to_string(),
-        codex_home: request.codex_home.to_path_buf(),
-        command_cwd: request.command_cwd.to_path_buf(),
+        codex_home: normalized_request.codex_home.to_path_buf(),
+        command_cwd: normalized_request.command_cwd.to_path_buf(),
         read_roots,
         write_roots,
         deny_write_paths,
@@ -206,14 +212,14 @@ fn run_setup_refresh_inner(
             cwd.display(),
             b64.len()
         ),
-        Some(&sandbox_dir(request.codex_home)),
+        Some(&sandbox_dir(normalized_request.codex_home)),
     );
     let status = cmd
         .status()
         .map_err(|e| {
             log_note(
                 &format!("setup refresh: failed to spawn {}: {e}", exe.display()),
-                Some(&sandbox_dir(request.codex_home)),
+                Some(&sandbox_dir(normalized_request.codex_home)),
             );
             e
         })
@@ -221,7 +227,7 @@ fn run_setup_refresh_inner(
     if !status.success() {
         log_note(
             &format!("setup refresh: exited with status {status:?}"),
-            Some(&sandbox_dir(request.codex_home)),
+            Some(&sandbox_dir(normalized_request.codex_home)),
         );
         return Err(anyhow!("setup refresh failed with status {status}"));
     }

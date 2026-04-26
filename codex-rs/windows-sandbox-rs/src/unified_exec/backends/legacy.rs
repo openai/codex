@@ -300,7 +300,8 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     if !common.policy.has_full_disk_read_access() {
         anyhow::bail!("Restricted read-only access requires the elevated Windows sandbox backend");
     }
-    let security = prepare_legacy_session_security(&common.policy, codex_home, cwd)?;
+    let security =
+        prepare_legacy_session_security(&common.policy, codex_home, &common.current_dir)?;
     allow_null_device_for_workspace_write(common.is_workspace_write);
 
     let persist_aces = common.is_workspace_write;
@@ -333,7 +334,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     } = match spawn_legacy_process(
         security.h_token,
         &command,
-        cwd,
+        &common.current_dir,
         &env_map,
         use_private_desktop,
         tty,
