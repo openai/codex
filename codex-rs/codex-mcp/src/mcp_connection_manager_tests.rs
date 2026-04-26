@@ -775,10 +775,18 @@ fn elicitation_capability_enabled_for_custom_servers() {
                 form: Some(FormElicitationCapability {
                     schema_validation: None
                 }),
-                url: None,
+                url: Some(_),
             })
         ));
     }
+}
+
+#[test]
+fn client_protocol_version_claims_url_elicitation_revision() {
+    assert_eq!(
+        protocol_version_with_url_elicitation().to_string(),
+        MCP_PROTOCOL_VERSION_WITH_URL_ELICITATION
+    );
 }
 
 #[test]

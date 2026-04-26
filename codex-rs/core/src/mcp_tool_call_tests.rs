@@ -763,6 +763,104 @@ async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_cod
 }
 
 #[test]
+fn codex_apps_auth_failure_meta_is_parsed_for_connector_elicitation() {
+    let result = CallToolResult {
+        content: vec![serde_json::json!({
+            "type": "text",
+            "text": "Connector reauthentication required",
+        })],
+        structured_content: None,
+        is_error: Some(true),
+        meta: Some(serde_json::json!({
+            MCP_TOOL_CODEX_APPS_META_KEY: {
+                CONNECTOR_AUTH_FAILURE_META_KEY: {
+                    CONNECTOR_AUTH_FAILURE_IS_AUTH_FAILURE_KEY: true,
+                    CONNECTOR_AUTH_FAILURE_AUTH_REASON_KEY: "reauthentication_required",
+                    CONNECTOR_AUTH_FAILURE_CONNECTOR_ID_KEY: "connector_calendar",
+                    CONNECTOR_AUTH_FAILURE_LINK_ID_KEY: "link_123",
+                    CONNECTOR_AUTH_FAILURE_ERROR_CODE_KEY: "UNAUTHORIZED",
+                    CONNECTOR_AUTH_FAILURE_ERROR_HTTP_STATUS_CODE_KEY: 401,
+                    CONNECTOR_AUTH_FAILURE_ERROR_ACTION_KEY: "TRIGGER_REAUTHENTICATION",
+                },
+            },
+        })),
+    };
+    let metadata = approval_metadata(
+        Some("metadata_connector"),
+        Some("Google Calendar"),
+        Some("Manage events and schedules."),
+        Some("Create Event"),
+        Some("Create a calendar event."),
+    );
+
+    assert_eq!(
+        codex_apps_connector_auth_failure(&result, Some(&metadata)),
+        Some(CodexAppsConnectorAuthFailure {
+            connector_id: "connector_calendar".to_string(),
+            connector_name: "Google Calendar".to_string(),
+            install_url: "https://chatgpt.com/apps/google-calendar/connector_calendar".to_string(),
+            auth_reason: Some("reauthentication_required".to_string()),
+            link_id: Some("link_123".to_string()),
+            error_code: Some("UNAUTHORIZED".to_string()),
+            error_http_status_code: Some(401),
+            error_action: Some("TRIGGER_REAUTHENTICATION".to_string()),
+        })
+    );
+}
+
+#[tokio::test]
+async fn codex_apps_auth_elicitation_request_uses_url_mode() {
+    let (session, turn_context) = make_session_and_context().await;
+    let auth_failure = CodexAppsConnectorAuthFailure {
+        connector_id: "connector_calendar".to_string(),
+        connector_name: "Google Calendar".to_string(),
+        install_url: "https://chatgpt.com/apps/google-calendar/connector_calendar".to_string(),
+        auth_reason: Some("oauth_upgrade_required".to_string()),
+        link_id: Some("link_123".to_string()),
+        error_code: Some("UNAUTHORIZED".to_string()),
+        error_http_status_code: Some(401),
+        error_action: Some("TRIGGER_REAUTHENTICATION".to_string()),
+    };
+
+    assert_eq!(
+        build_codex_apps_auth_elicitation_request(
+            &session,
+            &turn_context,
+            "call_123",
+            &auth_failure
+        ),
+        McpServerElicitationRequestParams {
+            thread_id: session.conversation_id.to_string(),
+            turn_id: Some(turn_context.sub_id),
+            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            request: McpServerElicitationRequest::Url {
+                meta: Some(serde_json::json!({
+                    MCP_TOOL_CODEX_APPS_META_KEY: {
+                        CONNECTOR_AUTH_FAILURE_META_KEY: {
+                            CONNECTOR_AUTH_FAILURE_IS_AUTH_FAILURE_KEY: true,
+                            CONNECTOR_AUTH_FAILURE_CONNECTOR_ID_KEY: "connector_calendar",
+                            CONNECTOR_AUTH_FAILURE_CONNECTOR_NAME_KEY: "Google Calendar",
+                            CONNECTOR_AUTH_FAILURE_INSTALL_URL_KEY:
+                                "https://chatgpt.com/apps/google-calendar/connector_calendar",
+                            CONNECTOR_AUTH_FAILURE_AUTH_REASON_KEY: "oauth_upgrade_required",
+                            CONNECTOR_AUTH_FAILURE_LINK_ID_KEY: "link_123",
+                            CONNECTOR_AUTH_FAILURE_ERROR_CODE_KEY: "UNAUTHORIZED",
+                            CONNECTOR_AUTH_FAILURE_ERROR_HTTP_STATUS_CODE_KEY: 401,
+                            CONNECTOR_AUTH_FAILURE_ERROR_ACTION_KEY: "TRIGGER_REAUTHENTICATION",
+                        },
+                    },
+                })),
+                message:
+                    "Reconnect Google Calendar on ChatGPT to grant the permissions needed for this request."
+                        .to_string(),
+                url: "https://chatgpt.com/apps/google-calendar/connector_calendar".to_string(),
+                elicitation_id: "codex_apps_auth_call_123".to_string(),
+            },
+        }
+    );
+}
+
+#[test]
 fn mcp_tool_call_thread_id_meta_is_added_to_request_meta() {
     assert_eq!(
         with_mcp_tool_call_thread_id_meta(

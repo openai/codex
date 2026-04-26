@@ -268,11 +268,21 @@ impl App {
                 }),
             ),
             ServerRequest::McpServerElicitationRequest { request_id, params } => {
-                if let Some(request) = McpServerElicitationFormRequest::from_app_server_request(
+                let mcp_request_id = app_server_request_id_to_mcp_request_id(request_id);
+                if let Some(params) = AppLinkViewParams::from_auth_url_app_server_request(
                     thread_id,
-                    app_server_request_id_to_mcp_request_id(request_id),
-                    params.clone(),
+                    &params.server_name,
+                    mcp_request_id.clone(),
+                    &params.request,
                 ) {
+                    Some(ThreadInteractiveRequest::AppLink(params))
+                } else if let Some(request) =
+                    McpServerElicitationFormRequest::from_app_server_request(
+                        thread_id,
+                        mcp_request_id.clone(),
+                        params.clone(),
+                    )
+                {
                     Some(ThreadInteractiveRequest::McpServerElicitation(request))
                 } else {
                     Some(ThreadInteractiveRequest::Approval(
@@ -280,7 +290,7 @@ impl App {
                             thread_id,
                             thread_label,
                             server_name: params.server_name.clone(),
-                            request_id: app_server_request_id_to_mcp_request_id(request_id),
+                            request_id: mcp_request_id,
                             message: match &params.request {
                                 codex_app_server_protocol::McpServerElicitationRequest::Form {
                                     message,
@@ -310,6 +320,9 @@ impl App {
 
     pub(super) fn push_thread_interactive_request(&mut self, request: ThreadInteractiveRequest) {
         match request {
+            ThreadInteractiveRequest::AppLink(params) => {
+                self.chat_widget.open_app_link_view(params);
+            }
             ThreadInteractiveRequest::Approval(request) => {
                 self.chat_widget.push_approval_request(request);
             }
