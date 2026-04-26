@@ -69,9 +69,16 @@ impl RunnerTransport {
     }
 }
 
+fn runner_launch_cwd<'a>(codex_home: &'a Path, runner_exe: &'a Path) -> &'a Path {
+    // The elevated helper only needs a stable local directory to start up and connect its pipes.
+    // Using the requested workspace as the process CWD breaks mapped-drive/UNC workspaces because
+    // the sandbox logon session may not inherit the caller's drive mappings.
+    runner_exe.parent().unwrap_or(codex_home)
+}
+
 pub(crate) fn spawn_runner_transport(
     codex_home: &Path,
-    cwd: &Path,
+    _cwd: &Path,
     sandbox_creds: &SandboxCreds,
     log_dir: Option<&Path>,
 ) -> Result<RunnerTransport> {
@@ -94,7 +101,8 @@ pub(crate) fn spawn_runner_transport(
     );
     let mut cmdline_vec = to_wide(&runner_full_cmd);
     let exe_w = to_wide(&runner_cmdline);
-    let cwd_w = to_wide(cwd);
+    let launch_cwd = runner_launch_cwd(codex_home, &runner_exe);
+    let cwd_w = to_wide(launch_cwd);
     let user_w = to_wide(&sandbox_creds.username);
     let domain_w = to_wide(".");
     let password_w = to_wide(&sandbox_creds.password);
@@ -164,6 +172,33 @@ pub(crate) fn spawn_runner_transport(
         pipe_write,
         pipe_read,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::runner_launch_cwd;
+    use std::path::Path;
+
+    #[test]
+    fn runner_launch_cwd_prefers_local_helper_parent_over_requested_workspace() {
+        let codex_home = Path::new(r"C:\Users\dev\.codex");
+        let runner_exe = Path::new(
+            r"C:\Users\dev\.codex\.sandbox-bin\codex-command-runner.exe",
+        );
+
+        assert_eq!(
+            runner_launch_cwd(codex_home, runner_exe),
+            Path::new(r"C:\Users\dev\.codex\.sandbox-bin")
+        );
+    }
+
+    #[test]
+    fn runner_launch_cwd_falls_back_to_codex_home_when_parent_is_missing() {
+        let codex_home = Path::new(r"C:\Users\dev\.codex");
+        let runner_exe = Path::new("codex-command-runner.exe");
+
+        assert_eq!(runner_launch_cwd(codex_home, runner_exe), codex_home);
+    }
 }
 
 fn wait_for_complete_frame(pipe_read: &File, timeout: Duration) -> Result<()> {
