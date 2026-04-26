@@ -119,6 +119,55 @@ pub fn parse_shell_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<Strin
     try_parse_word_only_commands_sequence(&tree, script)
 }
 
+/// Returns command word prefixes within a `bash -lc "..."` or `zsh -lc "..."`
+/// invocation, including commands nested in control-flow or substitutions.
+///
+/// This is intentionally more permissive than
+/// [`parse_shell_lc_plain_commands`]: it extracts the argv-shaped prefix from
+/// each command node and ignores shell attachments. Callers
+/// should use it only for conservative deny checks, not for allow-listing.
+pub fn parse_shell_lc_command_word_prefixes(command: &[String]) -> Option<Vec<Vec<String>>> {
+    let (_, script) = extract_bash_command(command)?;
+    let tree = try_parse_shell(script)?;
+    let root = tree.root_node();
+    if root.has_error() {
+        return None;
+    }
+
+    let mut commands = Vec::new();
+    for command_node in find_command_nodes(root) {
+        if let Some(words) = parse_command_word_prefix_from_node(command_node, script)
+            && !words.is_empty()
+        {
+            commands.push(words);
+        }
+    }
+
+    (!commands.is_empty()).then_some(commands)
+}
+
+/// Returns literal write redirection targets within a `bash -lc "..."` or
+/// `zsh -lc "..."` invocation.
+pub fn parse_shell_lc_write_redirection_targets(command: &[String]) -> Option<Vec<String>> {
+    let (_, script) = extract_bash_command(command)?;
+    let tree = try_parse_shell(script)?;
+    let root = tree.root_node();
+    if root.has_error() {
+        return None;
+    }
+
+    let mut targets = Vec::new();
+    for redirect_node in find_nodes_by_kind(root, "file_redirect") {
+        if file_redirect_uses_write_operator(redirect_node)
+            && let Some(target) = parse_redirection_target(redirect_node, script)
+        {
+            targets.push(target);
+        }
+    }
+
+    (!targets.is_empty()).then_some(targets)
+}
+
 /// Returns the parsed argv for a single shell command in a here-doc style
 /// script (`<<`), as long as the script contains exactly one command node.
 pub fn parse_shell_lc_single_command_prefix(command: &[String]) -> Option<Vec<String>> {
@@ -194,6 +243,100 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
     Some(words)
 }
 
+fn parse_command_word_prefix_from_node(cmd: Node<'_>, src: &str) -> Option<Vec<String>> {
+    if cmd.kind() != "command" {
+        return None;
+    }
+    let mut words = Vec::new();
+    let mut cursor = cmd.walk();
+    for child in cmd.named_children(&mut cursor) {
+        match child.kind() {
+            "command_name" => {
+                let word_node = child.named_child(0)?;
+                if !matches!(word_node.kind(), "word" | "number") {
+                    return None;
+                }
+                words.push(word_node.utf8_text(src.as_bytes()).ok()?.to_owned());
+            }
+            "word" | "number" => {
+                words.push(child.utf8_text(src.as_bytes()).ok()?.to_owned());
+            }
+            "string" => {
+                let parsed = parse_double_quoted_string(child, src)?;
+                words.push(parsed);
+            }
+            "raw_string" => {
+                let parsed = parse_raw_string(child, src)?;
+                words.push(parsed);
+            }
+            "concatenation" => {
+                let parsed = parse_concatenation(child, src)?;
+                words.push(parsed);
+            }
+            "variable_assignment" | "comment" => {}
+            kind if is_allowed_heredoc_attachment_kind(kind) => {}
+            _ => {}
+        }
+    }
+    Some(words)
+}
+
+fn file_redirect_uses_write_operator(node: Node<'_>) -> bool {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if !child.is_named() && child.kind().contains('>') {
+            return true;
+        }
+    }
+    false
+}
+
+fn parse_redirection_target(node: Node<'_>, src: &str) -> Option<String> {
+    let mut target = None;
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if let Some(parsed) = parse_literal_shell_word(child, src) {
+            target = Some(parsed);
+        }
+    }
+    target
+}
+
+fn parse_literal_shell_word(node: Node<'_>, src: &str) -> Option<String> {
+    match node.kind() {
+        "word" | "number" => Some(node.utf8_text(src.as_bytes()).ok()?.to_owned()),
+        "string" => parse_double_quoted_string(node, src),
+        "raw_string" => parse_raw_string(node, src),
+        "concatenation" => parse_concatenation(node, src),
+        _ => None,
+    }
+}
+
+fn parse_concatenation(node: Node<'_>, src: &str) -> Option<String> {
+    let mut concatenated = String::new();
+    let mut cursor = node.walk();
+    for part in node.named_children(&mut cursor) {
+        match part.kind() {
+            "word" | "number" => {
+                concatenated.push_str(part.utf8_text(src.as_bytes()).ok()?.to_owned().as_str());
+            }
+            "string" => {
+                let parsed = parse_double_quoted_string(part, src)?;
+                concatenated.push_str(&parsed);
+            }
+            "raw_string" => {
+                let parsed = parse_raw_string(part, src)?;
+                concatenated.push_str(&parsed);
+            }
+            _ => return None,
+        }
+    }
+    if concatenated.is_empty() {
+        return None;
+    }
+    Some(concatenated)
+}
+
 fn parse_heredoc_command_words(cmd: Node<'_>, src: &str) -> Option<Vec<String>> {
     if cmd.kind() != "command" {
         return None;
@@ -266,6 +409,29 @@ fn find_single_command_node(root: Node<'_>) -> Option<Node<'_>> {
         }
     }
     single_command
+}
+
+fn find_command_nodes(root: Node<'_>) -> Vec<Node<'_>> {
+    let mut command_nodes = find_nodes_by_kind(root, "command");
+    command_nodes.sort_by_key(Node::start_byte);
+    command_nodes
+}
+
+fn find_nodes_by_kind<'a>(root: Node<'a>, kind: &str) -> Vec<Node<'a>> {
+    let mut stack = vec![root];
+    let mut matches = Vec::new();
+    while let Some(node) = stack.pop() {
+        if node.kind() == kind {
+            matches.push(node);
+        }
+
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    matches.sort_by_key(Node::start_byte);
+    matches
 }
 
 fn has_named_descendant_kind(node: Node<'_>, kind: &str) -> bool {
@@ -451,6 +617,64 @@ mod tests {
         let command = vec!["zsh".to_string(), "-lc".to_string(), "ls".to_string()];
         let parsed = parse_shell_lc_plain_commands(&command).unwrap();
         assert_eq!(parsed, vec![vec!["ls".to_string()]]);
+    }
+
+    #[test]
+    fn parse_shell_lc_command_word_prefixes_extracts_complex_script_commands() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            r#"set -e
+top=$(git rev-parse --show-toplevel)
+if git init -q; then
+  exit 22
+fi
+if mkdir .codex; then
+  exit 23
+fi
+printf pwned > .git/config
+"#
+            .to_string(),
+        ];
+
+        let parsed = parse_shell_lc_command_word_prefixes(&command).expect("parse script");
+
+        assert!(parsed.contains(&vec![
+            "git".to_string(),
+            "rev-parse".to_string(),
+            "--show-toplevel".to_string()
+        ]));
+        assert!(parsed.contains(&vec![
+            "git".to_string(),
+            "init".to_string(),
+            "-q".to_string()
+        ]));
+        assert!(parsed.contains(&vec!["mkdir".to_string(), ".codex".to_string()]));
+    }
+
+    #[test]
+    fn parse_shell_lc_write_redirection_targets_extracts_literal_writes() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            r#"printf pwned > .git
+cat < .git/config
+printf ok >> .codex/log
+printf ok > ".agents/config"
+"#
+            .to_string(),
+        ];
+
+        let parsed = parse_shell_lc_write_redirection_targets(&command).expect("parse redirects");
+
+        assert_eq!(
+            parsed,
+            vec![
+                ".git".to_string(),
+                ".codex/log".to_string(),
+                ".agents/config".to_string()
+            ]
+        );
     }
 
     #[test]

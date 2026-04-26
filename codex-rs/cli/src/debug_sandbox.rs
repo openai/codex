@@ -35,6 +35,10 @@ use crate::exit_status::handle_exit_status;
 #[cfg(target_os = "macos")]
 use seatbelt::DenialLogger;
 
+#[cfg(target_os = "linux")]
+const LINUX_SANDBOX_FORWARDED_SIGNALS: &[libc::c_int] =
+    &[libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM];
+
 #[cfg(target_os = "macos")]
 pub async fn run_command_under_seatbelt(
     command: SeatbeltCommand,
@@ -142,6 +146,13 @@ async fn run_command_under_sandbox(
     // sandbox policy. In the future, we could add a CLI option to set them
     // separately.
     let sandbox_policy_cwd = cwd.clone();
+    if let Some(reason) = codex_shell_command::preserved_path_write_forbidden_reason(
+        &command,
+        cwd.as_path(),
+        &config.permissions.file_system_sandbox_policy,
+    ) {
+        anyhow::bail!("{reason}");
+    }
 
     let env = create_env(
         &config.permissions.shell_environment_policy,
@@ -257,6 +268,9 @@ async fn run_command_under_sandbox(
         denial_logger.on_child_spawn(&child);
     }
 
+    #[cfg(target_os = "linux")]
+    let status = wait_for_debug_sandbox_child(&mut child).await?;
+    #[cfg(not(target_os = "linux"))]
     let status = child.wait().await?;
 
     #[cfg(target_os = "macos")]
@@ -431,11 +445,94 @@ async fn spawn_debug_sandbox_child(
         cmd.env(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR, "1");
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        let parent_pid = unsafe { libc::getpid() };
+        // SAFETY: `pre_exec` runs in the child immediately before exec. The
+        // closure only adjusts the child signal mask, installs a parent-death
+        // signal, and checks the inherited parent pid to close the fork/exec
+        // race.
+        unsafe {
+            cmd.pre_exec(move || {
+                block_linux_sandbox_forwarded_signals()?;
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::getppid() != parent_pid {
+                    libc::raise(libc::SIGTERM);
+                }
+                Ok(())
+            });
+        }
+    }
+
     cmd.stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .kill_on_drop(true)
         .spawn()
+}
+
+#[cfg(target_os = "linux")]
+async fn wait_for_debug_sandbox_child(
+    child: &mut Child,
+) -> std::io::Result<std::process::ExitStatus> {
+    let child_pid = child.id().map(|pid| pid as libc::pid_t);
+    tokio::select! {
+        status = child.wait() => status,
+        signal = recv_linux_sandbox_forwarded_signal() => {
+            let signal = signal?;
+            if let Some(child_pid) = child_pid {
+                signal_debug_sandbox_child(child_pid, signal)?;
+            }
+            child.wait().await
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn recv_linux_sandbox_forwarded_signal() -> std::io::Result<libc::c_int> {
+    use tokio::signal::unix::SignalKind;
+    use tokio::signal::unix::signal;
+
+    let mut sighup = signal(SignalKind::hangup())?;
+    let mut sigint = signal(SignalKind::interrupt())?;
+    let mut sigquit = signal(SignalKind::quit())?;
+    let mut sigterm = signal(SignalKind::terminate())?;
+
+    let signal = tokio::select! {
+        _ = sighup.recv() => libc::SIGHUP,
+        _ = sigint.recv() => libc::SIGINT,
+        _ = sigquit.recv() => libc::SIGQUIT,
+        _ = sigterm.recv() => libc::SIGTERM,
+    };
+    Ok(signal)
+}
+
+#[cfg(target_os = "linux")]
+fn signal_debug_sandbox_child(pid: libc::pid_t, signal: libc::c_int) -> std::io::Result<()> {
+    if unsafe { libc::kill(pid, signal) } < 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::ESRCH) {
+            return Err(err);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn block_linux_sandbox_forwarded_signals() -> std::io::Result<()> {
+    let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::sigemptyset(&mut blocked);
+        for signal in LINUX_SANDBOX_FORWARDED_SIGNALS {
+            libc::sigaddset(&mut blocked, *signal);
+        }
+        if libc::sigprocmask(libc::SIG_BLOCK, &blocked, std::ptr::null_mut()) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
