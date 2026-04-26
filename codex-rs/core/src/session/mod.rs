@@ -387,6 +387,7 @@ pub struct CodexSpawnOk {
 
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
+    pub(crate) root_thread_id: Option<ThreadId>,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
@@ -448,6 +449,7 @@ impl Codex {
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
         let CodexSpawnArgs {
             mut config,
+            root_thread_id,
             auth_manager,
             models_manager,
             environment_manager,
@@ -629,6 +631,7 @@ impl Codex {
 
         let session = Session::new(
             session_configuration,
+            root_thread_id,
             config.clone(),
             auth_manager.clone(),
             models_manager.clone(),

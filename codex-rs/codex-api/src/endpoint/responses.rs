@@ -6,7 +6,7 @@ use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::requests::Compression;
 use crate::requests::attach_item_ids;
-use crate::requests::headers::build_conversation_headers;
+use crate::requests::headers::build_session_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
 use crate::sse::spawn_response_stream;
@@ -30,7 +30,8 @@ pub struct ResponsesClient<T: HttpTransport> {
 
 #[derive(Default)]
 pub struct ResponsesOptions {
-    pub conversation_id: Option<String>,
+    pub session_id: Option<String>,
+    pub thread_id: Option<String>,
     pub session_source: Option<SessionSource>,
     pub extra_headers: HeaderMap,
     pub compression: Compression,
@@ -72,7 +73,8 @@ impl<T: HttpTransport> ResponsesClient<T> {
         options: ResponsesOptions,
     ) -> Result<ResponseStream, ApiError> {
         let ResponsesOptions {
-            conversation_id,
+            session_id,
+            thread_id,
             session_source,
             extra_headers,
             compression,
@@ -86,10 +88,10 @@ impl<T: HttpTransport> ResponsesClient<T> {
         }
 
         let mut headers = extra_headers;
-        if let Some(ref conv_id) = conversation_id {
-            insert_header(&mut headers, "x-client-request-id", conv_id);
+        if let Some(ref thread_id) = thread_id {
+            insert_header(&mut headers, "x-client-request-id", thread_id);
         }
-        headers.extend(build_conversation_headers(conversation_id));
+        headers.extend(build_session_headers(session_id, thread_id));
         if let Some(subagent) = subagent_header(&session_source) {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }

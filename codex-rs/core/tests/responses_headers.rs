@@ -100,7 +100,8 @@ async fn responses_stream_includes_subagent_header_on_review() {
 
     let client = ModelClient::new(
         /*auth_manager*/ None,
-        conversation_id,
+        /*root_thread_id*/ conversation_id,
+        /*thread_id*/ conversation_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         session_source,
@@ -142,6 +143,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
     }
 
     let request = request_recorder.single_request();
+    let expected_session_id = conversation_id.to_string();
     let expected_window_id = format!("{conversation_id}:0");
     assert_eq!(
         request.header("x-openai-subagent").as_deref(),
@@ -151,12 +153,165 @@ async fn responses_stream_includes_subagent_header_on_review() {
         request.header("x-codex-window-id").as_deref(),
         Some(expected_window_id.as_str())
     );
+    assert_eq!(
+        request.header("session_id").as_deref(),
+        Some(expected_session_id.as_str())
+    );
+    assert_eq!(
+        request.header("thread_id").as_deref(),
+        Some(expected_session_id.as_str())
+    );
     assert_eq!(request.header("x-codex-parent-thread-id"), None);
     assert_eq!(
         request.body_json()["client_metadata"]["x-codex-installation-id"].as_str(),
         Some(TEST_INSTALLATION_ID)
     );
     assert_eq!(request.header("x-codex-sandbox"), None);
+}
+
+#[tokio::test]
+async fn responses_stream_separates_session_id_from_thread_id_for_thread_spawn() {
+    core_test_support::skip_if_no_network!();
+
+    let server = responses::start_mock_server().await;
+    let response_body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
+
+    let request_recorder = responses::mount_sse_once(&server, response_body).await;
+
+    let provider = ModelProviderInfo {
+        name: "mock".into(),
+        base_url: Some(format!("{}/v1", server.uri())),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        aws: None,
+        wire_api: WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    };
+
+    let codex_home = TempDir::new().expect("failed to create TempDir");
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.model_provider_id = provider.name.clone();
+    config.model_provider = provider.clone();
+    let effort = config.model_reasoning_effort;
+    let summary = config.model_reasoning_summary;
+    let model = codex_core::test_support::get_model_offline(config.model.as_deref());
+    config.model = Some(model.clone());
+    let config = Arc::new(config);
+
+    let root_thread_id = ThreadId::new();
+    let parent_thread_id = ThreadId::new();
+    let thread_id = ThreadId::new();
+    let auth_mode = TelemetryAuthMode::Chatgpt;
+    let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id,
+        depth: 2,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
+    let model_info =
+        codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
+
+    let session_telemetry = SessionTelemetry::new(
+        thread_id,
+        model.as_str(),
+        model_info.slug.as_str(),
+        /*account_id*/ None,
+        Some("test@test.com".to_string()),
+        Some(auth_mode),
+        "test_originator".to_string(),
+        /*log_user_prompts*/ false,
+        "test".to_string(),
+        session_source.clone(),
+    );
+
+    let client = ModelClient::new(
+        /*auth_manager*/ None,
+        root_thread_id,
+        thread_id,
+        /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
+        provider.clone(),
+        session_source,
+        config.model_verbosity,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+    );
+    let mut client_session = client.new_session();
+
+    let mut prompt = Prompt::default();
+    prompt.input = vec![ResponseItem::Message {
+        id: None,
+        role: "user".into(),
+        content: vec![ContentItem::InputText {
+            text: "hello".into(),
+        }],
+        end_turn: None,
+        phase: None,
+    }];
+
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &model_info,
+            &session_telemetry,
+            effort,
+            summary.unwrap_or(model_info.default_reasoning_summary),
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
+        )
+        .await
+        .expect("stream failed");
+    while let Some(event) = stream.next().await {
+        if matches!(event, Ok(ResponseEvent::Completed { .. })) {
+            break;
+        }
+    }
+
+    let request = request_recorder.single_request();
+    let expected_session_id = root_thread_id.to_string();
+    let expected_thread_id = thread_id.to_string();
+    let expected_parent_thread_id = parent_thread_id.to_string();
+    let expected_window_id = format!("{thread_id}:0");
+
+    assert_eq!(
+        request.header("x-openai-subagent").as_deref(),
+        Some("collab_spawn")
+    );
+    assert_eq!(
+        request.header("session_id").as_deref(),
+        Some(expected_session_id.as_str())
+    );
+    assert_eq!(
+        request.header("thread_id").as_deref(),
+        Some(expected_thread_id.as_str())
+    );
+    assert_eq!(
+        request.header("x-client-request-id").as_deref(),
+        Some(expected_thread_id.as_str())
+    );
+    assert_eq!(
+        request.header("x-codex-parent-thread-id").as_deref(),
+        Some(expected_parent_thread_id.as_str())
+    );
+    assert_eq!(
+        request.header("x-codex-window-id").as_deref(),
+        Some(expected_window_id.as_str())
+    );
 }
 
 #[tokio::test]
@@ -227,7 +382,8 @@ async fn responses_stream_includes_subagent_header_on_other() {
 
     let client = ModelClient::new(
         /*auth_manager*/ None,
-        conversation_id,
+        /*root_thread_id*/ conversation_id,
+        /*thread_id*/ conversation_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         session_source,
@@ -269,9 +425,18 @@ async fn responses_stream_includes_subagent_header_on_other() {
     }
 
     let request = request_recorder.single_request();
+    let expected_session_id = conversation_id.to_string();
     assert_eq!(
         request.header("x-openai-subagent").as_deref(),
         Some("my-task")
+    );
+    assert_eq!(
+        request.header("session_id").as_deref(),
+        Some(expected_session_id.as_str())
+    );
+    assert_eq!(
+        request.header("thread_id").as_deref(),
+        Some(expected_session_id.as_str())
     );
 }
 
@@ -343,7 +508,8 @@ async fn responses_respects_model_info_overrides_from_config() {
 
     let client = ModelClient::new(
         /*auth_manager*/ None,
-        conversation_id,
+        /*root_thread_id*/ conversation_id,
+        /*thread_id*/ conversation_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         session_source,

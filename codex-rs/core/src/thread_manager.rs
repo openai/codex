@@ -1063,10 +1063,12 @@ impl ThreadManagerState {
         let parent_rollout_thread_trace = self
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
+        let root_thread_id = self.root_thread_id_for_source(&session_source).await;
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
             config,
+            root_thread_id,
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
             environment_manager: Arc::clone(&self.environment_manager),
@@ -1099,6 +1101,23 @@ impl ThreadManagerState {
             warn!("failed to apply goal resume runtime effects: {err}");
         }
         Ok(new_thread)
+    }
+
+    async fn root_thread_id_for_source(&self, session_source: &SessionSource) -> Option<ThreadId> {
+        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth,
+            ..
+        }) = session_source
+        else {
+            return None;
+        };
+
+        if let Ok(parent_thread) = self.get_thread(*parent_thread_id).await {
+            return Some(parent_thread.codex.session.root_thread_id);
+        }
+
+        (*depth == 1).then_some(*parent_thread_id)
     }
 
     async fn finalize_thread_spawn(

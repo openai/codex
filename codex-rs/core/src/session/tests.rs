@@ -339,6 +339,10 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
 fn test_model_client_session() -> crate::client::ModelClientSession {
     crate::client::ModelClient::new(
         /*auth_manager*/ None,
+        /*root_thread_id*/
+        ThreadId::try_from("00000000-0000-4000-8000-000000000001")
+            .expect("test thread id should be valid"),
+        /*thread_id*/
         ThreadId::try_from("00000000-0000-4000-8000-000000000001")
             .expect("test thread id should be valid"),
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
@@ -3143,6 +3147,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     ));
     let result = Session::new(
         session_configuration,
+        /*root_thread_id*/ None,
         Arc::clone(&config),
         auth_manager,
         models_manager,
@@ -3311,7 +3316,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         )),
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
-            conversation_id,
+            /*root_thread_id*/ conversation_id,
+            /*thread_id*/ conversation_id,
             /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
             session_configuration.provider.clone(),
             session_configuration.session_source.clone(),
@@ -3362,6 +3368,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
 
     let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();
     let session = Session {
+        root_thread_id: conversation_id,
         conversation_id,
         tx_event,
         agent_status: agent_status_tx,
@@ -3464,6 +3471,7 @@ async fn make_session_with_config_and_rx(
 
     let session = Session::new(
         session_configuration,
+        /*root_thread_id*/ None,
         Arc::clone(&config),
         auth_manager,
         models_manager,
@@ -4674,7 +4682,8 @@ where
         )),
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
-            conversation_id,
+            /*root_thread_id*/ conversation_id,
+            /*thread_id*/ conversation_id,
             /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
             session_configuration.provider.clone(),
             session_configuration.session_source.clone(),
@@ -4725,6 +4734,7 @@ where
 
     let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();
     let session = Arc::new(Session {
+        root_thread_id: conversation_id,
         conversation_id,
         tx_event,
         agent_status: agent_status_tx,

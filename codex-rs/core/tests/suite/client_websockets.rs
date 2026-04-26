@@ -127,6 +127,14 @@ async fn responses_websocket_streams_request() {
         Some(harness.conversation_id.to_string())
     );
     assert_eq!(
+        handshake.header("session_id"),
+        Some(harness.conversation_id.to_string())
+    );
+    assert_eq!(
+        handshake.header("thread_id"),
+        Some(harness.conversation_id.to_string())
+    );
+    assert_eq!(
         body["client_metadata"]["x-codex-installation-id"].as_str(),
         Some(TEST_INSTALLATION_ID)
     );
@@ -1825,7 +1833,8 @@ async fn websocket_harness_with_provider_options(
     let summary = ReasoningSummary::Auto;
     let client = ModelClient::new(
         /*auth_manager*/ None,
-        conversation_id,
+        /*root_thread_id*/ conversation_id,
+        /*thread_id*/ conversation_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         SessionSource::Exec,
