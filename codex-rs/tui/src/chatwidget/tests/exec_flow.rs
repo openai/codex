@@ -1038,6 +1038,10 @@ async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
         Ok(Op::RunUserShellCommand { command }) => assert_eq!(command, "echo hi"),
         other => panic!("expected RunUserShellCommand op, got {other:?}"),
     }
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::AddToHistory { text }) if text == "!echo hi"
+    );
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 

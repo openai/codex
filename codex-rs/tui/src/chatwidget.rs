@@ -6112,9 +6112,26 @@ impl ChatWidget {
         }
     }
 
+    fn submit_shell_command_with_history(
+        &mut self,
+        command: &str,
+        history_text: &str,
+    ) -> QueueDrain {
+        let drain = self.submit_shell_command(command);
+        if drain == QueueDrain::Stop {
+            self.submit_op(Op::AddToHistory {
+                text: history_text.to_string(),
+            });
+        }
+        drain
+    }
+
     fn submit_queued_shell_prompt(&mut self, user_message: UserMessage) -> QueueDrain {
         match user_message.text.strip_prefix('!') {
-            Some(command) => self.submit_shell_command(command),
+            Some(command) => {
+                let history_text = user_message.text.clone();
+                self.submit_shell_command_with_history(command, &history_text)
+            }
             None => {
                 self.submit_user_message(user_message);
                 QueueDrain::Stop
@@ -6210,7 +6227,7 @@ impl ChatWidget {
         if shell_escape_policy == ShellEscapePolicy::Allow
             && let Some(stripped) = text.strip_prefix('!')
         {
-            let app_command = match self.submit_shell_command(stripped) {
+            let app_command = match self.submit_shell_command_with_history(stripped, &text) {
                 QueueDrain::Continue => None,
                 QueueDrain::Stop => Some(AppCommand::run_user_shell_command(
                     stripped.trim().to_string(),
