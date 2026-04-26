@@ -4,6 +4,7 @@ use std::sync::Arc;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core::thread_store_from_config;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_login::AuthManager;
@@ -71,6 +72,7 @@ impl MessageProcessor {
             },
             environment_manager,
             /*analytics_events_client*/ None,
+            thread_store_from_config(config.as_ref()),
         ));
         Self {
             outgoing,

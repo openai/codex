@@ -245,7 +245,6 @@ use codex_core::clear_memory_roots_contents;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
-use codex_core::config::ThreadStoreConfig;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::CloudRequirementsLoadError;
@@ -364,13 +363,10 @@ use codex_state::ThreadMetadata;
 use codex_state::ThreadMetadataBuilder;
 use codex_state::log_db::LogDbLayer;
 use codex_thread_store::ArchiveThreadParams as StoreArchiveThreadParams;
-#[cfg(debug_assertions)]
-use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::ListThreadsParams as StoreListThreadsParams;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ReadThreadByRolloutPathParams as StoreReadThreadByRolloutPathParams;
 use codex_thread_store::ReadThreadParams as StoreReadThreadParams;
-use codex_thread_store::RemoteThreadStore;
 use codex_thread_store::SortDirection as StoreSortDirection;
 use codex_thread_store::StoredThread;
 use codex_thread_store::ThreadMetadataPatch as StoreThreadMetadataPatch;
@@ -672,17 +668,9 @@ pub(crate) struct CodexMessageProcessorArgs {
     /// go through `config_manager`.
     pub(crate) config: Arc<Config>,
     pub(crate) config_manager: ConfigManager,
+    pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
-}
-
-fn configured_thread_store(config: &Config) -> Arc<dyn ThreadStore> {
-    match &config.experimental_thread_store {
-        ThreadStoreConfig::Local => Arc::new(configured_local_thread_store(config)),
-        ThreadStoreConfig::Remote { endpoint } => Arc::new(RemoteThreadStore::new(endpoint)),
-        #[cfg(debug_assertions)]
-        ThreadStoreConfig::InMemory { id } => InMemoryThreadStore::for_id(id),
-    }
 }
 
 fn environment_selection_error_message(err: CodexErr) -> String {
@@ -690,10 +678,6 @@ fn environment_selection_error_message(err: CodexErr) -> String {
         CodexErr::InvalidRequest(message) => message,
         err => err.to_string(),
     }
-}
-
-fn configured_local_thread_store(config: &Config) -> LocalThreadStore {
-    LocalThreadStore::new(codex_rollout::RolloutConfig::from_view(config))
 }
 
 impl CodexMessageProcessor {
@@ -768,6 +752,7 @@ impl CodexMessageProcessor {
             arg0_paths,
             config,
             config_manager,
+            thread_store,
             feedback,
             log_db,
         } = args;
@@ -777,7 +762,7 @@ impl CodexMessageProcessor {
             outgoing: outgoing.clone(),
             analytics_events_client,
             arg0_paths,
-            thread_store: configured_thread_store(&config),
+            thread_store,
             config,
             config_manager,
             active_login: Arc::new(Mutex::new(None)),
@@ -5066,11 +5051,11 @@ impl CodexMessageProcessor {
     async fn read_stored_thread_for_new_fork(
         &self,
         request_id: ConnectionRequestId,
-        thread_store: &dyn ThreadStore,
         thread_id: ThreadId,
         include_history: bool,
     ) -> Option<StoredThread> {
-        match thread_store
+        match self
+            .thread_store
             .read_thread(StoreReadThreadParams {
                 thread_id,
                 include_archived: true,
@@ -5274,7 +5259,6 @@ impl CodexMessageProcessor {
 
         let fallback_model_provider = config.model_provider_id.clone();
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
-        let fork_thread_store = configured_thread_store(&config);
 
         let NewThread {
             thread_id,
@@ -5339,12 +5323,7 @@ impl CodexMessageProcessor {
         // pathless, so they rebuild their visible history from the copied source history instead.
         let mut thread = if let Some(fork_rollout_path) = session_configured.rollout_path.as_ref() {
             let Some(stored_thread) = self
-                .read_stored_thread_for_new_fork(
-                    request_id.clone(),
-                    fork_thread_store.as_ref(),
-                    thread_id,
-                    include_turns,
-                )
+                .read_stored_thread_for_new_fork(request_id.clone(), thread_id, include_turns)
                 .await
             else {
                 return;

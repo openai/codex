@@ -17,6 +17,7 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
+use codex_core::thread_store_from_config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
@@ -408,6 +409,7 @@ impl TestCodexBuilder {
                 CollaborationModesConfig::default(),
                 Arc::clone(&environment_manager),
                 /*analytics_events_client*/ None,
+                thread_store_from_config(&config),
             )
         } else {
             codex_core::test_support::thread_manager_with_models_provider_and_home(

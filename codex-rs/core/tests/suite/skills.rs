@@ -3,6 +3,7 @@
 
 use anyhow::Result;
 use codex_core::ThreadManager;
+use codex_core::thread_store_from_config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
@@ -247,6 +248,7 @@ async fn list_skills_skips_cwd_roots_when_environment_disabled() -> Result<()> {
             },
         )),
         /*analytics_events_client*/ None,
+        thread_store_from_config(&config),
     );
     let new_thread = thread_manager.start_thread(config.clone()).await?;
     let cwd = config.cwd.to_path_buf();

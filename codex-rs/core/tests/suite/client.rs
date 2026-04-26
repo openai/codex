@@ -5,6 +5,7 @@ use codex_core::NewThread;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ThreadManager;
+use codex_core::thread_store_from_config;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -1112,6 +1113,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         },
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        thread_store_from_config(&config),
     );
     let NewThread { thread: codex, .. } = thread_manager
         .start_thread(config)
