@@ -36,6 +36,11 @@ async fn throttled_receiver_coalesces_within_interval() {
         })
     );
 
+    // Reset the throttle window relative to "now" so this assertion does not
+    // depend on how much wall-clock time slow CI spent between the first recv
+    // and the second send.
+    throttled.next_allowed = Some(Instant::now() + TEST_THROTTLE_INTERVAL);
+
     tx.add_changed_paths(&[path("b"), path("c")]).await;
     let blocked = timeout(TEST_THROTTLE_INTERVAL / 2, throttled.recv()).await;
     assert_eq!(blocked.is_err(), true);
