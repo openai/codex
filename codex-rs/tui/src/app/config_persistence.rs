@@ -686,8 +686,8 @@ mod tests {
         std::fs::write(
             codex_home.path().join("config.toml"),
             r#"
-[tui.terminal_resize_reflow]
-max_rows = 9000
+[tui]
+terminal_resize_reflow_max_rows = 9000
 "#,
         )?;
 

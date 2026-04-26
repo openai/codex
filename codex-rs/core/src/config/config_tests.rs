@@ -46,7 +46,6 @@ use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SkillsConfig;
-use codex_config::types::TerminalResizeReflowToml;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
 use codex_config::types::TuiNotificationSettings;
@@ -520,7 +519,7 @@ fn config_toml_deserializes_model_availability_nux() {
                     ("gpt-foo".to_string(), 2),
                 ]),
             },
-            terminal_resize_reflow: TerminalResizeReflowToml::default(),
+            terminal_resize_reflow_max_rows: None,
         }
     );
 }
@@ -528,8 +527,8 @@ fn config_toml_deserializes_model_availability_nux() {
 #[test]
 fn config_toml_deserializes_terminal_resize_reflow_config() {
     let toml = r#"
-[tui.terminal_resize_reflow]
-max_rows = 9000
+[tui]
+terminal_resize_reflow_max_rows = 9000
 "#;
     let cfg: ConfigToml =
         toml::from_str(toml).expect("TOML deserialization should succeed for resize reflow config");
@@ -537,10 +536,8 @@ max_rows = 9000
     assert_eq!(
         cfg.tui
             .expect("tui config should deserialize")
-            .terminal_resize_reflow,
-        TerminalResizeReflowToml {
-            max_rows: Some(9000),
-        }
+            .terminal_resize_reflow_max_rows,
+        Some(9000)
     );
 }
 
@@ -1409,7 +1406,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             terminal_title: None,
             theme: None,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
-            terminal_resize_reflow: TerminalResizeReflowToml::default(),
+            terminal_resize_reflow_max_rows: None,
         }
     );
 }
@@ -1436,9 +1433,7 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
     let cfg = Config::load_from_base_config_with_overrides(
         ConfigToml {
             tui: Some(Tui {
-                terminal_resize_reflow: TerminalResizeReflowToml {
-                    max_rows: Some(9000),
-                },
+                terminal_resize_reflow_max_rows: Some(9000),
                 ..Default::default()
             }),
             ..Default::default()
@@ -1457,7 +1452,7 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
     let cfg = Config::load_from_base_config_with_overrides(
         ConfigToml {
             tui: Some(Tui {
-                terminal_resize_reflow: TerminalResizeReflowToml { max_rows: Some(0) },
+                terminal_resize_reflow_max_rows: Some(0),
                 ..Default::default()
             }),
             ..Default::default()

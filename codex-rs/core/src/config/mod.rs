@@ -394,7 +394,7 @@ pub struct Config {
     /// Syntax highlighting theme override (kebab-case name).
     pub tui_theme: Option<String>,
 
-    /// Experimental terminal resize-reflow tuning knobs.
+    /// Terminal resize-reflow tuning knobs.
     pub terminal_resize_reflow: TerminalResizeReflowConfig,
 
     /// The absolute directory that should be treated as the current working
@@ -1550,7 +1550,7 @@ fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalRe
     };
 
     TerminalResizeReflowConfig {
-        max_rows: match tui.terminal_resize_reflow.max_rows {
+        max_rows: match tui.terminal_resize_reflow_max_rows {
             Some(0) => TerminalResizeReflowMaxRows::Disabled,
             Some(rows) => TerminalResizeReflowMaxRows::Limit(rows),
             None => TerminalResizeReflowMaxRows::Auto,
