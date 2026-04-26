@@ -381,6 +381,7 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod interrupts;
 use self::interrupts::InterruptManager;
+mod keymap_picker;
 mod session_header;
 use self::session_header::SessionHeader;
 mod skills;
@@ -5376,6 +5377,24 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self.bottom_pane.has_active_view()
+            && !matches!(
+                key_event,
+                KeyEvent {
+                    code: KeyCode::Char(c),
+                    modifiers,
+                    kind: KeyEventKind::Press,
+                    ..
+                } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c')
+            )
+        {
+            self.bottom_pane.handle_key_event(key_event);
+            if self.bottom_pane.no_modal_or_popup_active() {
+                self.maybe_send_next_queued_input();
+            }
+            return;
+        }
+
         if self.handle_reasoning_shortcut(key_event) {
             self.bottom_pane.clear_quit_shortcut_hint();
             self.quit_shortcut_expires_at = None;
@@ -11375,25 +11394,6 @@ impl ChatWidget {
     /// runtime overrides applied via TUI, e.g., model or approval policy).
     pub(crate) fn config_ref(&self) -> &Config {
         &self.config
-    }
-
-    #[cfg(test)]
-    pub(crate) fn apply_keymap_update(
-        &mut self,
-        keymap_config: codex_config::types::TuiKeymap,
-        runtime_keymap: &RuntimeKeymap,
-    ) {
-        self.config.tui_keymap = keymap_config;
-        self.copy_last_response_binding = runtime_keymap.app.copy.clone();
-        self.chat_keymap = runtime_keymap.chat.clone();
-        self.queued_message_edit_hint_binding = queued_message_edit_hint_binding(
-            &self.chat_keymap.edit_queued_message,
-            terminal_info(),
-        );
-        self.bottom_pane
-            .set_queued_message_edit_binding(self.queued_message_edit_hint_binding);
-        self.bottom_pane.set_keymap_bindings(runtime_keymap);
-        self.request_redraw();
     }
 
     #[cfg(test)]

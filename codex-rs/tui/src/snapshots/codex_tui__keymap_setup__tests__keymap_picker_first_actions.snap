@@ -1,0 +1,25 @@
+---
+source: tui/src/keymap_setup.rs
+expression: snapshot
+---
+tab: All (50 selectable)
+tab: Common (18 selectable)
+tab: Customized (0) (0 selectable)
+tab: Unbound (0) (0 selectable)
+tab: App (7 selectable)
+tab: Composer (5 selectable)
+tab: Editor (16 selectable)
+tab: Navigation (14 selectable)
+tab: Approval (8 selectable)
+Open Transcript | ctrl-t | Global open_transcript Open Transcript Open the transcript overlay. ctrl-t Default
+Open External Editor | ctrl-g | Global open_external_editor Open External Editor Open the current draft in an external editor. ctrl-g Default
+Copy | ctrl-o | Global copy Copy Copy the last agent response to the clipboard. ctrl-o Default
+Clear Terminal | ctrl-l | Global clear_terminal Clear Terminal Clear the terminal UI. ctrl-l Default
+Decrease Reasoning Effort | alt-, | Chat decrease_reasoning_effort Decrease Reasoning Effort Decrease reasoning effort. alt-, Default
+Increase Reasoning Effort | alt-. | Chat increase_reasoning_effort Increase Reasoning Effort Increase reasoning effort. alt-. Default
+Edit Queued Message | alt-up, shift-left | Chat edit_queued_message Edit Queued Message Edit the most recently queued message. alt-up, shift-left Default
+Submit | enter | Composer submit Submit Submit the current composer draft. enter Default
+Queue | tab | Composer queue Queue Queue the draft while a task is running. tab Default
+Toggle Shortcuts | ?, shift-? | Composer toggle_shortcuts Toggle Shortcuts Show or hide the composer shortcut overlay. ?, shift-? Default
+History Search Previous | ctrl-r | Composer history_search_previous History Search Previous Open history search or move to the previous match. ctrl-r Default
+History Search Next | ctrl-s | Composer history_search_next History Search Next Move to the next history search match. ctrl-s Default

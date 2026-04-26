@@ -113,6 +113,45 @@ pub fn terminal_title_items_edit(items: &[String]) -> ConfigEdit {
     }
 }
 
+fn keymap_binding_value(keys: &[String]) -> TomlItem {
+    if let [key] = keys {
+        value(key.to_string())
+    } else {
+        let array = keys.iter().cloned().collect::<toml_edit::Array>();
+        TomlItem::Value(array.into())
+    }
+}
+
+/// Produces a config edit that replaces one root-level TUI keymap binding list.
+pub fn keymap_bindings_edit(context: &str, action: &str, keys: &[String]) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec![
+            "tui".to_string(),
+            "keymap".to_string(),
+            context.to_string(),
+            action.to_string(),
+        ],
+        value: keymap_binding_value(keys),
+    }
+}
+
+/// Produces a config edit that replaces one root-level TUI keymap binding.
+pub fn keymap_binding_edit(context: &str, action: &str, key: &str) -> ConfigEdit {
+    keymap_bindings_edit(context, action, &[key.to_string()])
+}
+
+/// Produces a config edit that removes one root-level TUI keymap binding.
+pub fn keymap_binding_clear_edit(context: &str, action: &str) -> ConfigEdit {
+    ConfigEdit::ClearPath {
+        segments: vec![
+            "tui".to_string(),
+            "keymap".to_string(),
+            context.to_string(),
+            action.to_string(),
+        ],
+    }
+}
+
 pub fn model_availability_nux_count_edits(shown_count: &HashMap<String, u32>) -> Vec<ConfigEdit> {
     let mut shown_count_entries: Vec<_> = shown_count.iter().collect();
     shown_count_entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));

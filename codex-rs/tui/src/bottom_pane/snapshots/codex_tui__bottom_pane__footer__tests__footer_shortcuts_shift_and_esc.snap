@@ -9,3 +9,5 @@ expression: terminal.backend()
 "  ctrl + r search history                    ctrl + c to exit                   "
 "  ⌥ + , reasoning down                       ⌥ + . reasoning up                 "
 "  ctrl + t to view transcript                                                   "
+"                                                                                "
+"  customize shortcuts with /keymap                                              "

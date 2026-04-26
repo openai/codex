@@ -1,0 +1,30 @@
+---
+source: tui/src/keymap_setup.rs
+expression: "format!(\"{:?}\", render_capture(&view, 80, 8))"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 80, height: 8 },
+    content: [
+        "Remap Shortcut                                                                  ",
+        "Action: Submit  composer.submit                                                 ",
+        "Current: enter                                                                  ",
+        "Press the new key now. Esc cancels.                                             ",
+        "                                                                                ",
+        "                                                                                ",
+        "                                                                                ",
+        "                                                                                ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 14, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 8, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 16, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 31, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 9, y: 2, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 14, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 35, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

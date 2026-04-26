@@ -28,7 +28,7 @@ use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
-use bottom_pane_view::BottomPaneView;
+pub(crate) use bottom_pane_view::BottomPaneView;
 use bottom_pane_view::ViewCompletion;
 use codex_core_skills::model::SkillMetadata;
 use codex_features::Features;
@@ -92,6 +92,8 @@ mod skills_toggle_view;
 pub(crate) mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::ColumnWidthMode;
+#[cfg(test)]
+pub(crate) use list_selection_view::ListSelectionView;
 pub(crate) use list_selection_view::SelectionRowDisplay;
 pub(crate) use list_selection_view::SelectionToggle;
 pub(crate) use list_selection_view::SelectionViewParams;
@@ -907,6 +909,40 @@ impl BottomPane {
         popup_consts::standard_popup_hint_line_for_keymap(&self.keymap.list)
     }
 
+    /// Replace one or more active views whose IDs are in `view_ids` with a
+    /// generic list selection view.
+    pub(crate) fn replace_active_views_with_selection_view(
+        &mut self,
+        view_ids: &[&'static str],
+        mut params: list_selection_view::SelectionViewParams,
+    ) -> bool {
+        let is_match = self
+            .view_stack
+            .last()
+            .and_then(|view| view.view_id())
+            .is_some_and(|view_id| view_ids.contains(&view_id));
+        if !is_match {
+            return false;
+        }
+
+        while self
+            .view_stack
+            .last()
+            .and_then(|view| view.view_id())
+            .is_some_and(|view_id| view_ids.contains(&view_id))
+        {
+            self.view_stack.pop();
+        }
+        self.apply_standard_popup_hint(&mut params);
+        let view = list_selection_view::ListSelectionView::new(
+            params,
+            self.app_event_tx.clone(),
+            self.keymap.list.clone(),
+        );
+        self.push_view(Box::new(view));
+        true
+    }
+
     pub(crate) fn selected_index_for_active_view(&self, view_id: &'static str) -> Option<usize> {
         self.view_stack
             .last()
@@ -975,9 +1011,13 @@ impl BottomPane {
         self.is_task_running
     }
 
-    #[cfg(test)]
     pub(crate) fn has_active_view(&self) -> bool {
         !self.view_stack.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_view_id(&self) -> Option<&'static str> {
+        self.view_stack.last().and_then(|view| view.view_id())
     }
 
     /// Return true when the pane is in the regular composer state without any

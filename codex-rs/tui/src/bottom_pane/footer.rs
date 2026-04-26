@@ -874,7 +874,13 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     }
     ordered.push(show_transcript);
 
-    build_columns(ordered)
+    let mut lines = build_columns(ordered);
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        "customize shortcuts with ".into(),
+        "/keymap".cyan(),
+    ]));
+    lines
 }
 
 fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
