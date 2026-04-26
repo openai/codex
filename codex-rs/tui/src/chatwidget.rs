@@ -9203,7 +9203,6 @@ impl ChatWidget {
             .map(|event| {
                 let id = event.id.clone();
                 let summary = auto_review_denials::action_summary(&event.action);
-                let detail = auto_review_denials::action_detail(&event.action);
                 let rationale = event
                     .rationale
                     .as_deref()
@@ -9211,8 +9210,8 @@ impl ChatWidget {
                 SelectionItem {
                     name: summary.clone(),
                     description: Some(rationale.to_string()),
-                    selected_description: Some(format!("{detail}\n\nRationale: {rationale}")),
-                    search_value: Some(format!("{summary} {detail} {rationale}")),
+                    selected_description: Some(rationale.to_string()),
+                    search_value: Some(format!("{summary} {rationale}")),
                     actions: vec![Box::new(move |tx| {
                         tx.send(AppEvent::ApproveRecentAutoReviewDenial { id: id.clone() });
                     })],

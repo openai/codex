@@ -74,64 +74,6 @@ pub(crate) fn action_summary(action: &GuardianAssessmentAction) -> String {
     }
 }
 
-pub(crate) fn action_detail(action: &GuardianAssessmentAction) -> String {
-    match action {
-        GuardianAssessmentAction::Command { command, cwd, .. } => {
-            format!("Command: {command}\nCwd: {}", cwd.display())
-        }
-        GuardianAssessmentAction::Execve {
-            program, argv, cwd, ..
-        } => {
-            format!(
-                "Program: {program}\nArgv: {}\nCwd: {}",
-                serde_json::to_string(argv).unwrap_or_else(|_| "[]".to_string()),
-                cwd.display()
-            )
-        }
-        GuardianAssessmentAction::ApplyPatch { cwd, files } => {
-            let files = files
-                .iter()
-                .map(|file| file.display().to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
-            format!("Apply patch\nCwd: {}\nFiles:\n{files}", cwd.display())
-        }
-        GuardianAssessmentAction::NetworkAccess {
-            target,
-            host,
-            protocol,
-            port,
-        } => {
-            format!("Network: {target}\nHost: {host}\nProtocol: {protocol:?}\nPort: {port}")
-        }
-        GuardianAssessmentAction::McpToolCall {
-            server,
-            tool_name,
-            connector_id,
-            connector_name,
-            tool_title,
-        } => {
-            format!(
-                "MCP tool: {server}.{tool_name}\nConnector id: {}\nConnector name: {}\nTool title: {}",
-                connector_id.as_deref().unwrap_or("none"),
-                connector_name.as_deref().unwrap_or("none"),
-                tool_title.as_deref().unwrap_or("none")
-            )
-        }
-        GuardianAssessmentAction::RequestPermissions {
-            reason,
-            permissions,
-        } => {
-            let permissions =
-                serde_json::to_string_pretty(permissions).unwrap_or_else(|_| "{}".to_string());
-            format!(
-                "Permission request\nReason: {}\nPermissions: {permissions}",
-                reason.as_deref().unwrap_or("none")
-            )
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use codex_protocol::protocol::GuardianCommandSource;
@@ -185,18 +127,5 @@ mod tests {
                 "review-2",
             ]
         );
-    }
-
-    #[test]
-    fn take_consumes_denial_once() {
-        let mut denials = RecentAutoReviewDenials::default();
-        denials.push(denied_event(/*id*/ 1));
-
-        assert_eq!(
-            denials.take("review-1").map(|event| event.id),
-            Some("review-1".to_string())
-        );
-        assert_eq!(denials.take("review-1"), None);
-        assert!(denials.is_empty());
     }
 }
