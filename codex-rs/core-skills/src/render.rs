@@ -17,10 +17,8 @@ use codex_utils_output_truncation::approx_token_count;
 const DEFAULT_SKILL_METADATA_CHAR_BUDGET: usize = 8_000;
 const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 2;
 const SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS: usize = 10;
+const MAX_WARNING_SKILL_NAMES: usize = 5;
 const APPROX_BYTES_PER_TOKEN: usize = 4;
-pub const SKILL_DESCRIPTION_TRUNCATED_WARNING_PREFIX: &str = "Warning: Exceeded skills context budget. Loaded skill descriptions were truncated by an average of";
-pub const SKILL_DESCRIPTIONS_REMOVED_WARNING_PREFIX: &str =
-    "Warning: Exceeded skills context budget. All skill descriptions were removed and";
 pub const SKILLS_INTRO_WITH_ABSOLUTE_PATHS: &str = "A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.";
 pub const SKILLS_INTRO_WITH_ALIASES: &str = "A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and a short path that can be expanded into an absolute path using the skill roots table.";
 pub const SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS: &str = r###"- Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.
@@ -121,6 +119,8 @@ pub struct SkillRenderReport {
     pub omitted_count: usize,
     pub truncated_description_chars: usize,
     pub truncated_description_count: usize,
+    pub largest_truncated_description_names: Vec<String>,
+    pub omitted_skill_names: Vec<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -210,30 +210,26 @@ fn build_available_skills_from_lines(
 
     let (skill_lines, report) = render_skill_lines_from_lines(skill_lines, total_count, budget);
     let warning_message = if report.omitted_count > 0 {
-        let skill_word = if report.omitted_count == 1 {
-            "skill"
-        } else {
-            "skills"
-        };
-        let verb = if report.omitted_count == 1 {
-            "was"
-        } else {
-            "were"
-        };
         Some(format!(
-            "{} {} additional {} {} not included in the model-visible skills list.",
-            budget_warning_prefix(budget, SKILL_DESCRIPTIONS_REMOVED_WARNING_PREFIX),
-            report.omitted_count,
-            skill_word,
-            verb
+            "{} Some skills were omitted from the model-visible skills list.{}",
+            budget_warning_prefix(budget),
+            warning_skill_names_suffix(
+                "Omitted skills",
+                &report.omitted_skill_names,
+                report.omitted_count
+            )
         ))
     } else if report.average_truncated_description_chars()
         > SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS
     {
         Some(format!(
-            "{} {} characters per skill.",
-            budget_warning_prefix(budget, SKILL_DESCRIPTION_TRUNCATED_WARNING_PREFIX),
-            report.average_truncated_description_chars()
+            "{} All skills are still available, but some descriptions were shortened.{}",
+            budget_warning_prefix(budget),
+            warning_skill_names_suffix(
+                "Largest truncated descriptions",
+                &report.largest_truncated_description_names,
+                report.largest_truncated_description_names.len()
+            )
         ))
     } else {
         None
@@ -273,15 +269,24 @@ fn record_available_skills_side_effects(
     }
 }
 
-fn budget_warning_prefix(budget: SkillMetadataBudget, prefix: &str) -> String {
+fn budget_warning_prefix(budget: SkillMetadataBudget) -> &'static str {
     match budget {
-        SkillMetadataBudget::Tokens(_) => prefix.replacen(
-            "Exceeded skills context budget.",
-            "Exceeded skills context budget of 2%.",
-            1,
-        ),
-        SkillMetadataBudget::Characters(_) => prefix.to_string(),
+        SkillMetadataBudget::Tokens(_) => "Skills metadata exceeded the 2% context budget.",
+        SkillMetadataBudget::Characters(_) => "Skills metadata exceeded the context budget.",
     }
+}
+
+fn warning_skill_names_suffix(label: &str, names: &[String], total_count: usize) -> String {
+    if names.is_empty() {
+        return String::new();
+    }
+
+    let mut names_text = names.join(", ");
+    let hidden_count = total_count.saturating_sub(names.len());
+    if hidden_count > 0 {
+        names_text.push_str(&format!(", and {hidden_count} more"));
+    }
+    format!(" {label}: {names_text}.")
 }
 
 fn record_skill_render_side_effects(
@@ -340,6 +345,8 @@ fn render_skill_lines_from_lines(
                 /*omitted_count*/ 0,
                 /*truncated_description_chars*/ 0,
                 /*truncated_description_count*/ 0,
+                Vec::new(),
+                Vec::new(),
             ),
         );
     }
@@ -353,8 +360,11 @@ fn render_skill_lines_from_lines(
             &skill_lines,
             budget.limit().saturating_sub(minimum_cost),
         );
-        let (truncated_description_chars, truncated_description_count) =
-            sum_description_truncation(&rendered);
+        let (
+            truncated_description_chars,
+            truncated_description_count,
+            largest_truncated_description_names,
+        ) = summarize_description_truncation(&rendered);
         let included = rendered
             .into_iter()
             .map(|rendered| rendered.line)
@@ -368,6 +378,8 @@ fn render_skill_lines_from_lines(
                 /*omitted_count*/ 0,
                 truncated_description_chars,
                 truncated_description_count,
+                largest_truncated_description_names,
+                Vec::new(),
             ),
         );
     }
@@ -383,8 +395,10 @@ fn render_minimum_skill_lines_until_budget(
     let mut included = Vec::new();
     let mut used = 0usize;
     let mut omitted_count = 0usize;
+    let mut omitted_skill_names = Vec::new();
     let mut truncated_description_chars = 0usize;
     let mut truncated_description_count = 0usize;
+    let mut truncated_descriptions = Vec::new();
     for line in skill_lines {
         let line_cost = line.minimum_cost(budget);
         let description_char_count = line.description_char_count();
@@ -393,12 +407,16 @@ fn render_minimum_skill_lines_until_budget(
             included.push(line.render_minimum());
         } else {
             omitted_count = omitted_count.saturating_add(1);
+            if omitted_skill_names.len() < MAX_WARNING_SKILL_NAMES {
+                omitted_skill_names.push(line.name.to_string());
+            }
         }
 
         truncated_description_chars =
             truncated_description_chars.saturating_add(description_char_count);
         if description_char_count > 0 {
             truncated_description_count = truncated_description_count.saturating_add(1);
+            truncated_descriptions.push((description_char_count, line.name.to_string()));
         }
     }
 
@@ -408,6 +426,8 @@ fn render_minimum_skill_lines_until_budget(
         omitted_count,
         truncated_description_chars,
         truncated_description_count,
+        top_skill_names_by_truncated_chars(truncated_descriptions),
+        omitted_skill_names,
     );
 
     (included, report)
@@ -419,6 +439,8 @@ fn skill_render_report(
     omitted_count: usize,
     truncated_description_chars: usize,
     truncated_description_count: usize,
+    largest_truncated_description_names: Vec<String>,
+    omitted_skill_names: Vec<String>,
 ) -> SkillRenderReport {
     SkillRenderReport {
         total_count,
@@ -426,6 +448,8 @@ fn skill_render_report(
         omitted_count,
         truncated_description_chars,
         truncated_description_count,
+        largest_truncated_description_names,
+        omitted_skill_names,
     }
 }
 
@@ -449,6 +473,7 @@ struct SkillLine<'a> {
 
 struct RenderedSkillLine {
     line: String,
+    skill_name: String,
     truncated_chars: usize,
 }
 
@@ -458,19 +483,38 @@ struct DescriptionBudgetLine<'a> {
     extra_costs: Vec<usize>,
 }
 
-fn sum_description_truncation(rendered: &[RenderedSkillLine]) -> (usize, usize) {
-    rendered
-        .iter()
-        .fold((0usize, 0usize), |(chars, count), line| {
-            if line.truncated_chars == 0 {
-                (chars, count)
-            } else {
-                (
-                    chars.saturating_add(line.truncated_chars),
-                    count.saturating_add(1),
-                )
-            }
-        })
+fn summarize_description_truncation(rendered: &[RenderedSkillLine]) -> (usize, usize, Vec<String>) {
+    let mut truncated_description_chars = 0usize;
+    let mut truncated_description_count = 0usize;
+    let mut truncated_descriptions = Vec::new();
+    for line in rendered {
+        if line.truncated_chars == 0 {
+            continue;
+        }
+        truncated_description_chars =
+            truncated_description_chars.saturating_add(line.truncated_chars);
+        truncated_description_count = truncated_description_count.saturating_add(1);
+        truncated_descriptions.push((line.truncated_chars, line.skill_name.clone()));
+    }
+
+    (
+        truncated_description_chars,
+        truncated_description_count,
+        top_skill_names_by_truncated_chars(truncated_descriptions),
+    )
+}
+
+fn top_skill_names_by_truncated_chars(mut entries: Vec<(usize, String)>) -> Vec<String> {
+    entries.sort_by(|(left_chars, left_name), (right_chars, right_name)| {
+        right_chars
+            .cmp(left_chars)
+            .then_with(|| left_name.cmp(right_name))
+    });
+    entries
+        .into_iter()
+        .take(MAX_WARNING_SKILL_NAMES)
+        .map(|(_chars, name)| name)
+        .collect()
 }
 
 impl<'a> SkillLine<'a> {
@@ -626,6 +670,7 @@ fn render_lines_with_description_budget(
                 .saturating_sub(description_chars);
             RenderedSkillLine {
                 line: line.line.render_with_description_chars(description_chars),
+                skill_name: line.line.name.to_string(),
                 truncated_chars,
             }
         })
@@ -1066,7 +1111,7 @@ mod tests {
         assert_eq!(
             rendered.warning_message,
             Some(
-                "Warning: Exceeded skills context budget. Loaded skill descriptions were truncated by an average of 14 characters per skill."
+                "Skills metadata exceeded the context budget. All skills are still available, but some descriptions were shortened. Largest truncated descriptions: alpha-skill, beta-skill."
                     .to_string()
             )
         );
@@ -1116,7 +1161,7 @@ mod tests {
         assert_eq!(
             rendered.warning_message,
             Some(
-                "Warning: Exceeded skills context budget. All skill descriptions were removed and 2 additional skills were not included in the model-visible skills list."
+                "Skills metadata exceeded the context budget. Some skills were omitted from the model-visible skills list. Omitted skills: repo-skill, user-skill."
                     .to_string()
             )
         );
@@ -1145,7 +1190,7 @@ mod tests {
         assert_eq!(
             rendered.warning_message,
             Some(
-                "Warning: Exceeded skills context budget. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list."
+                "Skills metadata exceeded the context budget. Some skills were omitted from the model-visible skills list. Omitted skills: oversized-system-skill."
                     .to_string()
             )
         );

@@ -334,7 +334,7 @@ async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills(
     assert_eq!(warning.thread_id.as_deref(), Some(thread.id.as_str()));
     assert_eq!(
         warning.message,
-        "Warning: Exceeded skills context budget of 2%. All skill descriptions were removed and 7 additional skills were not included in the model-visible skills list."
+        "Skills metadata exceeded the 2% context budget. Some skills were omitted from the model-visible skills list. Omitted skills: imagegen, openai-docs, plugin-creator, skill-creator, skill-installer, and 2 more."
     );
 
     timeout(
