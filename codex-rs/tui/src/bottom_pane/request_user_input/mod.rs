@@ -1132,11 +1132,9 @@ impl BottomPaneView for RequestUserInputOverlay {
                     KeyCode::Backspace | KeyCode::Delete => {
                         self.clear_selection();
                     }
-                    KeyCode::Tab => {
-                        if self.selected_option_index().is_some() {
-                            self.focus = Focus::Notes;
-                            self.ensure_selected_for_notes();
-                        }
+                    KeyCode::Tab if self.selected_option_index().is_some() => {
+                        self.focus = Focus::Notes;
+                        self.ensure_selected_for_notes();
                     }
                     KeyCode::Enter => {
                         let has_selection = self.selected_option_index().is_some();

@@ -73,6 +73,7 @@ use crate::status::StatusHistoryHandle;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
 use crate::status::rate_limit_snapshot_display_for_limit;
+use crate::terminal_multiplexer::fork_pane_options;
 use crate::terminal_title::SetTerminalTitleResult;
 use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
@@ -7378,10 +7379,8 @@ impl ChatWidget {
                 reasoning_effort,
                 agents_states,
             }),
-            ThreadItem::EnteredReviewMode { review, .. } => {
-                if !from_replay {
-                    self.enter_review_mode_with_hint(review, /*from_replay*/ false);
-                }
+            ThreadItem::EnteredReviewMode { review, .. } if !from_replay => {
+                self.enter_review_mode_with_hint(review, /*from_replay*/ false);
             }
             _ => {}
         }
@@ -9471,6 +9470,36 @@ impl ChatWidget {
     /// Open the permissions popup (alias for /permissions).
     pub(crate) fn open_approvals_popup(&mut self) {
         self.open_permissions_popup();
+    }
+
+    fn open_fork_popup(&mut self, multiplexer: &Multiplexer) {
+        let items = fork_pane_options(multiplexer)
+            .iter()
+            .map(|option| {
+                let placement = option.placement;
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::ForkCurrentSession {
+                        placement: Some(placement),
+                    });
+                })];
+
+                SelectionItem {
+                    name: format!("/fork {}", option.name),
+                    description: Some(option.description.to_string()),
+                    actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Fork into a new pane".to_string()),
+            subtitle: Some("Choose where to open the fork.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
     }
 
     /// Open a popup to choose the permissions mode (approval policy + sandbox policy).

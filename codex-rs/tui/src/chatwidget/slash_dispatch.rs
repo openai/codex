@@ -9,6 +9,10 @@ use super::*;
 use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands;
+use crate::terminal_multiplexer::fork_command_usage;
+use crate::terminal_multiplexer::parse_fork_pane_placement;
+use codex_terminal_detection::Multiplexer;
+use codex_terminal_detection::terminal_info;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -103,6 +107,15 @@ impl ChatWidget {
         self.request_side_conversation(parent_thread_id, /*user_message*/ None);
     }
 
+    pub(super) fn dispatch_fork_command(&mut self, multiplexer: Option<&Multiplexer>) {
+        if let Some(multiplexer) = multiplexer {
+            self.open_fork_popup(multiplexer);
+        } else {
+            self.app_event_tx
+                .send(AppEvent::ForkCurrentSession { placement: None });
+        }
+    }
+
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
             return;
@@ -145,7 +158,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
             }
             SlashCommand::Fork => {
-                self.app_event_tx.send(AppEvent::ForkCurrentSession);
+                self.dispatch_fork_command(terminal_info().multiplexer.as_ref());
             }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_AGENTS_MD_FILENAME);
@@ -599,6 +612,23 @@ impl ChatWidget {
                 } else {
                     self.queue_user_message(user_message);
                 }
+            }
+            SlashCommand::Fork => {
+                if trimmed.is_empty() {
+                    self.app_event_tx
+                        .send(AppEvent::ForkCurrentSession { placement: None });
+                    return;
+                }
+                let mut parts = trimmed.split_whitespace();
+                let placement = parts.next().and_then(parse_fork_pane_placement);
+                if placement.is_none() || parts.next().is_some() {
+                    self.add_error_message(fork_command_usage(
+                        terminal_info().multiplexer.as_ref(),
+                    ));
+                    return;
+                }
+                self.app_event_tx
+                    .send(AppEvent::ForkCurrentSession { placement });
             }
             SlashCommand::Goal if !trimmed.is_empty() => {
                 if !self.config.features.enabled(Feature::Goals) {
