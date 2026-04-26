@@ -9196,6 +9196,10 @@ impl ChatWidget {
             );
             return;
         }
+        let Some(thread_id) = self.thread_id() else {
+            self.add_error_message("That thread is no longer available.".to_string());
+            return;
+        };
 
         let items = self
             .recent_auto_review_denials
@@ -9213,7 +9217,10 @@ impl ChatWidget {
                     selected_description: Some(rationale.to_string()),
                     search_value: Some(format!("{summary} {rationale}")),
                     actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::ApproveRecentAutoReviewDenial { id: id.clone() });
+                        tx.send(AppEvent::ApproveRecentAutoReviewDenial {
+                            thread_id,
+                            id: id.clone(),
+                        });
                     })],
                     dismiss_on_select: true,
                     ..Default::default()
@@ -9234,14 +9241,16 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn approve_recent_auto_review_denial(&mut self, id: String) {
+    pub(crate) fn approve_recent_auto_review_denial(&mut self, thread_id: ThreadId, id: String) {
         let Some(event) = self.recent_auto_review_denials.take(&id) else {
             self.add_error_message("That auto-review denial is no longer available.".to_string());
             return;
         };
 
-        self.app_event_tx
-            .send(AppEvent::CodexOp(Op::ApproveGuardianDeniedAction { event }));
+        self.app_event_tx.send(AppEvent::SubmitThreadOp {
+            thread_id,
+            op: Op::ApproveGuardianDeniedAction { event },
+        });
         self.add_info_message(
             "Approval recorded for one retry of the selected auto-review denial.".to_string(),
             Some(
