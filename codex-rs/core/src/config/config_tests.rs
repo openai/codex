@@ -56,6 +56,7 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -63,6 +64,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SandboxPolicy;
 use serde::Deserialize;
@@ -844,6 +846,145 @@ async fn permission_profile_override_populates_runtime_permissions() -> std::io:
 }
 
 #[tokio::test]
+async fn permission_profile_override_preserves_managed_unrestricted_filesystem()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let permission_profile = PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Unrestricted,
+        network: NetworkSandboxPolicy::Restricted,
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            permission_profile: Some(permission_profile.clone()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.permissions.permission_profile(), permission_profile);
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::ExternalSandbox {
+            network_access: NetworkAccess::Restricted,
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_unrestricted_permission_profile_still_enables_network_requirements()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let permission_profile = PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Unrestricted,
+        network: NetworkSandboxPolicy::Enabled,
+    };
+
+    let mut config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            permission_profile: Some(permission_profile),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::DangerFullAccess,
+        "the legacy projection is intentionally lossy for managed unrestricted profiles"
+    );
+
+    let layers = config
+        .config_layer_stack
+        .get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
+        .into_iter()
+        .cloned()
+        .collect();
+    let mut requirements = config.config_layer_stack.requirements().clone();
+    requirements.network = Some(Sourced::new(
+        crate::config_loader::NetworkConstraints {
+            enabled: Some(true),
+            ..Default::default()
+        },
+        RequirementSource::CloudRequirements,
+    ));
+    let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
+    requirements_toml.network = Some(crate::config_loader::NetworkRequirementsToml {
+        enabled: Some(true),
+        ..Default::default()
+    });
+    config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
+        .expect("config layer stack with network requirements");
+
+    assert!(config.managed_network_requirements_enabled());
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_profile_override_applies_runtime_roots_to_legacy_projection()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            permission_profile: Some(permission_profile),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let memories_root = codex_home.path().join("memories").abs();
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy()
+            .can_write_path_with_cwd(memories_root.as_path(), cwd.path())
+    );
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![memories_root],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn permission_profile_override_preserves_configured_network_proxy() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
@@ -1020,13 +1161,16 @@ async fn permissions_profiles_require_default_permissions() -> std::io::Result<(
 }
 
 #[tokio::test]
-async fn permissions_profiles_reject_writes_outside_workspace_root() -> std::io::Result<()> {
+async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
+-> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
-    let external_write_path = if cfg!(windows) { r"C:\temp" } else { "/tmp" };
+    let external_write_dir = TempDir::new()?;
+    let external_write_path =
+        AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(external_write_dir.path())?)?;
 
-    let err = Config::load_from_base_config_with_overrides(
+    let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
             default_permissions: Some("workspace".to_string()),
             permissions: Some(PermissionsToml {
@@ -1036,7 +1180,7 @@ async fn permissions_profiles_reject_writes_outside_workspace_root() -> std::io:
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
-                                external_write_path.to_string(),
+                                external_write_path.to_string_lossy().into_owned(),
                                 FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
                             )]),
                         }),
@@ -1052,14 +1196,25 @@ async fn permissions_profiles_reject_writes_outside_workspace_root() -> std::io:
         },
         codex_home.abs(),
     )
-    .await
-    .expect_err("writes outside the workspace root should be rejected");
+    .await?;
 
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    let memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
+        codex_home.path().join("memories"),
+    )?)?;
     assert!(
-        err.to_string()
-            .contains("filesystem writes outside the workspace root"),
-        "{err}"
+        config
+            .permissions
+            .file_system_sandbox_policy()
+            .can_write_path_with_cwd(external_write_path.as_path(), cwd.path())
+    );
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![external_write_path, memories_root],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        }
     );
     Ok(())
 }
@@ -5292,6 +5447,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             model_provider: fixture.openai_provider.clone(),
             permissions: Permissions {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
+                permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 file_system_sandbox_policy: FileSystemSandboxPolicy::from(
                     &SandboxPolicy::new_read_only_policy(),
@@ -5489,6 +5645,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_custom_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             file_system_sandbox_policy: FileSystemSandboxPolicy::from(
                 &SandboxPolicy::new_read_only_policy(),
@@ -5640,6 +5797,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             file_system_sandbox_policy: FileSystemSandboxPolicy::from(
                 &SandboxPolicy::new_read_only_policy(),
@@ -5776,6 +5934,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             file_system_sandbox_policy: FileSystemSandboxPolicy::from(
                 &SandboxPolicy::new_read_only_policy(),
@@ -6598,6 +6757,40 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
     assert_eq!(
         *config.permissions.sandbox_policy.get(),
         SandboxPolicy::new_read_only_policy()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_profile_override_falls_back_when_disallowed_by_requirements()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let requirements = crate::config_loader::ConfigRequirementsToml {
+        allowed_sandbox_modes: Some(vec![crate::config_loader::SandboxModeRequirement::ReadOnly]),
+        ..Default::default()
+    };
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .harness_overrides(ConfigOverrides {
+            permission_profile: Some(PermissionProfile::Disabled),
+            ..Default::default()
+        })
+        .cloud_requirements(CloudRequirementsLoader::new(async move {
+            Ok(Some(requirements))
+        }))
+        .build()
+        .await?;
+
+    let expected_sandbox_policy = SandboxPolicy::new_read_only_policy();
+    assert_eq!(
+        *config.permissions.sandbox_policy.get(),
+        expected_sandbox_policy
+    );
+    assert_eq!(
+        config.permissions.permission_profile(),
+        PermissionProfile::read_only()
     );
     Ok(())
 }

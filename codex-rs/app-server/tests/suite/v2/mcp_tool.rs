@@ -133,6 +133,7 @@ url = "{mcp_server_url}/mcp"
 }
 
 #[tokio::test]
+#[cfg_attr(windows, ignore = "temporary CI isolation for #19606 Windows hang")]
 async fn mcp_server_tool_call_returns_error_for_unknown_thread() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
