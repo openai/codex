@@ -28,6 +28,7 @@ use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::disable_raw_mode;
 use ratatui::crossterm::terminal::enable_raw_mode;
 use ratatui::layout::Offset;
+use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
 use ratatui::text::Line;
@@ -58,6 +59,10 @@ pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
+
+pub(crate) fn running_in_vscode_terminal() -> bool {
+    keyboard_modes::running_in_vscode_terminal()
+}
 
 fn should_emit_notification(condition: NotificationCondition, terminal_focused: bool) -> bool {
     match condition {
@@ -292,8 +297,16 @@ fn set_panic_hook() {
 
 #[derive(Clone, Debug)]
 pub enum TuiEvent {
+    /// A terminal key event after focus, paste, and protocol bookkeeping has been handled.
     Key(KeyEvent),
+    /// A bracketed paste payload normalized by the app layer before it reaches the composer.
     Paste(String),
+    /// A terminal size notification that should be handled as resize-sensitive draw work.
+    ///
+    /// Resize is separate from `Draw` so the app can run feature-gated pre-render logic without
+    /// changing the default draw path for scheduled frames.
+    Resize,
+    /// A scheduled repaint that does not necessarily correspond to a terminal size change.
     Draw,
 }
 
@@ -578,6 +591,54 @@ impl Tui {
         Ok(())
     }
 
+    /// Resize the inline viewport for the resize-reflow path.
+    ///
+    /// Unlike the legacy draw path, this path does not scroll rows above the viewport when the
+    /// terminal shrinks. Resize reflow owns rebuilding those rows from transcript source, so
+    /// scrolling here would move the viewport once and then replay history into the wrong row.
+    fn update_inline_viewport_for_resize_reflow(
+        terminal: &mut Terminal,
+        height: u16,
+        is_zellij: bool,
+    ) -> Result<bool> {
+        let size = terminal.size()?;
+        let terminal_height_shrank = size.height < terminal.last_known_screen_size.height;
+        let terminal_height_grew = size.height > terminal.last_known_screen_size.height;
+        let viewport_was_bottom_aligned =
+            terminal.viewport_area.bottom() == terminal.last_known_screen_size.height;
+        let previous_area = terminal.viewport_area;
+
+        let mut area = terminal.viewport_area;
+        area.height = height.min(size.height);
+        area.width = size.width;
+        let mut needs_full_repaint = false;
+
+        if area.bottom() > size.height {
+            let scroll_by = area.bottom() - size.height;
+            if !terminal_height_shrank {
+                if is_zellij {
+                    Self::scroll_zellij_expanded_viewport(terminal, size, scroll_by)?;
+                } else {
+                    terminal
+                        .backend_mut()
+                        .scroll_region_up(0..area.top(), scroll_by)?;
+                }
+            }
+            area.y = size.height - area.height;
+        } else if terminal_height_grew && viewport_was_bottom_aligned {
+            area.y = size.height - area.height;
+        }
+
+        if area != terminal.viewport_area {
+            let clear_position = Position::new(/*x*/ 0, previous_area.y.min(area.y));
+            terminal.set_viewport_area(area);
+            terminal.clear_after_position(clear_position)?;
+            needs_full_repaint = true;
+        }
+
+        Ok(needs_full_repaint)
+    }
+
     /// Write any buffered history lines above the viewport and clear the buffer.
     /// Returns `true` when Zellij mode was used, signaling that the caller must
     /// invalidate the diff buffer for a full repaint.
@@ -634,6 +695,63 @@ impl Tui {
                 &mut self.pending_history_lines,
                 self.is_zellij,
             )?;
+
+            if needs_full_repaint {
+                terminal.invalidate_viewport();
+            }
+
+            // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
+            #[cfg(unix)]
+            {
+                let area = terminal.viewport_area;
+                let inline_area_bottom = if self.alt_screen_active.load(Ordering::Relaxed) {
+                    self.alt_saved_viewport
+                        .map(|r| r.bottom().saturating_sub(1))
+                        .unwrap_or_else(|| area.bottom().saturating_sub(1))
+                } else {
+                    area.bottom().saturating_sub(1)
+                };
+                self.suspend_context.set_cursor_y(inline_area_bottom);
+            }
+
+            terminal.draw(|frame| {
+                draw_fn(frame);
+            })
+        })?
+    }
+
+    /// Draw a frame using the resize-reflow viewport and history insertion rules.
+    ///
+    /// This is the feature-gated counterpart to `draw`. It intentionally skips
+    /// `pending_viewport_area`, whose cursor-position heuristic is part of the legacy path, and
+    /// instead lets transcript reflow rebuild scrollback before the frame is rendered.
+    pub fn draw_with_resize_reflow(
+        &mut self,
+        height: u16,
+        draw_fn: impl FnOnce(&mut custom_terminal::Frame),
+    ) -> Result<()> {
+        // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
+        // in the synchronized update.
+        #[cfg(unix)]
+        let mut prepared_resume = self
+            .suspend_context
+            .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
+
+        stdout().sync_update(|_| {
+            #[cfg(unix)]
+            if let Some(prepared) = prepared_resume.take() {
+                prepared.apply(&mut self.terminal)?;
+            }
+
+            let terminal = &mut self.terminal;
+            let mut needs_full_repaint =
+                Self::update_inline_viewport_for_resize_reflow(terminal, height, self.is_zellij)?;
+            let flushed_history = Self::flush_pending_history_lines(
+                terminal,
+                &mut self.pending_history_lines,
+                self.is_zellij,
+            )?;
+            needs_full_repaint |= flushed_history;
 
             if needs_full_repaint {
                 terminal.invalidate_viewport();

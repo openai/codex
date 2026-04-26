@@ -61,7 +61,7 @@ fn running_in_wsl() -> bool {
     }
 }
 
-fn running_in_vscode_terminal() -> bool {
+pub(super) fn running_in_vscode_terminal() -> bool {
     vscode_terminal_detected(
         std::env::var("TERM_PROGRAM").ok().as_deref(),
         windows_term_program().as_deref(),

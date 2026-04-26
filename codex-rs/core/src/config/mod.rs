@@ -394,6 +394,9 @@ pub struct Config {
     /// Syntax highlighting theme override (kebab-case name).
     pub tui_theme: Option<String>,
 
+    /// Terminal resize-reflow tuning knobs.
+    pub terminal_resize_reflow: TerminalResizeReflowConfig,
+
     /// The absolute directory that should be treated as the current working
     /// directory for the session. All relative paths inside the business-logic
     /// layer are resolved against this path.
@@ -648,6 +651,22 @@ impl Default for MultiAgentV2Config {
             hide_spawn_agent_metadata: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TerminalResizeReflowMaxRows {
+    /// Use the runtime terminal detector to choose a scrollback-sized cap.
+    #[default]
+    Auto,
+    /// Keep all rendered transcript rows during resize reflow.
+    Disabled,
+    /// Keep at most this many rendered transcript rows during resize reflow.
+    Limit(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TerminalResizeReflowConfig {
+    pub max_rows: TerminalResizeReflowMaxRows,
 }
 
 impl AuthManagerConfig for Config {
@@ -1525,6 +1544,20 @@ fn resolve_multi_agent_v2_config(
     }
 }
 
+fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalResizeReflowConfig {
+    let Some(tui) = config_toml.tui.as_ref() else {
+        return TerminalResizeReflowConfig::default();
+    };
+
+    TerminalResizeReflowConfig {
+        max_rows: match tui.terminal_resize_reflow_max_rows {
+            Some(0) => TerminalResizeReflowMaxRows::Disabled,
+            Some(rows) => TerminalResizeReflowMaxRows::Limit(rows),
+            None => TerminalResizeReflowMaxRows::Auto,
+        },
+    }
+}
+
 fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiAgentV2ConfigToml> {
     match features?.multi_agent_v2.as_ref()? {
         FeatureToml::Enabled(_) => None,
@@ -1941,6 +1974,7 @@ impl Config {
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg, &config_profile);
+        let terminal_resize_reflow = resolve_terminal_resize_reflow_config(&cfg);
 
         let agent_roles =
             agent_roles::load_agent_roles(fs, &cfg, &config_layer_stack, &mut startup_warnings)
@@ -2491,6 +2525,7 @@ impl Config {
             tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
+            terminal_resize_reflow,
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
