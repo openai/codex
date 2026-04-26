@@ -378,7 +378,7 @@ mod windows_impl {
                     #[allow(clippy::expect_used)]
                     let psid_generic =
                         convert_string_sid_to_sid(&caps.workspace).expect("valid workspace SID");
-                    let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
+                    let ws_sid = workspace_cap_sid_for_cwd(codex_home, &current_dir)?;
                     #[allow(clippy::expect_used)]
                     let psid_workspace =
                         convert_string_sid_to_sid(&ws_sid).expect("valid workspace SID");
@@ -458,7 +458,7 @@ mod windows_impl {
             create_process_as_user(
                 h_token,
                 &command,
-                cwd,
+                &current_dir,
                 &env_map,
                 logs_base_dir,
                 Some((in_r, out_w, err_w)),
@@ -603,15 +603,15 @@ mod windows_impl {
         }
 
         ensure_codex_home_exists(codex_home)?;
+        let current_dir = canonicalize_path(cwd);
         let caps = load_or_create_cap_sids(codex_home)?;
         #[allow(clippy::expect_used)]
         let psid_generic =
             unsafe { convert_string_sid_to_sid(&caps.workspace) }.expect("valid workspace SID");
-        let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
+        let ws_sid = workspace_cap_sid_for_cwd(codex_home, &current_dir)?;
         #[allow(clippy::expect_used)]
         let psid_workspace =
             unsafe { convert_string_sid_to_sid(&ws_sid) }.expect("valid workspace SID");
-        let current_dir = cwd.to_path_buf();
         let AllowDenyPaths { allow, deny } =
             compute_allow_paths(sandbox_policy, sandbox_policy_cwd, &current_dir, env_map);
         let canonical_cwd = canonicalize_path(&current_dir);

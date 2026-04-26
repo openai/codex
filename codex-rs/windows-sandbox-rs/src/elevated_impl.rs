@@ -20,6 +20,7 @@ pub struct ElevatedSandboxCaptureRequest<'a> {
 mod windows_impl {
     use super::ElevatedSandboxCaptureRequest;
     use crate::acl::allow_null_device;
+    use crate::canonicalize_path;
     use crate::cap::load_or_create_cap_sids;
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
@@ -242,10 +243,11 @@ mod windows_impl {
             deny_write_paths_override,
         } = request;
         let policy = parse_policy(policy_json_or_preset)?;
+        let current_dir = canonicalize_path(cwd);
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
         inherit_path_env(&mut env_map);
-        inject_git_safe_directory(&mut env_map, cwd, None);
+        inject_git_safe_directory(&mut env_map, &current_dir, None);
         // Use a temp-based log dir that the sandbox user can write.
         let sandbox_base = codex_home.join(".sandbox");
         ensure_codex_home_exists(&sandbox_base)?;
@@ -255,7 +257,7 @@ mod windows_impl {
         let sandbox_creds = require_logon_sandbox_creds(
             &policy,
             sandbox_policy_cwd,
-            cwd,
+            &current_dir,
             &env_map,
             codex_home,
             read_roots_override,
@@ -289,7 +291,7 @@ mod windows_impl {
                     psid,
                     vec![
                         caps.workspace,
-                        crate::cap::workspace_cap_sid_for_cwd(codex_home, cwd)?,
+                        crate::cap::workspace_cap_sid_for_cwd(codex_home, &current_dir)?,
                     ],
                 )
             }
@@ -321,7 +323,7 @@ mod windows_impl {
         );
         let mut cmdline_vec: Vec<u16> = to_wide(&runner_full_cmd);
         let exe_w: Vec<u16> = to_wide(&runner_cmdline);
-        let cwd_w: Vec<u16> = to_wide(cwd);
+        let cwd_w: Vec<u16> = to_wide(&current_dir);
 
         // Minimal CPWL launch: inherit env, no desktop override, no handle inheritance.
         let env_block: Option<Vec<u16>> = None;
@@ -339,7 +341,7 @@ mod windows_impl {
                 "runner launch: exe={} cmdline={} cwd={}",
                 runner_exe.display(),
                 runner_full_cmd,
-                cwd.display()
+                current_dir.display()
             ),
             logs_base_dir,
         );
@@ -413,7 +415,7 @@ mod windows_impl {
                 message: Message::SpawnRequest {
                     payload: Box::new(SpawnRequest {
                         command: command.clone(),
-                        cwd: cwd.to_path_buf(),
+                        cwd: current_dir.clone(),
                         env: env_map.clone(),
                         policy_json_or_preset: policy_json_or_preset.to_string(),
                         sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),

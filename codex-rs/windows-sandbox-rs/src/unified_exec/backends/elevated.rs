@@ -42,7 +42,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
 
     let spawn_request = SpawnRequest {
         command: command.clone(),
-        cwd: cwd.to_path_buf(),
+        cwd: elevated.common.current_dir.clone(),
         env: env_map.clone(),
         policy_json_or_preset: policy_json_or_preset.to_string(),
         sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
@@ -55,7 +55,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
         use_private_desktop,
     };
     let codex_home = codex_home.to_path_buf();
-    let cwd = cwd.to_path_buf();
+    let cwd = elevated.common.current_dir.clone();
     let sandbox_creds = elevated.sandbox_creds.clone();
     let logs_base_dir = elevated.common.logs_base_dir.clone();
     let transport = tokio::task::spawn_blocking(move || -> Result<_> {

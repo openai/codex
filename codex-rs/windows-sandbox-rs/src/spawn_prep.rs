@@ -97,6 +97,7 @@ fn prepare_spawn_context_common(
     add_git_safe_directory: bool,
 ) -> Result<SpawnContext> {
     let policy = parse_policy(policy_json_or_preset)?;
+    let current_dir = canonicalize_path(cwd);
     if matches!(
         &policy,
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
@@ -113,7 +114,7 @@ fn prepare_spawn_context_common(
         inherit_path_env(env_map);
     }
     if add_git_safe_directory {
-        inject_git_safe_directory(env_map, cwd);
+        inject_git_safe_directory(env_map, &current_dir);
     }
 
     ensure_codex_home_exists(codex_home)?;
@@ -126,7 +127,7 @@ fn prepare_spawn_context_common(
 
     Ok(SpawnContext {
         policy,
-        current_dir: cwd.to_path_buf(),
+        current_dir,
         sandbox_base,
         logs_base_dir,
         is_workspace_write,
@@ -294,7 +295,7 @@ pub(crate) fn prepare_elevated_spawn_context(
     let sandbox_creds = require_logon_sandbox_creds(
         &common.policy,
         sandbox_policy_cwd,
-        cwd,
+        &common.current_dir,
         env_map,
         codex_home,
         /*read_roots_override*/ None,
@@ -309,7 +310,7 @@ pub(crate) fn prepare_elevated_spawn_context(
             vec![caps.readonly.clone()],
         ),
         SandboxPolicy::WorkspaceWrite { .. } => {
-            let cap_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
+            let cap_sid = workspace_cap_sid_for_cwd(codex_home, &common.current_dir)?;
             (
                 LocalSid::from_string(&caps.workspace)?,
                 vec![caps.workspace.clone(), cap_sid],
@@ -410,6 +411,31 @@ mod tests {
         assert_eq!(
             env_map.get("HTTP_PROXY"),
             Some(&"http://user.proxy:8080".to_string())
+        );
+    }
+
+    #[test]
+    fn common_spawn_context_canonicalizes_current_dir() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let workspace = TempDir::new().expect("tempdir");
+        std::fs::create_dir_all(workspace.path().join("nested")).expect("create nested dir");
+        let spelled_cwd = workspace.path().join(".").join("nested").join("..");
+        let mut env_map = HashMap::new();
+
+        let context = prepare_spawn_context_common(
+            "workspace-write",
+            codex_home.path(),
+            &spelled_cwd,
+            &mut env_map,
+            &["cmd.exe".to_string()],
+            /*inherit_path*/ true,
+            /*add_git_safe_directory*/ false,
+        )
+        .expect("canonical cwd prep");
+
+        assert_eq!(
+            context.current_dir,
+            dunce::canonicalize(&spelled_cwd).expect("canonical cwd")
         );
     }
 }
