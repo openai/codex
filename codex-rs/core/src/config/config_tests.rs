@@ -914,14 +914,14 @@ async fn managed_unrestricted_permission_profile_still_enables_network_requireme
         .collect();
     let mut requirements = config.config_layer_stack.requirements().clone();
     requirements.network = Some(Sourced::new(
-        crate::config_loader::NetworkConstraints {
+        codex_config::NetworkConstraints {
             enabled: Some(true),
             ..Default::default()
         },
         RequirementSource::CloudRequirements,
     ));
     let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
-    requirements_toml.network = Some(crate::config_loader::NetworkRequirementsToml {
+    requirements_toml.network = Some(codex_config::NetworkRequirementsToml {
         enabled: Some(true),
         ..Default::default()
     });
@@ -6746,8 +6746,8 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
 async fn permission_profile_override_falls_back_when_disallowed_by_requirements()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
-    let requirements = crate::config_loader::ConfigRequirementsToml {
-        allowed_sandbox_modes: Some(vec![crate::config_loader::SandboxModeRequirement::ReadOnly]),
+    let requirements = codex_config::ConfigRequirementsToml {
+        allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
         ..Default::default()
     };
 
