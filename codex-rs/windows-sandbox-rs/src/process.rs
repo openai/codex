@@ -1,29 +1,30 @@
 use crate::desktop::LaunchDesktop;
 use crate::logging;
+use crate::path_normalization::normalize_spawn_cwd;
 use crate::proc_thread_attr::ProcThreadAttributeList;
 use crate::winutil::argv_to_command_line;
 use crate::winutil::format_last_error;
 use crate::winutil::to_wide;
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::anyhow;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::Path;
 use std::ptr;
-use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::Foundation::SetHandleInformation;
+use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+use windows_sys::Win32::Foundation::SetHandleInformation;
 use windows_sys::Win32::Storage::FileSystem::ReadFile;
 use windows_sys::Win32::System::Console::GetStdHandle;
 use windows_sys::Win32::System::Console::STD_ERROR_HANDLE;
 use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
 use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
 use windows_sys::Win32::System::Pipes::CreatePipe;
-use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
 use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
+use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
 use windows_sys::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
@@ -89,7 +90,8 @@ pub unsafe fn create_process_as_user(
     let env_block = make_env_block(env_map);
     let desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
     let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
-    let cwd_wide = to_wide(cwd);
+    let spawn_cwd = normalize_spawn_cwd(cwd);
+    let cwd_wide = to_wide(&spawn_cwd);
     let env_block_len = env_block.len();
     match stdio {
         Some((stdin_h, stdout_h, stderr_h)) => {
@@ -139,7 +141,7 @@ pub unsafe fn create_process_as_user(
                     "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
                     err,
                     format_last_error(err),
-                    cwd.display(),
+                    spawn_cwd.display(),
                     cmdline_str,
                     env_block_len,
                     si.StartupInfo.dwFlags,
@@ -180,7 +182,7 @@ pub unsafe fn create_process_as_user(
                     "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
                     err,
                     format_last_error(err),
-                    cwd.display(),
+                    spawn_cwd.display(),
                     cmdline_str,
                     env_block_len,
                     si.dwFlags,

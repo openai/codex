@@ -35,7 +35,9 @@ use codex_windows_sandbox::encode_bytes;
 use codex_windows_sandbox::get_current_token_for_restriction;
 use codex_windows_sandbox::hide_current_user_profile_dir;
 use codex_windows_sandbox::log_note;
+use codex_windows_sandbox::normalize_spawn_cwd;
 use codex_windows_sandbox::parse_policy;
+use codex_windows_sandbox::path_uses_unc_prefix;
 use codex_windows_sandbox::read_frame;
 use codex_windows_sandbox::read_handle_loop;
 use codex_windows_sandbox::spawn_process_with_pipes;
@@ -167,6 +169,21 @@ fn read_spawn_request(reader: &mut File) -> Result<SpawnRequest> {
 
 /// Pick an effective CWD, using a junction if the ACL helper is active.
 fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
+    let normalized_cwd = normalize_spawn_cwd(req_cwd);
+    if path_uses_unc_prefix(&normalized_cwd) {
+        if normalized_cwd != req_cwd {
+            log_note(
+                &format!(
+                    "junction: using UNC cwd {} resolved from {}",
+                    normalized_cwd.display(),
+                    req_cwd.display()
+                ),
+                log_dir,
+            );
+        }
+        return normalized_cwd;
+    }
+
     let use_junction = match read_acl_mutex::read_acl_mutex_exists() {
         Ok(exists) => exists,
         Err(err) => {
@@ -180,9 +197,10 @@ fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
         }
     };
     if use_junction {
-        cwd_junction::create_cwd_junction(req_cwd, log_dir).unwrap_or_else(|| req_cwd.to_path_buf())
+        cwd_junction::create_cwd_junction(req_cwd, log_dir)
+            .unwrap_or_else(|| normalized_cwd.clone())
     } else {
-        req_cwd.to_path_buf()
+        normalized_cwd
     }
 }
 

@@ -149,6 +149,10 @@ pub use logging::log_note;
 #[cfg(target_os = "windows")]
 pub use path_normalization::canonicalize_path;
 #[cfg(target_os = "windows")]
+pub use path_normalization::normalize_spawn_cwd;
+#[cfg(target_os = "windows")]
+pub use path_normalization::path_uses_unc_prefix;
+#[cfg(target_os = "windows")]
 pub use policy::SandboxPolicy;
 #[cfg(target_os = "windows")]
 pub use policy::parse_policy;
