@@ -11,7 +11,7 @@ codex_rust_crate(
         # can cause us to exhaust our CI timeout if the shard happens to run
         # long. Using a higher shard count for app-server-all-test should help
         # mitigate this risk.
-        "app-server-all-test": 16,
+        "app-server-all-test": 32,
         "app-server-unit-tests": 8,
     },
     test_tags = ["no-sandbox"],
