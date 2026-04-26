@@ -7838,6 +7838,26 @@ impl CodexMessageProcessor {
                 None
             })
     }
+
+    async fn send_invalid_request_error(
+        &self,
+        request_id: ConnectionRequestId,
+        message: impl Into<String>,
+    ) {
+        self.outgoing
+            .send_error(request_id, invalid_request(message))
+            .await;
+    }
+
+    async fn send_internal_error(
+        &self,
+        request_id: ConnectionRequestId,
+        message: impl Into<String>,
+    ) {
+        self.outgoing
+            .send_error(request_id, internal_error(message))
+            .await;
+    }
 }
 
 fn normalize_thread_list_cwd_filters(
