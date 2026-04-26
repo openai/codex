@@ -7,6 +7,7 @@ import json
 import sys
 import tomllib
 import urllib.error
+import io
 from pathlib import Path
 
 import pytest
@@ -512,3 +513,36 @@ def test_broken_runtime_package_does_not_fall_back() -> None:
         client_module.resolve_codex_bin(client_module.AppServerConfig(), ops)
 
     assert str(exc_info.value) == ("missing packaged binary")
+
+
+def test_start_prepends_codex_runtime_dirs_to_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from codex_app_server import client as client_module
+
+    codex_bin = tmp_path / ("codex.exe" if client_module.os.name == "nt" else "codex")
+    codex_bin.write_text("")
+    resources_dir = tmp_path / "codex-resources"
+    resources_dir.mkdir()
+
+    captured: dict[str, object] = {}
+
+    class FakePopen:
+        def __init__(self, args, **kwargs):  # noqa: ANN001
+            captured["args"] = args
+            captured["env"] = kwargs["env"]
+            self.stdin = io.StringIO()
+            self.stdout = io.StringIO()
+            self.stderr = io.StringIO()
+
+    monkeypatch.setattr(client_module, "_resolve_codex_bin", lambda _config: codex_bin)
+    monkeypatch.setattr(client_module.subprocess, "Popen", FakePopen)
+
+    client = client_module.AppServerClient(
+        client_module.AppServerConfig(env={"PATH": f"/usr/bin{client_module.os.pathsep}/bin"})
+    )
+    client.start()
+
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["PATH"] == client_module.os.pathsep.join(
+        [str(tmp_path), str(resources_dir), f"/usr/bin{client_module.os.pathsep}/bin"]
+    )

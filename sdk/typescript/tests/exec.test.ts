@@ -1,5 +1,6 @@
 import * as child_process from "node:child_process";
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 
 import { describe, expect, it } from "@jest/globals";
@@ -141,5 +142,32 @@ describe("CodexExec", () => {
     } finally {
       delete process.env.CODEX_ENV_SHOULD_NOT_LEAK;
     }
+  });
+
+  it("prepends the Codex binary directory and resources directory to PATH", async () => {
+    const { CodexExec } = await import("../src/exec");
+    spawnMock.mockClear();
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child as unknown as child_process.ChildProcess);
+
+    setImmediate(() => {
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("exit", 0, null);
+    });
+
+    const exec = new CodexExec("/tmp/codex-release/codex", {
+      PATH: "/usr/local/bin",
+    });
+
+    for await (const _ of exec.run({ input: "path test" })) {
+      // no-op
+    }
+
+    const spawnOptions = spawnMock.mock.calls[0]?.[2] as child_process.SpawnOptions | undefined;
+    const spawnEnv = spawnOptions?.env as Record<string, string> | undefined;
+    expect(spawnEnv?.PATH).toBe(
+      ["/tmp/codex-release", "/usr/local/bin"].join(path.delimiter),
+    );
   });
 });

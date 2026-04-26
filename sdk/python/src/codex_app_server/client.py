@@ -120,6 +120,26 @@ def _resolve_codex_bin(config: "AppServerConfig") -> Path:
     return resolve_codex_bin(config, _default_codex_bin_resolver_ops())
 
 
+def _prepend_codex_runtime_dirs(env: dict[str, str], codex_bin: Path) -> None:
+    search_dirs = [str(codex_bin.parent)]
+    resources_dir = codex_bin.parent / "codex-resources"
+    if resources_dir.is_dir():
+        search_dirs.append(str(resources_dir))
+
+    existing_entries = [entry for entry in env.get("PATH", "").split(os.pathsep) if entry]
+    merged_entries: list[str] = []
+    seen: set[str] = set()
+
+    for entry in [*search_dirs, *existing_entries]:
+        key = entry.lower() if os.name == "nt" else entry
+        if key in seen:
+            continue
+        seen.add(key)
+        merged_entries.append(entry)
+
+    env["PATH"] = os.pathsep.join(merged_entries)
+
+
 @dataclass(slots=True)
 class AppServerConfig:
     codex_bin: str | None = None
@@ -174,6 +194,8 @@ class AppServerClient:
         env = os.environ.copy()
         if self.config.env:
             env.update(self.config.env)
+        if self.config.launch_args_override is None:
+            _prepend_codex_runtime_dirs(env, codex_bin)
 
         self._proc = subprocess.Popen(
             args,

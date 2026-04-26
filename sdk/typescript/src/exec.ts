@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { createRequire } from "node:module";
@@ -160,6 +161,7 @@ export class CodexExec {
     if (args.apiKey) {
       env.CODEX_API_KEY = args.apiKey;
     }
+    applyBundledCodexPath(env, this.executablePath);
 
     const child = spawn(this.executablePath, commandArgs, {
       env,
@@ -312,6 +314,59 @@ function formatTomlKey(key: string): string {
 
 function isPlainObject(value: unknown): value is CodexConfigObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function applyBundledCodexPath(env: Record<string, string>, executablePath: string): void {
+  const searchDirs = bundledCodexSearchDirs(executablePath);
+  if (searchDirs.length === 0) {
+    return;
+  }
+
+  const existingEntries = (env.PATH ?? "")
+    .split(path.delimiter)
+    .filter(Boolean);
+  const seen = new Set<string>();
+  const mergedEntries: string[] = [];
+
+  for (const entry of [...searchDirs, ...existingEntries]) {
+    const key = normalizePathForDedup(entry);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    mergedEntries.push(entry);
+  }
+
+  env.PATH = mergedEntries.join(path.delimiter);
+}
+
+function bundledCodexSearchDirs(executablePath: string): string[] {
+  const codexDir = executableDirectory(executablePath);
+  if (!codexDir) {
+    return [];
+  }
+
+  const searchDirs = [codexDir];
+  const resourcesDir = path.join(codexDir, "codex-resources");
+  if (existsSync(resourcesDir)) {
+    searchDirs.push(resourcesDir);
+  }
+  return searchDirs;
+}
+
+function executableDirectory(executablePath: string): string | null {
+  if (!path.isAbsolute(executablePath) && !containsPathSeparator(executablePath)) {
+    return null;
+  }
+  return path.dirname(executablePath);
+}
+
+function containsPathSeparator(value: string): boolean {
+  return value.includes(path.sep) || value.includes(path.posix.sep) || value.includes(path.win32.sep);
+}
+
+function normalizePathForDedup(entry: string): string {
+  return process.platform === "win32" ? entry.toLowerCase() : entry;
 }
 
 function findCodexPath() {
