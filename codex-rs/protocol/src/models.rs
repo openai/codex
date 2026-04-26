@@ -482,10 +482,7 @@ impl PermissionProfile {
             FileSystemSandboxKind::ExternalSandbox => Self::External {
                 network: network_sandbox_policy,
             },
-            FileSystemSandboxKind::Unrestricted
-                if enforcement == SandboxEnforcement::Disabled
-                    && network_sandbox_policy.is_enabled() =>
-            {
+            FileSystemSandboxKind::Unrestricted if enforcement == SandboxEnforcement::Disabled => {
                 Self::Disabled
             }
             FileSystemSandboxKind::Restricted | FileSystemSandboxKind::Unrestricted => {
@@ -1865,6 +1862,17 @@ mod tests {
             )
         );
         Ok(())
+    }
+
+    #[test]
+    fn disabled_permission_profile_ignores_runtime_network_policy() {
+        let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::Disabled,
+            &FileSystemSandboxPolicy::unrestricted(),
+            NetworkSandboxPolicy::Restricted,
+        );
+
+        assert_eq!(permission_profile, PermissionProfile::Disabled);
     }
 
     #[test]
