@@ -1606,11 +1606,11 @@ fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiA
 
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
-    sandbox_policy: &SandboxPolicy,
+    permission_profile: &PermissionProfile,
 ) -> WebSearchMode {
     let preferred = web_search_mode.value();
 
-    if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
+    if matches!(permission_profile, PermissionProfile::Disabled)
         && preferred != WebSearchMode::Disabled
     {
         for mode in [
