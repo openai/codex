@@ -1,6 +1,6 @@
-use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::anyhow;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
@@ -49,12 +49,15 @@ pub(crate) fn helper_bin_dir(codex_home: &Path) -> PathBuf {
 }
 
 pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(candidate) = source_path_for_exe(&exe, kind.file_name())
-    {
+    if let Some(candidate) = bundled_source_path_for_current_exe(kind.file_name()) {
         return candidate;
     }
     PathBuf::from(kind.file_name())
+}
+
+pub(crate) fn bundled_source_path_for_current_exe(file_name: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    source_path_for_exe(&exe, file_name)
 }
 
 pub(crate) fn resolve_helper_for_launch(
@@ -89,10 +92,7 @@ pub(crate) fn resolve_helper_for_launch(
     }
 }
 
-pub fn resolve_current_exe_for_launch(
-    codex_home: &Path,
-    fallback_executable: &str,
-) -> PathBuf {
+pub fn resolve_current_exe_for_launch(codex_home: &Path, fallback_executable: &str) -> PathBuf {
     let source = match std::env::current_exe() {
         Ok(path) => path,
         Err(_) => return PathBuf::from(fallback_executable),
@@ -179,11 +179,13 @@ fn store_helper_path(cache_key: String, path: PathBuf) {
 }
 
 fn sibling_source_path(kind: HelperExecutable) -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("resolve current executable for helper lookup")?;
-    source_path_for_exe(&exe, kind.file_name()).ok_or_else(|| {
+    bundled_source_path_for_current_exe(kind.file_name()).ok_or_else(|| {
         anyhow!(
             "helper not found next to current executable or under {RESOURCES_DIRNAME}: {}",
-            exe.display()
+            std::env::current_exe()
+                .ok()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "<unknown>".to_string())
         )
     })
 }
@@ -196,7 +198,40 @@ fn source_path_for_exe(exe: &Path, file_name: &str) -> Option<PathBuf> {
     }
 
     let resource_candidate = dir.join(RESOURCES_DIRNAME).join(file_name);
-    resource_candidate.exists().then_some(resource_candidate)
+    if resource_candidate.exists() {
+        return Some(resource_candidate);
+    }
+
+    packaged_local_cache_source_path(exe, file_name, std::env::var_os("LOCALAPPDATA").as_deref())
+}
+
+fn packaged_local_cache_source_path(
+    exe: &Path,
+    file_name: &str,
+    local_app_data: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    let local_app_data = local_app_data.map(PathBuf::from)?;
+    let package_family = msix_package_family_from_exe_path(exe)?;
+    let candidate = local_app_data
+        .join("Packages")
+        .join(package_family)
+        .join("LocalCache")
+        .join("Local")
+        .join("OpenAI")
+        .join("Codex")
+        .join("bin")
+        .join(file_name);
+    candidate.exists().then_some(candidate)
+}
+
+fn msix_package_family_from_exe_path(exe: &Path) -> Option<String> {
+    let package_full_name = exe.ancestors().find_map(|ancestor| {
+        let name = ancestor.file_name()?.to_str()?;
+        name.contains("__").then_some(name)
+    })?;
+    let (package_name_and_version, publisher_id) = package_full_name.split_once("__")?;
+    let package_name = package_name_and_version.split('_').next()?;
+    Some(format!("{package_name}_{publisher_id}"))
 }
 
 fn helper_destination_for_source(
@@ -242,11 +277,7 @@ fn dev_build_suffix(source: &Path) -> Result<String> {
     let duration = modified
         .duration_since(UNIX_EPOCH)
         .with_context(|| format!("convert helper source mtime {}", source.display()))?;
-    Ok(format!(
-        "{}-{:x}",
-        metadata.len(),
-        duration.as_secs(),
-    ))
+    Ok(format!("{}-{:x}", metadata.len(), duration.as_secs(),))
 }
 
 fn copy_from_source_if_needed(source: &Path, destination: &Path) -> Result<CopyOutcome> {
@@ -254,9 +285,12 @@ fn copy_from_source_if_needed(source: &Path, destination: &Path) -> Result<CopyO
         return Ok(CopyOutcome::Reused);
     }
 
-    let destination_dir = destination
-        .parent()
-        .ok_or_else(|| anyhow!("helper destination has no parent: {}", destination.display()))?;
+    let destination_dir = destination.parent().ok_or_else(|| {
+        anyhow!(
+            "helper destination has no parent: {}",
+            destination.display()
+        )
+    })?;
     fs::create_dir_all(destination_dir).with_context(|| {
         format!(
             "create helper destination directory {}",
@@ -327,8 +361,9 @@ fn destination_is_fresh(source: &Path, destination: &Path) -> Result<bool> {
         Ok(meta) => meta,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(err) => {
-            return Err(err)
-                .with_context(|| format!("read helper destination metadata {}", destination.display()));
+            return Err(err).with_context(|| {
+                format!("read helper destination metadata {}", destination.display())
+            });
         }
     };
 
@@ -348,16 +383,18 @@ fn destination_is_fresh(source: &Path, destination: &Path) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::copy_from_source_if_needed;
     use super::CopyOutcome;
-    use super::dev_build_suffix;
+    use super::DEV_BUILD_VERSION_SENTINEL;
+    use super::HelperExecutable;
+    use super::RESOURCES_DIRNAME;
+    use super::copy_from_source_if_needed;
     use super::destination_is_fresh;
+    use super::dev_build_suffix;
     use super::helper_bin_dir;
     use super::helper_version_suffix;
     use super::materialized_file_name;
-    use super::HelperExecutable;
-    use super::DEV_BUILD_VERSION_SENTINEL;
-    use super::RESOURCES_DIRNAME;
+    use super::msix_package_family_from_exe_path;
+    use super::packaged_local_cache_source_path;
     use super::source_path_for_exe;
     use pretty_assertions::assert_eq;
     use std::fs;
@@ -376,7 +413,10 @@ mod tests {
         let outcome = copy_from_source_if_needed(&source, &destination).expect("copy helper");
 
         assert_eq!(CopyOutcome::ReCopied, outcome);
-        assert_eq!(b"runner-v1".as_slice(), fs::read(&destination).expect("read destination"));
+        assert_eq!(
+            b"runner-v1".as_slice(),
+            fs::read(&destination).expect("read destination")
+        );
     }
 
     #[test]
@@ -403,11 +443,13 @@ mod tests {
         fs::write(&source, b"runner-v1").expect("write source");
         copy_from_source_if_needed(&source, &destination).expect("initial copy");
 
-        let outcome =
-            copy_from_source_if_needed(&source, &destination).expect("revalidate helper");
+        let outcome = copy_from_source_if_needed(&source, &destination).expect("revalidate helper");
 
         assert_eq!(CopyOutcome::Reused, outcome);
-        assert_eq!(b"runner-v1".as_slice(), fs::read(&destination).expect("read destination"));
+        assert_eq!(
+            b"runner-v1".as_slice(),
+            fs::read(&destination).expect("read destination")
+        );
     }
 
     #[test]
@@ -429,8 +471,10 @@ mod tests {
         let runner_source = source_dir.join("codex-command-runner.exe");
         fs::write(&runner_source, b"runner").expect("runner");
         let runner_suffix = helper_version_suffix(&runner_source).expect("runner suffix");
-        let runner_destination = helper_bin_dir(&codex_home)
-            .join(materialized_file_name(HelperExecutable::CommandRunner, &runner_suffix));
+        let runner_destination = helper_bin_dir(&codex_home).join(materialized_file_name(
+            HelperExecutable::CommandRunner,
+            &runner_suffix,
+        ));
 
         let runner_outcome =
             copy_from_source_if_needed(&runner_source, &runner_destination).expect("runner copy");
@@ -453,8 +497,8 @@ mod tests {
         fs::write(&exe, b"codex").expect("write exe");
         fs::write(&helper, b"runner").expect("write helper");
 
-        let resolved =
-            source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe").expect("helper path");
+        let resolved = source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe")
+            .expect("helper path");
 
         assert_eq!(resolved, helper);
     }
@@ -472,10 +516,57 @@ mod tests {
         fs::write(&sibling_helper, b"sibling runner").expect("write sibling helper");
         fs::write(&resource_helper, b"resource runner").expect("write resource helper");
 
-        let resolved =
-            source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe").expect("helper path");
+        let resolved = source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe")
+            .expect("helper path");
 
         assert_eq!(resolved, sibling_helper);
+    }
+
+    #[test]
+    fn helper_source_lookup_checks_packaged_local_cache() {
+        let tmp = TempDir::new().expect("tempdir");
+        let local_app_data = tmp.path().join("AppData").join("Local");
+        let exe = tmp
+            .path()
+            .join("Program Files")
+            .join("WindowsApps")
+            .join("OpenAI.Codex_26.422.3464.0_x64__2p2nqsd0c76g0")
+            .join("app")
+            .join("resources")
+            .join("codex.exe");
+        let helper = local_app_data
+            .join("Packages")
+            .join("OpenAI.Codex_2p2nqsd0c76g0")
+            .join("LocalCache")
+            .join("Local")
+            .join("OpenAI")
+            .join("Codex")
+            .join("bin")
+            .join("codex-command-runner.exe");
+        fs::create_dir_all(helper.parent().expect("helper parent")).expect("create helper dir");
+        fs::create_dir_all(exe.parent().expect("exe parent")).expect("create exe dir");
+        fs::write(&exe, b"codex").expect("write exe");
+        fs::write(&helper, b"runner").expect("write helper");
+
+        let resolved = packaged_local_cache_source_path(
+            &exe,
+            "codex-command-runner.exe",
+            Some(local_app_data.as_os_str()),
+        )
+        .expect("helper path");
+
+        assert_eq!(resolved, helper);
+    }
+
+    #[test]
+    fn msix_package_family_drops_version_and_architecture() {
+        let exe = Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.422.3464.0_x64__2p2nqsd0c76g0\app\resources\codex.exe",
+        );
+
+        let package_family = msix_package_family_from_exe_path(exe).expect("package family");
+
+        assert_eq!(package_family, "OpenAI.Codex_2p2nqsd0c76g0");
     }
 
     #[test]
