@@ -723,6 +723,7 @@ async fn fs_watch_directory_reports_changed_child_paths_and_unwatch_stops_notifi
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(windows, ignore = "temporary CI isolation for #19606 Windows hang")]
 async fn fs_watch_file_reports_atomic_replace_events() -> Result<()> {
     let codex_home = TempDir::new()?;
     let git_dir = codex_home.path().join("repo").join(".git");
