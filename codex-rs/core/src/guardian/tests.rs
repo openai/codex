@@ -585,6 +585,42 @@ fn collect_guardian_transcript_entries_skips_contextual_user_messages() {
 }
 
 #[test]
+fn collect_guardian_transcript_entries_keeps_manual_approval_developer_message() {
+    let approval_text =
+        format!("{AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX}\n\nApproved action:\n{{}}");
+    let items = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "ordinary developer context".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: approval_text.clone(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+    ];
+
+    let entries = collect_guardian_transcript_entries(&items);
+
+    assert_eq!(
+        entries,
+        vec![GuardianTranscriptEntry {
+            kind: GuardianTranscriptEntryKind::Developer,
+            text: approval_text,
+        }]
+    );
+}
+
+#[test]
 fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
     let items = vec![
         ResponseItem::Message {
