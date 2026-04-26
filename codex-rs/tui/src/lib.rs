@@ -142,11 +142,14 @@ mod model_catalog;
 mod model_migration;
 mod multi_agents;
 mod notifications;
+#[cfg(any(not(debug_assertions), test))]
+mod npm_registry;
 pub(crate) mod onboarding;
 mod oss_selection;
 mod pager_overlay;
 pub(crate) mod public_widgets;
 mod render;
+mod resize_reflow_cap;
 mod resume_picker;
 mod selection_list;
 mod session_log;
@@ -162,15 +165,19 @@ mod terminal_title;
 mod text_formatting;
 mod theme_picker;
 mod tooltips;
+mod transcript_reflow;
 mod tui;
 mod ui_consts;
 pub(crate) mod update_action;
 pub use update_action::UpdateAction;
 mod update_prompt;
+#[cfg(any(not(debug_assertions), test))]
+mod update_versions;
 mod updates;
 mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;
+mod width;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod voice {

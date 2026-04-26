@@ -65,6 +65,7 @@ use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_state::StateRuntime;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -93,6 +94,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const INTERNAL_ERROR_CODE: i64 = -32603;
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
+
+fn normalized_existing_path(path: impl AsRef<Path>) -> Result<PathBuf> {
+    Ok(AbsolutePathBuf::from_absolute_path(path.as_ref().canonicalize()?)?.into_path_buf())
+}
 
 async fn wait_for_responses_request_count(
     server: &wiremock::MockServer,
@@ -2537,7 +2542,12 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(resumed.id, thread.id);
-    assert_eq!(resumed.path, thread.path);
+    let resumed_path = resumed.path.as_ref().expect("resumed thread path");
+    let original_path = thread.path.as_ref().expect("original thread path");
+    assert_eq!(
+        normalized_existing_path(resumed_path)?,
+        normalized_existing_path(original_path)?
+    );
     assert_eq!(resumed.status, ThreadStatus::Idle);
 
     Ok(())
@@ -2577,9 +2587,12 @@ async fn thread_resume_can_load_source_by_external_path() -> Result<()> {
     let ThreadResumeResponse {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    let expected_thread_path = std::fs::canonicalize(&thread_path)?;
     assert_eq!(resumed.id, thread_id);
-    assert_eq!(resumed.path, Some(expected_thread_path));
+    let resumed_path = resumed.path.as_ref().expect("resumed thread path");
+    assert_eq!(
+        normalized_existing_path(resumed_path)?,
+        normalized_existing_path(&thread_path)?
+    );
     assert_eq!(resumed.preview, "external path history");
     assert_eq!(resumed.status, ThreadStatus::Idle);
 

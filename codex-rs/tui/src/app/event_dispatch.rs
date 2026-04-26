@@ -3,6 +3,7 @@
 //! This module contains the exhaustive `AppEvent` dispatcher and exit-mode handling. Large domain
 //! actions are delegated to focused app submodules so the central match remains the routing layer.
 
+use super::resize_reflow::trailing_run_start;
 use super::*;
 
 const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
@@ -178,6 +179,9 @@ impl App {
 
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::BeginInitialHistoryReplayBuffer => {
+                self.begin_initial_history_replay_buffer();
+            }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
@@ -185,23 +189,82 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-                if !display.is_empty() {
-                    // Only insert a separating blank line for new cells that are not
-                    // part of an ongoing stream. Streaming continuations should not
-                    // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
-                        if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
-                        } else {
-                            self.has_emitted_history_lines = true;
-                        }
+                if self.initial_history_replay_buffer.as_ref().is_some() {
+                    self.insert_history_cell_lines_with_initial_replay_buffer(
+                        tui,
+                        cell.as_ref(),
+                        tui.terminal.last_known_screen_size.width,
+                    );
+                } else {
+                    self.insert_history_cell_lines(
+                        tui,
+                        cell.as_ref(),
+                        tui.terminal.last_known_screen_size.width,
+                    );
+                }
+            }
+            AppEvent::EndInitialHistoryReplayBuffer => {
+                self.finish_initial_history_replay_buffer(tui);
+            }
+            AppEvent::ConsolidateAgentMessage { source, cwd } => {
+                if !self.terminal_resize_reflow_enabled() {
+                    self.transcript_reflow.clear();
+                    return Ok(AppRunControl::Continue);
+                }
+                let end = self.transcript_cells.len();
+                let start =
+                    trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells);
+                if start < end {
+                    let consolidated: Arc<dyn HistoryCell> =
+                        Arc::new(history_cell::AgentMarkdownCell::new(source, &cwd));
+                    self.transcript_cells
+                        .splice(start..end, std::iter::once(consolidated.clone()));
+
+                    if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+                        t.consolidate_cells(start..end, consolidated.clone());
+                        tui.frame_requester().schedule_frame();
                     }
-                    if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(display);
-                    } else {
-                        tui.insert_history_lines(display);
+
+                    self.maybe_finish_stream_reflow(tui)?;
+                } else {
+                    self.maybe_finish_stream_reflow(tui)?;
+                }
+            }
+            AppEvent::ConsolidateProposedPlan(source) => {
+                if !self.terminal_resize_reflow_enabled() {
+                    self.transcript_reflow.clear();
+                    return Ok(AppRunControl::Continue);
+                }
+                let end = self.transcript_cells.len();
+                let start = trailing_run_start::<history_cell::ProposedPlanStreamCell>(
+                    &self.transcript_cells,
+                );
+                let consolidated: Arc<dyn HistoryCell> =
+                    Arc::new(history_cell::new_proposed_plan(source, &self.config.cwd));
+
+                if start < end {
+                    self.transcript_cells
+                        .splice(start..end, std::iter::once(consolidated.clone()));
+
+                    if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+                        t.consolidate_cells(start..end, consolidated.clone());
+                        tui.frame_requester().schedule_frame();
                     }
+
+                    self.finish_required_stream_reflow(tui)?;
+                } else {
+                    self.transcript_cells.push(consolidated.clone());
+                    if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+                        t.insert_cell(consolidated.clone());
+                        tui.frame_requester().schedule_frame();
+                    }
+                    self.insert_history_cell_lines(
+                        tui,
+                        consolidated.as_ref(),
+                        tui.terminal.last_known_screen_size.width,
+                    );
+
+                    self.maybe_finish_stream_reflow(tui)?;
                 }
             }
             AppEvent::ApplyThreadRollback { num_turns } => {

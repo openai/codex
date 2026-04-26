@@ -519,7 +519,25 @@ fn config_toml_deserializes_model_availability_nux() {
                     ("gpt-foo".to_string(), 2),
                 ]),
             },
+            terminal_resize_reflow_max_rows: None,
         }
+    );
+}
+
+#[test]
+fn config_toml_deserializes_terminal_resize_reflow_config() {
+    let toml = r#"
+[tui]
+terminal_resize_reflow_max_rows = 9000
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for resize reflow config");
+
+    assert_eq!(
+        cfg.tui
+            .expect("tui config should deserialize")
+            .terminal_resize_reflow_max_rows,
+        Some(9000)
     );
 }
 
@@ -1388,7 +1406,66 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             terminal_title: None,
             theme: None,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
+            terminal_resize_reflow_max_rows: None,
         }
+    );
+}
+
+#[tokio::test]
+async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides() {
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load default config");
+
+    assert_eq!(
+        cfg.terminal_resize_reflow,
+        TerminalResizeReflowConfig::default()
+    );
+    assert_eq!(
+        cfg.terminal_resize_reflow.max_rows,
+        TerminalResizeReflowMaxRows::Auto
+    );
+
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            tui: Some(Tui {
+                terminal_resize_reflow_max_rows: Some(9000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load overridden config");
+
+    assert_eq!(
+        cfg.terminal_resize_reflow.max_rows,
+        TerminalResizeReflowMaxRows::Limit(9000)
+    );
+
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            tui: Some(Tui {
+                terminal_resize_reflow_max_rows: Some(0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config with disabled resize reflow limits");
+
+    assert_eq!(
+        cfg.terminal_resize_reflow.max_rows,
+        TerminalResizeReflowMaxRows::Disabled
     );
 }
 
@@ -5310,6 +5387,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             animations: true,
             show_tooltips: true,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
+            terminal_resize_reflow: TerminalResizeReflowConfig::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tool_suggest: ToolSuggestConfig::default(),
@@ -5506,6 +5584,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
         tool_suggest: ToolSuggestConfig::default(),
@@ -5656,6 +5735,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(false),
         feedback_enabled: true,
         tool_suggest: ToolSuggestConfig::default(),
@@ -5791,6 +5871,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
         tool_suggest: ToolSuggestConfig::default(),
