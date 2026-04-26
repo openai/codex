@@ -10,6 +10,7 @@ use crate::runner_pipe::connect_pipe;
 use crate::runner_pipe::create_named_pipe;
 use crate::runner_pipe::find_runner_exe;
 use crate::runner_pipe::pipe_pair;
+use crate::runner_pipe::prepare_runner_launch_cwd;
 use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;
 use anyhow::Result;
@@ -90,6 +91,7 @@ pub(crate) fn spawn_runner_transport(
         .to_str()
         .map(str::to_owned)
         .unwrap_or_else(|| "codex-command-runner.exe".to_string());
+    let runner_launch_cwd = prepare_runner_launch_cwd(codex_home, log_dir);
     let runner_full_cmd = format!(
         "{} {} {}",
         quote_windows_arg(&runner_cmdline),
@@ -98,7 +100,7 @@ pub(crate) fn spawn_runner_transport(
     );
     let mut cmdline_vec = to_wide(&runner_full_cmd);
     let exe_w = to_wide(&runner_cmdline);
-    let cwd_w = to_wide(cwd);
+    let cwd_w = to_wide(&runner_launch_cwd);
     let user_w = to_wide(&sandbox_creds.username);
     let domain_w = to_wide(".");
     let password_w = to_wide(&sandbox_creds.password);
@@ -136,7 +138,11 @@ pub(crate) fn spawn_runner_transport(
             CloseHandle(h_pipe_in);
             CloseHandle(h_pipe_out);
         }
-        return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {err}"));
+        return Err(anyhow::anyhow!(
+            "CreateProcessWithLogonW failed: {err} (runner_cwd={} requested_cwd={})",
+            runner_launch_cwd.display(),
+            cwd.display()
+        ));
     }
     let expected_runner_pid = pi.dwProcessId;
 

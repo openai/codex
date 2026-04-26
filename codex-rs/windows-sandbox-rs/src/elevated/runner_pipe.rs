@@ -9,6 +9,7 @@
 
 use crate::helper_materialization::HelperExecutable;
 use crate::helper_materialization::resolve_helper_for_launch;
+use crate::logging::log_note;
 use crate::winutil::resolve_sid;
 use crate::winutil::string_from_sid_bytes;
 use crate::winutil::to_wide;
@@ -42,6 +43,27 @@ pub const PIPE_ACCESS_OUTBOUND: u32 = 0x0000_0002;
 /// `.sandbox-bin` and falling back to the legacy sibling lookup when needed.
 pub fn find_runner_exe(codex_home: &Path, log_dir: Option<&Path>) -> PathBuf {
     resolve_helper_for_launch(HelperExecutable::CommandRunner, codex_home, log_dir)
+}
+
+/// Picks a stable local directory for launching the elevated runner itself.
+///
+/// The requested workspace cwd may be a mapped drive or other user-session-specific path that
+/// `CreateProcessWithLogonW` cannot use when starting the sandbox user. The runner only needs a
+/// local bootstrap directory; it receives the real command cwd later in the framed spawn request.
+pub fn prepare_runner_launch_cwd(codex_home: &Path, log_dir: Option<&Path>) -> PathBuf {
+    let runner_cwd = codex_home.join(".sandbox").join("runner-cwd");
+    if let Err(err) = std::fs::create_dir_all(&runner_cwd) {
+        log_note(
+            &format!(
+                "runner launch cwd: failed to create {}: {err}; falling back to {}",
+                runner_cwd.display(),
+                codex_home.display()
+            ),
+            log_dir,
+        );
+        return codex_home.to_path_buf();
+    }
+    runner_cwd
 }
 
 /// Generates a unique named-pipe path used to communicate with the runner process.
@@ -132,4 +154,20 @@ pub fn connect_pipe(h: HANDLE, expected_runner_pid: u32) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prepare_runner_launch_cwd;
+
+    #[test]
+    fn prepare_runner_launch_cwd_creates_sandbox_runner_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+
+        let launch_cwd = prepare_runner_launch_cwd(&codex_home, None);
+
+        assert_eq!(launch_cwd, codex_home.join(".sandbox").join("runner-cwd"));
+        assert!(launch_cwd.is_dir());
+    }
 }
