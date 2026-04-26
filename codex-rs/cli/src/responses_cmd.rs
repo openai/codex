@@ -203,11 +203,12 @@ mod tests {
             json!({"type": "response.completed", "response": {"id": "resp-2", "end_turn": false}})
         );
 
-        let completed_without_usage_or_end_turn = response_event_to_json(codex_api::ResponseEvent::Completed {
-            response_id: "resp-3".to_string(),
-            token_usage: None,
-            end_turn: None,
-        });
+        let completed_without_usage_or_end_turn =
+            response_event_to_json(codex_api::ResponseEvent::Completed {
+                response_id: "resp-3".to_string(),
+                token_usage: None,
+                end_turn: None,
+            });
         assert_eq!(
             completed_without_usage_or_end_turn,
             json!({"type": "response.completed", "response": {"id": "resp-3"}})
