@@ -18,14 +18,16 @@ bytes = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-client = { workspace = true }
 codex-config = { workspace = true }
+codex-login = { workspace = true }
 codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-pty = { workspace = true }
 futures = { workspace = true }
-reqwest = { workspace = true, features = ["rustls-tls", "stream"] }
+reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = [
     "fs",
@@ -51,3 +53,4 @@ pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 test-case = "3.3.1"
+wiremock = { workspace = true }
