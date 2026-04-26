@@ -846,6 +846,14 @@ async fn maybe_fs_changed_notification(
 fn replace_file_atomically(path: &PathBuf, contents: &str) -> Result<()> {
     let temp_path = path.with_extension("lock");
     std::fs::write(&temp_path, contents)?;
+
+    #[cfg(windows)]
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+
     std::fs::rename(temp_path, path)?;
     Ok(())
 }
