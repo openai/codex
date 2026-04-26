@@ -78,10 +78,9 @@ fn response_event_to_json(event: codex_api::ResponseEvent) -> serde_json::Value 
         codex_api::ResponseEvent::Completed {
             response_id,
             token_usage,
-            // FIXME(andrey): Make this actually work + test it, before merging.
-            end_turn: _,
+            end_turn,
         } => {
-            let response = match token_usage {
+            let mut response = match token_usage {
                 Some(token_usage) => json!({
                     "id": response_id,
                     "usage": {
@@ -98,6 +97,9 @@ fn response_event_to_json(event: codex_api::ResponseEvent) -> serde_json::Value 
                 }),
                 None => json!({ "id": response_id }),
             };
+            if let Some(end_turn) = end_turn {
+                response["end_turn"] = json!(end_turn);
+            }
             json!({ "type": "response.completed", "response": response })
         }
         codex_api::ResponseEvent::OutputTextDelta(delta) => {
@@ -167,7 +169,7 @@ mod tests {
                 reasoning_output_tokens: 3,
                 total_tokens: 17,
             }),
-            end_turn: None,
+            end_turn: Some(true),
         });
         assert_eq!(
             completed,
@@ -186,6 +188,7 @@ mod tests {
                         },
                         "total_tokens": 17,
                     },
+                    "end_turn": true,
                 },
             })
         );
@@ -193,11 +196,21 @@ mod tests {
         let completed_without_usage = response_event_to_json(codex_api::ResponseEvent::Completed {
             response_id: "resp-2".to_string(),
             token_usage: None,
-            end_turn: None,
+            end_turn: Some(false),
         });
         assert_eq!(
             completed_without_usage,
-            json!({"type": "response.completed", "response": {"id": "resp-2"}})
+            json!({"type": "response.completed", "response": {"id": "resp-2", "end_turn": false}})
+        );
+
+        let completed_without_usage_or_end_turn = response_event_to_json(codex_api::ResponseEvent::Completed {
+            response_id: "resp-3".to_string(),
+            token_usage: None,
+            end_turn: None,
+        });
+        assert_eq!(
+            completed_without_usage_or_end_turn,
+            json!({"type": "response.completed", "response": {"id": "resp-3"}})
         );
     }
 
