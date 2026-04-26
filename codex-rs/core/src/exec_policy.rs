@@ -20,10 +20,10 @@ use codex_execpolicy::RuleMatch;
 use codex_execpolicy::blocking_append_allow_prefix_rule;
 use codex_execpolicy::blocking_append_network_rule;
 use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_shell_command::is_dangerous_command::command_might_be_dangerous;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use thiserror::Error;
@@ -204,8 +204,9 @@ pub(crate) struct ExecPolicyManager {
 pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) command: &'a [String],
     pub(crate) approval_policy: AskForApproval,
-    pub(crate) sandbox_policy: &'a SandboxPolicy,
+    pub(crate) permission_profile: PermissionProfile,
     pub(crate) file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
+    pub(crate) sandbox_cwd: &'a Path,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) prefix_rule: Option<Vec<String>>,
 }
@@ -238,8 +239,9 @@ impl ExecPolicyManager {
         let ExecApprovalRequest {
             command,
             approval_policy,
-            sandbox_policy,
+            permission_profile,
             file_system_sandbox_policy,
+            sandbox_cwd,
             sandbox_permissions,
             prefix_rule,
         } = req;
@@ -252,8 +254,9 @@ impl ExecPolicyManager {
         let exec_policy_fallback = |cmd: &[String]| {
             render_decision_for_unmatched_command(
                 approval_policy,
-                sandbox_policy,
+                &permission_profile,
                 file_system_sandbox_policy,
+                sandbox_cwd,
                 cmd,
                 sandbox_permissions,
                 used_complex_parsing,
@@ -580,8 +583,9 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
 /// If a command is not matched by any execpolicy rule, derive a [`Decision`].
 pub fn render_decision_for_unmatched_command(
     approval_policy: AskForApproval,
-    sandbox_policy: &SandboxPolicy,
+    permission_profile: &PermissionProfile,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    sandbox_cwd: &Path,
     command: &[String],
     sandbox_permissions: SandboxPermissions,
     used_complex_parsing: bool,
@@ -592,8 +596,12 @@ pub fn render_decision_for_unmatched_command(
 
     // On Windows, ReadOnly sandbox is not a real sandbox, so special-case it
     // here.
-    let environment_lacks_sandbox_protections =
-        cfg!(windows) && matches!(sandbox_policy, SandboxPolicy::ReadOnly { .. });
+    let environment_lacks_sandbox_protections = cfg!(windows)
+        && profile_is_managed_read_only(
+            permission_profile,
+            file_system_sandbox_policy,
+            sandbox_cwd,
+        );
 
     // If the command is flagged as dangerous or we have no sandbox protection,
     // we should never allow it to run without approval.
@@ -605,8 +613,8 @@ pub fn render_decision_for_unmatched_command(
         return match approval_policy {
             AskForApproval::Never => {
                 let sandbox_is_explicitly_disabled = matches!(
-                    sandbox_policy,
-                    SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+                    permission_profile,
+                    PermissionProfile::Disabled | PermissionProfile::External { .. }
                 );
                 if sandbox_is_explicitly_disabled {
                     // If the sandbox is explicitly disabled, we should allow the command to run
@@ -668,6 +676,22 @@ pub fn render_decision_for_unmatched_command(
             }
         },
     }
+}
+
+fn profile_is_managed_read_only(
+    permission_profile: &PermissionProfile,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    sandbox_cwd: &Path,
+) -> bool {
+    matches!(permission_profile, PermissionProfile::Managed { .. })
+        && matches!(
+            file_system_sandbox_policy.kind,
+            FileSystemSandboxKind::Restricted
+        )
+        && !file_system_sandbox_policy.has_full_disk_write_access()
+        && file_system_sandbox_policy
+            .get_writable_roots_with_cwd(sandbox_cwd)
+            .is_empty()
 }
 
 fn default_policy_path(codex_home: &Path) -> PathBuf {
