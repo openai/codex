@@ -1,4 +1,9 @@
-//! Allocates model-visible MCP tool names while preserving raw MCP identities.
+//! MCP tool metadata, filtering, schema shaping, and name qualification.
+//!
+//! Raw MCP tool identities must be preserved for protocol calls, while
+//! model-visible tool names must be sanitized, deduplicated, and kept within API
+//! limits. This module owns that translation as well as the shared [`ToolInfo`]
+//! type and helpers that adjust tool schemas before exposing them to the model.
 
 use std::collections::HashMap;
 use std::collections::HashSet;

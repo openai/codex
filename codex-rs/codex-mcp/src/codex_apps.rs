@@ -1,3 +1,10 @@
+//! Codex Apps support for the built-in apps MCP server.
+//!
+//! This module owns the pieces that are unique to ChatGPT-hosted app
+//! connectors: cache scoping by authenticated user, disk cache reads/writes,
+//! connector allow-list filtering, and the normalization that turns app
+//! connector/tool metadata into model-visible MCP callable names.
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;

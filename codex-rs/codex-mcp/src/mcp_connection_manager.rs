@@ -1,3 +1,11 @@
+//! Aggregates MCP server connections for Codex.
+//!
+//! [`McpConnectionManager`] owns the set of running async RMCP clients keyed by
+//! MCP server name. It coordinates startup status events, keeps server origin
+//! metadata, aggregates tools/resources/templates across servers, routes tool
+//! calls to the right client, and exposes the public manager API used by
+//! `codex-core`.
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;

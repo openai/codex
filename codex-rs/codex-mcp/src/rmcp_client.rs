@@ -1,3 +1,11 @@
+//! RMCP client lifecycle for MCP server connections.
+//!
+//! This module owns startup of individual RMCP clients: building the transport,
+//! initializing the server, listing raw tools, applying per-server tool filters,
+//! and exposing cached startup snapshots while a client is still connecting.
+//! Higher-level aggregation and resource/tool APIs live in
+//! [`crate::mcp_connection_manager`].
+
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env;
