@@ -34,6 +34,7 @@ mod windows_impl {
     use crate::logging::log_failure;
     use crate::logging::log_start;
     use crate::logging::log_success;
+    use crate::path_normalization::resolve_sandbox_path;
     use crate::policy::SandboxPolicy;
     use crate::policy::parse_policy;
     use crate::runner_client::spawn_runner_transport;
@@ -184,12 +185,14 @@ mod windows_impl {
         }
 
         (|| -> Result<CaptureResult> {
+            let resolved_cwd = resolve_sandbox_path(cwd);
+            let resolved_policy_cwd = resolve_sandbox_path(sandbox_policy_cwd);
             let spawn_request = SpawnRequest {
                 command: command.clone(),
-                cwd: cwd.to_path_buf(),
+                cwd: resolved_cwd,
                 env: env_map.clone(),
                 policy_json_or_preset: policy_json_or_preset.to_string(),
-                sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
+                sandbox_policy_cwd: resolved_policy_cwd,
                 codex_home: sandbox_base.clone(),
                 real_codex_home: codex_home.to_path_buf(),
                 cap_sids,

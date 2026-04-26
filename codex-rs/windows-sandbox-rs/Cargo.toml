@@ -84,6 +84,7 @@ features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
     "Win32_System_Registry",
+    "Win32_NetworkManagement_WNet",
 ]
 version = "0.52"
 

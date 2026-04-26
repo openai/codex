@@ -15,6 +15,8 @@ use crate::allow::compute_allow_paths;
 use crate::helper_materialization::helper_bin_dir;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
+use crate::path_normalization::canonicalize_path;
+use crate::path_normalization::resolve_sandbox_path;
 use crate::policy::SandboxPolicy;
 use crate::setup_error::SetupErrorCode;
 use crate::setup_error::SetupFailure;
@@ -177,7 +179,7 @@ fn run_setup_refresh_inner(
         offline_username: OFFLINE_USERNAME.to_string(),
         online_username: ONLINE_USERNAME.to_string(),
         codex_home: request.codex_home.to_path_buf(),
-        command_cwd: request.command_cwd.to_path_buf(),
+        command_cwd: resolve_sandbox_path(request.command_cwd),
         read_roots,
         write_roots,
         deny_write_paths,
@@ -322,7 +324,7 @@ fn canonical_existing(paths: &[PathBuf]) -> Vec<PathBuf> {
             if !p.exists() {
                 return None;
             }
-            Some(dunce::canonicalize(p).unwrap_or_else(|_| p.clone()))
+            Some(canonicalize_path(p))
         })
         .collect()
 }
@@ -727,7 +729,7 @@ pub fn run_elevated_setup(
         offline_username: OFFLINE_USERNAME.to_string(),
         online_username: ONLINE_USERNAME.to_string(),
         codex_home: request.codex_home.to_path_buf(),
-        command_cwd: request.command_cwd.to_path_buf(),
+        command_cwd: resolve_sandbox_path(request.command_cwd),
         read_roots,
         write_roots,
         deny_write_paths,

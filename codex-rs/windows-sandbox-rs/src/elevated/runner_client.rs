@@ -4,6 +4,7 @@ use crate::ipc_framed::Message;
 use crate::ipc_framed::SpawnRequest;
 use crate::ipc_framed::read_frame;
 use crate::ipc_framed::write_frame;
+use crate::path_normalization::resolve_sandbox_path;
 use crate::runner_pipe::PIPE_ACCESS_INBOUND;
 use crate::runner_pipe::PIPE_ACCESS_OUTBOUND;
 use crate::runner_pipe::connect_pipe;
@@ -98,7 +99,8 @@ pub(crate) fn spawn_runner_transport(
     );
     let mut cmdline_vec = to_wide(&runner_full_cmd);
     let exe_w = to_wide(&runner_cmdline);
-    let cwd_w = to_wide(cwd);
+    let resolved_cwd = resolve_sandbox_path(cwd);
+    let cwd_w = to_wide(&resolved_cwd);
     let user_w = to_wide(&sandbox_creds.username);
     let domain_w = to_wide(".");
     let password_w = to_wide(&sandbox_creds.password);
