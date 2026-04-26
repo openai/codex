@@ -45,7 +45,7 @@ use crate::render::renderable::Renderable;
 /// - Git-related items only show when in a git repository
 /// - Context/limit items only show when data is available from the API
 /// - Session ID only shows after a session has started
-#[derive(EnumIter, EnumString, Display, Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(EnumIter, EnumString, Display, Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 #[strum(serialize_all = "kebab_case")]
 pub(crate) enum StatusLineItem {
     /// The current model name.
@@ -118,7 +118,7 @@ pub(crate) enum StatusLineItem {
 
 impl StatusLineItem {
     /// User-visible description shown in the popup.
-    pub(crate) fn description(&self) -> &'static str {
+    pub(crate) fn description(self) -> &'static str {
         match self {
             StatusLineItem::ModelName => "Current model name",
             StatusLineItem::ModelWithReasoning => "Current model name with reasoning level",
@@ -246,12 +246,11 @@ impl StatusLineSetupView {
             .items(items)
             .enable_ordering()
             .on_preview(move |items| {
-                preview_data.line_for_items(
+                preview_data.status_line_for_items(
                     items
                         .iter()
                         .filter(|item| item.enabled)
-                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
-                        .map(StatusLineItem::preview_item),
+                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok()),
                 )
             })
             .on_confirm(|ids, app_event| {
@@ -425,13 +424,14 @@ mod tests {
         ];
 
         assert_eq!(
-            preview_data.line_for_items(
-                items
-                    .iter()
-                    .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
-                    .map(StatusLineItem::preview_item),
+            line_text(
+                preview_data.status_line_for_items(
+                    items
+                        .iter()
+                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
+                )
             ),
-            Some(Line::from("gpt-5 · /repo"))
+            Some("gpt-5 · /repo".to_string())
         );
     }
 
@@ -457,13 +457,14 @@ mod tests {
         ];
 
         assert_eq!(
-            preview_data.line_for_items(
-                items
-                    .iter()
-                    .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
-                    .map(StatusLineItem::preview_item),
+            line_text(
+                preview_data.status_line_for_items(
+                    items
+                        .iter()
+                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
+                )
             ),
-            Some(Line::from("gpt-5 · feat/awesome-feature"))
+            Some("gpt-5 · feat/awesome-feature".to_string())
         );
     }
 
@@ -495,13 +496,14 @@ mod tests {
         ];
 
         assert_eq!(
-            preview_data.line_for_items(
-                items
-                    .iter()
-                    .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
-                    .map(StatusLineItem::preview_item),
+            line_text(
+                preview_data.status_line_for_items(
+                    items
+                        .iter()
+                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
+                )
             ),
-            Some(Line::from("gpt-5 · Roadmap cleanup"))
+            Some("gpt-5 · Roadmap cleanup".to_string())
         );
     }
 
@@ -559,5 +561,14 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn line_text(line: Option<Line<'static>>) -> Option<String> {
+        line.map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
     }
 }

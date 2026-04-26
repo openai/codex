@@ -748,6 +748,9 @@ pub(crate) enum AppEvent {
         name: String,
     },
 
+    /// Runtime syntax theme preview changed; refresh theme-derived UI colors.
+    SyntaxThemePreviewed,
+
     /// Open set/remove actions for the selected keymap action.
     OpenKeymapActionMenu {
         context: String,

@@ -13,7 +13,7 @@ fn line_text(line: Line<'static>) -> String {
 fn status_preview_line(chat: &mut ChatWidget, items: &[StatusLineItem]) -> String {
     let preview_data = chat.status_surface_preview_data();
     let preview = preview_data
-        .line_for_items(items.iter().cloned().map(StatusLineItem::preview_item))
+        .status_line_for_items(items.iter().copied())
         .expect("status preview line");
     line_text(preview)
 }
