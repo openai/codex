@@ -64,6 +64,7 @@ fn mcp_prompt_auto_approval_honors_unrestricted_managed_profiles() {
         },
     ));
 }
+
 #[test]
 fn tool_plugin_provenance_collects_app_and_mcp_sources() {
     let provenance = ToolPluginProvenance::from_capability_summaries(&[
