@@ -23,6 +23,7 @@ use rand::TryRngCore;
 use rand::rngs::OsRng;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use sha2::Digest as _;
 use sha2::Sha512;
 
@@ -118,24 +119,37 @@ pub fn decode_agent_identity_jwt(
     jwt: &str,
     public_key_base64: Option<&str>,
 ) -> Result<AgentIdentityJwtClaims> {
+    let Some(public_key_base64) = public_key_base64 else {
+        return decode_agent_identity_jwt_payload(jwt);
+    };
+
     let mut validation = Validation::new(Algorithm::EdDSA);
     validation.required_spec_claims.clear();
     validation.validate_exp = false;
     validation.validate_aud = false;
 
-    let decoding_key = if let Some(public_key_base64) = public_key_base64 {
-        let public_key = BASE64_STANDARD
-            .decode(public_key_base64)
-            .context("agent identity JWT public key is not valid base64")?;
-        DecodingKey::from_ed_der(&public_key)
-    } else {
-        validation.insecure_disable_signature_validation();
-        DecodingKey::from_secret(&[])
-    };
+    let public_key = BASE64_STANDARD
+        .decode(public_key_base64)
+        .context("agent identity JWT public key is not valid base64")?;
+    let decoding_key = DecodingKey::from_ed_der(&public_key);
 
     jsonwebtoken::decode::<AgentIdentityJwtClaims>(jwt, &decoding_key, &validation)
         .map(|data| data.claims)
         .context("failed to decode agent identity JWT")
+}
+
+fn decode_agent_identity_jwt_payload<T: DeserializeOwned>(jwt: &str) -> Result<T> {
+    let mut parts = jwt.split('.');
+    let (_header_b64, payload_b64, _sig_b64) = match (parts.next(), parts.next(), parts.next()) {
+        (Some(h), Some(p), Some(s)) if !h.is_empty() && !p.is_empty() && !s.is_empty() => (h, p, s),
+        _ => anyhow::bail!("invalid agent identity JWT format"),
+    };
+    anyhow::ensure!(parts.next().is_none(), "invalid agent identity JWT format");
+
+    let payload_bytes = URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .context("agent identity JWT payload is not valid base64url")?;
+    serde_json::from_slice(&payload_bytes).context("agent identity JWT payload is not valid JSON")
 }
 
 pub fn sign_task_registration_payload(
@@ -157,19 +171,27 @@ pub async fn register_agent_task(
         signature: sign_task_registration_payload(key, &timestamp)?,
         timestamp,
     };
+    let url = agent_task_registration_url(chatgpt_base_url, key.agent_runtime_id);
 
     let response = client
-        .post(agent_task_registration_url(
-            chatgpt_base_url,
-            key.agent_runtime_id,
-        ))
+        .post(url)
         .timeout(AGENT_TASK_REGISTRATION_TIMEOUT)
         .json(&request)
         .send()
         .await
-        .context("failed to register agent task")?
-        .error_for_status()
-        .context("failed to register agent task")?
+        .context("failed to register agent task")?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        let body = if body.len() > 512 {
+            format!("{}...", body.chars().take(512).collect::<String>())
+        } else {
+            body
+        };
+        anyhow::bail!("failed to register agent task with status {status}: {body}");
+    }
+
+    let response = response
         .json()
         .await
         .context("failed to decode agent task registration response")?;
@@ -569,7 +591,7 @@ mod tests {
 
     fn jwt_with_payload(payload: serde_json::Value) -> String {
         let encode = |bytes: &[u8]| URL_SAFE_NO_PAD.encode(bytes);
-        let header_b64 = encode(br#"{"alg":"EdDSA","typ":"JWT"}"#);
+        let header_b64 = encode(br#"{"alg":"none","typ":"JWT"}"#);
         let payload_b64 = encode(&serde_json::to_vec(&payload).expect("payload should serialize"));
         let signature_b64 = encode(b"sig");
         format!("{header_b64}.{payload_b64}.{signature_b64}")
