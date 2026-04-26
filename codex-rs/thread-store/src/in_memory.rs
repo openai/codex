@@ -61,9 +61,9 @@ pub struct InMemoryThreadStoreCalls {
     pub unarchive_thread: usize,
 }
 
-/// Test-only in-memory [`ThreadStore`] implementation.
+/// In-memory [`ThreadStore`] implementation for tests and debug configs.
 ///
-/// Debug/test configs can select this store by id, letting tests exercise
+/// Test and debug configs can select this store by id, letting tests exercise
 /// config-driven non-local persistence without requiring the real remote gRPC
 /// service.
 #[derive(Default)]
