@@ -34,6 +34,7 @@ mod windows_impl {
     use crate::logging::log_failure;
     use crate::logging::log_start;
     use crate::logging::log_success;
+    use crate::path_normalization::execution_path;
     use crate::policy::SandboxPolicy;
     use crate::policy::parse_policy;
     use crate::runner_client::spawn_runner_transport;
@@ -126,6 +127,8 @@ mod windows_impl {
             write_roots_override,
             deny_write_paths_override,
         } = request;
+        let cwd = execution_path(cwd);
+        let sandbox_policy_cwd = execution_path(sandbox_policy_cwd);
         let policy = parse_policy(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
@@ -186,10 +189,10 @@ mod windows_impl {
         (|| -> Result<CaptureResult> {
             let spawn_request = SpawnRequest {
                 command: command.clone(),
-                cwd: cwd.to_path_buf(),
+                cwd: cwd.clone(),
                 env: env_map.clone(),
                 policy_json_or_preset: policy_json_or_preset.to_string(),
-                sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
+                sandbox_policy_cwd: sandbox_policy_cwd.clone(),
                 codex_home: sandbox_base.clone(),
                 real_codex_home: codex_home.to_path_buf(),
                 cap_sids,

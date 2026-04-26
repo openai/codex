@@ -249,6 +249,7 @@ mod windows_impl {
     use super::logging::log_failure;
     use super::logging::log_success;
     use super::path_normalization::canonicalize_path;
+    use super::path_normalization::execution_path;
     use super::policy::SandboxPolicy;
     use super::process::create_process_as_user;
     use super::sandbox_utils::ensure_codex_home_exists;
@@ -378,7 +379,7 @@ mod windows_impl {
                     #[allow(clippy::expect_used)]
                     let psid_generic =
                         convert_string_sid_to_sid(&caps.workspace).expect("valid workspace SID");
-                    let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
+                    let ws_sid = workspace_cap_sid_for_cwd(codex_home, &current_dir)?;
                     #[allow(clippy::expect_used)]
                     let psid_workspace =
                         convert_string_sid_to_sid(&ws_sid).expect("valid workspace SID");
@@ -411,8 +412,9 @@ mod windows_impl {
         }
 
         let persist_aces = is_workspace_write;
+        let normalized_policy_cwd = execution_path(sandbox_policy_cwd);
         let AllowDenyPaths { allow, mut deny } =
-            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
+            compute_allow_paths(&policy, &normalized_policy_cwd, &current_dir, &env_map);
         for path in additional_deny_write_paths {
             if path.exists() {
                 deny.insert(path.clone());
@@ -607,13 +609,18 @@ mod windows_impl {
         #[allow(clippy::expect_used)]
         let psid_generic =
             unsafe { convert_string_sid_to_sid(&caps.workspace) }.expect("valid workspace SID");
-        let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
+        let current_dir = execution_path(cwd);
+        let ws_sid = workspace_cap_sid_for_cwd(codex_home, &current_dir)?;
         #[allow(clippy::expect_used)]
         let psid_workspace =
             unsafe { convert_string_sid_to_sid(&ws_sid) }.expect("valid workspace SID");
-        let current_dir = cwd.to_path_buf();
-        let AllowDenyPaths { allow, deny } =
-            compute_allow_paths(sandbox_policy, sandbox_policy_cwd, &current_dir, env_map);
+        let normalized_policy_cwd = execution_path(sandbox_policy_cwd);
+        let AllowDenyPaths { allow, deny } = compute_allow_paths(
+            sandbox_policy,
+            &normalized_policy_cwd,
+            &current_dir,
+            env_map,
+        );
         let canonical_cwd = canonicalize_path(&current_dir);
         unsafe {
             for p in &allow {

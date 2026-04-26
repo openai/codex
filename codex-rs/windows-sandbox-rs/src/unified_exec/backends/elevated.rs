@@ -7,6 +7,7 @@ use crate::ipc_framed::EmptyPayload;
 use crate::ipc_framed::FramedMessage;
 use crate::ipc_framed::Message;
 use crate::ipc_framed::SpawnRequest;
+use crate::path_normalization::execution_path;
 use crate::runner_client::spawn_runner_transport;
 use crate::spawn_prep::prepare_elevated_spawn_context;
 use anyhow::Result;
@@ -39,13 +40,15 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
         &mut env_map,
         &command,
     )?;
+    let normalized_cwd = elevated.common.current_dir.clone();
+    let normalized_policy_cwd = execution_path(sandbox_policy_cwd);
 
     let spawn_request = SpawnRequest {
         command: command.clone(),
-        cwd: cwd.to_path_buf(),
+        cwd: normalized_cwd.clone(),
         env: env_map.clone(),
         policy_json_or_preset: policy_json_or_preset.to_string(),
-        sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
+        sandbox_policy_cwd: normalized_policy_cwd,
         codex_home: elevated.common.sandbox_base.clone(),
         real_codex_home: codex_home.to_path_buf(),
         cap_sids: elevated.cap_sids.clone(),
@@ -55,12 +58,15 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
         use_private_desktop,
     };
     let codex_home = codex_home.to_path_buf();
-    let cwd = cwd.to_path_buf();
     let sandbox_creds = elevated.sandbox_creds.clone();
     let logs_base_dir = elevated.common.logs_base_dir.clone();
     let transport = tokio::task::spawn_blocking(move || -> Result<_> {
-        let mut transport =
-            spawn_runner_transport(&codex_home, &cwd, &sandbox_creds, logs_base_dir.as_deref())?;
+        let mut transport = spawn_runner_transport(
+            &codex_home,
+            &normalized_cwd,
+            &sandbox_creds,
+            logs_base_dir.as_deref(),
+        )?;
         transport.send_spawn_request(spawn_request)?;
         transport.read_spawn_ready_with_timeout()?;
         Ok(transport)

@@ -13,6 +13,7 @@ use crate::identity::SandboxCreds;
 use crate::identity::require_logon_sandbox_creds;
 use crate::logging::log_start;
 use crate::path_normalization::canonicalize_path;
+use crate::path_normalization::execution_path;
 use crate::policy::SandboxPolicy;
 use crate::policy::parse_policy;
 use crate::sandbox_utils::ensure_codex_home_exists;
@@ -105,11 +106,12 @@ fn prepare_spawn_context_common(
 
     normalize_null_device_env(env_map);
     ensure_non_interactive_pager(env_map);
+    let current_dir = execution_path(cwd);
     if inherit_path {
         inherit_path_env(env_map);
     }
     if add_git_safe_directory {
-        inject_git_safe_directory(env_map, cwd);
+        inject_git_safe_directory(env_map, &current_dir);
     }
 
     ensure_codex_home_exists(codex_home)?;
@@ -122,7 +124,7 @@ fn prepare_spawn_context_common(
 
     Ok(SpawnContext {
         policy,
-        current_dir: cwd.to_path_buf(),
+        current_dir,
         sandbox_base,
         logs_base_dir,
         is_workspace_write,
@@ -158,6 +160,7 @@ pub(crate) fn prepare_legacy_session_security(
     codex_home: &Path,
     cwd: &Path,
 ) -> Result<LegacySessionSecurity> {
+    let current_dir = execution_path(cwd);
     let caps = load_or_create_cap_sids(codex_home)?;
     let (h_token, psid_generic, psid_workspace, cap_sid_str) = unsafe {
         match policy {
@@ -168,7 +171,7 @@ pub(crate) fn prepare_legacy_session_security(
             }
             SandboxPolicy::WorkspaceWrite { .. } => {
                 let psid_generic = LocalSid::from_string(&caps.workspace)?;
-                let workspace_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
+                let workspace_sid = workspace_cap_sid_for_cwd(codex_home, &current_dir)?;
                 let psid_workspace = LocalSid::from_string(&workspace_sid)?;
                 let base = get_current_token_for_restriction()?;
                 let h_token = create_workspace_write_token_with_caps_from(
@@ -273,10 +276,11 @@ pub(crate) fn prepare_elevated_spawn_context(
         /*inherit_path*/ true,
         /*add_git_safe_directory*/ true,
     )?;
+    let normalized_policy_cwd = execution_path(sandbox_policy_cwd);
 
     let AllowDenyPaths { allow, deny } = compute_allow_paths(
         &common.policy,
-        sandbox_policy_cwd,
+        &normalized_policy_cwd,
         &common.current_dir,
         env_map,
     );
@@ -289,8 +293,8 @@ pub(crate) fn prepare_elevated_spawn_context(
     };
     let sandbox_creds = require_logon_sandbox_creds(
         &common.policy,
-        sandbox_policy_cwd,
-        cwd,
+        &normalized_policy_cwd,
+        &common.current_dir,
         env_map,
         codex_home,
         /*read_roots_override*/ None,
@@ -306,7 +310,7 @@ pub(crate) fn prepare_elevated_spawn_context(
             vec![caps.readonly.clone()],
         ),
         SandboxPolicy::WorkspaceWrite { .. } => {
-            let cap_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
+            let cap_sid = workspace_cap_sid_for_cwd(codex_home, &common.current_dir)?;
             (
                 LocalSid::from_string(&caps.workspace)?,
                 vec![caps.workspace.clone(), cap_sid],
