@@ -39,7 +39,6 @@ use crate::token_data::parse_jwt_expiration;
 use codex_client::CodexHttpClient;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_protocol::account::PlanType as AccountPlanType;
-use codex_protocol::auth::KnownPlan as InternalKnownPlan;
 use codex_protocol::auth::PlanType as InternalPlanType;
 use codex_protocol::auth::RefreshTokenFailedError;
 use codex_protocol::auth::RefreshTokenFailedReason;
@@ -380,29 +379,10 @@ impl CodexAuth {
             return Some(auth.plan_type());
         }
 
-        let map_known = |kp: &InternalKnownPlan| match kp {
-            InternalKnownPlan::Free => AccountPlanType::Free,
-            InternalKnownPlan::Go => AccountPlanType::Go,
-            InternalKnownPlan::Plus => AccountPlanType::Plus,
-            InternalKnownPlan::Pro => AccountPlanType::Pro,
-            InternalKnownPlan::ProLite => AccountPlanType::ProLite,
-            InternalKnownPlan::Team => AccountPlanType::Team,
-            InternalKnownPlan::SelfServeBusinessUsageBased => {
-                AccountPlanType::SelfServeBusinessUsageBased
-            }
-            InternalKnownPlan::Business => AccountPlanType::Business,
-            InternalKnownPlan::EnterpriseCbpUsageBased => AccountPlanType::EnterpriseCbpUsageBased,
-            InternalKnownPlan::Enterprise => AccountPlanType::Enterprise,
-            InternalKnownPlan::Edu => AccountPlanType::Edu,
-        };
-
         self.get_current_token_data().map(|t| {
             t.id_token
                 .chatgpt_plan_type
-                .map(|pt| match pt {
-                    InternalPlanType::Known(k) => map_known(&k),
-                    InternalPlanType::Unknown(_) => AccountPlanType::Unknown,
-                })
+                .map(AccountPlanType::from)
                 .unwrap_or(AccountPlanType::Unknown)
         })
     }

@@ -88,7 +88,8 @@ async fn login_with_agent_identity_writes_only_token() {
     let dir = tempdir().unwrap();
     let auth_path = dir.path().join("auth.json");
     let record = agent_identity_record("account-123");
-    let agent_identity = signed_agent_identity_jwt(&record).expect("signed agent identity");
+    let agent_identity =
+        signed_agent_identity_jwt(&record, json!(record.plan_type)).expect("signed agent identity");
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/backend-api/wham/agent-identities/jwks"))
@@ -709,7 +710,8 @@ async fn load_auth_reads_agent_identity_from_env() {
     let codex_home = tempdir().unwrap();
     let expected_record = agent_identity_record("account-123");
     let agent_identity =
-        signed_agent_identity_jwt(&expected_record).expect("signed agent identity");
+        signed_agent_identity_jwt(&expected_record, json!(expected_record.plan_type))
+            .expect("signed agent identity");
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/backend-api/wham/agent-identities/jwks"))
@@ -925,6 +927,13 @@ fn agent_identity_record(account_id: &str) -> AgentIdentityAuthRecord {
 }
 
 fn fake_agent_identity_jwt(record: &AgentIdentityAuthRecord) -> std::io::Result<String> {
+    fake_agent_identity_jwt_with_plan_type(record, serde_json::to_value(record.plan_type)?)
+}
+
+fn fake_agent_identity_jwt_with_plan_type(
+    record: &AgentIdentityAuthRecord,
+    plan_type: serde_json::Value,
+) -> std::io::Result<String> {
     let encode = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
     let header_b64 = encode(br#"{"alg":"EdDSA","typ":"JWT"}"#);
     let payload = json!({
@@ -937,7 +946,7 @@ fn fake_agent_identity_jwt(record: &AgentIdentityAuthRecord) -> std::io::Result<
         "account_id": record.account_id,
         "chatgpt_user_id": record.chatgpt_user_id,
         "email": record.email,
-        "plan_type": record.plan_type,
+        "plan_type": plan_type,
         "chatgpt_account_is_fedramp": record.chatgpt_account_is_fedramp,
     });
     let payload_b64 = encode(&serde_json::to_vec(&payload)?);
@@ -947,6 +956,7 @@ fn fake_agent_identity_jwt(record: &AgentIdentityAuthRecord) -> std::io::Result<
 
 fn signed_agent_identity_jwt(
     record: &AgentIdentityAuthRecord,
+    plan_type: serde_json::Value,
 ) -> jsonwebtoken::errors::Result<String> {
     let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
     header.kid = Some("test-key".to_string());
@@ -962,7 +972,7 @@ fn signed_agent_identity_jwt(
             "account_id": record.account_id,
             "chatgpt_user_id": record.chatgpt_user_id,
             "email": record.email,
-            "plan_type": record.plan_type,
+            "plan_type": plan_type,
             "chatgpt_account_is_fedramp": record.chatgpt_account_is_fedramp,
         }),
         &jsonwebtoken::EncodingKey::from_rsa_pem(TEST_AGENT_IDENTITY_RSA_PRIVATE_KEY_PEM)?,
@@ -1010,6 +1020,48 @@ J1bwkqKZTB5dHolX9A58e/xXnfZ5P8f3Z83+Izap3FwqQulk7b1WO1MQcHuVg2NN
 5da0D4h2rYOXnbYIg0BVu4spQbaM6ewsp66b8+MzLOBvj8SzWdt1Oyw0q/MRyQAR
 8U4M2TSWCKUY/A6sT4W8+mT9
 -----END PRIVATE KEY-----"#;
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn agent_identity_plan_type_maps_raw_enterprise_alias() {
+    assert_agent_identity_plan_alias(json!("hc"), AccountPlanType::Enterprise).await;
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn agent_identity_plan_type_maps_raw_education_alias() {
+    assert_agent_identity_plan_alias(json!("education"), AccountPlanType::Edu).await;
+}
+
+async fn assert_agent_identity_plan_alias(
+    plan_type: serde_json::Value,
+    expected_plan_type: AccountPlanType,
+) {
+    let record = agent_identity_record("account-id");
+    let jwt = signed_agent_identity_jwt(&record, plan_type).expect("agent identity jwt");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/agent-identities/jwks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(test_jwks_body()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/v1/agent/agent-runtime-id/task/register"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "task_id": "task-123",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let auth = CodexAuth::from_agent_identity_jwt(&jwt, Some(&chatgpt_base_url))
+        .await
+        .expect("agent identity auth");
+
+    pretty_assertions::assert_eq!(auth.account_plan_type(), Some(expected_plan_type));
+    server.verify().await;
+}
 
 #[tokio::test]
 #[serial(codex_auth_env)]
