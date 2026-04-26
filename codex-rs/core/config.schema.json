@@ -2238,7 +2238,8 @@
               "open_transcript": null,
               "queue": null,
               "submit": null,
-              "toggle_shortcuts": null
+              "toggle_shortcuts": null,
+              "toggle_vim_mode": null
             },
             "list": {
               "accept": null,
@@ -2257,6 +2258,44 @@
               "page_up": null,
               "scroll_down": null,
               "scroll_up": null
+            },
+            "vim_normal": {
+              "append_after_cursor": null,
+              "append_line_end": null,
+              "cancel_operator": null,
+              "delete_char": null,
+              "delete_to_line_end": null,
+              "enter_insert": null,
+              "insert_line_start": null,
+              "move_down": null,
+              "move_left": null,
+              "move_line_end": null,
+              "move_line_start": null,
+              "move_right": null,
+              "move_up": null,
+              "move_word_backward": null,
+              "move_word_end": null,
+              "move_word_forward": null,
+              "open_line_above": null,
+              "open_line_below": null,
+              "paste_after": null,
+              "start_delete_operator": null,
+              "start_yank_operator": null,
+              "yank_line": null
+            },
+            "vim_operator": {
+              "cancel": null,
+              "delete_line": null,
+              "motion_down": null,
+              "motion_left": null,
+              "motion_line_end": null,
+              "motion_line_start": null,
+              "motion_right": null,
+              "motion_up": null,
+              "motion_word_backward": null,
+              "motion_word_end": null,
+              "motion_word_forward": null,
+              "yank_line": null
             }
           },
           "description": "Keybinding overrides for the TUI.\n\nThis supports rebinding selected actions globally and by context. Context bindings take precedence over `global` bindings."
@@ -2322,6 +2361,11 @@
           "default": null,
           "description": "Syntax highlighting theme name (kebab-case).\n\nWhen set, overrides automatic light/dark theme detection. Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.",
           "type": "string"
+        },
+        "vim_mode_default": {
+          "default": false,
+          "description": "Start the composer in Vim mode (`Normal`) by default. Defaults to `false`.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2669,6 +2713,14 @@
             }
           ],
           "description": "Toggle the composer shortcut overlay."
+        },
+        "toggle_vim_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle Vim mode for the composer input."
         }
       },
       "type": "object"
@@ -2758,7 +2810,8 @@
             "open_transcript": null,
             "queue": null,
             "submit": null,
-            "toggle_shortcuts": null
+            "toggle_shortcuts": null,
+            "toggle_vim_mode": null
           }
         },
         "list": {
@@ -2791,6 +2844,58 @@
             "page_up": null,
             "scroll_down": null,
             "scroll_up": null
+          }
+        },
+        "vim_normal": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiVimNormalKeymap"
+            }
+          ],
+          "default": {
+            "append_after_cursor": null,
+            "append_line_end": null,
+            "cancel_operator": null,
+            "delete_char": null,
+            "delete_to_line_end": null,
+            "enter_insert": null,
+            "insert_line_start": null,
+            "move_down": null,
+            "move_left": null,
+            "move_line_end": null,
+            "move_line_start": null,
+            "move_right": null,
+            "move_up": null,
+            "move_word_backward": null,
+            "move_word_end": null,
+            "move_word_forward": null,
+            "open_line_above": null,
+            "open_line_below": null,
+            "paste_after": null,
+            "start_delete_operator": null,
+            "start_yank_operator": null,
+            "yank_line": null
+          }
+        },
+        "vim_operator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiVimOperatorKeymap"
+            }
+          ],
+          "default": {
+            "cancel": null,
+            "delete_line": null,
+            "motion_down": null,
+            "motion_left": null,
+            "motion_line_end": null,
+            "motion_line_start": null,
+            "motion_right": null,
+            "motion_up": null,
+            "motion_word_backward": null,
+            "motion_word_end": null,
+            "motion_word_forward": null,
+            "yank_line": null
           }
         }
       },
@@ -2918,6 +3023,292 @@
             }
           ],
           "description": "Scroll up by one row."
+        }
+      },
+      "type": "object"
+    },
+    "TuiVimNormalKeymap": {
+      "additionalProperties": false,
+      "description": "Vim normal-mode keybindings for modal editing inside text areas.\n\nActions that use uppercase letters (like `A` for append-line-end) should be specified as `shift-a` in config; the runtime matcher handles cross-terminal shift-reporting differences automatically.",
+      "properties": {
+        "append_after_cursor": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter insert mode after cursor (`a`)."
+        },
+        "append_line_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter insert mode at end of line (`A`)."
+        },
+        "cancel_operator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Cancel a pending operator and return to normal mode."
+        },
+        "delete_char": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Delete character under cursor (`x`)."
+        },
+        "delete_to_line_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Delete from cursor to end of line (`D`)."
+        },
+        "enter_insert": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter insert mode at cursor (`i`)."
+        },
+        "insert_line_start": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter insert mode at first non-blank of line (`I`)."
+        },
+        "move_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor down (`j`)."
+        },
+        "move_left": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor left (`h`)."
+        },
+        "move_line_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to end of line (`$`)."
+        },
+        "move_line_start": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to start of line (`0`)."
+        },
+        "move_right": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor right (`l`)."
+        },
+        "move_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor up (`k`)."
+        },
+        "move_word_backward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to start of previous word (`b`)."
+        },
+        "move_word_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to end of current/next word (`e`)."
+        },
+        "move_word_forward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to start of next word (`w`)."
+        },
+        "open_line_above": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open a new line above and enter insert mode (`O`)."
+        },
+        "open_line_below": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open a new line below and enter insert mode (`o`)."
+        },
+        "paste_after": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Paste after cursor (`p`)."
+        },
+        "start_delete_operator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Begin delete operator; next key selects motion (`d`)."
+        },
+        "start_yank_operator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Begin yank operator; next key selects motion (`y`)."
+        },
+        "yank_line": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Yank the entire line (`Y`)."
+        }
+      },
+      "type": "object"
+    },
+    "TuiVimOperatorKeymap": {
+      "additionalProperties": false,
+      "description": "Vim operator-pending keybindings for modal editing inside text areas.\n\nThis context is active only while waiting for a motion after `d` or `y`. Repeating the operator key (`dd`, `yy`) targets the entire line. Pressing `Esc` cancels the pending operator and returns to normal mode without modifying text.",
+      "properties": {
+        "cancel": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Cancel the pending operator and return to normal mode."
+        },
+        "delete_line": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Repeat delete operator to delete the whole line (`dd`)."
+        },
+        "motion_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: down one line (`j`)."
+        },
+        "motion_left": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: left (`h`)."
+        },
+        "motion_line_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to end of line (`$`)."
+        },
+        "motion_line_start": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to start of line (`0`)."
+        },
+        "motion_right": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: right (`l`)."
+        },
+        "motion_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: up one line (`k`)."
+        },
+        "motion_word_backward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to start of previous word (`b`)."
+        },
+        "motion_word_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to end of current/next word (`e`)."
+        },
+        "motion_word_forward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to start of next word (`w`)."
+        },
+        "yank_line": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Repeat yank operator to yank the whole line (`yy`)."
         }
       },
       "type": "object"

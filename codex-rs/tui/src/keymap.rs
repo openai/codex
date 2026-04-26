@@ -44,6 +44,8 @@ pub(crate) struct RuntimeKeymap {
     pub(crate) chat: ChatKeymap,
     pub(crate) composer: ComposerKeymap,
     pub(crate) editor: EditorKeymap,
+    pub(crate) vim_normal: VimNormalKeymap,
+    pub(crate) vim_operator: VimOperatorKeymap,
     pub(crate) pager: PagerKeymap,
     pub(crate) list: ListKeymap,
     pub(crate) approval: ApprovalKeymap,
@@ -59,9 +61,16 @@ pub(crate) struct AppKeymap {
     pub(crate) copy: Vec<KeyBinding>,
     /// Clear the terminal UI.
     pub(crate) clear_terminal: Vec<KeyBinding>,
+    /// Toggle Vim mode for the composer input.
+    pub(crate) toggle_vim_mode: Vec<KeyBinding>,
 }
 
-/// Main chat-surface keybindings.
+/// Chat-level keybindings evaluated at the app event layer.
+///
+/// These participate in the first app-scope conflict validation pass alongside
+/// `AppKeymap` actions because both are checked before input reaches the
+/// composer. Dispatch gating (empty-composer guard for backtrack) happens in
+/// handler code, not here.
 #[derive(Clone, Debug)]
 pub(crate) struct ChatKeymap {
     /// Decrease the active reasoning effort.
@@ -72,6 +81,11 @@ pub(crate) struct ChatKeymap {
     pub(crate) edit_queued_message: Vec<KeyBinding>,
 }
 
+/// Composer-level keybindings validated in the second app-scope conflict pass.
+///
+/// App-level handlers execute before the composer receives input, so any key
+/// bound here that also appears in `AppKeymap` would be silently intercepted.
+/// The conflict validator prevents this by checking app + composer uniqueness.
 #[derive(Clone, Debug)]
 pub(crate) struct ComposerKeymap {
     /// Submit current draft.
@@ -108,6 +122,62 @@ pub(crate) struct EditorKeymap {
     pub(crate) kill_line_start: Vec<KeyBinding>,
     pub(crate) kill_line_end: Vec<KeyBinding>,
     pub(crate) yank: Vec<KeyBinding>,
+}
+
+/// Vim normal-mode keybindings for modal editing in the composer textarea.
+///
+/// Normal mode is the resting state when Vim is enabled. Pressing a movement
+/// or editing key here either moves the cursor, triggers an operator-pending
+/// state (via `start_delete_operator` / `start_yank_operator`), or transitions
+/// to insert mode. Default bindings include both `shift(letter)` and
+/// `plain(UPPERCASE)` variants for uppercase commands like `A`, `I`, `O` to
+/// handle cross-terminal shift-reporting inconsistencies.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct VimNormalKeymap {
+    pub(crate) enter_insert: Vec<KeyBinding>,
+    pub(crate) append_after_cursor: Vec<KeyBinding>,
+    pub(crate) append_line_end: Vec<KeyBinding>,
+    pub(crate) insert_line_start: Vec<KeyBinding>,
+    pub(crate) open_line_below: Vec<KeyBinding>,
+    pub(crate) open_line_above: Vec<KeyBinding>,
+    pub(crate) move_left: Vec<KeyBinding>,
+    pub(crate) move_right: Vec<KeyBinding>,
+    pub(crate) move_up: Vec<KeyBinding>,
+    pub(crate) move_down: Vec<KeyBinding>,
+    pub(crate) move_word_forward: Vec<KeyBinding>,
+    pub(crate) move_word_backward: Vec<KeyBinding>,
+    pub(crate) move_word_end: Vec<KeyBinding>,
+    pub(crate) move_line_start: Vec<KeyBinding>,
+    pub(crate) move_line_end: Vec<KeyBinding>,
+    pub(crate) delete_char: Vec<KeyBinding>,
+    pub(crate) delete_to_line_end: Vec<KeyBinding>,
+    pub(crate) yank_line: Vec<KeyBinding>,
+    pub(crate) paste_after: Vec<KeyBinding>,
+    pub(crate) start_delete_operator: Vec<KeyBinding>,
+    pub(crate) start_yank_operator: Vec<KeyBinding>,
+    pub(crate) cancel_operator: Vec<KeyBinding>,
+}
+
+/// Vim operator-pending keybindings active after `d` or `y` in normal mode.
+///
+/// When an operator (`start_delete_operator` or `start_yank_operator`) is
+/// pressed, the next keypress is matched against this context to determine the
+/// motion range. Repeating the operator key (`dd`, `yy`) acts on the whole
+/// line. `Esc` cancels the pending operator and returns to normal mode.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct VimOperatorKeymap {
+    pub(crate) delete_line: Vec<KeyBinding>,
+    pub(crate) yank_line: Vec<KeyBinding>,
+    pub(crate) motion_left: Vec<KeyBinding>,
+    pub(crate) motion_right: Vec<KeyBinding>,
+    pub(crate) motion_up: Vec<KeyBinding>,
+    pub(crate) motion_down: Vec<KeyBinding>,
+    pub(crate) motion_word_forward: Vec<KeyBinding>,
+    pub(crate) motion_word_backward: Vec<KeyBinding>,
+    pub(crate) motion_word_end: Vec<KeyBinding>,
+    pub(crate) motion_line_start: Vec<KeyBinding>,
+    pub(crate) motion_line_end: Vec<KeyBinding>,
+    pub(crate) cancel: Vec<KeyBinding>,
 }
 
 /// Pager/overlay keybindings for transcript and static help views.
@@ -294,6 +364,11 @@ impl RuntimeKeymap {
                 &defaults.app.clear_terminal,
                 "tui.keymap.global.clear_terminal",
             )?,
+            toggle_vim_mode: resolve_bindings(
+                keymap.global.toggle_vim_mode.as_ref(),
+                &defaults.app.toggle_vim_mode,
+                "tui.keymap.global.toggle_vim_mode",
+            )?,
         };
 
         let chat = ChatKeymap {
@@ -346,6 +421,61 @@ impl RuntimeKeymap {
             yank: resolve_local!(keymap, defaults, editor, yank),
         };
 
+        let vim_normal = VimNormalKeymap {
+            enter_insert: resolve_local!(keymap, defaults, vim_normal, enter_insert),
+            append_after_cursor: resolve_local!(keymap, defaults, vim_normal, append_after_cursor),
+            append_line_end: resolve_local!(keymap, defaults, vim_normal, append_line_end),
+            insert_line_start: resolve_local!(keymap, defaults, vim_normal, insert_line_start),
+            open_line_below: resolve_local!(keymap, defaults, vim_normal, open_line_below),
+            open_line_above: resolve_local!(keymap, defaults, vim_normal, open_line_above),
+            move_left: resolve_local!(keymap, defaults, vim_normal, move_left),
+            move_right: resolve_local!(keymap, defaults, vim_normal, move_right),
+            move_up: resolve_local!(keymap, defaults, vim_normal, move_up),
+            move_down: resolve_local!(keymap, defaults, vim_normal, move_down),
+            move_word_forward: resolve_local!(keymap, defaults, vim_normal, move_word_forward),
+            move_word_backward: resolve_local!(keymap, defaults, vim_normal, move_word_backward),
+            move_word_end: resolve_local!(keymap, defaults, vim_normal, move_word_end),
+            move_line_start: resolve_local!(keymap, defaults, vim_normal, move_line_start),
+            move_line_end: resolve_local!(keymap, defaults, vim_normal, move_line_end),
+            delete_char: resolve_local!(keymap, defaults, vim_normal, delete_char),
+            delete_to_line_end: resolve_local!(keymap, defaults, vim_normal, delete_to_line_end),
+            yank_line: resolve_local!(keymap, defaults, vim_normal, yank_line),
+            paste_after: resolve_local!(keymap, defaults, vim_normal, paste_after),
+            start_delete_operator: resolve_local!(
+                keymap,
+                defaults,
+                vim_normal,
+                start_delete_operator
+            ),
+            start_yank_operator: resolve_local!(keymap, defaults, vim_normal, start_yank_operator),
+            cancel_operator: resolve_local!(keymap, defaults, vim_normal, cancel_operator),
+        };
+
+        let vim_operator = VimOperatorKeymap {
+            delete_line: resolve_local!(keymap, defaults, vim_operator, delete_line),
+            yank_line: resolve_local!(keymap, defaults, vim_operator, yank_line),
+            motion_left: resolve_local!(keymap, defaults, vim_operator, motion_left),
+            motion_right: resolve_local!(keymap, defaults, vim_operator, motion_right),
+            motion_up: resolve_local!(keymap, defaults, vim_operator, motion_up),
+            motion_down: resolve_local!(keymap, defaults, vim_operator, motion_down),
+            motion_word_forward: resolve_local!(
+                keymap,
+                defaults,
+                vim_operator,
+                motion_word_forward
+            ),
+            motion_word_backward: resolve_local!(
+                keymap,
+                defaults,
+                vim_operator,
+                motion_word_backward
+            ),
+            motion_word_end: resolve_local!(keymap, defaults, vim_operator, motion_word_end),
+            motion_line_start: resolve_local!(keymap, defaults, vim_operator, motion_line_start),
+            motion_line_end: resolve_local!(keymap, defaults, vim_operator, motion_line_end),
+            cancel: resolve_local!(keymap, defaults, vim_operator, cancel),
+        };
+
         let pager = PagerKeymap {
             scroll_up: resolve_local!(keymap, defaults, pager, scroll_up),
             scroll_down: resolve_local!(keymap, defaults, pager, scroll_down),
@@ -382,6 +512,8 @@ impl RuntimeKeymap {
             chat,
             composer,
             editor,
+            vim_normal,
+            vim_operator,
             pager,
             list,
             approval,
@@ -403,6 +535,7 @@ impl RuntimeKeymap {
                 open_external_editor: default_bindings![ctrl(KeyCode::Char('g'))],
                 copy: default_bindings![ctrl(KeyCode::Char('o'))],
                 clear_terminal: default_bindings![ctrl(KeyCode::Char('l'))],
+                toggle_vim_mode: default_bindings![],
             },
             chat: ChatKeymap {
                 decrease_reasoning_effort: default_bindings![alt(KeyCode::Char(','))],
@@ -462,6 +595,62 @@ impl RuntimeKeymap {
                 kill_line_start: default_bindings![ctrl(KeyCode::Char('u'))],
                 kill_line_end: default_bindings![ctrl(KeyCode::Char('k'))],
                 yank: default_bindings![ctrl(KeyCode::Char('y'))],
+            },
+            vim_normal: VimNormalKeymap {
+                enter_insert: default_bindings![plain(KeyCode::Char('i'))],
+                append_after_cursor: default_bindings![plain(KeyCode::Char('a'))],
+                append_line_end: default_bindings![
+                    shift(KeyCode::Char('a')),
+                    plain(KeyCode::Char('A'))
+                ],
+                insert_line_start: default_bindings![
+                    shift(KeyCode::Char('i')),
+                    plain(KeyCode::Char('I'))
+                ],
+                open_line_below: default_bindings![plain(KeyCode::Char('o'))],
+                open_line_above: default_bindings![
+                    shift(KeyCode::Char('o')),
+                    plain(KeyCode::Char('O'))
+                ],
+                move_left: default_bindings![plain(KeyCode::Char('h'))],
+                move_right: default_bindings![plain(KeyCode::Char('l'))],
+                move_up: default_bindings![plain(KeyCode::Char('k'))],
+                move_down: default_bindings![plain(KeyCode::Char('j'))],
+                move_word_forward: default_bindings![plain(KeyCode::Char('w'))],
+                move_word_backward: default_bindings![plain(KeyCode::Char('b'))],
+                move_word_end: default_bindings![plain(KeyCode::Char('e'))],
+                move_line_start: default_bindings![plain(KeyCode::Char('0'))],
+                move_line_end: default_bindings![
+                    plain(KeyCode::Char('$')),
+                    shift(KeyCode::Char('$'))
+                ],
+                delete_char: default_bindings![plain(KeyCode::Char('x'))],
+                delete_to_line_end: default_bindings![
+                    shift(KeyCode::Char('d')),
+                    plain(KeyCode::Char('D'))
+                ],
+                yank_line: default_bindings![shift(KeyCode::Char('y')), plain(KeyCode::Char('Y'))],
+                paste_after: default_bindings![plain(KeyCode::Char('p'))],
+                start_delete_operator: default_bindings![plain(KeyCode::Char('d'))],
+                start_yank_operator: default_bindings![plain(KeyCode::Char('y'))],
+                cancel_operator: default_bindings![plain(KeyCode::Esc)],
+            },
+            vim_operator: VimOperatorKeymap {
+                delete_line: default_bindings![plain(KeyCode::Char('d'))],
+                yank_line: default_bindings![plain(KeyCode::Char('y'))],
+                motion_left: default_bindings![plain(KeyCode::Char('h'))],
+                motion_right: default_bindings![plain(KeyCode::Char('l'))],
+                motion_up: default_bindings![plain(KeyCode::Char('k'))],
+                motion_down: default_bindings![plain(KeyCode::Char('j'))],
+                motion_word_forward: default_bindings![plain(KeyCode::Char('w'))],
+                motion_word_backward: default_bindings![plain(KeyCode::Char('b'))],
+                motion_word_end: default_bindings![plain(KeyCode::Char('e'))],
+                motion_line_start: default_bindings![plain(KeyCode::Char('0'))],
+                motion_line_end: default_bindings![
+                    plain(KeyCode::Char('$')),
+                    shift(KeyCode::Char('$'))
+                ],
+                cancel: default_bindings![plain(KeyCode::Esc)],
             },
             pager: PagerKeymap {
                 scroll_up: default_bindings![plain(KeyCode::Up), plain(KeyCode::Char('k'))],
@@ -536,6 +725,7 @@ impl RuntimeKeymap {
                 ),
                 ("copy", self.app.copy.as_slice()),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
+                ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 (
                     "chat.decrease_reasoning_effort",
                     self.chat.decrease_reasoning_effort.as_slice(),
@@ -575,6 +765,7 @@ impl RuntimeKeymap {
                 ),
                 ("copy", self.app.copy.as_slice()),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
+                ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 (
                     "chat.decrease_reasoning_effort",
                     self.chat.decrease_reasoning_effort.as_slice(),
@@ -615,6 +806,7 @@ impl RuntimeKeymap {
                 ),
                 ("copy", self.app.copy.as_slice()),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
+                ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
             ],
             [
                 ("list.move_up", self.list.move_up.as_slice()),
@@ -666,6 +858,103 @@ impl RuntimeKeymap {
                 ("kill_line_start", self.editor.kill_line_start.as_slice()),
                 ("kill_line_end", self.editor.kill_line_end.as_slice()),
                 ("yank", self.editor.yank.as_slice()),
+            ],
+        )?;
+
+        validate_unique(
+            "vim_normal",
+            [
+                ("enter_insert", self.vim_normal.enter_insert.as_slice()),
+                (
+                    "append_after_cursor",
+                    self.vim_normal.append_after_cursor.as_slice(),
+                ),
+                (
+                    "append_line_end",
+                    self.vim_normal.append_line_end.as_slice(),
+                ),
+                (
+                    "insert_line_start",
+                    self.vim_normal.insert_line_start.as_slice(),
+                ),
+                (
+                    "open_line_below",
+                    self.vim_normal.open_line_below.as_slice(),
+                ),
+                (
+                    "open_line_above",
+                    self.vim_normal.open_line_above.as_slice(),
+                ),
+                ("move_left", self.vim_normal.move_left.as_slice()),
+                ("move_right", self.vim_normal.move_right.as_slice()),
+                ("move_up", self.vim_normal.move_up.as_slice()),
+                ("move_down", self.vim_normal.move_down.as_slice()),
+                (
+                    "move_word_forward",
+                    self.vim_normal.move_word_forward.as_slice(),
+                ),
+                (
+                    "move_word_backward",
+                    self.vim_normal.move_word_backward.as_slice(),
+                ),
+                ("move_word_end", self.vim_normal.move_word_end.as_slice()),
+                (
+                    "move_line_start",
+                    self.vim_normal.move_line_start.as_slice(),
+                ),
+                ("move_line_end", self.vim_normal.move_line_end.as_slice()),
+                ("delete_char", self.vim_normal.delete_char.as_slice()),
+                (
+                    "delete_to_line_end",
+                    self.vim_normal.delete_to_line_end.as_slice(),
+                ),
+                ("yank_line", self.vim_normal.yank_line.as_slice()),
+                ("paste_after", self.vim_normal.paste_after.as_slice()),
+                (
+                    "start_delete_operator",
+                    self.vim_normal.start_delete_operator.as_slice(),
+                ),
+                (
+                    "start_yank_operator",
+                    self.vim_normal.start_yank_operator.as_slice(),
+                ),
+                (
+                    "cancel_operator",
+                    self.vim_normal.cancel_operator.as_slice(),
+                ),
+            ],
+        )?;
+
+        validate_unique(
+            "vim_operator",
+            [
+                ("delete_line", self.vim_operator.delete_line.as_slice()),
+                ("yank_line", self.vim_operator.yank_line.as_slice()),
+                ("motion_left", self.vim_operator.motion_left.as_slice()),
+                ("motion_right", self.vim_operator.motion_right.as_slice()),
+                ("motion_up", self.vim_operator.motion_up.as_slice()),
+                ("motion_down", self.vim_operator.motion_down.as_slice()),
+                (
+                    "motion_word_forward",
+                    self.vim_operator.motion_word_forward.as_slice(),
+                ),
+                (
+                    "motion_word_backward",
+                    self.vim_operator.motion_word_backward.as_slice(),
+                ),
+                (
+                    "motion_word_end",
+                    self.vim_operator.motion_word_end.as_slice(),
+                ),
+                (
+                    "motion_line_start",
+                    self.vim_operator.motion_line_start.as_slice(),
+                ),
+                (
+                    "motion_line_end",
+                    self.vim_operator.motion_line_end.as_slice(),
+                ),
+                ("cancel", self.vim_operator.cancel.as_slice()),
             ],
         )?;
 

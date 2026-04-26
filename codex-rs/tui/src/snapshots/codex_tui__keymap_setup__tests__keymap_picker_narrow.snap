@@ -5,9 +5,9 @@ expression: "render_picker(params, 78)"
 
   Keymap
   All configurable shortcuts.
-  50 actions, 0 customized, 0 unbound.
+  85 actions, 0 customized, 1 unbound.
 
-  [All]  Common  Customized (0)  Unbound (0)  App  Composer  Editor
+  [All]  Common  Customized (0)  Unbound (1)  App  Composer  Editor  Vim
   Navigation  Approval
 
   Type to search shortcuts
@@ -15,9 +15,9 @@ expression: "render_picker(params, 78)"
   Global         Open External Editor       ctrl-g
   Global         Copy                       ctrl-o
   Global         Clear Terminal             ctrl-l
+  Global       - Toggle Vim Mode            unbound
   Chat           Decrease Reasoning Effort  alt-,
   Chat           Increase Reasoning Effort  alt-.
   Chat           Edit Queued Message        alt-up, shift-left
-  Composer       Submit                     enter
 
   left/right group · enter edit shortcut · * custom · - unbound · esc close

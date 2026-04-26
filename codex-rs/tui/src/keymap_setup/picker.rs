@@ -60,6 +60,7 @@ const KEYMAP_COMMON_ACTIONS: &[(&str, &str)] = &[
     ("composer", "queue"),
     ("global", "open_external_editor"),
     ("global", "copy"),
+    ("global", "toggle_vim_mode"),
     ("editor", "delete_backward_word"),
     ("editor", "delete_forward_word"),
     ("editor", "move_word_left"),
@@ -93,6 +94,12 @@ const KEYMAP_CONTEXT_TABS: &[KeymapContextTab] = &[
         label: "Editor",
         description: "Inline editor movement and editing shortcuts.",
         contexts: &["editor"],
+    },
+    KeymapContextTab {
+        id: "vim-shortcuts",
+        label: "Vim",
+        description: "Vim normal-mode and operator shortcuts.",
+        contexts: &["vim_normal", "vim_operator"],
     },
     KeymapContextTab {
         id: "navigation-shortcuts",
