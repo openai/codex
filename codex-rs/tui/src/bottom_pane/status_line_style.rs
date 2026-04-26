@@ -1,3 +1,5 @@
+//! Theme-derived styling for the configurable footer statusline.
+
 use ratatui::prelude::Stylize;
 use ratatui::style::Style;
 use ratatui::text::Line;
