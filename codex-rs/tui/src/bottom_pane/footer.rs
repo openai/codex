@@ -640,7 +640,7 @@ fn footer_from_props_lines(
     // Passive footer context can come from the configurable status line, the
     // active agent label, or both combined.
     if let Some(status_line) = passive_footer_status_line(props) {
-        return vec![status_line.dim()];
+        return vec![status_line];
     }
     match props.mode {
         FooterMode::QuitShortcutReminder => {
@@ -702,10 +702,10 @@ pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<Line<'st
 
     if let Some(active_agent_label) = props.active_agent_label.as_ref() {
         if let Some(existing) = line.as_mut() {
-            existing.spans.push(" · ".into());
-            existing.spans.push(active_agent_label.clone().into());
+            existing.spans.push(" · ".dim());
+            existing.spans.push(active_agent_label.clone().dim());
         } else {
-            line = Some(Line::from(active_agent_label.clone()));
+            line = Some(Line::from(active_agent_label.clone()).dim());
         }
     }
 
@@ -1210,10 +1210,9 @@ mod tests {
                         props.mode,
                         FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
                     ) {
-                    passive_status_line
-                        .as_ref()
-                        .map(|line| line.clone().dim())
-                        .map(|line| truncate_line_with_ellipsis_if_overflow(line, available_width))
+                    passive_status_line.as_ref().map(|line| {
+                        truncate_line_with_ellipsis_if_overflow(line.clone(), available_width)
+                    })
                 } else {
                     None
                 };
@@ -1256,12 +1255,9 @@ mod tests {
                 if status_line_active
                     && let Some(max_left) = max_left_width_for_right(area, right_width)
                     && left_width > max_left
-                    && let Some(line) = passive_status_line
-                        .as_ref()
-                        .map(|line| line.clone().dim())
-                        .map(|line| {
-                            truncate_line_with_ellipsis_if_overflow(line, max_left as usize)
-                        })
+                    && let Some(line) = passive_status_line.as_ref().map(|line| {
+                        truncate_line_with_ellipsis_if_overflow(line.clone(), max_left as usize)
+                    })
                 {
                     left_width = line.width() as u16;
                     truncated_status_line = Some(line);

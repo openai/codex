@@ -3951,7 +3951,6 @@ impl ChatComposer {
                     let status_line_active = uses_passive_footer_status_layout(&footer_props);
                     let combined_status_line = if status_line_active {
                         passive_footer_status_line(&footer_props)
-                            .map(ratatui::prelude::Stylize::dim)
                     } else {
                         None
                     };

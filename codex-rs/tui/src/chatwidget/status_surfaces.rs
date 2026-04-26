@@ -4,6 +4,7 @@
 //! behavior easier to review without paging through the rest of `chatwidget.rs`.
 
 use super::*;
+use crate::bottom_pane::status_line_from_segments;
 use crate::status::format_tokens_compact;
 
 /// Items shown in the terminal title when the user has not configured a
@@ -143,19 +144,14 @@ impl ChatWidget {
             return;
         }
 
-        let mut parts = Vec::new();
+        let mut segments = Vec::new();
         for item in &selections.status_line_items {
-            if let Some(value) = self.status_line_value_for_item(item) {
-                parts.push(value);
+            if let Some(value) = self.status_line_value_for_item(*item) {
+                segments.push((*item, value));
             }
         }
 
-        let line = if parts.is_empty() {
-            None
-        } else {
-            Some(Line::from(parts.join(" · ")))
-        };
-        self.set_status_line(line);
+        self.set_status_line(status_line_from_segments(segments));
     }
 
     /// Clears the terminal title Codex most recently wrote, if any.
@@ -419,7 +415,7 @@ impl ChatWidget {
     /// Returning `None` means "omit this item for now", not "configuration error". Callers rely on
     /// this to keep partially available status lines readable while waiting for session, token, or
     /// git metadata.
-    pub(super) fn status_line_value_for_item(&mut self, item: &StatusLineItem) -> Option<String> {
+    pub(super) fn status_line_value_for_item(&mut self, item: StatusLineItem) -> Option<String> {
         match item {
             StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
             StatusLineItem::ModelWithReasoning => Some(self.model_with_reasoning_display_name()),
@@ -524,7 +520,7 @@ impl ChatWidget {
             StatusSurfacePreviewItem::Model => StatusLineItem::ModelName,
             StatusSurfacePreviewItem::ModelWithReasoning => StatusLineItem::ModelWithReasoning,
         };
-        self.status_line_value_for_item(&status_line_item)
+        self.status_line_value_for_item(status_line_item)
     }
 
     /// Resolves one configured terminal-title item into a displayable segment.
@@ -560,34 +556,34 @@ impl ChatWidget {
                 Self::truncate_terminal_title_part(branch.clone(), /*max_chars*/ 32)
             }),
             TerminalTitleItem::ContextRemaining => self
-                .status_line_value_for_item(&StatusLineItem::ContextRemaining)
+                .status_line_value_for_item(StatusLineItem::ContextRemaining)
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::ContextUsed => self
-                .status_line_value_for_item(&StatusLineItem::ContextUsed)
+                .status_line_value_for_item(StatusLineItem::ContextUsed)
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::FiveHourLimit => self
-                .status_line_value_for_item(&StatusLineItem::FiveHourLimit)
+                .status_line_value_for_item(StatusLineItem::FiveHourLimit)
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::WeeklyLimit => self
-                .status_line_value_for_item(&StatusLineItem::WeeklyLimit)
+                .status_line_value_for_item(StatusLineItem::WeeklyLimit)
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::CodexVersion => self
-                .status_line_value_for_item(&StatusLineItem::CodexVersion)
+                .status_line_value_for_item(StatusLineItem::CodexVersion)
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::UsedTokens => self
-                .status_line_value_for_item(&StatusLineItem::UsedTokens)
+                .status_line_value_for_item(StatusLineItem::UsedTokens)
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::TotalInputTokens => self
-                .status_line_value_for_item(&StatusLineItem::TotalInputTokens)
+                .status_line_value_for_item(StatusLineItem::TotalInputTokens)
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::TotalOutputTokens => self
-                .status_line_value_for_item(&StatusLineItem::TotalOutputTokens)
+                .status_line_value_for_item(StatusLineItem::TotalOutputTokens)
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::SessionId => self
-                .status_line_value_for_item(&StatusLineItem::SessionId)
+                .status_line_value_for_item(StatusLineItem::SessionId)
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::FastMode => self
-                .status_line_value_for_item(&StatusLineItem::FastMode)
+                .status_line_value_for_item(StatusLineItem::FastMode)
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::Model => Some(Self::truncate_terminal_title_part(
                 self.model_display_name().to_string(),
