@@ -1685,6 +1685,7 @@ impl Session {
             .inject_response_items(vec![ResponseInputItem::Message {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText { text }],
+                phase: None,
             }])
             .await
             .is_err()
@@ -1781,6 +1782,7 @@ impl Session {
             .inject_response_items(vec![ResponseInputItem::Message {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText { text }],
+                phase: None,
             }])
             .await
             .is_err()

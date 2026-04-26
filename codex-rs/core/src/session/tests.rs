@@ -6109,6 +6109,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         content: vec![ContentItem::InputText {
             text: "late pending input".to_string(),
         }],
+        phase: None,
     }])
     .await
     .expect("inject pending input into active turn");
@@ -6355,18 +6356,21 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
         content: vec![ContentItem::InputText {
             text: "blocked queued prompt".to_string(),
         }],
+        phase: None,
     };
     let later = ResponseInputItem::Message {
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: "later queued prompt".to_string(),
         }],
+        phase: None,
     };
     let newer = ResponseInputItem::Message {
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: "newer queued prompt".to_string(),
         }],
+        phase: None,
     };
 
     sess.inject_response_items(vec![blocked.clone(), later.clone()])
@@ -6397,6 +6401,7 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
         content: vec![ContentItem::InputText {
             text: "queued before wake".to_string(),
         }],
+        phase: None,
     };
 
     sess.queue_response_items_for_next_turn(vec![queued_item.clone()])
@@ -6423,6 +6428,7 @@ async fn idle_interrupt_does_not_wake_queued_next_turn_items() {
         content: vec![ContentItem::InputText {
             text: "queued before interrupt".to_string(),
         }],
+        phase: None,
     };
 
     sess.queue_response_items_for_next_turn(vec![queued_item])
@@ -6442,6 +6448,7 @@ async fn abort_empty_active_turn_preserves_pending_input() {
         content: vec![ContentItem::InputText {
             text: "late pending input".to_string(),
         }],
+        phase: None,
     };
     let turn_state = {
         let mut active = sess.active_turn.lock().await;
@@ -6647,7 +6654,7 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
     .await?;
 
     let pending_input = sess.get_pending_input().await;
-    let [ResponseInputItem::Message { role, content }] = pending_input.as_slice() else {
+    let [ResponseInputItem::Message { role, content, .. }] = pending_input.as_slice() else {
         panic!("expected one budget-limit steering message, got {pending_input:#?}");
     };
     assert_eq!("developer", role);

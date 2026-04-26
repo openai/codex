@@ -438,9 +438,15 @@ impl CodexThread {
 
 fn pending_message_input_item(message: &ResponseItem) -> CodexResult<ResponseInputItem> {
     match message {
-        ResponseItem::Message { role, content, .. } => Ok(ResponseInputItem::Message {
+        ResponseItem::Message {
+            role,
+            content,
+            phase,
+            ..
+        } => Ok(ResponseInputItem::Message {
             role: role.clone(),
             content: content.clone(),
+            phase: phase.clone(),
         }),
         _ => Err(CodexErr::InvalidRequest(
             "append_message only supports ResponseItem::Message".to_string(),
