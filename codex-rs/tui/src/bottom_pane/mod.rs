@@ -1115,7 +1115,6 @@ impl BottomPane {
             .is_some_and(bottom_pane_view::BottomPaneView::terminal_title_requires_action)
     }
 
-    #[cfg(test)]
     pub(crate) fn has_active_view(&self) -> bool {
         !self.view_stack.is_empty()
     }
