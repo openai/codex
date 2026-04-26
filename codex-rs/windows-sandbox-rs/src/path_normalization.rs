@@ -17,6 +17,8 @@ pub fn canonical_path_key(path: &Path) -> String {
         .to_ascii_lowercase()
 }
 
+/// Resolve mapped drive working directories into their UNC targets before launching
+/// sandboxed processes under an alternate logon session.
 pub fn normalize_command_cwd(path: &Path) -> PathBuf {
     let simplified = dunce::simplified(path).to_path_buf();
     normalize_mapped_drive_path_with(&simplified, mapped_drive_remote_root).unwrap_or(simplified)
@@ -48,7 +50,8 @@ fn mapped_drive_remote_root(drive: &str) -> Option<String> {
 
     loop {
         let mut buf = vec![0u16; len as usize];
-        let status = unsafe { WNetGetConnectionW(drive_wide.as_ptr(), buf.as_mut_ptr(), &mut len) };
+        let status =
+            unsafe { WNetGetConnectionW(drive_wide.as_ptr(), buf.as_mut_ptr(), &mut len) };
         match status {
             NO_ERROR => {
                 let end = buf.iter().position(|ch| *ch == 0).unwrap_or(buf.len());
