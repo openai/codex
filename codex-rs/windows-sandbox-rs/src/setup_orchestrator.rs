@@ -15,6 +15,7 @@ use crate::allow::compute_allow_paths;
 use crate::helper_materialization::helper_bin_dir;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
+use crate::path_normalization::ensure_windows_sandbox_local_path;
 use crate::policy::SandboxPolicy;
 use crate::setup_error::SetupErrorCode;
 use crate::setup_error::SetupFailure;
@@ -167,6 +168,13 @@ fn run_setup_refresh_inner(
     }
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
     let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
+    ensure_windows_sandbox_local_path(request.command_cwd, "sandbox working directory")?;
+    for root in &write_roots {
+        ensure_windows_sandbox_local_path(root, "sandbox writable root")?;
+    }
+    for path in &deny_write_paths {
+        ensure_windows_sandbox_local_path(path, "sandbox protected path")?;
+    }
     let network_identity =
         SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
     let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);

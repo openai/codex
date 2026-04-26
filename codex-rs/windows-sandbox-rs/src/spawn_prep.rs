@@ -13,6 +13,7 @@ use crate::identity::SandboxCreds;
 use crate::identity::require_logon_sandbox_creds;
 use crate::logging::log_start;
 use crate::path_normalization::canonicalize_path;
+use crate::path_normalization::ensure_windows_sandbox_local_path;
 use crate::policy::SandboxPolicy;
 use crate::policy::parse_policy;
 use crate::sandbox_utils::ensure_codex_home_exists;
@@ -102,6 +103,8 @@ fn prepare_spawn_context_common(
     ) {
         anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
     }
+
+    ensure_windows_sandbox_local_path(cwd, "sandbox working directory")?;
 
     normalize_null_device_env(env_map);
     ensure_non_interactive_pager(env_map);
@@ -282,6 +285,12 @@ pub(crate) fn prepare_elevated_spawn_context(
     );
     let write_roots: Vec<PathBuf> = allow.into_iter().collect();
     let deny_write_paths: Vec<PathBuf> = deny.into_iter().collect();
+    for root in &write_roots {
+        ensure_windows_sandbox_local_path(root, "sandbox writable root")?;
+    }
+    for path in &deny_write_paths {
+        ensure_windows_sandbox_local_path(path, "sandbox protected path")?;
+    }
     let write_roots_override = if common.is_workspace_write {
         Some(write_roots.as_slice())
     } else {
