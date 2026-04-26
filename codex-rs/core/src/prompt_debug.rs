@@ -29,7 +29,7 @@ pub async fn build_prompt_input(
     config.ephemeral = true;
 
     let auth_manager =
-        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
     let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
         config.codex_self_exe.clone(),

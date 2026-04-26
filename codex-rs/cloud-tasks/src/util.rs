@@ -62,12 +62,15 @@ pub fn extract_chatgpt_account_id(token: &str) -> Option<String> {
 pub async fn load_auth_manager() -> Option<AuthManager> {
     // TODO: pass in cli overrides once cloud tasks properly support them.
     let config = Config::load_with_cli_overrides(Vec::new()).await.ok()?;
-    Some(AuthManager::new(
-        config.codex_home.to_path_buf(),
-        /*enable_codex_api_key_env*/ false,
-        config.cli_auth_credentials_store_mode,
-        Some(config.chatgpt_base_url),
-    ))
+    Some(
+        AuthManager::new(
+            config.codex_home.to_path_buf(),
+            /*enable_codex_api_key_env*/ false,
+            config.cli_auth_credentials_store_mode,
+            Some(config.chatgpt_base_url),
+        )
+        .await,
+    )
 }
 
 /// Build headers for ChatGPT-backed requests: `User-Agent`, optional `Authorization`,

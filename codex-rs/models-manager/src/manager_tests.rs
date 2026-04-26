@@ -703,12 +703,15 @@ async fn refresh_available_models_skips_network_without_chatgpt_auth() {
     .await;
 
     let codex_home = tempdir().expect("temp dir");
-    let auth_manager = Arc::new(AuthManager::new(
-        codex_home.path().to_path_buf(),
-        /*enable_codex_api_key_env*/ false,
-        AuthCredentialsStoreMode::File,
-        /*chatgpt_base_url*/ None,
-    ));
+    let auth_manager = Arc::new(
+        AuthManager::new(
+            codex_home.path().to_path_buf(),
+            /*enable_codex_api_key_env*/ false,
+            AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
+        )
+        .await,
+    );
     let provider = provider_for(server.uri());
     let manager = ModelsManager::with_provider_for_tests(
         codex_home.path().to_path_buf(),

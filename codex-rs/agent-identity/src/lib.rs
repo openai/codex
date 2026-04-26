@@ -8,6 +8,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
 use chrono::Utc;
+use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::protocol::SessionSource;
 use crypto_box::SecretKey as Curve25519SecretKey;
 use ed25519_dalek::Signer as _;
@@ -15,6 +16,12 @@ use ed25519_dalek::SigningKey;
 use ed25519_dalek::VerifyingKey;
 use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::pkcs8::EncodePrivateKey;
+use jsonwebtoken::Algorithm;
+use jsonwebtoken::DecodingKey;
+use jsonwebtoken::Validation;
+use jsonwebtoken::decode;
+use jsonwebtoken::decode_header;
+use jsonwebtoken::jwk::JwkSet;
 use rand::TryRngCore;
 use rand::rngs::OsRng;
 use serde::Deserialize;
@@ -23,6 +30,9 @@ use sha2::Digest as _;
 use sha2::Sha512;
 
 const AGENT_TASK_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(30);
+const AGENT_IDENTITY_JWKS_TIMEOUT: Duration = Duration::from_secs(10);
+const AGENT_IDENTITY_JWT_AUDIENCE: &str = "codex-app-server";
+const AGENT_IDENTITY_JWT_ISSUER: &str = "https://chatgpt.com/codex-backend/agent-identity";
 
 /// Stored key material for a registered agent identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,6 +58,21 @@ pub struct AgentBillOfMaterials {
 pub struct GeneratedAgentKeyMaterial {
     pub private_key_pkcs8_base64: String,
     pub public_key_ssh: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct AgentIdentityJwtClaims {
+    pub iss: String,
+    pub aud: String,
+    pub iat: usize,
+    pub exp: usize,
+    pub agent_runtime_id: String,
+    pub agent_private_key: String,
+    pub account_id: String,
+    pub chatgpt_user_id: String,
+    pub email: String,
+    pub plan_type: AccountPlanType,
+    pub chatgpt_account_is_fedramp: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -96,6 +121,40 @@ pub fn authorization_header_for_agent_task(
     };
     let serialized_assertion = serialize_agent_assertion(&envelope)?;
     Ok(format!("AgentAssertion {serialized_assertion}"))
+}
+
+pub async fn fetch_agent_identity_jwks(
+    client: &reqwest::Client,
+    chatgpt_base_url: &str,
+) -> Result<JwkSet> {
+    client
+        .get(agent_identity_jwks_url(chatgpt_base_url))
+        .timeout(AGENT_IDENTITY_JWKS_TIMEOUT)
+        .send()
+        .await
+        .context("failed to fetch agent identity JWKS")?
+        .error_for_status()
+        .context("failed to fetch agent identity JWKS")?
+        .json()
+        .await
+        .context("failed to decode agent identity JWKS")
+}
+
+pub fn decode_agent_identity_jwt(jwt: &str, jwks: &JwkSet) -> Result<AgentIdentityJwtClaims> {
+    let header = decode_header(jwt).context("failed to decode agent identity JWT header")?;
+    let kid = header
+        .kid
+        .context("agent identity JWT header does not include a kid")?;
+    let jwk = jwks
+        .find(&kid)
+        .with_context(|| format!("agent identity JWT kid {kid} is not trusted"))?;
+    let decoding_key = DecodingKey::from_jwk(jwk).context("failed to build JWT decoding key")?;
+    let mut validation = Validation::new(Algorithm::RS256);
+    validation.set_audience(&[AGENT_IDENTITY_JWT_AUDIENCE]);
+    validation.set_issuer(&[AGENT_IDENTITY_JWT_ISSUER]);
+    decode::<AgentIdentityJwtClaims>(jwt, &decoding_key, &validation)
+        .map(|data| data.claims)
+        .context("failed to verify agent identity JWT")
 }
 
 pub fn sign_task_registration_payload(
@@ -215,6 +274,11 @@ pub fn agent_task_registration_url(chatgpt_base_url: &str, agent_runtime_id: &st
 pub fn agent_identity_biscuit_url(chatgpt_base_url: &str) -> String {
     let trimmed = chatgpt_base_url.trim_end_matches('/');
     format!("{trimmed}/authenticate_app_v2")
+}
+
+pub fn agent_identity_jwks_url(chatgpt_base_url: &str) -> String {
+    let trimmed = chatgpt_base_url.trim_end_matches('/');
+    format!("{trimmed}/api/codex/agent-identities/jwks")
 }
 
 pub fn agent_identity_request_id() -> Result<String> {

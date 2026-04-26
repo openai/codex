@@ -27,7 +27,8 @@ pub async fn init_chatgpt_token_from_auth(
         /*enable_codex_api_key_env*/ false,
         auth_credentials_store_mode,
         /*chatgpt_base_url*/ None,
-    );
+    )
+    .await;
     if let Some(auth) = auth_manager.auth().await {
         let token_data = auth.get_token_data()?;
         set_chatgpt_token_data(token_data);

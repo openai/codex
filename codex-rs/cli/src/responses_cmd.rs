@@ -29,7 +29,8 @@ pub(crate) async fn run_responses_command(
     let config = Config::load_with_cli_overrides(cli_overrides).await?;
     let base_auth_manager = codex_login::AuthManager::shared_from_config(
         &config, /*enable_codex_api_key_env*/ true,
-    );
+    )
+    .await;
     let model_provider = create_model_provider(config.model_provider, Some(base_auth_manager));
     let api_provider = model_provider.api_provider().await?;
     let api_auth = model_provider.api_auth().await?;

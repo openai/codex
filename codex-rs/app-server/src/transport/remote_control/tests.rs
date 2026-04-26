@@ -497,7 +497,8 @@ async fn remote_control_start_allows_missing_auth_when_enabled() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
-    );
+    )
+    .await;
     let (transport_event_tx, _transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
@@ -1085,7 +1086,8 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
-    );
+    )
+    .await;
     let expected_server_name = gethostname().to_string_lossy().trim().to_string();
     let expected_enrollment = RemoteControlEnrollment {
         account_id: "account_id".to_string(),

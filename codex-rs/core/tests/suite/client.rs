@@ -1093,7 +1093,8 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     config.model_provider = model_provider;
 
     let auth_manager =
-        match CodexAuth::from_auth_storage(codex_home.path(), AuthCredentialsStoreMode::File) {
+        match CodexAuth::from_auth_storage(codex_home.path(), AuthCredentialsStoreMode::File).await
+        {
             Ok(Some(auth)) => codex_core::test_support::auth_manager_from_auth(auth),
             Ok(None) => panic!("No CodexAuth found in codex_home"),
             Err(e) => panic!("Failed to load CodexAuth: {e}"),

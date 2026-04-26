@@ -783,7 +783,8 @@ pub async fn run_main(
         /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
         chatgpt_base_url,
-    );
+    )
+    .await;
 
     let model_provider_override = if cli.oss {
         let resolved = resolve_oss_provider(
@@ -880,7 +881,9 @@ pub async fn run_main(
             auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
             forced_login_method: config.forced_login_method,
             forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
-        }) {
+        })
+        .await
+        {
             eprintln!("{err}");
             std::process::exit(1);
         }
@@ -1151,7 +1154,8 @@ async fn run_ratatui_app(
                 /*enable_codex_api_key_env*/ false,
                 initial_config.cli_auth_credentials_store_mode,
                 initial_config.chatgpt_base_url.clone(),
-            );
+            )
+            .await;
         }
 
         // If the user made an explicit trust decision, or we showed the login flow, reload config

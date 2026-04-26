@@ -391,7 +391,8 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
 
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
         let auth_manager =
-            AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env);
+            AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env)
+                .await;
         let config_manager = ConfigManager::new(
             args.config.codex_home.to_path_buf(),
             args.cli_overrides,

@@ -414,7 +414,7 @@ pub async fn run_main_with_transport(
             }
 
             let auth_manager =
-                AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
+                AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
             config_manager.replace_cloud_requirements_loader(auth_manager, config.chatgpt_base_url);
         }
         Err(err) => {
@@ -567,7 +567,7 @@ pub async fn run_main_with_transport(
     }
 
     let auth_manager =
-        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
     let remote_control_enabled = config.features.enabled(Feature::RemoteControl);
     if transport_accept_handles.is_empty() && !remote_control_enabled {
@@ -648,7 +648,7 @@ pub async fn run_main_with_transport(
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
         let outbound_control_tx = outbound_control_tx;
         let auth_manager =
-            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
+            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
         let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
             arg0_paths,
