@@ -2144,8 +2144,8 @@ async fn try_run_sampling_request(
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
                 should_emit_turn_diff = true;
-                if let Some(end_turn) = end_turn {
-                    needs_follow_up |= !end_turn;
+                if let Some(false) = end_turn {
+                    needs_follow_up = true;
                 }
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
