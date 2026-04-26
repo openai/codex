@@ -7,6 +7,7 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::config_loader::ConfigLayerStack;
 use codex_analytics::AnalyticsEventsClient;
 use codex_config::types::PluginConfig;
+use codex_config::version_for_toml;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
 use codex_core_plugins::loader::configured_curated_plugin_ids_from_codex_home;
@@ -332,10 +333,16 @@ pub struct PluginsManager {
     featured_plugin_ids_cache: RwLock<Option<CachedFeaturedPluginIds>>,
     configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
-    cached_enabled_outcome: RwLock<Option<PluginLoadOutcome>>,
+    cached_enabled_outcome: RwLock<Option<CachedPluginLoadOutcome>>,
     remote_sync_lock: Semaphore,
     restriction_product: Option<Product>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
+}
+
+#[derive(Clone)]
+struct CachedPluginLoadOutcome {
+    config_version: String,
+    outcome: PluginLoadOutcome,
 }
 
 impl PluginsManager {
@@ -401,7 +408,9 @@ impl PluginsManager {
             return PluginLoadOutcome::default();
         }
 
-        if !force_reload && let Some(outcome) = self.cached_enabled_outcome() {
+        let config_version = version_for_toml(&config.config_layer_stack.effective_config());
+
+        if !force_reload && let Some(outcome) = self.cached_enabled_outcome(&config_version) {
             return outcome;
         }
 
@@ -416,7 +425,10 @@ impl PluginsManager {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
-        *cache = Some(outcome.clone());
+        *cache = Some(CachedPluginLoadOutcome {
+            config_version,
+            outcome: outcome.clone(),
+        });
         outcome
     }
 
@@ -447,10 +459,17 @@ impl PluginsManager {
             .effective_skill_roots()
     }
 
-    fn cached_enabled_outcome(&self) -> Option<PluginLoadOutcome> {
+    fn cached_enabled_outcome(&self, config_version: &str) -> Option<PluginLoadOutcome> {
         match self.cached_enabled_outcome.read() {
-            Ok(cache) => cache.clone(),
-            Err(err) => err.into_inner().clone(),
+            Ok(cache) => cache
+                .as_ref()
+                .filter(|cached| cached.config_version == config_version)
+                .map(|cached| cached.outcome.clone()),
+            Err(err) => err
+                .into_inner()
+                .as_ref()
+                .filter(|cached| cached.config_version == config_version)
+                .map(|cached| cached.outcome.clone()),
         }
     }
 
