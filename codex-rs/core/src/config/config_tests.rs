@@ -2182,24 +2182,25 @@ fn web_search_mode_disabled_overrides_legacy_request() {
 #[test]
 fn web_search_mode_for_turn_uses_preference_for_read_only() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
-    let mode =
-        resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::new_read_only_policy());
+    let permission_profile =
+        PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::new_read_only_policy());
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &permission_profile);
 
     assert_eq!(mode, WebSearchMode::Cached);
 }
 
 #[test]
-fn web_search_mode_for_turn_prefers_live_for_danger_full_access() {
+fn web_search_mode_for_turn_prefers_live_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::DangerFullAccess);
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
 
     assert_eq!(mode, WebSearchMode::Live);
 }
 
 #[test]
-fn web_search_mode_for_turn_respects_disabled_for_danger_full_access() {
+fn web_search_mode_for_turn_respects_disabled_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Disabled);
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::DangerFullAccess);
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
 
     assert_eq!(mode, WebSearchMode::Disabled);
 }
@@ -2219,7 +2220,7 @@ fn web_search_mode_for_turn_falls_back_when_live_is_disallowed() -> anyhow::Resu
             })
         }
     })?;
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::DangerFullAccess);
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
 
     assert_eq!(mode, WebSearchMode::Cached);
     Ok(())
@@ -6783,7 +6784,7 @@ async fn requirements_web_search_mode_overrides_danger_full_access_default() -> 
     assert_eq!(
         resolve_web_search_mode_for_turn(
             &config.web_search_mode,
-            config.permissions.sandbox_policy.get(),
+            &config.permissions.permission_profile(),
         ),
         WebSearchMode::Cached,
     );
