@@ -13,7 +13,9 @@ use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated
 use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::AppToolApproval;
 use codex_config::McpServerConfig;
+use codex_config::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core_plugins::installed_marketplaces::marketplace_install_root;
 use codex_core_plugins::loader::refresh_non_curated_plugin_cache;
@@ -241,6 +243,74 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
     assert_eq!(
         outcome.effective_apps(),
         vec![AppConnectorId("connector_example".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn load_plugins_applies_plugin_mcp_server_policy() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "sample"
+}"#,
+    );
+    write_file(
+        &plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "sample": {
+      "type": "http",
+      "url": "https://sample.example/mcp",
+      "default_tools_approval_mode": "prompt",
+      "enabled_tools": ["read", "search"],
+      "tools": {
+        "search": { "approval_mode": "prompt" }
+      }
+    }
+  }
+}"#,
+    );
+    let config_toml = r#"
+[features]
+plugins = true
+
+[plugins."sample@test"]
+enabled = true
+
+[plugins."sample@test".mcp_servers.sample]
+enabled = false
+default_tools_approval_mode = "approve"
+enabled_tools = ["search"]
+disabled_tools = ["delete"]
+
+[plugins."sample@test".mcp_servers.sample.tools.search]
+approval_mode = "approve"
+"#;
+
+    let outcome = load_plugins_from_config(config_toml, codex_home.path()).await;
+    let server = outcome.plugins()[0]
+        .mcp_servers
+        .get("sample")
+        .expect("sample server");
+
+    assert!(!server.enabled);
+    assert_eq!(
+        server.default_tools_approval_mode,
+        Some(AppToolApproval::Approve)
+    );
+    assert_eq!(server.enabled_tools, Some(vec!["search".to_string()]));
+    assert_eq!(server.disabled_tools, Some(vec!["delete".to_string()]));
+    assert_eq!(
+        server.tools.get("search"),
+        Some(&McpServerToolConfig {
+            approval_mode: Some(AppToolApproval::Approve),
+        })
     );
 }
 

@@ -1694,6 +1694,54 @@
         "enabled": {
           "default": true,
           "type": "boolean"
+        },
+        "mcp_servers": {
+          "additionalProperties": {
+            "$ref": "#/definitions/PluginMcpServerConfig"
+          },
+          "description": "Per-MCP-server policy overlays for MCP servers contributed by this plugin.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "PluginMcpServerConfig": {
+      "additionalProperties": false,
+      "description": "Policy settings for a plugin-provided MCP server.\n\nThis intentionally excludes transport settings: plugin manifests own how the MCP server is launched, while user config owns enablement and tool policy.",
+      "properties": {
+        "default_tools_approval_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            }
+          ],
+          "description": "Approval mode for tools in this server unless a tool override exists."
+        },
+        "disabled_tools": {
+          "description": "Explicit deny-list of tools. These tools are removed after applying `enabled_tools`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "description": "When `false`, Codex skips initializing this plugin MCP server.",
+          "type": "boolean"
+        },
+        "enabled_tools": {
+          "description": "Explicit allow-list of tools exposed from this server.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tools": {
+          "additionalProperties": {
+            "$ref": "#/definitions/McpServerToolConfig"
+          },
+          "description": "Per-tool approval settings keyed by tool name.",
+          "type": "object"
         }
       },
       "type": "object"
