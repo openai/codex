@@ -265,6 +265,17 @@ pub(crate) fn sandbox_override_for_first_attempt(
     }
 }
 
+pub(crate) fn managed_network_for_sandbox_permissions(
+    network: Option<&NetworkProxy>,
+    sandbox_permissions: SandboxPermissions,
+) -> Option<&NetworkProxy> {
+    if sandbox_permissions.requires_escalated_permissions() {
+        None
+    } else {
+        network
+    }
+}
+
 pub(crate) trait Approvable<Req> {
     type ApprovalKey: Hash + Eq + Clone + Debug + Serialize;
 

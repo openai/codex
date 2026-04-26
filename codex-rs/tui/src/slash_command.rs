@@ -33,6 +33,7 @@ pub enum SlashCommand {
     Init,
     Compact,
     Plan,
+    Goal,
     Collab,
     Agent,
     Side,
@@ -106,6 +107,7 @@ impl SlashCommand {
             SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
             SlashCommand::Settings => "configure realtime microphone/speaker",
             SlashCommand::Plan => "switch to Plan mode",
+            SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::Side => "start a side conversation in an ephemeral fork",
@@ -140,6 +142,7 @@ impl SlashCommand {
             SlashCommand::Review
                 | SlashCommand::Rename
                 | SlashCommand::Plan
+                | SlashCommand::Goal
                 | SlashCommand::Fast
                 | SlashCommand::Mcp
                 | SlashCommand::Side
@@ -189,6 +192,7 @@ impl SlashCommand {
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
+            | SlashCommand::Goal
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Plugins
@@ -251,5 +255,9 @@ mod tests {
             SlashCommand::from_str("denials"),
             Ok(SlashCommand::AutoReviewDenials)
         );
+    }
+  
+    fn goal_command_is_available_during_task() {
+        assert!(SlashCommand::Goal.available_during_task());
     }
 }

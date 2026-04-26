@@ -424,6 +424,9 @@
             "general_analytics": {
               "type": "boolean"
             },
+            "goals": {
+              "type": "boolean"
+            },
             "guardian_approval": {
               "type": "boolean"
             },
@@ -521,6 +524,9 @@
               "type": "boolean"
             },
             "telepathy": {
+              "type": "boolean"
+            },
+            "terminal_resize_reflow": {
               "type": "boolean"
             },
             "tool_call_mcp_elicitation": {
@@ -2249,6 +2255,13 @@
           },
           "type": "array"
         },
+        "terminal_resize_reflow_max_rows": {
+          "default": null,
+          "description": "Trim terminal resize-reflow replay to the most recent rendered terminal rows when the transcript exceeds this cap. Omit to use Codex's terminal-specific default. Set to `0` to keep all rendered rows.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "terminal_title": {
           "default": null,
           "description": "Ordered list of terminal title item identifiers.\n\nWhen set, the TUI renders the selected items into the terminal window/tab title. When unset, the TUI defaults to: `spinner` and `project`.",
@@ -2616,6 +2629,9 @@
         "general_analytics": {
           "type": "boolean"
         },
+        "goals": {
+          "type": "boolean"
+        },
         "guardian_approval": {
           "type": "boolean"
         },
@@ -2713,6 +2729,9 @@
           "type": "boolean"
         },
         "telepathy": {
+          "type": "boolean"
+        },
+        "terminal_resize_reflow": {
           "type": "boolean"
         },
         "tool_call_mcp_elicitation": {

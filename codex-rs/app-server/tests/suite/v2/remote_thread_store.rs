@@ -54,6 +54,8 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     let store_id = Uuid::new_v4().to_string();
+    // Plugin startup warmups may create `.tmp` under codex_home. Disable them
+    // here so this regression stays focused on thread persistence artifacts.
     create_config_toml_with_thread_store(codex_home.path(), &server.uri(), &store_id)?;
 
     let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
@@ -248,6 +250,9 @@ base_url = "{server_uri}/v1"
 wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
+
+[features]
+plugins = false
 "#
         ),
     )

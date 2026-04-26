@@ -3810,6 +3810,46 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/goal/updated"
+              ],
+              "title": "Thread/goal/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadGoalUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/goal/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/goal/cleared"
+              ],
+              "title": "Thread/goal/clearedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadGoalClearedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/goal/clearedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/tokenUsage/updated"
               ],
               "title": "Thread/tokenUsage/updatedNotificationMethod",
@@ -14609,6 +14649,97 @@
           "thread"
         ],
         "title": "ThreadForkResponse",
+        "type": "object"
+      },
+      "ThreadGoal": {
+        "properties": {
+          "createdAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "objective": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/definitions/v2/ThreadGoalStatus"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "timeUsedSeconds": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "tokenBudget": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tokensUsed": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "updatedAt": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "createdAt",
+          "objective",
+          "status",
+          "threadId",
+          "timeUsedSeconds",
+          "tokensUsed",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "ThreadGoalClearedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadGoalClearedNotification",
+        "type": "object"
+      },
+      "ThreadGoalStatus": {
+        "enum": [
+          "active",
+          "paused",
+          "budgetLimited",
+          "complete"
+        ],
+        "type": "string"
+      },
+      "ThreadGoalUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "goal": {
+            "$ref": "#/definitions/v2/ThreadGoal"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "goal",
+          "threadId"
+        ],
+        "title": "ThreadGoalUpdatedNotification",
         "type": "object"
       },
       "ThreadId": {

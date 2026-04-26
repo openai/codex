@@ -43,6 +43,12 @@ pub struct ResolvedMcpOAuthScopes {
     pub source: McpOAuthScopesSource,
 }
 
+#[derive(Debug, Clone)]
+pub struct McpAuthStatusEntry {
+    pub config: McpServerConfig,
+    pub auth_status: McpAuthStatus,
+}
+
 pub async fn oauth_login_support(transport: &McpServerTransportConfig) -> McpOAuthLoginSupport {
     let McpServerTransportConfig::StreamableHttp {
         url,
@@ -117,12 +123,6 @@ pub fn resolve_oauth_scopes(
 pub fn should_retry_without_scopes(scopes: &ResolvedMcpOAuthScopes, error: &anyhow::Error) -> bool {
     scopes.source == McpOAuthScopesSource::Discovered
         && error.downcast_ref::<OAuthProviderError>().is_some()
-}
-
-#[derive(Debug, Clone)]
-pub struct McpAuthStatusEntry {
-    pub config: McpServerConfig,
-    pub auth_status: McpAuthStatus,
 }
 
 pub async fn compute_auth_statuses<'a, I>(

@@ -101,6 +101,7 @@ pub struct ToolsConfig {
     pub code_mode_only_enabled: bool,
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
+    pub goal_tools: bool,
     pub multi_agent_v2: bool,
     pub hide_spawn_agent_metadata: bool,
     pub spawn_agent_usage_hint: bool,
@@ -140,6 +141,7 @@ impl ToolsConfig {
         let include_code_mode = features.enabled(Feature::CodeMode);
         let include_code_mode_only = include_code_mode && features.enabled(Feature::CodeModeOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
+        let include_goal_tools = features.enabled(Feature::Goals);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
         let include_default_mode_request_user_input =
@@ -218,6 +220,7 @@ impl ToolsConfig {
             code_mode_only_enabled: include_code_mode_only,
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
+            goal_tools: include_goal_tools,
             multi_agent_v2: include_multi_agent_v2,
             hide_spawn_agent_metadata: false,
             spawn_agent_usage_hint: true,
@@ -251,6 +254,11 @@ impl ToolsConfig {
 
     pub fn with_hide_spawn_agent_metadata(mut self, hide_spawn_agent_metadata: bool) -> Self {
         self.hide_spawn_agent_metadata = hide_spawn_agent_metadata;
+        self
+    }
+
+    pub fn with_goal_tools_allowed(mut self, allowed: bool) -> Self {
+        self.goal_tools = self.goal_tools && allowed;
         self
     }
 

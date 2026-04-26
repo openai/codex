@@ -14,95 +14,6 @@ const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
 const CALLABLE_NAME_HASH_LEN: usize = 12;
 
-fn sha1_hex(s: &str) -> String {
-    let mut hasher = Sha1::new();
-    hasher.update(s.as_bytes());
-    let sha1 = hasher.finalize();
-    format!("{sha1:x}")
-}
-
-fn callable_name_hash_suffix(raw_identity: &str) -> String {
-    let hash = sha1_hex(raw_identity);
-    format!("_{}", &hash[..CALLABLE_NAME_HASH_LEN])
-}
-
-fn append_hash_suffix(value: &str, raw_identity: &str) -> String {
-    format!("{value}{}", callable_name_hash_suffix(raw_identity))
-}
-
-fn append_namespace_hash_suffix(namespace: &str, raw_identity: &str) -> String {
-    if let Some(namespace) = namespace.strip_suffix(MCP_TOOL_NAME_DELIMITER) {
-        format!(
-            "{}{}{}",
-            namespace,
-            callable_name_hash_suffix(raw_identity),
-            MCP_TOOL_NAME_DELIMITER
-        )
-    } else {
-        append_hash_suffix(namespace, raw_identity)
-    }
-}
-
-fn truncate_name(value: &str, max_len: usize) -> String {
-    value.chars().take(max_len).collect()
-}
-
-fn fit_callable_parts_with_hash(
-    namespace: &str,
-    tool_name: &str,
-    raw_identity: &str,
-) -> (String, String) {
-    let suffix = callable_name_hash_suffix(raw_identity);
-    let max_tool_len = MAX_TOOL_NAME_LENGTH.saturating_sub(namespace.len());
-    if max_tool_len >= suffix.len() {
-        let prefix_len = max_tool_len - suffix.len();
-        return (
-            namespace.to_string(),
-            format!("{}{}", truncate_name(tool_name, prefix_len), suffix),
-        );
-    }
-
-    let max_namespace_len = MAX_TOOL_NAME_LENGTH - suffix.len();
-    (truncate_name(namespace, max_namespace_len), suffix)
-}
-
-fn unique_callable_parts(
-    namespace: &str,
-    tool_name: &str,
-    raw_identity: &str,
-    used_names: &mut HashSet<String>,
-) -> (String, String, String) {
-    let qualified_name = format!("{namespace}{tool_name}");
-    if qualified_name.len() <= MAX_TOOL_NAME_LENGTH && used_names.insert(qualified_name.clone()) {
-        return (namespace.to_string(), tool_name.to_string(), qualified_name);
-    }
-
-    let mut attempt = 0_u32;
-    loop {
-        let hash_input = if attempt == 0 {
-            raw_identity.to_string()
-        } else {
-            format!("{raw_identity}\0{attempt}")
-        };
-        let (namespace, tool_name) =
-            fit_callable_parts_with_hash(namespace, tool_name, &hash_input);
-        let qualified_name = format!("{namespace}{tool_name}");
-        if used_names.insert(qualified_name.clone()) {
-            return (namespace, tool_name, qualified_name);
-        }
-        attempt = attempt.saturating_add(1);
-    }
-}
-
-#[derive(Debug)]
-struct CallableToolCandidate {
-    tool: ToolInfo,
-    raw_namespace_identity: String,
-    raw_tool_identity: String,
-    callable_namespace: String,
-    callable_name: String,
-}
-
 /// Returns a qualified-name lookup for MCP tools.
 ///
 /// Raw MCP server/tool names are kept on each [`ToolInfo`] for protocol calls, while
@@ -199,4 +110,93 @@ where
         qualified_tools.insert(qualified_name, candidate.tool);
     }
     qualified_tools
+}
+
+#[derive(Debug)]
+struct CallableToolCandidate {
+    tool: ToolInfo,
+    raw_namespace_identity: String,
+    raw_tool_identity: String,
+    callable_namespace: String,
+    callable_name: String,
+}
+
+fn sha1_hex(s: &str) -> String {
+    let mut hasher = Sha1::new();
+    hasher.update(s.as_bytes());
+    let sha1 = hasher.finalize();
+    format!("{sha1:x}")
+}
+
+fn callable_name_hash_suffix(raw_identity: &str) -> String {
+    let hash = sha1_hex(raw_identity);
+    format!("_{}", &hash[..CALLABLE_NAME_HASH_LEN])
+}
+
+fn append_hash_suffix(value: &str, raw_identity: &str) -> String {
+    format!("{value}{}", callable_name_hash_suffix(raw_identity))
+}
+
+fn append_namespace_hash_suffix(namespace: &str, raw_identity: &str) -> String {
+    if let Some(namespace) = namespace.strip_suffix(MCP_TOOL_NAME_DELIMITER) {
+        format!(
+            "{}{}{}",
+            namespace,
+            callable_name_hash_suffix(raw_identity),
+            MCP_TOOL_NAME_DELIMITER
+        )
+    } else {
+        append_hash_suffix(namespace, raw_identity)
+    }
+}
+
+fn truncate_name(value: &str, max_len: usize) -> String {
+    value.chars().take(max_len).collect()
+}
+
+fn fit_callable_parts_with_hash(
+    namespace: &str,
+    tool_name: &str,
+    raw_identity: &str,
+) -> (String, String) {
+    let suffix = callable_name_hash_suffix(raw_identity);
+    let max_tool_len = MAX_TOOL_NAME_LENGTH.saturating_sub(namespace.len());
+    if max_tool_len >= suffix.len() {
+        let prefix_len = max_tool_len - suffix.len();
+        return (
+            namespace.to_string(),
+            format!("{}{}", truncate_name(tool_name, prefix_len), suffix),
+        );
+    }
+
+    let max_namespace_len = MAX_TOOL_NAME_LENGTH - suffix.len();
+    (truncate_name(namespace, max_namespace_len), suffix)
+}
+
+fn unique_callable_parts(
+    namespace: &str,
+    tool_name: &str,
+    raw_identity: &str,
+    used_names: &mut HashSet<String>,
+) -> (String, String, String) {
+    let qualified_name = format!("{namespace}{tool_name}");
+    if qualified_name.len() <= MAX_TOOL_NAME_LENGTH && used_names.insert(qualified_name.clone()) {
+        return (namespace.to_string(), tool_name.to_string(), qualified_name);
+    }
+
+    let mut attempt = 0_u32;
+    loop {
+        let hash_input = if attempt == 0 {
+            raw_identity.to_string()
+        } else {
+            format!("{raw_identity}\0{attempt}")
+        };
+        let (namespace, tool_name) =
+            fit_callable_parts_with_hash(namespace, tool_name, &hash_input);
+        let qualified_name = format!("{namespace}{tool_name}");
+        if used_names.insert(qualified_name.clone()) {
+            return (namespace, tool_name, qualified_name);
+        }
+        attempt = attempt.saturating_add(1);
+    }
 }

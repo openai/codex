@@ -5,6 +5,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::RequestId;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::Duration;
@@ -48,10 +49,10 @@ async fn marketplace_add_local_directory_source() -> Result<()> {
         installed_root,
         already_added,
     } = to_response(response)?;
-    let expected_root = source.canonicalize()?;
+    let expected_root = AbsolutePathBuf::from_absolute_path(source.canonicalize()?)?;
 
     assert_eq!(marketplace_name, "debug");
-    assert_eq!(installed_root.as_path(), expected_root.as_path());
+    assert_eq!(installed_root, expected_root);
     assert!(!already_added);
     assert_eq!(
         std::fs::read_to_string(installed_root.as_path().join("plugins/sample/marker.txt"))?,

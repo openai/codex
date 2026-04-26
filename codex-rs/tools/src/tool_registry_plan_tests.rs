@@ -104,6 +104,15 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     ] {
         expected.insert(spec.name().to_string(), spec);
     }
+    if config.goal_tools {
+        for spec in [
+            create_get_goal_tool(),
+            create_create_goal_tool(),
+            create_update_goal_tool(),
+        ] {
+            expected.insert(spec.name().to_string(), spec);
+        }
+    }
     let collab_specs = if config.multi_agent_v2 {
         vec![
             create_spawn_agent_tool_v2(spawn_agent_tool_options(&config)),
@@ -184,6 +193,51 @@ fn test_build_specs_collab_tools_enabled() {
     let (properties, _) = expect_object_schema(parameters);
     assert!(properties.contains_key("fork_context"));
     assert!(!properties.contains_key("fork_turns"));
+}
+
+#[test]
+fn goal_tools_require_goals_feature() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let mut features = Features::with_defaults();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_lacks_tool_name(&tools, "get_goal");
+    assert_lacks_tool_name(&tools, "create_goal");
+    assert_lacks_tool_name(&tools, "update_goal");
+
+    features.enable(Feature::Goals);
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_contains_tool_names(&tools, &["get_goal", "create_goal", "update_goal"]);
 }
 
 #[test]

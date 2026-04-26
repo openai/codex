@@ -152,6 +152,11 @@ Example with notification opt-out:
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
 - `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
+- `thread/goal/set` — create, replace, or update the single persisted goal for a materialized thread; returns the current goal and emits `thread/goal/updated`. Supplying a new `objective` replaces the goal and resets usage accounting. Supplying the current non-terminal objective or omitting `objective` updates the existing goal’s status and/or token budget while preserving usage.
+- `thread/goal/get` — fetch the current persisted goal for a materialized thread; returns `goal: null` when no goal exists.
+- `thread/goal/clear` — clear the current persisted goal for a materialized thread; returns whether a goal was removed and emits `thread/goal/cleared` when state changes.
+- `thread/goal/updated` — notification emitted whenever a thread goal changes; includes the full current goal.
+- `thread/goal/cleared` — notification emitted whenever a thread goal is removed.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory and attempt to move any spawned descendant thread rollout files; returns `{}` on success and emits `thread/archived` for each archived thread.
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server keeps the thread loaded and unloads it only after it has had no subscribers and no thread activity for 30 minutes, then emits `thread/closed`.
@@ -468,6 +473,70 @@ Experimental: use `memory/reset` to clear local memory artifacts and sqlite-back
 ```json
 { "method": "memory/reset", "id": 27 }
 { "id": 27, "result": {} }
+```
+
+### Example: Set and update a thread goal
+
+Use `thread/goal/set` with an `objective` to create or replace the current goal for a materialized thread. Supplying a new objective resets `tokensUsed`, `timeUsedSeconds`, and `createdAt`. Supplying the current non-terminal objective, or omitting `objective`, updates the existing goal’s status or token budget while preserving usage history. Clients can set `budgetLimited` when they stop because a token budget is exhausted or nearly exhausted; the system also sets it when accounting crosses a configured token budget.
+
+```json
+{ "method": "thread/goal/set", "id": 27, "params": {
+    "threadId": "thr_123",
+    "objective": "Keep improving the benchmark until p95 latency is under 120ms",
+    "tokenBudget": 200000
+} }
+{ "id": 27, "result": { "goal": {
+    "threadId": "thr_123",
+    "objective": "Keep improving the benchmark until p95 latency is under 120ms",
+    "status": "active",
+    "tokenBudget": 200000,
+    "tokensUsed": 0,
+    "timeUsedSeconds": 0,
+    "createdAt": 1776272400,
+    "updatedAt": 1776272400
+} } }
+{ "method": "thread/goal/updated", "params": { "threadId": "thr_123", "goal": {
+    "threadId": "thr_123",
+    "objective": "Keep improving the benchmark until p95 latency is under 120ms",
+    "status": "active",
+    "tokenBudget": 200000,
+    "tokensUsed": 0,
+    "timeUsedSeconds": 0,
+    "createdAt": 1776272400,
+    "updatedAt": 1776272400
+} } }
+```
+
+```json
+{ "method": "thread/goal/set", "id": 28, "params": {
+    "threadId": "thr_123",
+    "status": "paused"
+} }
+{ "id": 28, "result": { "goal": {
+    "threadId": "thr_123",
+    "objective": "Keep improving the benchmark until p95 latency is under 120ms",
+    "status": "paused",
+    "tokenBudget": 200000,
+    "tokensUsed": 10000,
+    "timeUsedSeconds": 60,
+    "createdAt": 1776272400,
+    "updatedAt": 1776272460
+} } }
+```
+
+Use `thread/goal/get` to read the current goal without changing it.
+
+```json
+{ "method": "thread/goal/get", "id": 29, "params": { "threadId": "thr_123" } }
+{ "id": 29, "result": { "goal": null } }
+```
+
+Use `thread/goal/clear` to remove the current goal.
+
+```json
+{ "method": "thread/goal/clear", "id": 30, "params": { "threadId": "thr_123" } }
+{ "id": 30, "result": { "cleared": true } }
+{ "method": "thread/goal/cleared", "params": { "threadId": "thr_123" } }
 ```
 
 ### Example: Archive a thread
