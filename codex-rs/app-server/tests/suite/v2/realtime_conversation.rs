@@ -281,7 +281,7 @@ impl RealtimeE2eHarness {
         )?;
 
         let mut mcp = McpProcess::new(codex_home.path()).await?;
-        mcp.initialize().await?;
+        timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
         login_with_api_key(&mut mcp, "sk-test-key").await?;
 
         let thread_start_request_id = mcp
@@ -540,7 +540,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    mcp.initialize().await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
@@ -789,7 +789,7 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    mcp.initialize().await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
@@ -891,7 +891,7 @@ async fn realtime_list_voices_returns_supported_names() -> Result<()> {
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    mcp.initialize().await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_thread_realtime_list_voices_request(ThreadRealtimeListVoicesParams {})
@@ -963,7 +963,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    mcp.initialize().await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
@@ -1059,7 +1059,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    mcp.initialize().await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
@@ -1974,7 +1974,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    mcp.initialize().await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     // Phase 2: start a normal app-server thread and request realtime over WebRTC.
@@ -2035,7 +2035,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    mcp.initialize().await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_request_id = mcp
         .send_thread_start_request(ThreadStartParams::default())
