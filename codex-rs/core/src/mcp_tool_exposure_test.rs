@@ -9,7 +9,7 @@ use codex_mcp::ToolInfo;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SessionSource;
 use codex_tools::ToolsConfig;
 use codex_tools::ToolsConfigParams;
@@ -104,7 +104,7 @@ async fn tools_config_for_mcp_tool_exposure(search_tool: bool) -> ToolsConfig {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     tools_config.search_tool = search_tool;

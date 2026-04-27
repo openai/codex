@@ -332,7 +332,6 @@ mod job {
                         &rollout_contents,
                     )?,
                 }],
-                end_turn: None,
                 phase: None,
             }],
             tools: Vec::new(),
@@ -491,7 +490,6 @@ mod job {
             id,
             role,
             content,
-            end_turn,
             phase,
         } = item
         else {
@@ -519,7 +517,6 @@ mod job {
             id: id.clone(),
             role: role.clone(),
             content,
-            end_turn: *end_turn,
             phase: phase.clone(),
         })
     }

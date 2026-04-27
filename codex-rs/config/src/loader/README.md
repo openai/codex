@@ -1,4 +1,4 @@
-# `codex-core` config loader
+# `codex-config` loader
 
 This module is the canonical place to **load and describe Codex configuration layers** (user config, CLI/session overrides, managed config, and MDM-managed preferences) and to produce:
 
@@ -8,9 +8,9 @@ This module is the canonical place to **load and describe Codex configuration la
 
 ## Public surface
 
-Exported from `codex_core::config_loader`:
+Exported from `codex_config::loader`:
 
-- `load_config_layers_state(fs, codex_home, cwd_opt, cli_overrides, overrides, cloud_requirements, thread_config_loader, host_name) -> ConfigLayerStack`
+- `load_config_layers_state(fs, codex_home, cwd_opt, cli_overrides, overrides, cloud_requirements, thread_config_loader) -> ConfigLayerStack`
 - `ConfigLayerStack`
   - `effective_config() -> toml::Value`
   - `origins() -> HashMap<String, ConfigLayerMetadata>`
@@ -41,8 +41,10 @@ computing the effective config and origins metadata. This is what
 Most callers want the effective config plus metadata:
 
 ```rust
-use codex_core::config_loader::{CloudRequirementsLoader, LoaderOverrides, load_config_layers_state};
 use codex_config::NoopThreadConfigLoader;
+use codex_config::CloudRequirementsLoader;
+use codex_config::LoaderOverrides;
+use codex_config::loader::load_config_layers_state;
 use codex_exec_server::LOCAL_FS;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use toml::Value as TomlValue;
@@ -57,7 +59,6 @@ let layers = load_config_layers_state(
     LoaderOverrides::default(),
     CloudRequirementsLoader::default(),
     &NoopThreadConfigLoader,
-    /*host_name*/ None,
 ).await?;
 
 let effective = layers.effective_config();

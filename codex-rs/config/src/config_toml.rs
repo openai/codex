@@ -47,6 +47,7 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -647,7 +648,7 @@ impl ConfigToml {
         profile_sandbox_mode: Option<SandboxMode>,
         windows_sandbox_level: WindowsSandboxLevel,
         active_project: Option<&ProjectConfig>,
-        sandbox_policy_constraint: Option<&crate::Constrained<SandboxPolicy>>,
+        permission_profile_constraint: Option<&crate::Constrained<PermissionProfile>>,
     ) -> SandboxPolicy {
         let sandbox_mode_was_explicit = sandbox_mode_override.is_some()
             || profile_sandbox_mode.is_some()
@@ -707,14 +708,16 @@ impl ConfigToml {
             downgrade_workspace_write_if_unsupported(&mut sandbox_policy);
         }
         if !sandbox_mode_was_explicit
-            && let Some(constraint) = sandbox_policy_constraint
-            && let Err(err) = constraint.can_set(&sandbox_policy)
+            && let Some(constraint) = permission_profile_constraint
+            && let Err(err) = constraint.can_set(&PermissionProfile::from_legacy_sandbox_policy(
+                &sandbox_policy,
+            ))
         {
             tracing::warn!(
                 error = %err,
                 "default sandbox policy is disallowed by requirements; falling back to required default"
             );
-            sandbox_policy = constraint.get().clone();
+            sandbox_policy = SandboxPolicy::new_read_only_policy();
             downgrade_workspace_write_if_unsupported(&mut sandbox_policy);
         }
         sandbox_policy

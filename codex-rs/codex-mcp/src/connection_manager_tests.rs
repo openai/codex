@@ -1,11 +1,36 @@
 use super::*;
+use crate::codex_apps::CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION;
+use crate::codex_apps::CodexAppsToolsCacheContext;
+use crate::codex_apps::load_startup_cached_codex_apps_tools_snapshot;
+use crate::codex_apps::read_cached_codex_apps_tools;
+use crate::codex_apps::write_cached_codex_apps_tools;
+use crate::declared_openai_file_input_param_names;
+use crate::elicitation::ElicitationRequestManager;
+use crate::elicitation::elicitation_is_rejected_by_policy;
+use crate::rmcp_client::AsyncManagedClient;
+use crate::rmcp_client::ManagedClient;
+use crate::rmcp_client::StartupOutcomeError;
+use crate::rmcp_client::elicitation_capability_for_server;
+use crate::tools::ToolFilter;
+use crate::tools::ToolInfo;
+use crate::tools::filter_tools;
+use crate::tools::qualify_tools;
+use crate::tools::tool_with_model_visible_input_schema;
+use codex_config::Constrained;
 use codex_protocol::ToolName;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::McpAuthStatus;
+use futures::FutureExt;
 use pretty_assertions::assert_eq;
+use rmcp::model::CreateElicitationRequestParams;
+use rmcp::model::ElicitationAction;
+use rmcp::model::ElicitationCapability;
+use rmcp::model::FormElicitationCapability;
 use rmcp::model::JsonObject;
 use rmcp::model::Meta;
 use rmcp::model::NumberOrString;
+use rmcp::model::Tool;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -179,9 +204,9 @@ fn elicitation_granular_policy_respects_never_and_config() {
 }
 
 #[tokio::test]
-async fn full_access_auto_accepts_elicitation_with_empty_form_schema() {
+async fn disabled_permissions_auto_accept_elicitation_with_empty_form_schema() {
     let manager =
-        ElicitationRequestManager::new(AskForApproval::Never, SandboxPolicy::DangerFullAccess);
+        ElicitationRequestManager::new(AskForApproval::Never, PermissionProfile::Disabled);
     let (tx_event, _rx_event) = async_channel::bounded(1);
     let sender = manager.make_sender("server".to_string(), tx_event);
 
@@ -209,9 +234,9 @@ async fn full_access_auto_accepts_elicitation_with_empty_form_schema() {
 }
 
 #[tokio::test]
-async fn full_access_does_not_auto_accept_elicitation_with_requested_fields() {
+async fn disabled_permissions_do_not_auto_accept_elicitation_with_requested_fields() {
     let manager =
-        ElicitationRequestManager::new(AskForApproval::Never, SandboxPolicy::DangerFullAccess);
+        ElicitationRequestManager::new(AskForApproval::Never, PermissionProfile::Disabled);
     let (tx_event, _rx_event) = async_channel::bounded(1);
     let sender = manager.make_sender("server".to_string(), tx_event);
 
@@ -627,8 +652,9 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
         .boxed()
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
-    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager =
+        McpConnectionManager::new_uninitialized(&approval_policy, &permission_profile);
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
@@ -654,8 +680,9 @@ async fn resolve_tool_info_accepts_canonical_namespaced_tool_names() {
         .boxed()
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
-    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager =
+        McpConnectionManager::new_uninitialized(&approval_policy, &permission_profile);
     manager.clients.insert(
         "rmcp".to_string(),
         AsyncManagedClient {
@@ -689,8 +716,9 @@ async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot(
         .boxed()
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
-    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager =
+        McpConnectionManager::new_uninitialized(&approval_policy, &permission_profile);
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
@@ -712,8 +740,9 @@ async fn list_all_tools_does_not_block_when_startup_snapshot_cache_hit_is_empty(
         .boxed()
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
-    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager =
+        McpConnectionManager::new_uninitialized(&approval_policy, &permission_profile);
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
@@ -744,8 +773,9 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
     .boxed()
     .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
-    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager =
+        McpConnectionManager::new_uninitialized(&approval_policy, &permission_profile);
     let startup_complete = Arc::new(std::sync::atomic::AtomicBool::new(true));
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),

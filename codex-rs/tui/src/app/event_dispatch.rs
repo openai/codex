@@ -315,6 +315,10 @@ impl App {
             AppEvent::CodexOp(op) => {
                 self.submit_active_thread_op(app_server, op.into()).await?;
             }
+            AppEvent::ApproveRecentAutoReviewDenial { thread_id, id } => {
+                self.chat_widget
+                    .approve_recent_auto_review_denial(thread_id, id);
+            }
             AppEvent::SubmitThreadOp { thread_id, op } => {
                 self.submit_thread_op(app_server, thread_id, op.into())
                     .await?;
@@ -834,7 +838,10 @@ impl App {
                             /*hint*/ None,
                         ));
 
-                    let policy = self.config.permissions.sandbox_policy.get().clone();
+                    let policy = self
+                        .config
+                        .permissions
+                        .legacy_sandbox_policy(self.config.cwd.as_path());
                     let policy_cwd = self.config.cwd.clone();
                     let command_cwd = self.config.cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =
@@ -1245,8 +1252,11 @@ impl App {
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
                     return Ok(AppRunControl::Continue);
                 }
-                self.runtime_sandbox_policy_override =
-                    Some(self.config.permissions.sandbox_policy.get().clone());
+                self.runtime_sandbox_policy_override = Some(
+                    self.config
+                        .permissions
+                        .legacy_sandbox_policy(self.config.cwd.as_path()),
+                );
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
 
@@ -1269,7 +1279,10 @@ impl App {
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
                         let logs_base_dir = self.config.codex_home.clone();
-                        let sandbox_policy = self.config.permissions.sandbox_policy.get().clone();
+                        let sandbox_policy = self
+                            .config
+                            .permissions
+                            .legacy_sandbox_policy(self.config.cwd.as_path());
                         Self::spawn_world_writable_scan(
                             cwd,
                             env_map,

@@ -1634,11 +1634,7 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
         auto_review.approval_policy
     );
     assert_eq!(
-        app.chat_widget
-            .config_ref()
-            .permissions
-            .sandbox_policy
-            .get(),
+        &app.chat_widget.config_ref().legacy_sandbox_policy(),
         &auto_review.sandbox_policy
     );
     assert_eq!(
@@ -1714,9 +1710,7 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
         .approval_policy
         .set(AskForApproval::OnRequest)?;
     app.config
-        .permissions
-        .sandbox_policy
-        .set(SandboxPolicy::new_workspace_write_policy())?;
+        .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())?;
     app.chat_widget
         .set_approval_policy(AskForApproval::OnRequest);
     app.chat_widget
@@ -1815,11 +1809,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
         auto_review.approval_policy
     );
     assert_eq!(
-        app.chat_widget
-            .config_ref()
-            .permissions
-            .sandbox_policy
-            .get(),
+        &app.chat_widget.config_ref().legacy_sandbox_policy(),
         &auto_review.sandbox_policy
     );
     assert_eq!(
@@ -2218,9 +2208,7 @@ async fn inactive_thread_approval_bubbles_into_active_view() -> Result<()> {
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-                permission_profile: Some(PermissionProfile::from_legacy_sandbox_policy(
-                    &SandboxPolicy::new_workspace_write_policy(),
-                )),
+                permission_profile: Some(PermissionProfile::workspace_write()),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2380,9 +2368,7 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-                permission_profile: Some(PermissionProfile::from_legacy_sandbox_policy(
-                    &SandboxPolicy::new_workspace_write_policy(),
-                )),
+                permission_profile: Some(PermissionProfile::workspace_write()),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2605,9 +2591,7 @@ async fn inactive_thread_approval_badge_clears_after_turn_completion_notificatio
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-                permission_profile: Some(PermissionProfile::from_legacy_sandbox_policy(
-                    &SandboxPolicy::new_workspace_write_policy(),
-                )),
+                permission_profile: Some(PermissionProfile::workspace_write()),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2661,9 +2645,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
         sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-        permission_profile: Some(PermissionProfile::from_legacy_sandbox_policy(
-            &SandboxPolicy::new_workspace_write_policy(),
-        )),
+        permission_profile: Some(PermissionProfile::workspace_write()),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
 
@@ -2776,9 +2758,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
         sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-        permission_profile: Some(PermissionProfile::from_legacy_sandbox_policy(
-            &SandboxPolicy::new_workspace_write_policy(),
-        )),
+        permission_profile: Some(PermissionProfile::workspace_write()),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
 
@@ -2847,9 +2827,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
         sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-        permission_profile: Some(PermissionProfile::from_legacy_sandbox_policy(
-            &SandboxPolicy::new_workspace_write_policy(),
-        )),
+        permission_profile: Some(PermissionProfile::workspace_write()),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
     app.primary_session_configured = Some(primary_session);
@@ -2945,7 +2923,7 @@ async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
     let mut app = make_test_app().await;
     app.config.developer_instructions = Some("Existing developer policy.".to_string());
     let original_approval_policy = app.config.permissions.approval_policy.value();
-    let original_sandbox_policy = app.config.permissions.sandbox_policy.get().clone();
+    let original_sandbox_policy = app.config.legacy_sandbox_policy();
 
     let fork_config = app.side_fork_config();
 
@@ -2954,10 +2932,7 @@ async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
         fork_config.permissions.approval_policy.value(),
         original_approval_policy
     );
-    assert_eq!(
-        fork_config.permissions.sandbox_policy.get(),
-        &original_sandbox_policy
-    );
+    assert_eq!(fork_config.legacy_sandbox_policy(), original_sandbox_policy);
     let developer_instructions = fork_config
         .developer_instructions
         .as_deref()
@@ -3752,9 +3727,7 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        permission_profile: Some(PermissionProfile::from_legacy_sandbox_policy(
-            &SandboxPolicy::new_read_only_policy(),
-        )),
+        permission_profile: Some(PermissionProfile::read_only()),
         cwd: cwd.abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,

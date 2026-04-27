@@ -1313,7 +1313,9 @@ pub(crate) fn new_session_info(
 pub(crate) fn is_yolo_mode(config: &Config) -> bool {
     has_yolo_permissions(
         config.permissions.approval_policy.value(),
-        config.permissions.sandbox_policy.get(),
+        &config
+            .permissions
+            .legacy_sandbox_policy(config.cwd.as_path()),
     )
 }
 
