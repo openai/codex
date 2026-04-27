@@ -1030,13 +1030,13 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
     if item.cwd.is_none() {
         item.cwd = cwd;
     }
-    if item.git_branch.is_none() {
+    if git_branch.is_some() {
         item.git_branch = git_branch;
     }
-    if item.git_sha.is_none() {
+    if git_sha.is_some() {
         item.git_sha = git_sha;
     }
-    if item.git_origin_url.is_none() {
+    if git_origin_url.is_some() {
         item.git_origin_url = git_origin_url;
     }
     if item.source.is_none() {

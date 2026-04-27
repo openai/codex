@@ -779,7 +779,7 @@ async fn list_threads_metadata_filter_overlays_state_db_list_metadata() -> std::
 }
 
 #[test]
-fn fill_missing_thread_item_metadata_preserves_filesystem_identity() {
+fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fields() {
     let filesystem_thread_id = ThreadId::new();
     let state_thread_id = ThreadId::new();
     let filesystem_path = PathBuf::from("/tmp/filesystem-rollout.jsonl");
@@ -789,9 +789,9 @@ fn fill_missing_thread_item_metadata_preserves_filesystem_identity() {
         thread_id: Some(filesystem_thread_id),
         first_user_message: Some("filesystem message".to_string()),
         cwd: None,
-        git_branch: None,
-        git_sha: None,
-        git_origin_url: None,
+        git_branch: Some("filesystem-branch".to_string()),
+        git_sha: Some("filesystem-sha".to_string()),
+        git_origin_url: Some("https://example.com/filesystem.git".to_string()),
         source: None,
         agent_nickname: None,
         agent_role: None,
