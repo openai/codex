@@ -5,6 +5,7 @@ use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_exec_command_sse_response;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_final_assistant_message_sse_response;
+use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
@@ -39,6 +40,7 @@ use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::PermissionProfile;
 use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
+use codex_app_server_protocol::PermissionProfileNetworkPermissions;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
@@ -47,6 +49,7 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
@@ -75,7 +78,6 @@ use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-use super::analytics::enable_analytics_capture;
 use super::analytics::mount_analytics_capture;
 use super::analytics::wait_for_analytics_event;
 
@@ -460,7 +462,7 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
         &server.uri(),
         &server.uri(),
     )?;
-    enable_analytics_capture(&server, codex_home.path()).await?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -532,77 +534,6 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
     assert_eq!(event["event_params"]["reasoning_output_tokens"], 0);
     assert_eq!(event["event_params"]["total_tokens"], 0);
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn turn_start_does_not_track_turn_event_analytics_without_feature() -> Result<()> {
-    let responses = vec![create_final_assistant_message_sse_response("Done")?];
-    let server = create_mock_responses_server_sequence_unchecked(responses).await;
-
-    let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml_with_chatgpt_base_url(
-        codex_home.path(),
-        &server.uri(),
-        &server.uri(),
-    )?;
-    let config_path = codex_home.path().join("config.toml");
-    let config_toml = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        format!("{config_toml}\n[features]\ngeneral_analytics = false\n"),
-    )?;
-    mount_analytics_capture(&server, codex_home.path()).await?;
-
-    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
-            model: Some("mock-model".to_string()),
-            ..Default::default()
-        })
-        .await?;
-    let thread_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
-
-    let turn_req = mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id,
-            input: vec![V2UserInput::Text {
-                text: "hello".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    let turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
-    )
-    .await??;
-    let _ = to_response::<TurnStartResponse>(turn_resp)?;
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-
-    let turn_event = wait_for_analytics_event(
-        &server,
-        std::time::Duration::from_millis(250),
-        "codex_turn_event",
-    )
-    .await;
-    assert!(
-        turn_event.is_err(),
-        "turn analytics should be gated off when general_analytics is disabled"
-    );
     Ok(())
 }
 
@@ -746,12 +677,16 @@ async fn turn_start_rejects_combined_oversized_text_input() -> Result<()> {
 #[tokio::test]
 async fn turn_start_rejects_invalid_permission_profile_before_starting_turn() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let unsupported_write_root = TempDir::new()?;
+    let disallowed_write_root = TempDir::new()?;
     create_config_toml(
         codex_home.path(),
         "http://localhost/unused",
         "never",
         &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+    std::fs::write(
+        codex_home.path().join("managed_config.toml"),
+        "sandbox_mode = \"read-only\"\n",
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -769,7 +704,7 @@ async fn turn_start_rejects_invalid_permission_profile_before_starting_turn() ->
     )
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
-    let unsupported_write_root = AbsolutePathBuf::from_absolute_path(unsupported_write_root.path())
+    let disallowed_write_root = AbsolutePathBuf::from_absolute_path(disallowed_write_root.path())
         .expect("tempdir path should be absolute");
 
     let turn_req = mcp
@@ -779,17 +714,17 @@ async fn turn_start_rejects_invalid_permission_profile_before_starting_turn() ->
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            permission_profile: Some(PermissionProfile {
-                network: None,
-                file_system: Some(PermissionProfileFileSystemPermissions {
+            permission_profile: Some(PermissionProfile::Managed {
+                network: PermissionProfileNetworkPermissions { enabled: false },
+                file_system: PermissionProfileFileSystemPermissions::Restricted {
                     entries: vec![FileSystemSandboxEntry {
                         path: FileSystemPath::Path {
-                            path: unsupported_write_root,
+                            path: disallowed_write_root,
                         },
                         access: FileSystemAccessMode::Write,
                     }],
                     glob_scan_max_depth: None,
-                }),
+                },
             }),
             ..Default::default()
         })
@@ -803,9 +738,9 @@ async fn turn_start_rejects_invalid_permission_profile_before_starting_turn() ->
     assert_eq!(err.error.code, INVALID_REQUEST_ERROR_CODE);
     assert!(err.error.message.contains("invalid turn context override"));
     assert!(
-        err.error
-            .message
-            .contains("filesystem writes outside the workspace root")
+        err.error.message.contains("allowed set [ReadOnly]"),
+        "unexpected error message: {}",
+        err.error.message
     );
     let turn_started = tokio::time::timeout(
         std::time::Duration::from_millis(250),
@@ -815,6 +750,69 @@ async fn turn_start_rejects_invalid_permission_profile_before_starting_turn() ->
     assert!(
         turn_started.is_err(),
         "did not expect a turn/started notification after rejected permissionProfile"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_rejects_unknown_environment_before_starting_turn() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            environments: Some(vec![TurnEnvironmentParams {
+                environment_id: "missing".to_string(),
+                cwd: codex_home.path().to_path_buf().try_into()?,
+            }]),
+            ..Default::default()
+        })
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+
+    assert_eq!(err.id, RequestId::Integer(turn_req));
+    assert_eq!(err.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert_eq!(err.error.message, "unknown turn environment id `missing`");
+    let turn_started = tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        mcp.read_stream_until_notification_message("turn/started"),
+    )
+    .await;
+    assert!(
+        turn_started.is_err(),
+        "did not expect a turn/started notification after rejected environments"
     );
 
     Ok(())
@@ -1829,7 +1827,6 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             approvals_reviewer: None,
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![first_cwd.try_into()?],
-                read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -1924,6 +1921,179 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     .await??;
 
     Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_resolves_sticky_thread_environments_and_turn_overrides() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+
+    let server = create_mock_responses_server_repeating_assistant("done").await;
+    create_config_toml(&codex_home, &server.uri(), "never", &BTreeMap::default())?;
+
+    let mut mcp = McpProcess::new_with_env(
+        &codex_home,
+        &[("CODEX_EXEC_SERVER_URL", Some("http://127.0.0.1:1"))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    for case in [
+        EnvironmentSelectionCase {
+            name: "sticky_unset_turn_unset",
+            sticky: None,
+            turn: None,
+        },
+        EnvironmentSelectionCase {
+            name: "sticky_empty_turn_unset",
+            sticky: Some(&[]),
+            turn: None,
+        },
+        EnvironmentSelectionCase {
+            name: "sticky_local_turn_unset",
+            sticky: Some(&["local"]),
+            turn: None,
+        },
+        EnvironmentSelectionCase {
+            name: "sticky_remote_turn_unset",
+            sticky: Some(&["remote"]),
+            turn: None,
+        },
+        EnvironmentSelectionCase {
+            name: "sticky_local_remote_turn_unset",
+            sticky: Some(&["local", "remote"]),
+            turn: None,
+        },
+        EnvironmentSelectionCase {
+            name: "sticky_local_turn_empty",
+            sticky: Some(&["local"]),
+            turn: Some(&[]),
+        },
+        EnvironmentSelectionCase {
+            name: "sticky_empty_turn_local",
+            sticky: Some(&[]),
+            turn: Some(&["local"]),
+        },
+        EnvironmentSelectionCase {
+            name: "sticky_local_turn_remote",
+            sticky: Some(&["local"]),
+            turn: Some(&["remote"]),
+        },
+        EnvironmentSelectionCase {
+            name: "sticky_remote_turn_local",
+            sticky: Some(&["remote"]),
+            turn: Some(&["local"]),
+        },
+        EnvironmentSelectionCase {
+            name: "sticky_unset_turn_local_remote",
+            sticky: None,
+            turn: Some(&["local", "remote"]),
+        },
+    ] {
+        run_environment_selection_case(&mut mcp, &workspace, case).await?;
+    }
+
+    Ok(())
+}
+
+struct EnvironmentSelectionCase {
+    name: &'static str,
+    sticky: Option<&'static [&'static str]>,
+    turn: Option<&'static [&'static str]>,
+}
+
+async fn run_environment_selection_case(
+    mcp: &mut McpProcess,
+    workspace: &Path,
+    case: EnvironmentSelectionCase,
+) -> Result<()> {
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            cwd: Some(workspace.to_string_lossy().into_owned()),
+            environments: environment_params(case.sticky, workspace)?,
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: format!("run {}", case.name),
+                text_elements: Vec::new(),
+            }],
+            environments: environment_params(case.turn, workspace)?,
+            cwd: Some(workspace.to_path_buf()),
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let started_notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/started"),
+    )
+    .await??;
+    let started: TurnStartedNotification = serde_json::from_value(
+        started_notification
+            .params
+            .ok_or_else(|| anyhow::anyhow!("turn/started notification should include params"))?,
+    )?;
+    assert_eq!(started.turn.id, turn.id, "{}", case.name);
+
+    let completed_notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let completed: TurnCompletedNotification =
+        serde_json::from_value(completed_notification.params.ok_or_else(|| {
+            anyhow::anyhow!("turn/completed notification should include params")
+        })?)?;
+    assert_eq!(completed.turn.id, turn.id, "{}", case.name);
+    assert_eq!(
+        completed.turn.status,
+        TurnStatus::Completed,
+        "{}",
+        case.name
+    );
+
+    mcp.clear_message_buffer();
+
+    Ok(())
+}
+
+fn environment_params(
+    ids: Option<&[&str]>,
+    cwd: &Path,
+) -> Result<Option<Vec<TurnEnvironmentParams>>> {
+    ids.map(|ids| {
+        ids.iter()
+            .map(|id| {
+                Ok(TurnEnvironmentParams {
+                    environment_id: (*id).to_string(),
+                    cwd: cwd.to_path_buf().try_into()?,
+                })
+            })
+            .collect()
+    })
+    .transpose()
 }
 
 #[tokio::test]

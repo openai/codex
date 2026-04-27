@@ -2,8 +2,8 @@ use super::*;
 use crate::shell::default_user_shell;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
+use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
-use codex_protocol::models::PermissionProfile;
 use codex_tools::UnifiedExecShellMode;
 use codex_tools::ZshForkConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -15,6 +15,7 @@ use tempfile::tempdir;
 
 use crate::session::tests::make_session_and_context;
 use crate::tools::context::ExecCommandToolOutput;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::hook_names::HookToolName;
@@ -35,6 +36,7 @@ async fn invocation_for_payload(
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: call_id.to_string(),
         tool_name: codex_tools::ToolName::plain(tool_name),
+        source: ToolCallSource::Direct,
         payload,
     }
 }
@@ -232,6 +234,7 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-43".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
@@ -257,6 +260,7 @@ async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-44".to_string(),
             tool_name: codex_tools::ToolName::plain("write_stdin"),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload,
         }),
         None

@@ -10,8 +10,10 @@ use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
 use codex_cli::WindowsCommand;
+use codex_cli::read_agent_identity_from_stdin;
 use codex_cli::read_api_key_from_stdin;
 use codex_cli::run_login_status;
+use codex_cli::run_login_with_agent_identity;
 use codex_cli::run_login_with_api_key;
 use codex_cli::run_login_with_chatgpt;
 use codex_cli::run_login_with_device_code;
@@ -22,6 +24,8 @@ use codex_exec::Command as ExecCommand;
 use codex_exec::ReviewArgs;
 use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
+use codex_rollout_trace::REDUCED_STATE_FILE_NAME;
+use codex_rollout_trace::replay_bundle;
 use codex_state::StateRuntime;
 use codex_state::state_db_path;
 use codex_tui::AppExitInfo;
@@ -41,14 +45,11 @@ mod app_cmd;
 mod desktop_app;
 mod marketplace_cmd;
 mod mcp_cmd;
-mod responses_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
-use crate::responses_cmd::ResponsesCommand;
-use crate::responses_cmd::run_responses_command;
 
 use codex_core::build_models_manager;
 use codex_core::clear_memory_roots_contents;
@@ -59,7 +60,7 @@ use codex_core::config::find_codex_home;
 use codex_features::FEATURES;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
-use codex_models_manager::AuthManager;
+use codex_login::AuthManager;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::RefreshStrategy;
@@ -161,10 +162,6 @@ enum Subcommand {
     #[clap(hide = true)]
     ResponsesApiProxy(ResponsesApiProxyArgs),
 
-    /// Internal: send one raw Responses API payload through Codex auth.
-    #[clap(hide = true)]
-    Responses(ResponsesCommand),
-
     /// Internal: relay stdio to a Unix domain socket.
     #[clap(hide = true, name = "stdio-to-uds")]
     StdioToUds(StdioToUdsCommand),
@@ -216,6 +213,10 @@ enum DebugSubcommand {
     /// Render the model-visible prompt input list as JSON.
     PromptInput(DebugPromptInputCommand),
 
+    /// Replay a rollout trace bundle and write reduced state JSON.
+    #[clap(hide = true)]
+    TraceReduce(DebugTraceReduceCommand),
+
     /// Internal: reset local memory state for a fresh start.
     #[clap(hide = true)]
     ClearMemories,
@@ -255,6 +256,17 @@ struct DebugModelsCommand {
     /// Skip refresh and dump only the bundled catalog shipped with this binary.
     #[arg(long = "bundled", default_value_t = false)]
     bundled: bool,
+}
+
+#[derive(Debug, Parser)]
+struct DebugTraceReduceCommand {
+    /// Trace bundle directory containing manifest.json and trace.jsonl.
+    #[arg(value_name = "TRACE_BUNDLE")]
+    trace_bundle: PathBuf,
+
+    /// Output path for reduced RolloutTrace JSON. Defaults to TRACE_BUNDLE/state.json.
+    #[arg(long = "output", short = 'o', value_name = "FILE")]
+    output: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -348,6 +360,12 @@ struct LoginCommand {
         help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`)"
     )]
     with_api_key: bool,
+
+    #[arg(
+        long = "with-agent-identity",
+        help = "Read the experimental Agent Identity token from stdin (e.g. `printenv CODEX_AGENT_IDENTITY | codex login --with-agent-identity`)"
+    )]
+    with_agent_identity: bool,
 
     #[arg(
         long = "api-key",
@@ -812,7 +830,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     codex_app_server::run_main_with_transport(
                         arg0_paths.clone(),
                         root_config_overrides,
-                        codex_core::config_loader::LoaderOverrides::default(),
+                        codex_config::LoaderOverrides::default(),
                         analytics_default_enabled,
                         transport,
                         codex_protocol::protocol::SessionSource::VSCode,
@@ -930,7 +948,12 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     run_login_status(login_cli.config_overrides).await;
                 }
                 None => {
-                    if login_cli.use_device_code {
+                    if login_cli.with_api_key && login_cli.with_agent_identity {
+                        eprintln!(
+                            "Choose one login credential source: --with-api-key or --with-agent-identity."
+                        );
+                        std::process::exit(1);
+                    } else if login_cli.use_device_code {
                         run_login_with_device_code(
                             login_cli.config_overrides,
                             login_cli.issuer_base_url,
@@ -945,6 +968,10 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     } else if login_cli.with_api_key {
                         let api_key = read_api_key_from_stdin();
                         run_login_with_api_key(login_cli.config_overrides, api_key).await;
+                    } else if login_cli.with_agent_identity {
+                        let agent_identity = read_agent_identity_from_stdin();
+                        run_login_with_agent_identity(login_cli.config_overrides, agent_identity)
+                            .await;
                     } else {
                         run_login_with_chatgpt(login_cli.config_overrides).await;
                     }
@@ -1065,6 +1092,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 )
                 .await?;
             }
+            DebugSubcommand::TraceReduce(cmd) => {
+                reject_remote_mode_for_subcommand(
+                    root_remote.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
+                    "debug trace-reduce",
+                )?;
+                run_debug_trace_reduce_command(cmd).await?;
+            }
             DebugSubcommand::ClearMemories => {
                 reject_remote_mode_for_subcommand(
                     root_remote.as_deref(),
@@ -1104,14 +1139,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )?;
             tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
                 .await??;
-        }
-        Some(Subcommand::Responses(ResponsesCommand {})) => {
-            reject_remote_mode_for_subcommand(
-                root_remote.as_deref(),
-                root_remote_auth_token_env.as_deref(),
-                "responses",
-            )?;
-            run_responses_command(root_config_overrides).await?;
         }
         Some(Subcommand::StdioToUds(cmd)) => {
             reject_remote_mode_for_subcommand(
@@ -1265,6 +1292,19 @@ fn maybe_print_under_development_feature_warning(
     );
 }
 
+async fn run_debug_trace_reduce_command(cmd: DebugTraceReduceCommand) -> anyhow::Result<()> {
+    let output = cmd
+        .output
+        .unwrap_or_else(|| cmd.trace_bundle.join(REDUCED_STATE_FILE_NAME));
+
+    let trace = replay_bundle(&cmd.trace_bundle)?;
+    let reduced_json = serde_json::to_vec_pretty(&trace)?;
+    tokio::fs::write(&output, reduced_json).await?;
+    println!("{}", output.display());
+
+    Ok(())
+}
+
 async fn run_debug_prompt_input_command(
     cmd: DebugPromptInputCommand,
     root_config_overrides: CliConfigOverrides,
@@ -1344,7 +1384,7 @@ async fn run_debug_models_command(
             .map_err(anyhow::Error::msg)?;
         let config = Config::load_with_cli_overrides(cli_overrides).await?;
         let auth_manager =
-            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true);
+            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true).await;
         let models_manager =
             build_models_manager(&config, auth_manager, CollaborationModesConfig::default());
         models_manager
@@ -1511,7 +1551,7 @@ async fn run_interactive_tui(
     codex_tui::run_main(
         interactive,
         arg0_paths,
-        codex_core::config_loader::LoaderOverrides::default(),
+        codex_config::LoaderOverrides::default(),
         normalized_remote,
         remote_auth_token,
     )
@@ -1799,12 +1839,13 @@ mod tests {
     }
 
     #[test]
-    fn responses_subcommand_is_hidden_from_help_but_parses() {
-        let help = MultitoolCli::command().render_help().to_string();
-        assert!(!help.contains("responses"));
-
-        let cli = MultitoolCli::try_parse_from(["codex", "responses"]).expect("parse");
-        assert!(matches!(cli.subcommand, Some(Subcommand::Responses(_))));
+    fn responses_subcommand_is_not_registered() {
+        let command = MultitoolCli::command();
+        assert!(
+            command
+                .get_subcommands()
+                .all(|subcommand| subcommand.get_name() != "responses")
+        );
     }
 
     fn help_from_args(args: &[&str]) -> String {

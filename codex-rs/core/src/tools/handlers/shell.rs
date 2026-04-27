@@ -36,7 +36,7 @@ use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
 use codex_features::Feature;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ShellCommandBackendConfig;
@@ -79,7 +79,7 @@ struct RunExecLikeArgs {
     tool_name: String,
     exec_params: ExecParams,
     hook_command: String,
-    additional_permissions: Option<PermissionProfile>,
+    additional_permissions: Option<AdditionalPermissionProfile>,
     prefix_rule: Option<Vec<String>>,
     session: Arc<crate::session::session::Session>,
     turn: Arc<TurnContext>,
@@ -513,14 +513,16 @@ impl ShellHandler {
         );
         emitter.begin(event_ctx).await;
 
+        let file_system_sandbox_policy = turn.file_system_sandbox_policy();
         let exec_approval_requirement = session
             .services
             .exec_policy
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &exec_params.command,
                 approval_policy: turn.approval_policy.value(),
-                sandbox_policy: turn.sandbox_policy.get(),
-                file_system_sandbox_policy: &turn.file_system_sandbox_policy,
+                permission_profile: turn.permission_profile(),
+                file_system_sandbox_policy: &file_system_sandbox_policy,
+                sandbox_cwd: turn.cwd.as_path(),
                 sandbox_permissions: if effective_additional_permissions.permissions_preapproved {
                     codex_protocol::models::SandboxPermissions::UseDefault
                 } else {

@@ -7,17 +7,22 @@
 //! See `README.md` for the system diagram and reducer model.
 
 mod bundle;
+mod code_cell;
 mod compaction;
 mod inference;
 mod model;
 mod payload;
+mod protocol_event;
 mod raw_event;
-mod recorder;
 mod reducer;
+mod thread;
+mod tool_dispatch;
 mod writer;
 
 /// Conventional reduced-state cache name written next to a raw trace bundle.
 pub use bundle::REDUCED_STATE_FILE_NAME;
+/// No-op-capable handle for recording one code-mode runtime cell.
+pub use code_cell::CodeCellTraceContext;
 /// Raw checkpoint payload for a remote compaction install event.
 pub use compaction::CompactionCheckpointTracePayload;
 /// No-op-capable handle for recording remote-compaction requests.
@@ -46,13 +51,25 @@ pub use raw_event::RawTraceEvent;
 pub use raw_event::RawTraceEventContext;
 /// Typed payload for one raw trace event.
 pub use raw_event::RawTraceEventPayload;
-/// Environment variable that enables local trace-bundle recording.
-pub use recorder::CODEX_ROLLOUT_TRACE_ROOT_ENV;
-/// Best-effort hot-path recorder for one rollout trace bundle.
-pub use recorder::RolloutTraceRecorder;
-/// Raw metadata captured when a thread starts.
-pub use recorder::ThreadStartedTraceMetadata;
 /// Replay a raw trace bundle and write/read its reduced `RolloutTrace`.
 pub use reducer::replay_bundle;
+/// Raw payload captured when a child agent reports completion to its parent.
+pub use thread::AgentResultTracePayload;
+/// Environment variable that enables local trace-bundle recording.
+pub use thread::CODEX_ROLLOUT_TRACE_ROOT_ENV;
+/// Raw metadata captured when a thread starts.
+pub use thread::ThreadStartedTraceMetadata;
+/// No-op-capable handle for recording one thread in a rollout bundle.
+pub use thread::ThreadTraceContext;
+/// Request data for the canonical Codex tool boundary.
+pub use tool_dispatch::ToolDispatchInvocation;
+/// Tool input observed at the registry boundary.
+pub use tool_dispatch::ToolDispatchPayload;
+/// Runtime source that caused a dispatch-level tool call.
+pub use tool_dispatch::ToolDispatchRequester;
+/// Result data returned from a dispatch-level tool call.
+pub use tool_dispatch::ToolDispatchResult;
+/// No-op-capable handle for recording one resolved tool dispatch.
+pub use tool_dispatch::ToolDispatchTraceContext;
 /// Append-only writer used by hot-path Codex instrumentation.
 pub use writer::TraceWriter;

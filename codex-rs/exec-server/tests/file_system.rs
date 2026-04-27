@@ -21,13 +21,16 @@ use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LocalFileSystem;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
-use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
-use codex_sandboxing::policy_transforms::merge_permission_profiles;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
+use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -102,15 +105,10 @@ fn workspace_write_sandbox(writable_root: std::path::PathBuf) -> FileSystemSandb
 }
 
 fn sandbox_context(entries: Vec<FileSystemSandboxEntry>) -> FileSystemSandboxContext {
-    FileSystemSandboxContext::from_permission_profile(PermissionProfile {
-        network: Some(NetworkPermissions {
-            enabled: Some(false),
-        }),
-        file_system: Some(FileSystemPermissions {
-            entries,
-            glob_scan_max_depth: None,
-        }),
-    })
+    FileSystemSandboxContext::from_permission_profile(PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(entries),
+        NetworkSandboxPolicy::Restricted,
+    ))
 }
 
 #[test]
@@ -604,19 +602,26 @@ async fn file_system_sandboxed_write_allows_additional_write_root(use_remote: bo
     std::fs::create_dir_all(&writable_dir)?;
 
     let mut sandbox = read_only_sandbox(readable_dir);
-    let additional_permissions = PermissionProfile {
+    let additional_permissions = AdditionalPermissionProfile {
         network: None,
         file_system: Some(FileSystemPermissions::from_read_write_roots(
             /*read*/ None,
             Some(vec![absolute_path(writable_dir)]),
         )),
     };
-    let Some(permissions) =
-        merge_permission_profiles(Some(&sandbox.permissions), Some(&additional_permissions))
-    else {
-        panic!("merged permissions should not be empty");
-    };
-    sandbox.permissions = permissions;
+    let file_system_policy = effective_file_system_sandbox_policy(
+        &sandbox.permissions.file_system_sandbox_policy(),
+        Some(&additional_permissions),
+    );
+    let network_policy = effective_network_sandbox_policy(
+        sandbox.permissions.network_sandbox_policy(),
+        Some(&additional_permissions),
+    );
+    sandbox.permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
+        sandbox.permissions.enforcement(),
+        &file_system_policy,
+        network_policy,
+    );
 
     file_system
         .write_file(

@@ -219,7 +219,8 @@ impl Session {
             .tool_plugin_provenance(config.as_ref())
             .await;
         let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
-        let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
+        let auth_statuses =
+            compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             guard.cancel();
@@ -232,7 +233,7 @@ impl Session {
             &turn_context.approval_policy,
             turn_context.sub_id.clone(),
             self.get_tx_event(),
-            turn_context.sandbox_policy.get().clone(),
+            turn_context.permission_profile(),
             McpRuntimeEnvironment::new(
                 turn_context
                     .environment
@@ -243,6 +244,7 @@ impl Session {
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
             tool_plugin_provenance,
+            auth.as_ref(),
         )
         .await;
         {

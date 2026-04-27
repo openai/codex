@@ -9,6 +9,7 @@ use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
 use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
+use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::StoredThread;
@@ -25,6 +26,10 @@ mod proto;
 
 /// gRPC-backed [`ThreadStore`] implementation for deployments whose durable thread data lives
 /// outside the app-server process.
+///
+/// This store is still a work in progress: app-server code should call the generic
+/// [`ThreadStore`] methods, and unsupported remote operations will return explicit
+/// `not_implemented` errors until the remote API catches up.
 #[derive(Clone, Debug)]
 pub struct RemoteThreadStore {
     endpoint: String,
@@ -185,6 +190,15 @@ impl ThreadStore for RemoteThreadStore {
             message: "remote thread store omitted read_thread response thread".to_string(),
         })?;
         helpers::stored_thread_from_proto(thread)
+    }
+
+    async fn read_thread_by_rollout_path(
+        &self,
+        _params: ReadThreadByRolloutPathParams,
+    ) -> ThreadStoreResult<StoredThread> {
+        Err(ThreadStoreError::Internal {
+            message: "remote thread store does not support read_thread_by_rollout_path".to_string(),
+        })
     }
 
     async fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreResult<ThreadPage> {

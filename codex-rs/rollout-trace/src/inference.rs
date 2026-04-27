@@ -174,13 +174,13 @@ impl InferenceTraceAttempt {
         token_usage: &Option<TokenUsage>,
         output_items: &[ResponseItem],
     ) {
+        let InferenceTraceAttemptState::Enabled(attempt) = &self.state else {
+            return;
+        };
         let response_payload = TracedResponseStreamCompleted {
             response_id,
             token_usage,
             output_items: output_items.iter().map(trace_response_item_json).collect(),
-        };
-        let InferenceTraceAttemptState::Enabled(attempt) = &self.state else {
-            return;
         };
         let Some(response_payload) = write_json_payload_best_effort(
             &attempt.context.writer,

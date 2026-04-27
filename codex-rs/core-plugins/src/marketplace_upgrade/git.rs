@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use std::process::Output;
 use std::process::Stdio;
@@ -46,9 +47,10 @@ pub(super) fn clone_git_source(
     destination: &Path,
     timeout: Duration,
 ) -> Result<String, String> {
+    let git_destination = git_path_arg(destination);
     if sparse_paths.is_empty() {
         let output = run_git_command_with_timeout(
-            git_command().arg("clone").arg(source).arg(destination),
+            git_command().arg("clone").arg(source).arg(&git_destination),
             "git clone marketplace source",
             timeout,
         )?;
@@ -57,7 +59,7 @@ pub(super) fn clone_git_source(
             let output = run_git_command_with_timeout(
                 git_command()
                     .arg("-C")
-                    .arg(destination)
+                    .arg(&git_destination)
                     .arg("checkout")
                     .arg(ref_name),
                 "git checkout marketplace ref",
@@ -65,7 +67,7 @@ pub(super) fn clone_git_source(
             )?;
             ensure_git_success(&output, "git checkout marketplace ref")?;
         }
-        return git_worktree_revision(destination, timeout);
+        return git_worktree_revision(&git_destination, timeout);
     }
 
     let output = run_git_command_with_timeout(
@@ -74,7 +76,7 @@ pub(super) fn clone_git_source(
             .arg("--filter=blob:none")
             .arg("--no-checkout")
             .arg(source)
-            .arg(destination),
+            .arg(&git_destination),
         "git clone marketplace source",
         timeout,
     )?;
@@ -83,7 +85,7 @@ pub(super) fn clone_git_source(
     let mut sparse_checkout = git_command();
     sparse_checkout
         .arg("-C")
-        .arg(destination)
+        .arg(&git_destination)
         .arg("sparse-checkout")
         .arg("set")
         .args(sparse_paths);
@@ -97,14 +99,14 @@ pub(super) fn clone_git_source(
     let output = run_git_command_with_timeout(
         git_command()
             .arg("-C")
-            .arg(destination)
+            .arg(&git_destination)
             .arg("checkout")
             .arg(ref_name.unwrap_or("HEAD")),
         "git checkout marketplace ref",
         timeout,
     )?;
     ensure_git_success(&output, "git checkout marketplace ref")?;
-    git_worktree_revision(destination, timeout)
+    git_worktree_revision(&git_destination, timeout)
 }
 
 fn git_worktree_revision(destination: &Path, timeout: Duration) -> Result<String, String> {
@@ -137,6 +139,28 @@ fn git_command() -> Command {
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0");
     command
+}
+
+#[cfg(windows)]
+fn git_path_arg(path: &Path) -> PathBuf {
+    strip_windows_verbatim_path_prefix(&path.to_string_lossy())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
+#[cfg(not(windows))]
+fn git_path_arg(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
+
+#[cfg(any(windows, test))]
+fn strip_windows_verbatim_path_prefix(path: &str) -> Option<String> {
+    let stripped = path.strip_prefix(r"\\?\")?;
+    let stripped = stripped
+        .strip_prefix(r"UNC\")
+        .map(|unc_path| format!(r"\\{unc_path}"))
+        .unwrap_or_else(|| stripped.to_string());
+    Some(stripped)
 }
 
 fn run_git_command_with_timeout(
@@ -201,6 +225,8 @@ fn ensure_git_success(output: &Output, context: &str) -> Result<(), String> {
 mod tests {
     use super::git_command;
     use super::is_full_git_sha;
+    use super::strip_windows_verbatim_path_prefix;
+    use pretty_assertions::assert_eq;
     use std::ffi::OsStr;
 
     #[test]
@@ -224,6 +250,27 @@ mod tests {
             Some(Some(OsStr::new("0")))
         );
         assert_eq!(command_env(&command, "PATH"), None);
+    }
+
+    #[test]
+    fn strips_windows_verbatim_disk_prefix_for_git() {
+        assert_eq!(
+            strip_windows_verbatim_path_prefix(r"\\?\C:\Users\alice\marketplace"),
+            Some(r"C:\Users\alice\marketplace".to_string())
+        );
+    }
+
+    #[test]
+    fn strips_windows_verbatim_unc_prefix_for_git() {
+        assert_eq!(
+            strip_windows_verbatim_path_prefix(r"\\?\UNC\server\share\marketplace"),
+            Some(r"\\server\share\marketplace".to_string())
+        );
+    }
+
+    #[test]
+    fn leaves_non_verbatim_path_without_rewrite() {
+        assert_eq!(strip_windows_verbatim_path_prefix(r"C:\Users\alice"), None);
     }
 
     fn command_env<'a>(

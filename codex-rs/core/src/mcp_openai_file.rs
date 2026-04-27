@@ -14,7 +14,6 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use codex_api::upload_local_file;
 use codex_login::CodexAuth;
-use codex_model_provider::BearerAuthProvider;
 use serde_json::Value as JsonValue;
 
 pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
@@ -109,17 +108,15 @@ async fn build_uploaded_local_argument_value(
             "ChatGPT auth is required to upload local files for Codex Apps tools".to_string(),
         );
     };
-    let token_data = auth
-        .get_token_data()
-        .map_err(|error| format!("failed to read ChatGPT auth for file upload: {error}"))?;
-    let upload_auth = BearerAuthProvider {
-        token: Some(token_data.access_token),
-        account_id: token_data.account_id,
-        is_fedramp_account: auth.is_fedramp_account(),
-    };
+    if !auth.uses_codex_backend() {
+        return Err(
+            "ChatGPT auth is required to upload local files for Codex Apps tools".to_string(),
+        );
+    }
+    let upload_auth = codex_model_provider::auth_provider_from_auth(auth);
     let uploaded = upload_local_file(
         turn_context.config.chatgpt_base_url.trim_end_matches('/'),
-        &upload_auth,
+        upload_auth.as_ref(),
         &resolved_path,
     )
     .await

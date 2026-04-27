@@ -12,15 +12,17 @@ pub use crate::mcp_types::McpServerTransportConfig;
 pub use crate::mcp_types::RawMcpServerConfig;
 pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::EnvironmentVariablePattern;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 pub use codex_protocol::config_types::WebSearchMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
-use wildmatch::WildMatchPattern;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -532,6 +534,9 @@ pub struct ModelAvailabilityNuxConfig {
     pub shown_count: HashMap<String, u32>,
 }
 
+/// Fallback resize-reflow row cap when Codex cannot identify a terminal-specific scrollback size.
+pub const DEFAULT_TERMINAL_RESIZE_REFLOW_FALLBACK_MAX_ROWS: usize = 1_000;
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -584,6 +589,13 @@ pub struct Tui {
     /// Startup tooltip availability NUX state persisted by the TUI.
     #[serde(default)]
     pub model_availability_nux: ModelAvailabilityNuxConfig,
+
+    /// Trim terminal resize-reflow replay to the most recent rendered terminal rows when the
+    /// transcript exceeds this cap. Omit to use Codex's terminal-specific default. Set to `0` to
+    /// keep all rendered rows.
+    #[serde(default)]
+    #[schemars(range(min = 0))]
+    pub terminal_resize_reflow_max_rows: Option<usize>,
 }
 
 const fn default_true() -> bool {
@@ -697,21 +709,6 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum ShellEnvironmentPolicyInherit {
-    /// "Core" environment variables for the platform. On UNIX, this would
-    /// include HOME, LOGNAME, PATH, SHELL, and USER, among others.
-    Core,
-
-    /// Inherits the full environment from the parent process.
-    #[default]
-    All,
-
-    /// Do not inherit any environment variables from the parent process.
-    None,
-}
-
 /// Policy for building the `env` when spawning a process via either the
 /// `shell` or `local_shell` tool.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
@@ -730,37 +727,6 @@ pub struct ShellEnvironmentPolicyToml {
     pub include_only: Option<Vec<String>>,
 
     pub experimental_use_profile: Option<bool>,
-}
-
-pub type EnvironmentVariablePattern = WildMatchPattern<'*', '?'>;
-
-/// Deriving the `env` based on this policy works as follows:
-/// 1. Create an initial map based on the `inherit` policy.
-/// 2. If `ignore_default_excludes` is false, filter the map using the default
-///    exclude pattern(s), which are: `"*KEY*"`, `"*SECRET*"`, and `"*TOKEN*"`.
-/// 3. If `exclude` is not empty, filter the map using the provided patterns.
-/// 4. Insert any entries from `r#set` into the map.
-/// 5. If non-empty, filter the map using the `include_only` patterns.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ShellEnvironmentPolicy {
-    /// Starting point when building the environment.
-    pub inherit: ShellEnvironmentPolicyInherit,
-
-    /// True to skip the check to exclude default environment variables that
-    /// contain "KEY", "SECRET", or "TOKEN" in their name. Defaults to true.
-    pub ignore_default_excludes: bool,
-
-    /// Environment variable names to exclude from the environment.
-    pub exclude: Vec<EnvironmentVariablePattern>,
-
-    /// (key, value) pairs to insert in the environment.
-    pub r#set: HashMap<String, String>,
-
-    /// Environment variable names to retain in the environment.
-    pub include_only: Vec<EnvironmentVariablePattern>,
-
-    /// If true, the shell profile will be used to run the command.
-    pub use_profile: bool,
 }
 
 impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
@@ -790,19 +756,6 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             r#set,
             include_only,
             use_profile,
-        }
-    }
-}
-
-impl Default for ShellEnvironmentPolicy {
-    fn default() -> Self {
-        Self {
-            inherit: ShellEnvironmentPolicyInherit::All,
-            ignore_default_excludes: true,
-            exclude: Vec::new(),
-            r#set: HashMap::new(),
-            include_only: Vec::new(),
-            use_profile: false,
         }
     }
 }

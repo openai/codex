@@ -440,7 +440,6 @@ impl App {
             content: vec![ContentItem::InputText {
                 text: SIDE_BOUNDARY_PROMPT.to_string(),
             }],
-            end_turn: None,
             phase: None,
         }
     }

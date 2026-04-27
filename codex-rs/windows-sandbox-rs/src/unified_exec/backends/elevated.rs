@@ -62,7 +62,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
         let mut transport =
             spawn_runner_transport(&codex_home, &cwd, &sandbox_creds, logs_base_dir.as_deref())?;
         transport.send_spawn_request(spawn_request)?;
-        transport.read_spawn_ready()?;
+        transport.read_spawn_ready_with_timeout()?;
         Ok(transport)
     })
     .await

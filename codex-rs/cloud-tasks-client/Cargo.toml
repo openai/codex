@@ -15,6 +15,7 @@ workspace = true
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
+codex-api = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-git-utils = { workspace = true }
 serde = { version = "1", features = ["derive"] }

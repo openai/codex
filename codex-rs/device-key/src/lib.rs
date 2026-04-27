@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use p256::pkcs8::EncodePublicKey;
@@ -211,47 +212,82 @@ pub enum DeviceKeyError {
 #[derive(Debug, Clone)]
 pub struct DeviceKeyStore {
     provider: Arc<dyn DeviceKeyProvider>,
-}
-
-impl Default for DeviceKeyStore {
-    fn default() -> Self {
-        Self {
-            provider: platform::default_provider(),
-        }
-    }
+    bindings: Arc<dyn DeviceKeyBindingStore>,
 }
 
 impl DeviceKeyStore {
-    pub fn create(&self, request: DeviceKeyCreateRequest) -> Result<DeviceKeyInfo, DeviceKeyError> {
-        let key_id_random = random_key_id_random();
-        validate_binding(&request.binding.account_user_id, &request.binding.client_id)?;
-        self.provider.create(ProviderCreateRequest {
-            key_id_random: &key_id_random,
-            protection_policy: request.protection_policy,
-            binding: &request.binding,
-        })
+    pub fn new(bindings: Arc<dyn DeviceKeyBindingStore>) -> Self {
+        Self {
+            provider: platform::default_provider(),
+            bindings,
+        }
     }
 
-    pub fn get_public(
+    pub async fn create(
+        &self,
+        request: DeviceKeyCreateRequest,
+    ) -> Result<DeviceKeyInfo, DeviceKeyError> {
+        let key_id_random = random_key_id_random();
+        validate_binding(&request.binding.account_user_id, &request.binding.client_id)?;
+        let provider = Arc::clone(&self.provider);
+        let info = spawn_provider_call(move || {
+            provider.create(ProviderCreateRequest {
+                key_id_random,
+                protection_policy: request.protection_policy,
+            })
+        })
+        .await?;
+        match self
+            .bindings
+            .put_binding(&info.key_id, &request.binding)
+            .await
+        {
+            Ok(()) => Ok(info),
+            Err(store_error) => {
+                let provider = Arc::clone(&self.provider);
+                let key_id = info.key_id;
+                let protection_class = info.protection_class;
+                if let Err(delete_error) =
+                    spawn_provider_call(move || provider.delete(&key_id, protection_class)).await
+                {
+                    return Err(DeviceKeyError::Platform(format!(
+                        "failed to store device key binding ({store_error}); failed to delete newly created key ({delete_error})"
+                    )));
+                }
+                Err(store_error)
+            }
+        }
+    }
+
+    pub async fn get_public(
         &self,
         request: DeviceKeyGetPublicRequest,
     ) -> Result<DeviceKeyInfo, DeviceKeyError> {
         let protection_class = validate_key_id(&request.key_id)?;
-        self.provider.get_public(&request.key_id, protection_class)
+        let provider = Arc::clone(&self.provider);
+        spawn_provider_call(move || provider.get_public(&request.key_id, protection_class)).await
     }
 
-    pub fn sign(
+    pub async fn sign(
         &self,
         request: DeviceKeySignRequest,
     ) -> Result<DeviceKeySignature, DeviceKeyError> {
         let protection_class = validate_key_id(&request.key_id)?;
         validate_payload(&request.payload)?;
-        let binding = self.provider.binding(&request.key_id, protection_class)?;
+        let binding = self
+            .bindings
+            .get_binding(&request.key_id)
+            .await?
+            .ok_or(DeviceKeyError::KeyNotFound)?;
         validate_payload_binding(&request.payload, &binding)?;
         let signed_payload = device_key_signing_payload_bytes(&request.payload)?;
-        let signature = self
-            .provider
-            .sign(&request.key_id, protection_class, &signed_payload)?;
+        let provider = Arc::clone(&self.provider);
+        let key_id = request.key_id;
+        let provider_payload = signed_payload.clone();
+        let signature = spawn_provider_call(move || {
+            provider.sign(&key_id, protection_class, &provider_payload)
+        })
+        .await?;
         Ok(DeviceKeySignature {
             signature_der: signature.signature_der,
             signed_payload,
@@ -260,21 +296,79 @@ impl DeviceKeyStore {
     }
 
     #[cfg(test)]
-    fn with_provider(provider: Arc<dyn DeviceKeyProvider>) -> Self {
-        Self { provider }
+    fn new_for_test(provider: Arc<dyn DeviceKeyProvider>) -> Self {
+        Self {
+            provider,
+            bindings: Arc::new(InMemoryDeviceKeyBindingStore::default()),
+        }
+    }
+}
+
+async fn spawn_provider_call<T, F>(call: F) -> Result<T, DeviceKeyError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, DeviceKeyError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(call)
+        .await
+        .map_err(|err| DeviceKeyError::Platform(format!("device key task failed: {err}")))?
+}
+
+/// Persists the account/client binding for a generated device key.
+///
+/// Device-key providers only own platform key material. Implementations store the binding in a
+/// platform-neutral location so signing can reject payloads for the wrong account or client before
+/// asking a provider to use the private key.
+#[async_trait]
+pub trait DeviceKeyBindingStore: Debug + Send + Sync {
+    async fn get_binding(&self, key_id: &str) -> Result<Option<DeviceKeyBinding>, DeviceKeyError>;
+    async fn put_binding(
+        &self,
+        key_id: &str,
+        binding: &DeviceKeyBinding,
+    ) -> Result<(), DeviceKeyError>;
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct InMemoryDeviceKeyBindingStore {
+    bindings: std::sync::Mutex<std::collections::HashMap<String, DeviceKeyBinding>>,
+}
+
+#[cfg(test)]
+#[async_trait]
+impl DeviceKeyBindingStore for InMemoryDeviceKeyBindingStore {
+    async fn get_binding(&self, key_id: &str) -> Result<Option<DeviceKeyBinding>, DeviceKeyError> {
+        Ok(self
+            .bindings
+            .lock()
+            .map_err(|err| DeviceKeyError::Platform(err.to_string()))?
+            .get(key_id)
+            .cloned())
+    }
+
+    async fn put_binding(
+        &self,
+        key_id: &str,
+        binding: &DeviceKeyBinding,
+    ) -> Result<(), DeviceKeyError> {
+        self.bindings
+            .lock()
+            .map_err(|err| DeviceKeyError::Platform(err.to_string()))?
+            .insert(key_id.to_string(), binding.clone());
+        Ok(())
     }
 }
 
 #[derive(Debug)]
-struct ProviderCreateRequest<'a> {
-    key_id_random: &'a str,
+struct ProviderCreateRequest {
+    key_id_random: String,
     protection_policy: DeviceKeyProtectionPolicy,
-    binding: &'a DeviceKeyBinding,
 }
 
-impl ProviderCreateRequest<'_> {
+impl ProviderCreateRequest {
     fn key_id_for(&self, protection_class: DeviceKeyProtectionClass) -> String {
-        key_id_for_protection_class(protection_class, self.key_id_random)
+        key_id_for_protection_class(protection_class, &self.key_id_random)
     }
 }
 
@@ -283,17 +377,22 @@ impl ProviderCreateRequest<'_> {
 /// Implementations must never expose a generic arbitrary-byte signing API outside this crate. The
 /// crate validates and serializes accepted structured payloads before calling `sign`.
 trait DeviceKeyProvider: Debug + Send + Sync {
-    fn create(&self, request: ProviderCreateRequest<'_>) -> Result<DeviceKeyInfo, DeviceKeyError>;
+    fn create(&self, request: ProviderCreateRequest) -> Result<DeviceKeyInfo, DeviceKeyError>;
+    /// Deletes provider-owned key material after a create operation cannot be completed.
+    ///
+    /// Implementations should treat missing keys as success where the platform allows it, since
+    /// cleanup can race with external deletion and should not mask the original persistence error
+    /// unless deletion itself fails unexpectedly.
+    fn delete(
+        &self,
+        key_id: &str,
+        protection_class: DeviceKeyProtectionClass,
+    ) -> Result<(), DeviceKeyError>;
     fn get_public(
         &self,
         key_id: &str,
         protection_class: DeviceKeyProtectionClass,
     ) -> Result<DeviceKeyInfo, DeviceKeyError>;
-    fn binding(
-        &self,
-        key_id: &str,
-        protection_class: DeviceKeyProtectionClass,
-    ) -> Result<DeviceKeyBinding, DeviceKeyError>;
     fn sign(
         &self,
         key_id: &str,
@@ -629,7 +728,6 @@ mod tests {
     struct MemoryProvider {
         class: DeviceKeyProtectionClass,
         keys: Mutex<HashMap<String, SigningKey>>,
-        bindings: Mutex<HashMap<String, DeviceKeyBinding>>,
     }
 
     impl MemoryProvider {
@@ -637,16 +735,16 @@ mod tests {
             Self {
                 class,
                 keys: Mutex::new(HashMap::new()),
-                bindings: Mutex::new(HashMap::new()),
             }
+        }
+
+        fn key_count(&self) -> usize {
+            self.keys.lock().expect("memory provider lock").len()
         }
     }
 
     impl DeviceKeyProvider for MemoryProvider {
-        fn create(
-            &self,
-            request: ProviderCreateRequest<'_>,
-        ) -> Result<DeviceKeyInfo, DeviceKeyError> {
+        fn create(&self, request: ProviderCreateRequest) -> Result<DeviceKeyInfo, DeviceKeyError> {
             if !request.protection_policy.allows(self.class) {
                 return Err(DeviceKeyError::DegradedProtectionNotAllowed {
                     available: self.class,
@@ -660,11 +758,22 @@ mod tests {
             let signing_key = keys
                 .entry(key_id.clone())
                 .or_insert_with(|| SigningKey::random(&mut OsRng));
-            self.bindings
+            memory_key_info(&key_id, signing_key, self.class)
+        }
+
+        fn delete(
+            &self,
+            key_id: &str,
+            protection_class: DeviceKeyProtectionClass,
+        ) -> Result<(), DeviceKeyError> {
+            if protection_class != self.class {
+                return Ok(());
+            }
+            self.keys
                 .lock()
                 .map_err(|err| DeviceKeyError::Platform(err.to_string()))?
-                .insert(key_id.clone(), request.binding.clone());
-            memory_key_info(&key_id, signing_key, self.class)
+                .remove(key_id);
+            Ok(())
         }
 
         fn get_public(
@@ -681,22 +790,6 @@ mod tests {
                 .map_err(|err| DeviceKeyError::Platform(err.to_string()))?;
             let signing_key = keys.get(key_id).ok_or(DeviceKeyError::KeyNotFound)?;
             memory_key_info(key_id, signing_key, self.class)
-        }
-
-        fn binding(
-            &self,
-            key_id: &str,
-            protection_class: DeviceKeyProtectionClass,
-        ) -> Result<DeviceKeyBinding, DeviceKeyError> {
-            if protection_class != self.class {
-                return Err(DeviceKeyError::KeyNotFound);
-            }
-            self.bindings
-                .lock()
-                .map_err(|err| DeviceKeyError::Platform(err.to_string()))?
-                .get(key_id)
-                .cloned()
-                .ok_or(DeviceKeyError::KeyNotFound)
         }
 
         fn sign(
@@ -721,6 +814,27 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct FailingBindingStore;
+
+    #[async_trait]
+    impl DeviceKeyBindingStore for FailingBindingStore {
+        async fn get_binding(
+            &self,
+            _key_id: &str,
+        ) -> Result<Option<DeviceKeyBinding>, DeviceKeyError> {
+            Ok(None)
+        }
+
+        async fn put_binding(
+            &self,
+            _key_id: &str,
+            _binding: &DeviceKeyBinding,
+        ) -> Result<(), DeviceKeyError> {
+            Err(DeviceKeyError::Platform("binding write failed".to_string()))
+        }
+    }
+
     fn memory_key_info(
         key_id: &str,
         signing_key: &SigningKey,
@@ -741,7 +855,14 @@ mod tests {
     }
 
     fn store(class: DeviceKeyProtectionClass) -> DeviceKeyStore {
-        DeviceKeyStore::with_provider(Arc::new(MemoryProvider::new(class)))
+        DeviceKeyStore::new_for_test(Arc::new(MemoryProvider::new(class)))
+    }
+
+    fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("build test runtime")
+            .block_on(future)
     }
 
     fn create_request(protection_policy: DeviceKeyProtectionPolicy) -> DeviceKeyCreateRequest {
@@ -808,9 +929,11 @@ mod tests {
 
     #[test]
     fn create_requires_explicit_degraded_protection() {
-        let err = store(DeviceKeyProtectionClass::OsProtectedNonextractable)
-            .create(create_request(DeviceKeyProtectionPolicy::HardwareOnly))
-            .expect_err("OS-protected fallback should require opt-in");
+        let err = block_on(
+            store(DeviceKeyProtectionClass::OsProtectedNonextractable)
+                .create(create_request(DeviceKeyProtectionPolicy::HardwareOnly)),
+        )
+        .expect_err("OS-protected fallback should require opt-in");
 
         assert!(
             matches!(
@@ -825,11 +948,12 @@ mod tests {
 
     #[test]
     fn create_allows_os_protected_nonextractable_policy() {
-        let info = store(DeviceKeyProtectionClass::OsProtectedNonextractable)
-            .create(create_request(
+        let info = block_on(
+            store(DeviceKeyProtectionClass::OsProtectedNonextractable).create(create_request(
                 DeviceKeyProtectionPolicy::AllowOsProtectedNonextractable,
-            ))
-            .expect("OS-protected fallback should be allowed by policy");
+            )),
+        )
+        .expect("OS-protected fallback should be allowed by policy");
 
         assert_eq!(
             info.protection_class,
@@ -844,16 +968,36 @@ mod tests {
     #[test]
     fn create_generates_distinct_key_ids() {
         let store = store(DeviceKeyProtectionClass::HardwareTpm);
-        let first = store
-            .create(create_request(DeviceKeyProtectionPolicy::HardwareOnly))
+        let first = block_on(store.create(create_request(DeviceKeyProtectionPolicy::HardwareOnly)))
             .expect("create should succeed");
-        let second = store
-            .create(create_request(DeviceKeyProtectionPolicy::HardwareOnly))
-            .expect("create should succeed");
+        let second =
+            block_on(store.create(create_request(DeviceKeyProtectionPolicy::HardwareOnly)))
+                .expect("create should succeed");
 
         assert_ne!(second.key_id, first.key_id);
         assert_valid_generated_key_id(&first.key_id, DeviceKeyProtectionClass::HardwareTpm);
         assert_valid_generated_key_id(&second.key_id, DeviceKeyProtectionClass::HardwareTpm);
+    }
+
+    #[test]
+    fn create_deletes_provider_key_when_binding_write_fails() {
+        let provider = Arc::new(MemoryProvider::new(DeviceKeyProtectionClass::HardwareTpm));
+        let store = DeviceKeyStore {
+            provider: provider.clone(),
+            bindings: Arc::new(FailingBindingStore),
+        };
+
+        let err = block_on(store.create(create_request(DeviceKeyProtectionPolicy::HardwareOnly)))
+            .expect_err("binding failure should fail create");
+
+        assert!(
+            matches!(
+                &err,
+                DeviceKeyError::Platform(message) if message == "binding write failed"
+            ),
+            "unexpected error: {err:?}"
+        );
+        assert_eq!(provider.key_count(), 0);
     }
 
     #[test]
@@ -902,11 +1046,10 @@ mod tests {
         let store = store(DeviceKeyProtectionClass::HardwareTpm);
         let malformed_key_id = "not-a-device-key".to_string();
 
-        let err = store
-            .get_public(DeviceKeyGetPublicRequest {
-                key_id: malformed_key_id.clone(),
-            })
-            .expect_err("malformed get_public key id should fail");
+        let err = block_on(store.get_public(DeviceKeyGetPublicRequest {
+            key_id: malformed_key_id.clone(),
+        }))
+        .expect_err("malformed get_public key id should fail");
         assert!(
             matches!(
                 err,
@@ -915,12 +1058,11 @@ mod tests {
             "unexpected get_public error: {err:?}"
         );
 
-        let err = store
-            .sign(DeviceKeySignRequest {
-                key_id: malformed_key_id,
-                payload: remote_control_client_connection_payload(),
-            })
-            .expect_err("malformed sign key id should fail");
+        let err = block_on(store.sign(DeviceKeySignRequest {
+            key_id: malformed_key_id,
+            payload: remote_control_client_connection_payload(),
+        }))
+        .expect_err("malformed sign key id should fail");
         assert!(
             matches!(
                 err,
@@ -933,8 +1075,7 @@ mod tests {
     #[test]
     fn sign_rejects_empty_account_user_id() {
         let store = store(DeviceKeyProtectionClass::HardwareTpm);
-        let info = store
-            .create(create_request(DeviceKeyProtectionPolicy::HardwareOnly))
+        let info = block_on(store.create(create_request(DeviceKeyProtectionPolicy::HardwareOnly)))
             .expect("create should succeed");
         let mut payload = remote_control_client_connection_payload();
         match &mut payload {
@@ -944,12 +1085,11 @@ mod tests {
             DeviceKeySignPayload::RemoteControlClientEnrollment(_) => unreachable!(),
         }
 
-        let err = store
-            .sign(DeviceKeySignRequest {
-                key_id: info.key_id,
-                payload,
-            })
-            .expect_err("empty account user id should fail");
+        let err = block_on(store.sign(DeviceKeySignRequest {
+            key_id: info.key_id,
+            payload,
+        }))
+        .expect_err("empty account user id should fail");
 
         assert!(
             matches!(
@@ -963,18 +1103,16 @@ mod tests {
     #[test]
     fn sign_uses_structured_payload() {
         let store = store(DeviceKeyProtectionClass::HardwareTpm);
-        let info = store
-            .create(create_request(DeviceKeyProtectionPolicy::HardwareOnly))
+        let info = block_on(store.create(create_request(DeviceKeyProtectionPolicy::HardwareOnly)))
             .expect("create should succeed");
         let payload = remote_control_client_connection_payload();
         let signed_payload =
             device_key_signing_payload_bytes(&payload).expect("payload should serialize");
-        let signature = store
-            .sign(DeviceKeySignRequest {
-                key_id: info.key_id,
-                payload,
-            })
-            .expect("sign should succeed");
+        let signature = block_on(store.sign(DeviceKeySignRequest {
+            key_id: info.key_id,
+            payload,
+        }))
+        .expect("sign should succeed");
         assert_eq!(signature.signed_payload, signed_payload);
 
         let verifying_key = VerifyingKey::from_public_key_der(&info.public_key_spki_der)
@@ -1063,8 +1201,7 @@ mod tests {
     #[test]
     fn sign_rejects_malformed_token_hash() {
         let store = store(DeviceKeyProtectionClass::HardwareTpm);
-        let info = store
-            .create(create_request(DeviceKeyProtectionPolicy::HardwareOnly))
+        let info = block_on(store.create(create_request(DeviceKeyProtectionPolicy::HardwareOnly)))
             .expect("create should succeed");
         let mut payload = remote_control_client_connection_payload();
         match &mut payload {
@@ -1074,12 +1211,11 @@ mod tests {
             DeviceKeySignPayload::RemoteControlClientEnrollment(_) => unreachable!(),
         }
 
-        let err = store
-            .sign(DeviceKeySignRequest {
-                key_id: info.key_id,
-                payload,
-            })
-            .expect_err("malformed token hash should fail");
+        let err = block_on(store.sign(DeviceKeySignRequest {
+            key_id: info.key_id,
+            payload,
+        }))
+        .expect_err("malformed token hash should fail");
 
         assert!(
             matches!(
@@ -1095,8 +1231,7 @@ mod tests {
     #[test]
     fn sign_rejects_unexpected_scopes() {
         let store = store(DeviceKeyProtectionClass::HardwareTpm);
-        let info = store
-            .create(create_request(DeviceKeyProtectionPolicy::HardwareOnly))
+        let info = block_on(store.create(create_request(DeviceKeyProtectionPolicy::HardwareOnly)))
             .expect("create should succeed");
         let mut payload = remote_control_client_connection_payload();
         match &mut payload {
@@ -1106,12 +1241,11 @@ mod tests {
             DeviceKeySignPayload::RemoteControlClientEnrollment(_) => unreachable!(),
         }
 
-        let err = store
-            .sign(DeviceKeySignRequest {
-                key_id: info.key_id,
-                payload,
-            })
-            .expect_err("unexpected scope should fail");
+        let err = block_on(store.sign(DeviceKeySignRequest {
+            key_id: info.key_id,
+            payload,
+        }))
+        .expect_err("unexpected scope should fail");
 
         assert!(
             matches!(
@@ -1127,8 +1261,7 @@ mod tests {
     #[test]
     fn sign_rejects_malformed_enrollment_identity_hash() {
         let store = store(DeviceKeyProtectionClass::HardwareTpm);
-        let info = store
-            .create(create_request(DeviceKeyProtectionPolicy::HardwareOnly))
+        let info = block_on(store.create(create_request(DeviceKeyProtectionPolicy::HardwareOnly)))
             .expect("create should succeed");
         let mut payload = remote_control_client_enrollment_payload();
         match &mut payload {
@@ -1138,12 +1271,11 @@ mod tests {
             DeviceKeySignPayload::RemoteControlClientConnection(_) => unreachable!(),
         }
 
-        let err = store
-            .sign(DeviceKeySignRequest {
-                key_id: info.key_id,
-                payload,
-            })
-            .expect_err("malformed device identity hash should fail");
+        let err = block_on(store.sign(DeviceKeySignRequest {
+            key_id: info.key_id,
+            payload,
+        }))
+        .expect_err("malformed device identity hash should fail");
 
         assert!(
             matches!(
@@ -1159,8 +1291,7 @@ mod tests {
     #[test]
     fn sign_rejects_empty_target_binding() {
         let store = store(DeviceKeyProtectionClass::HardwareTpm);
-        let info = store
-            .create(create_request(DeviceKeyProtectionPolicy::HardwareOnly))
+        let info = block_on(store.create(create_request(DeviceKeyProtectionPolicy::HardwareOnly)))
             .expect("create should succeed");
         let mut payload = remote_control_client_connection_payload();
         match &mut payload {
@@ -1170,12 +1301,11 @@ mod tests {
             DeviceKeySignPayload::RemoteControlClientEnrollment(_) => unreachable!(),
         }
 
-        let err = store
-            .sign(DeviceKeySignRequest {
-                key_id: info.key_id,
-                payload,
-            })
-            .expect_err("empty target origin should fail");
+        let err = block_on(store.sign(DeviceKeySignRequest {
+            key_id: info.key_id,
+            payload,
+        }))
+        .expect_err("empty target origin should fail");
 
         assert!(
             matches!(
@@ -1191,8 +1321,7 @@ mod tests {
     #[test]
     fn sign_rejects_remote_control_paths_for_other_payload_shapes() {
         let store = store(DeviceKeyProtectionClass::HardwareTpm);
-        let info = store
-            .create(create_request(DeviceKeyProtectionPolicy::HardwareOnly))
+        let info = block_on(store.create(create_request(DeviceKeyProtectionPolicy::HardwareOnly)))
             .expect("create should succeed");
         let mut connection_payload = remote_control_client_connection_payload();
         match &mut connection_payload {
@@ -1202,12 +1331,11 @@ mod tests {
             DeviceKeySignPayload::RemoteControlClientEnrollment(_) => unreachable!(),
         }
 
-        let err = store
-            .sign(DeviceKeySignRequest {
-                key_id: info.key_id.clone(),
-                payload: connection_payload,
-            })
-            .expect_err("connection payload should reject enrollment path");
+        let err = block_on(store.sign(DeviceKeySignRequest {
+            key_id: info.key_id.clone(),
+            payload: connection_payload,
+        }))
+        .expect_err("connection payload should reject enrollment path");
         assert!(
             matches!(
                 err,
@@ -1226,12 +1354,11 @@ mod tests {
             DeviceKeySignPayload::RemoteControlClientConnection(_) => unreachable!(),
         }
 
-        let err = store
-            .sign(DeviceKeySignRequest {
-                key_id: info.key_id,
-                payload: enrollment_payload,
-            })
-            .expect_err("enrollment payload should reject connection path");
+        let err = block_on(store.sign(DeviceKeySignRequest {
+            key_id: info.key_id,
+            payload: enrollment_payload,
+        }))
+        .expect_err("enrollment payload should reject connection path");
         assert!(
             matches!(
                 err,
@@ -1283,8 +1410,7 @@ mod tests {
     #[test]
     fn sign_rejects_empty_session_binding() {
         let store = store(DeviceKeyProtectionClass::HardwareTpm);
-        let info = store
-            .create(create_request(DeviceKeyProtectionPolicy::HardwareOnly))
+        let info = block_on(store.create(create_request(DeviceKeyProtectionPolicy::HardwareOnly)))
             .expect("create should succeed");
         let mut payload = remote_control_client_connection_payload();
         match &mut payload {
@@ -1294,12 +1420,11 @@ mod tests {
             DeviceKeySignPayload::RemoteControlClientEnrollment(_) => unreachable!(),
         }
 
-        let err = store
-            .sign(DeviceKeySignRequest {
-                key_id: info.key_id,
-                payload,
-            })
-            .expect_err("empty session id should fail");
+        let err = block_on(store.sign(DeviceKeySignRequest {
+            key_id: info.key_id,
+            payload,
+        }))
+        .expect_err("empty session id should fail");
 
         assert!(
             matches!(
@@ -1313,8 +1438,7 @@ mod tests {
     #[test]
     fn sign_rejects_empty_client_id() {
         let store = store(DeviceKeyProtectionClass::HardwareTpm);
-        let info = store
-            .create(create_request(DeviceKeyProtectionPolicy::HardwareOnly))
+        let info = block_on(store.create(create_request(DeviceKeyProtectionPolicy::HardwareOnly)))
             .expect("create should succeed");
         let mut payload = remote_control_client_connection_payload();
         match &mut payload {
@@ -1324,12 +1448,11 @@ mod tests {
             DeviceKeySignPayload::RemoteControlClientEnrollment(_) => unreachable!(),
         }
 
-        let err = store
-            .sign(DeviceKeySignRequest {
-                key_id: info.key_id,
-                payload,
-            })
-            .expect_err("empty client id should fail");
+        let err = block_on(store.sign(DeviceKeySignRequest {
+            key_id: info.key_id,
+            payload,
+        }))
+        .expect_err("empty client id should fail");
 
         assert!(
             matches!(
@@ -1343,8 +1466,7 @@ mod tests {
     #[test]
     fn sign_rejects_mismatched_binding() {
         let store = store(DeviceKeyProtectionClass::HardwareTpm);
-        let info = store
-            .create(create_request(DeviceKeyProtectionPolicy::HardwareOnly))
+        let info = block_on(store.create(create_request(DeviceKeyProtectionPolicy::HardwareOnly)))
             .expect("create should succeed");
         let mut payload = remote_control_client_connection_payload();
         match &mut payload {
@@ -1354,12 +1476,11 @@ mod tests {
             DeviceKeySignPayload::RemoteControlClientEnrollment(_) => unreachable!(),
         }
 
-        let err = store
-            .sign(DeviceKeySignRequest {
-                key_id: info.key_id,
-                payload,
-            })
-            .expect_err("mismatched binding should fail");
+        let err = block_on(store.sign(DeviceKeySignRequest {
+            key_id: info.key_id,
+            payload,
+        }))
+        .expect_err("mismatched binding should fail");
 
         assert!(
             matches!(

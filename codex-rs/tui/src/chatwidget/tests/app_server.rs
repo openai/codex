@@ -349,25 +349,6 @@ async fn live_app_server_command_execution_strips_shell_wrapper() {
     );
 }
 
-#[test]
-fn app_server_patch_changes_to_core_preserves_diffs() {
-    let changes = app_server_patch_changes_to_core(vec![FileUpdateChange {
-        path: "foo.txt".to_string(),
-        kind: PatchChangeKind::Add,
-        diff: "hello\n".to_string(),
-    }]);
-
-    assert_eq!(
-        changes,
-        HashMap::from([(
-            PathBuf::from("foo.txt"),
-            FileChange::Add {
-                content: "hello\n".to_string(),
-            },
-        )])
-    );
-}
-
 #[tokio::test]
 async fn live_app_server_collab_wait_items_render_history() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;

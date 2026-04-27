@@ -1,6 +1,5 @@
 exports_files([
     "clippy.toml",
-    "node-version.txt",
 ])
 
 filegroup(

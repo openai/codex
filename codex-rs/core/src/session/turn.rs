@@ -95,9 +95,7 @@ use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
-use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
-use codex_tools::ToolSpec;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
@@ -664,10 +662,6 @@ async fn track_turn_resolved_config_analytics(
     turn_context: &TurnContext,
     input: &[UserInput],
 ) {
-    if !sess.enabled(Feature::GeneralAnalytics) {
-        return;
-    }
-
     let thread_config = {
         let state = sess.state.lock().await;
         state.session_configuration.thread_config_snapshot()
@@ -692,13 +686,14 @@ async fn track_turn_resolved_config_analytics(
             session_source: thread_config.session_source,
             model: turn_context.model_info.slug.clone(),
             model_provider: turn_context.config.model_provider_id.clone(),
-            sandbox_policy: turn_context.sandbox_policy.get().clone(),
+            permission_profile: turn_context.permission_profile(),
+            permission_profile_cwd: turn_context.cwd.to_path_buf(),
             reasoning_effort: turn_context.reasoning_effort,
             reasoning_summary: Some(turn_context.reasoning_summary),
             service_tier: turn_context.config.service_tier,
             approval_policy: turn_context.approval_policy.value(),
             approvals_reviewer: turn_context.config.approvals_reviewer,
-            sandbox_network_access: turn_context.network_sandbox_policy.is_enabled(),
+            sandbox_network_access: turn_context.network_sandbox_policy().is_enabled(),
             collaboration_mode: turn_context.collaboration_mode.mode,
             personality: turn_context.personality,
             is_first_turn,
@@ -945,25 +940,9 @@ pub(crate) fn build_prompt(
     turn_context: &TurnContext,
     base_instructions: BaseInstructions,
 ) -> Prompt {
-    let deferred_dynamic_tools = turn_context
-        .dynamic_tools
-        .iter()
-        .filter(|tool| tool.defer_loading)
-        .map(|tool| ToolName::new(tool.namespace.clone(), tool.name.clone()))
-        .collect::<HashSet<_>>();
-    let tools = if deferred_dynamic_tools.is_empty() {
-        router.model_visible_specs()
-    } else {
-        router
-            .model_visible_specs()
-            .into_iter()
-            .filter_map(|spec| filter_deferred_dynamic_tool_spec(spec, &deferred_dynamic_tools))
-            .collect()
-    };
-
     Prompt {
         input,
-        tools,
+        tools: router.model_visible_specs(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,
         personality: turn_context.personality,
@@ -971,35 +950,6 @@ pub(crate) fn build_prompt(
         output_schema_strict: !crate::guardian::is_guardian_reviewer_source(
             &turn_context.session_source,
         ),
-    }
-}
-
-fn filter_deferred_dynamic_tool_spec(
-    spec: ToolSpec,
-    deferred_dynamic_tools: &HashSet<ToolName>,
-) -> Option<ToolSpec> {
-    match spec {
-        ToolSpec::Function(tool) => {
-            if deferred_dynamic_tools.contains(&ToolName::plain(tool.name.as_str())) {
-                None
-            } else {
-                Some(ToolSpec::Function(tool))
-            }
-        }
-        ToolSpec::Namespace(mut namespace) => {
-            let namespace_name = namespace.name.clone();
-            namespace.tools.retain(|tool| match tool {
-                ResponsesApiNamespaceTool::Function(tool) => !deferred_dynamic_tools.contains(
-                    &ToolName::namespaced(namespace_name.as_str(), tool.name.as_str()),
-                ),
-            });
-            if namespace.tools.is_empty() {
-                None
-            } else {
-                Some(ToolSpec::Namespace(namespace))
-            }
-        }
-        spec => Some(spec),
     }
 }
 
@@ -1502,6 +1452,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::AgentReasoningSectionBreak(_)
         | EventMsg::SessionConfigured(_)
         | EventMsg::ThreadNameUpdated(_)
+        | EventMsg::ThreadGoalUpdated(_)
         | EventMsg::McpStartupUpdate(_)
         | EventMsg::McpStartupComplete(_)
         | EventMsg::McpToolCallBegin(_)
@@ -1870,13 +1821,12 @@ async fn try_run_sampling_request(
     feedback_tags!(
         model = turn_context.model_info.slug.clone(),
         approval_policy = turn_context.approval_policy.value(),
-        sandbox_policy = turn_context.sandbox_policy.get(),
+        sandbox_policy = &turn_context.sandbox_policy(),
         effort = turn_context.reasoning_effort,
         auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
     );
-    let inference_trace = sess.services.rollout_trace.inference_trace_context(
-        sess.conversation_id,
+    let inference_trace = sess.services.rollout_thread_trace.inference_trace_context(
         turn_context.sub_id.as_str(),
         turn_context.model_info.slug.as_str(),
         turn_context.provider.info().name.as_str(),
@@ -2132,6 +2082,7 @@ async fn try_run_sampling_request(
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
+                end_turn,
             } => {
                 flush_assistant_text_segments_all(
                     &sess,
@@ -2143,7 +2094,9 @@ async fn try_run_sampling_request(
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
                 should_emit_turn_diff = true;
-
+                if let Some(false) = end_turn {
+                    needs_follow_up = true;
+                }
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,

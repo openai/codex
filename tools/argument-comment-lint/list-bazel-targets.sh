@@ -10,4 +10,6 @@ cd "${repo_root}"
 # Add only those manual rust_test targets explicitly so inline `#[cfg(test)]`
 # call sites are linted without pulling in unrelated manual release targets.
 printf '%s\n' "//codex-rs/..."
-bazel query 'kind("rust_test rule", attr(tags, "manual", //codex-rs/...))'
+./.github/scripts/run-bazel-query-ci.sh \
+  --output=label \
+  -- 'kind("rust_test rule", attr(tags, "manual", //codex-rs/...))'

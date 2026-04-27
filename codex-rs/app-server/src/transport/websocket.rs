@@ -43,6 +43,11 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+/// WebSocket clients can briefly lag behind normal turn output bursts while the
+/// writer task is healthy, so give them more headroom than internal channels.
+const WEBSOCKET_OUTBOUND_CHANNEL_CAPACITY: usize = 32 * 1024;
+const _: () = assert!(WEBSOCKET_OUTBOUND_CHANNEL_CAPACITY > CHANNEL_CAPACITY);
+
 fn colorize(text: &str, style: Style) -> String {
     text.if_supports_color(Stream::Stderr, |value| value.style(style))
         .to_string()
@@ -174,7 +179,8 @@ pub(crate) async fn run_websocket_connection<M, SinkError, StreamError>(
     StreamError: std::fmt::Display + Send + 'static,
 {
     let connection_id = next_connection_id();
-    let (writer_tx, writer_rx) = mpsc::channel::<QueuedOutgoingMessage>(CHANNEL_CAPACITY);
+    let (writer_tx, writer_rx) =
+        mpsc::channel::<QueuedOutgoingMessage>(WEBSOCKET_OUTBOUND_CHANNEL_CAPACITY);
     let writer_tx_for_reader = writer_tx.clone();
     let disconnect_token = CancellationToken::new();
     if transport_event_tx

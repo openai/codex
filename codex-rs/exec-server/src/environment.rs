@@ -115,6 +115,11 @@ impl EnvironmentManager {
             .and_then(|environment_id| self.get_environment(environment_id))
     }
 
+    /// Returns the id of the default environment.
+    pub fn default_environment_id(&self) -> Option<&str> {
+        self.default_environment.as_deref()
+    }
+
     /// Returns the local environment instance used for internal runtime work.
     pub fn local_environment(&self) -> Arc<Environment> {
         match self.get_environment(LOCAL_ENVIRONMENT_ID) {
@@ -304,6 +309,7 @@ mod tests {
         });
 
         let environment = manager.default_environment().expect("default environment");
+        assert_eq!(manager.default_environment_id(), Some(LOCAL_ENVIRONMENT_ID));
         assert!(!environment.is_remote());
         assert!(
             !manager
@@ -322,6 +328,7 @@ mod tests {
         });
 
         assert!(manager.default_environment().is_none());
+        assert_eq!(manager.default_environment_id(), None);
         assert!(
             !manager
                 .get_environment(LOCAL_ENVIRONMENT_ID)
@@ -339,6 +346,10 @@ mod tests {
         });
 
         let environment = manager.default_environment().expect("default environment");
+        assert_eq!(
+            manager.default_environment_id(),
+            Some(REMOTE_ENVIRONMENT_ID)
+        );
         assert!(environment.is_remote());
         assert_eq!(environment.exec_server_url(), Some("ws://127.0.0.1:8765"));
         assert!(Arc::ptr_eq(
@@ -399,6 +410,7 @@ mod tests {
         });
 
         assert!(manager.default_environment().is_none());
+        assert_eq!(manager.default_environment_id(), None);
     }
 
     #[tokio::test]
@@ -409,6 +421,7 @@ mod tests {
         });
 
         assert!(manager.default_environment().is_none());
+        assert_eq!(manager.default_environment_id(), None);
         assert!(
             !manager
                 .get_environment(LOCAL_ENVIRONMENT_ID)

@@ -1615,7 +1615,6 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
             content: vec![codex_protocol::models::ContentItem::OutputText {
                 text: remote_summary.to_string(),
             }],
-            end_turn: None,
             phase: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
@@ -1687,6 +1686,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: resumed.session_configured.model.clone(),
             effort: None,
             summary: None,
@@ -1779,6 +1779,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: previous_model.to_string(),
             effort: None,
             summary: None,
@@ -1805,6 +1806,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: next_model.to_string(),
             effort: None,
             summary: None,
@@ -1917,6 +1919,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: previous_model.to_string(),
             effort: None,
             summary: None,
@@ -1967,6 +1970,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: next_model.to_string(),
             effort: None,
             summary: None,
@@ -2856,7 +2860,6 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
             content: vec![codex_protocol::models::ContentItem::OutputText {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
-            end_turn: None,
             phase: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
@@ -2980,7 +2983,6 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
             content: vec![codex_protocol::models::ContentItem::OutputText {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
-            end_turn: None,
             phase: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
@@ -3204,6 +3206,7 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: previous_model.to_string(),
             effort: None,
             summary: None,
@@ -3230,6 +3233,7 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: next_model.to_string(),
             effort: None,
             summary: None,

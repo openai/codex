@@ -4,8 +4,11 @@ use ratatui::widgets::WidgetRef;
 
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
+use super::selection_popup_common::ColumnWidthConfig;
+use super::selection_popup_common::ColumnWidthMode;
 use super::selection_popup_common::GenericDisplayRow;
-use super::selection_popup_common::render_rows;
+use super::selection_popup_common::measure_rows_height_with_col_width_mode;
+use super::selection_popup_common::render_rows_with_col_width_mode;
 use super::slash_commands;
 use crate::render::Insets;
 use crate::render::RectExt;
@@ -15,6 +18,10 @@ use crate::slash_command::SlashCommand;
 // `quit` is an alias of `exit`, so we skip `quit` here.
 // `approvals` is an alias of `permissions`.
 const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit, SlashCommand::Approvals];
+const COMMAND_COLUMN_WIDTH: ColumnWidthConfig = ColumnWidthConfig::new(
+    ColumnWidthMode::AutoAllRows,
+    /*name_column_width*/ None,
+);
 
 /// A selectable item in the popup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +41,7 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) connectors_enabled: bool,
     pub(crate) plugins_command_enabled: bool,
     pub(crate) fast_command_enabled: bool,
+    pub(crate) goal_command_enabled: bool,
     pub(crate) personality_command_enabled: bool,
     pub(crate) realtime_conversation_enabled: bool,
     pub(crate) audio_device_selection_enabled: bool,
@@ -48,6 +56,7 @@ impl From<CommandPopupFlags> for slash_commands::BuiltinCommandFlags {
             connectors_enabled: value.connectors_enabled,
             plugins_command_enabled: value.plugins_command_enabled,
             fast_command_enabled: value.fast_command_enabled,
+            goal_command_enabled: value.goal_command_enabled,
             personality_command_enabled: value.personality_command_enabled,
             realtime_conversation_enabled: value.realtime_conversation_enabled,
             audio_device_selection_enabled: value.audio_device_selection_enabled,
@@ -107,10 +116,15 @@ impl CommandPopup {
     /// Determine the preferred height of the popup for a given width.
     /// Accounts for wrapped descriptions so that long tooltips don't overflow.
     pub(crate) fn calculate_required_height(&self, width: u16) -> u16 {
-        use super::selection_popup_common::measure_rows_height;
         let rows = self.rows_from_matches(self.filtered());
 
-        measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width)
+        measure_rows_height_with_col_width_mode(
+            &rows,
+            &self.state,
+            MAX_POPUP_ROWS,
+            width,
+            COMMAND_COLUMN_WIDTH,
+        )
     }
 
     /// Compute exact/prefix matches over built-in commands and user prompts,
@@ -221,7 +235,7 @@ impl CommandPopup {
 impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let rows = self.rows_from_matches(self.filtered());
-        render_rows(
+        render_rows_with_col_width_mode(
             area.inset(Insets::tlbr(
                 /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
             )),
@@ -230,6 +244,7 @@ impl WidgetRef for CommandPopup {
             &self.state,
             MAX_POPUP_ROWS,
             "no matches",
+            COMMAND_COLUMN_WIDTH,
         );
     }
 }
@@ -357,6 +372,7 @@ mod tests {
             connectors_enabled: false,
             plugins_command_enabled: false,
             fast_command_enabled: false,
+            goal_command_enabled: false,
             personality_command_enabled: true,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
@@ -378,6 +394,7 @@ mod tests {
             connectors_enabled: false,
             plugins_command_enabled: false,
             fast_command_enabled: false,
+            goal_command_enabled: false,
             personality_command_enabled: true,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
@@ -399,6 +416,7 @@ mod tests {
             connectors_enabled: false,
             plugins_command_enabled: false,
             fast_command_enabled: false,
+            goal_command_enabled: false,
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
@@ -427,6 +445,7 @@ mod tests {
             connectors_enabled: false,
             plugins_command_enabled: false,
             fast_command_enabled: false,
+            goal_command_enabled: false,
             personality_command_enabled: true,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
@@ -448,6 +467,7 @@ mod tests {
             connectors_enabled: false,
             plugins_command_enabled: false,
             fast_command_enabled: false,
+            goal_command_enabled: false,
             personality_command_enabled: true,
             realtime_conversation_enabled: true,
             audio_device_selection_enabled: false,

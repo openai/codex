@@ -54,7 +54,6 @@ async fn preset_matching_accepts_workspace_write_with_extra_roots() {
     let extra_root = test_path_buf("/tmp/extra").abs();
     let current_sandbox = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![extra_root],
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -199,34 +198,49 @@ async fn approvals_popup_navigation_skips_disabled() {
         .expect("construct constrained approval policy");
     chat.open_approvals_popup();
 
-    // Keep the popup layout stable across platforms and feature defaults so
-    // the hidden numeric shortcut below still targets the disabled Full Access row.
-    let disabled_shortcut = if cfg!(target_os = "windows") {
-        '3'
-    } else {
-        '2'
-    };
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    let mut disabled_shortcut = None;
+    let mut row_number = 0;
+    for line in popup.lines() {
+        let row = line
+            .trim_start()
+            .strip_prefix('\u{203a}')
+            .unwrap_or_else(|| line.trim_start())
+            .trim_start();
+        let mut chars = row.chars();
+        let has_numeric_shortcut =
+            chars.next().is_some_and(|ch| ch.is_ascii_digit()) && chars.next() == Some('.');
+        if has_numeric_shortcut || row.contains("(disabled)") {
+            row_number += 1;
+            if row.contains("(disabled)") {
+                disabled_shortcut = char::from_digit(row_number, 10);
+                break;
+            }
+        }
+    }
+    let disabled_shortcut = disabled_shortcut
+        .unwrap_or_else(|| panic!("expected at least one disabled selection row: {popup}"));
 
-    // The approvals popup is the active bottom-pane view; drive navigation via
-    // chat.handle_key_event. Move through the menu so selection stays on an
-    // enabled preset even when disabled rows are skipped.
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    for _ in 0..10 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+        let popup = render_bottom_popup(&chat, /*width*/ 80);
+        let selected_disabled = popup
+            .lines()
+            .find(|line| line.trim_start().starts_with('\u{203a}'))
+            .expect("expected a selected selection row")
+            .contains("(disabled)");
+        assert!(
+            !selected_disabled,
+            "navigation should skip disabled rows: {popup}"
+        );
+    }
 
-    // Press the hidden numeric shortcut for the disabled Full Access row; it
-    // should not close the popup or accept the preset.
+    // Press the hidden numeric shortcut for a disabled row; it should not close
+    // the popup or accept the preset.
     chat.handle_key_event(KeyEvent::from(KeyCode::Char(disabled_shortcut)));
 
     // Ensure the popup remains open and no selection actions were sent.
-    let width = 80;
-    let height = chat.desired_height(width);
-    let mut terminal =
-        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
-    terminal
-        .draw(|f| chat.render(f.area(), f.buffer_mut()))
-        .expect("render approvals popup after disabled selection");
-    let screen = terminal.backend().vt100().screen().contents();
+    let screen = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
         screen.contains("Update Model Permissions"),
         "popup should remain open after selecting a disabled entry"
@@ -333,8 +347,9 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
         .approval_policy
         .set(AskForApproval::Never)
         .expect("set approval policy");
-    chat.config.permissions.sandbox_policy =
-        Constrained::allow_any(SandboxPolicy::DangerFullAccess);
+    chat.config
+        .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess)
+        .expect("set sandbox policy");
 
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, /*width*/ 120);
@@ -374,9 +389,7 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
         .set(AskForApproval::OnRequest)
         .expect("set approval policy");
     chat.config
-        .permissions
-        .sandbox_policy
-        .set(SandboxPolicy::new_workspace_write_policy())
+        .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
 
     chat.open_permissions_popup();
@@ -433,9 +446,7 @@ async fn permissions_selection_hides_auto_review_when_feature_disabled_even_if_a
         .set(AskForApproval::OnRequest)
         .expect("set approval policy");
     chat.config
-        .permissions
-        .sandbox_policy
-        .set(SandboxPolicy::new_workspace_write_policy())
+        .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
 
     chat.open_permissions_popup();
@@ -522,7 +533,6 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
             approvals_reviewer: ApprovalsReviewer::AutoReview,
             sandbox_policy: SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![extra_root],
-                read_only_access: ReadOnlyAccess::FullAccess,
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -563,9 +573,7 @@ async fn permissions_selection_can_disable_auto_review() {
         .set(AskForApproval::OnRequest)
         .expect("set approval policy");
     chat.config
-        .permissions
-        .sandbox_policy
-        .set(SandboxPolicy::new_workspace_write_policy())
+        .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
 
     chat.open_permissions_popup();
@@ -604,9 +612,7 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
         .set(AskForApproval::OnRequest)
         .expect("set approval policy");
     chat.config
-        .permissions
-        .sandbox_policy
-        .set(SandboxPolicy::new_workspace_write_policy())
+        .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
     chat.set_approvals_reviewer(ApprovalsReviewer::User);
 

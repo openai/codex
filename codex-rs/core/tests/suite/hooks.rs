@@ -3,13 +3,13 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigLayerStackOrdering;
+use codex_config::NetworkConstraints;
+use codex_config::NetworkRequirementsToml;
+use codex_config::RequirementSource;
+use codex_config::Sourced;
 use codex_core::config::Constrained;
-use codex_core::config_loader::ConfigLayerStack;
-use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::config_loader::NetworkConstraints;
-use codex_core::config_loader::NetworkRequirementsToml;
-use codex_core::config_loader::RequirementSource;
-use codex_core::config_loader::Sourced;
 use codex_features::Feature;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
@@ -1417,7 +1417,6 @@ async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result
         AskForApproval::OnRequest,
         SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
-            read_only_access: Default::default(),
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1566,7 +1565,6 @@ allow_local_binding = true
     let approval_policy = AskForApproval::OnFailure;
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
-        read_only_access: Default::default(),
         network_access: true,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -1585,7 +1583,9 @@ allow_local_binding = true
                 .enable(Feature::CodexHooks)
                 .expect("test config should allow feature update");
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-            config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+            config
+                .set_legacy_sandbox_policy(sandbox_policy_for_config)
+                .expect("set sandbox policy");
             let layers = config
                 .config_layer_stack
                 .get_layers(

@@ -13,6 +13,7 @@ use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::ShellCommandHandler;
@@ -230,6 +231,7 @@ async fn shell_pre_tool_use_payload_uses_joined_command() {
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-41".to_string(),
             tool_name: codex_tools::ToolName::plain("shell"),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
@@ -257,6 +259,7 @@ async fn shell_command_pre_tool_use_payload_uses_raw_command() {
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-42".to_string(),
             tool_name: codex_tools::ToolName::plain("shell_command"),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
@@ -287,6 +290,7 @@ async fn build_post_tool_use_payload_uses_tool_output_wire_value() {
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: "call-42".to_string(),
         tool_name: codex_tools::ToolName::plain("shell_command"),
+        source: ToolCallSource::Direct,
         payload,
     };
     assert_eq!(

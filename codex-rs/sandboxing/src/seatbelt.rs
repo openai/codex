@@ -532,8 +532,10 @@ fn create_seatbelt_command_args_for_legacy_policy(
     enforce_managed_network: bool,
     network: Option<&NetworkProxy>,
 ) -> Vec<String> {
-    let file_system_sandbox_policy =
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, sandbox_policy_cwd);
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+        sandbox_policy,
+        sandbox_policy_cwd,
+    );
     create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command,
         file_system_sandbox_policy: &file_system_sandbox_policy,

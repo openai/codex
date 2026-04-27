@@ -2,9 +2,9 @@ use super::*;
 use crate::SkillsManager;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
-use crate::config_loader::ConfigLayerStackOrdering;
 use crate::plugins::PluginsManager;
 use crate::skills_load_input_from_config;
+use codex_config::ConfigLayerStackOrdering;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -574,7 +574,7 @@ writable_roots = ["./sandbox-root"]
         false
     );
 
-    match &*config.permissions.sandbox_policy {
+    match &config.legacy_sandbox_policy() {
         SandboxPolicy::WorkspaceWrite { network_access, .. } => {
             assert_eq!(*network_access, true);
         }

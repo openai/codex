@@ -55,9 +55,7 @@ fn test_exec_request(
     env: HashMap<String, String>,
 ) -> ExecRequest {
     let windows_sandbox_private_desktop = false;
-    let sandbox_policy = turn.sandbox_policy.get().clone();
-    let file_system_sandbox_policy = turn.file_system_sandbox_policy.clone();
-    let network_sandbox_policy = turn.network_sandbox_policy;
+    let permission_profile = turn.permission_profile();
     let network = None;
     let arg0 = None;
     ExecRequest::new(
@@ -70,9 +68,7 @@ fn test_exec_request(
         SandboxType::None,
         turn.windows_sandbox_level,
         windows_sandbox_private_desktop,
-        sandbox_policy,
-        file_system_sandbox_policy,
-        network_sandbox_policy,
+        permission_profile,
         arg0,
     )
 }

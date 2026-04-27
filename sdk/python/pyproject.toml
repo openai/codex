@@ -60,3 +60,11 @@ include = [
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+
+[tool.uv]
+exclude-newer = "7 days"
+index-strategy = "first-index"
+
+[tool.uv.pip]
+exclude-newer = "7 days"
+index-strategy = "first-index"

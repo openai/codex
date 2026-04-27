@@ -51,7 +51,6 @@ mod hooks;
 mod hooks_mcp;
 mod image_rollout;
 mod items;
-mod js_repl;
 mod json_result;
 mod live_cli;
 mod live_reload;

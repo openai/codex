@@ -6,11 +6,18 @@ This file is a curated helper. Every recommendation here must be verified agains
 
 | Model ID | Use for |
 | --- | --- |
-| `gpt-5.4` | Default text plus reasoning for most new apps, including for coding use-cases |
-| `gpt-5.4-pro` | Only when the user explicitly asks for maximum reasoning or quality; substantially slower and more expensive |
-| `gpt-5.4-mini` | Cheaper and faster reasoning with good quality, including for coding use-cases |
+| `gpt-5.5` | Latest/default text and reasoning model for most new apps, including coding and tool-heavy workflows |
+| `gpt-5.5-pro` | Maximum reasoning or quality when latency and cost matter less |
+| `gpt-5.4` | Previous default text and reasoning model; use for existing GPT-5.4 integrations |
+| `gpt-5.4-mini` | Lower-cost testing and lighter production workflows |
 | `gpt-5.4-nano` | High-throughput simple tasks and classification |
-| `gpt-image-1.5` | Best image generation and edit quality |
+| `gpt-5.5` | Explicit no-reasoning text path via `reasoning.effort: none` |
+| `gpt-4.1-mini` | Cheaper no-reasoning text |
+| `gpt-4.1-nano` | Fastest and cheapest no-reasoning text |
+| `gpt-5.3-codex` | Agentic coding, code editing, and tool-heavy coding workflows |
+| `gpt-5.1-codex-mini` | Cheaper coding workflows |
+| `gpt-image-2` | Best image generation and edit quality |
+| `gpt-image-1.5` | Less expensive image generation and edit quality |
 | `gpt-image-1-mini` | Cost-optimized image generation |
 | `gpt-4o-mini-tts` | Text-to-speech |
 | `gpt-4o-mini-transcribe` | Speech-to-text, fast and cost-efficient |

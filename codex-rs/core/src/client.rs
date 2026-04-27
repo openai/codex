@@ -1127,7 +1127,7 @@ impl ModelClientSession {
 
     fn responses_request_compression(&self, auth: Option<&CodexAuth>) -> Compression {
         if self.client.state.enable_request_compression
-            && auth.is_some_and(CodexAuth::is_chatgpt_auth)
+            && auth.is_some_and(CodexAuth::uses_codex_backend)
             && self.client.state.provider.info().is_openai()
         {
             Compression::Zstd
@@ -1655,6 +1655,7 @@ where
                 Ok(ResponseEvent::Completed {
                     response_id,
                     token_usage,
+                    end_turn,
                 }) => {
                     if let Some(usage) = &token_usage {
                         session_telemetry.sse_event_completed(
@@ -1680,6 +1681,7 @@ where
                         .send(Ok(ResponseEvent::Completed {
                             response_id,
                             token_usage,
+                            end_turn,
                         }))
                         .await
                         .is_err()

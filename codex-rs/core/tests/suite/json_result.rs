@@ -83,6 +83,7 @@ async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model,
             effort: None,
             summary: None,

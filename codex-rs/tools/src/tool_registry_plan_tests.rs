@@ -26,11 +26,11 @@ use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::WebSearchToolType;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
@@ -57,7 +57,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -103,6 +103,15 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         }),
     ] {
         expected.insert(spec.name().to_string(), spec);
+    }
+    if config.goal_tools {
+        for spec in [
+            create_get_goal_tool(),
+            create_create_goal_tool(),
+            create_update_goal_tool(),
+        ] {
+            expected.insert(spec.name().to_string(), spec);
+        }
     }
     let collab_specs = if config.multi_agent_v2 {
         vec![
@@ -160,7 +169,7 @@ fn test_build_specs_collab_tools_enabled() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -187,6 +196,51 @@ fn test_build_specs_collab_tools_enabled() {
 }
 
 #[test]
+fn goal_tools_require_goals_feature() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let mut features = Features::with_defaults();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_lacks_tool_name(&tools, "get_goal");
+    assert_lacks_tool_name(&tools, "create_goal");
+    assert_lacks_tool_name(&tools, "update_goal");
+
+    features.enable(Feature::Goals);
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_contains_tool_names(&tools, &["get_goal", "create_goal", "update_goal"]);
+}
+
+#[test]
 fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
@@ -200,7 +254,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -343,7 +397,7 @@ fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -378,7 +432,7 @@ fn view_image_tool_omits_detail_without_original_detail_support() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -408,7 +462,7 @@ fn view_image_tool_includes_detail_with_original_detail_support() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -437,7 +491,6 @@ fn disabled_environment_omits_environment_backed_tools() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::UnifiedExec);
-    features.enable(Feature::JsRepl);
     let available_models = Vec::new();
     let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -446,7 +499,7 @@ fn disabled_environment_omits_environment_backed_tools() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     })
     .with_has_environment(/*has_environment*/ false);
@@ -462,8 +515,6 @@ fn disabled_environment_omits_environment_backed_tools() {
 
     assert_lacks_tool_name(&tools, "exec_command");
     assert_lacks_tool_name(&tools, "write_stdin");
-    assert_lacks_tool_name(&tools, "js_repl");
-    assert_lacks_tool_name(&tools, "js_repl_reset");
     assert_lacks_tool_name(&tools, "apply_patch");
     assert_lacks_tool_name(&tools, "list_dir");
     assert_lacks_tool_name(&tools, VIEW_IMAGE_TOOL_NAME);
@@ -486,7 +537,7 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
             "agent_job:test".to_string(),
         )),
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -523,7 +574,7 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -546,7 +597,7 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -574,7 +625,7 @@ fn request_permissions_requires_feature_flag() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -594,7 +645,7 @@ fn request_permissions_requires_feature_flag() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -623,7 +674,7 @@ fn request_permissions_tool_is_independent_from_additional_permissions() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -634,66 +685,6 @@ fn request_permissions_tool_is_independent_from_additional_permissions() {
     );
 
     assert_lacks_tool_name(&tools, "request_permissions");
-}
-
-#[test]
-fn js_repl_requires_feature_flag() {
-    let model_info = model_info();
-    let features = Features::with_defaults();
-
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        image_generation_tool_auth_allowed: true,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*deferred_mcp_tools*/ None,
-        &[],
-    );
-
-    assert!(
-        !tools.iter().any(|tool| tool.spec.name() == "js_repl"),
-        "js_repl should be disabled when the feature is off"
-    );
-    assert!(
-        !tools.iter().any(|tool| tool.spec.name() == "js_repl_reset"),
-        "js_repl_reset should be disabled when the feature is off"
-    );
-}
-
-#[test]
-fn js_repl_enabled_adds_tools() {
-    let model_info = model_info();
-    let mut features = Features::with_defaults();
-    features.enable(Feature::JsRepl);
-
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        image_generation_tool_auth_allowed: true,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*deferred_mcp_tools*/ None,
-        &[],
-    );
-
-    assert_contains_tool_names(&tools, &["js_repl", "js_repl_reset"]);
 }
 
 #[test]
@@ -714,7 +705,7 @@ fn image_generation_tools_require_feature_and_supported_model() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (default_tools, _) = build_specs(
@@ -737,7 +728,7 @@ fn image_generation_tools_require_feature_and_supported_model() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (supported_tools, _) = build_specs(
@@ -763,7 +754,7 @@ fn image_generation_tools_require_feature_and_supported_model() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -793,7 +784,7 @@ fn web_search_mode_cached_sets_external_web_access_false() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -829,7 +820,7 @@ fn web_search_mode_live_sets_external_web_access_true() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -878,7 +869,7 @@ fn web_search_config_is_forwarded_to_tool_spec() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     })
     .with_web_search_config(Some(web_search_config.clone()));
@@ -920,7 +911,7 @@ fn web_search_tool_type_text_and_image_sets_search_content_types() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -955,7 +946,7 @@ fn mcp_resource_tools_are_hidden_without_mcp_servers() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -986,7 +977,7 @@ fn mcp_resource_tools_are_included_when_mcp_servers_are_present() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -1020,7 +1011,7 @@ fn test_parallel_support_flags() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -1047,7 +1038,7 @@ fn test_test_model_info_includes_sync_tool() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -1073,7 +1064,7 @@ fn test_build_specs_mcp_tools_converted() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -1165,7 +1156,7 @@ fn test_build_specs_mcp_namespace_description_falls_back_when_missing() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -1205,7 +1196,7 @@ fn test_build_specs_mcp_tools_sorted_by_name() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
@@ -1255,7 +1246,7 @@ fn search_tool_description_lists_each_mcp_source_once() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
@@ -1357,7 +1348,7 @@ fn search_tool_requires_model_capability_and_enabled_feature() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -1377,7 +1368,7 @@ fn search_tool_requires_model_capability_and_enabled_feature() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -1395,7 +1386,7 @@ fn search_tool_requires_model_capability_and_enabled_feature() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
@@ -1420,7 +1411,7 @@ fn search_tool_registers_for_deferred_dynamic_tools() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let dynamic_tools = vec![
@@ -1509,7 +1500,7 @@ fn tool_suggest_is_not_registered_without_feature_flag() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs_with_discoverable_tools(
@@ -1549,7 +1540,7 @@ fn tool_suggest_can_be_registered_without_search_tool() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs_with_discoverable_tools(
@@ -1595,7 +1586,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
@@ -1697,7 +1688,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
@@ -1750,7 +1741,7 @@ fn code_mode_preserves_nullable_and_literal_mcp_input_shapes() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
@@ -1833,7 +1824,7 @@ fn code_mode_augments_builtin_tool_descriptions_with_typed_sample() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
@@ -1869,7 +1860,7 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
@@ -1906,7 +1897,7 @@ fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only(
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
@@ -2063,7 +2054,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_structured_output_sample() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
@@ -2200,6 +2191,7 @@ fn spawn_agent_tool_options(config: &ToolsConfig) -> SpawnAgentToolOptions<'_> {
         hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
         include_usage_hint: config.spawn_agent_usage_hint,
         usage_hint_text: config.spawn_agent_usage_hint_text.clone(),
+        max_concurrent_threads_per_session: config.max_concurrent_threads_per_session,
     }
 }
 

@@ -19,6 +19,7 @@ mod fs;
 mod initialize;
 mod marketplace_add;
 mod marketplace_remove;
+mod marketplace_upgrade;
 mod mcp_resource;
 mod mcp_server_elicitation;
 mod mcp_server_status;
@@ -33,6 +34,8 @@ mod plugin_read;
 mod plugin_uninstall;
 mod rate_limits;
 mod realtime_conversation;
+#[cfg(debug_assertions)]
+mod remote_thread_store;
 mod request_permissions;
 mod request_user_input;
 mod review;

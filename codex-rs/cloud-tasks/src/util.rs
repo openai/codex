@@ -1,4 +1,3 @@
-use base64::Engine as _;
 use chrono::DateTime;
 use chrono::Local;
 use chrono::Utc;
@@ -42,39 +41,23 @@ pub fn normalize_base_url(input: &str) -> String {
     base_url
 }
 
-/// Extract the ChatGPT account id from a JWT token, when present.
-pub fn extract_chatgpt_account_id(token: &str) -> Option<String> {
-    let mut parts = token.split('.');
-    let (_h, payload_b64, _s) = match (parts.next(), parts.next(), parts.next()) {
-        (Some(h), Some(p), Some(s)) if !h.is_empty() && !p.is_empty() && !s.is_empty() => (h, p, s),
-        _ => return None,
-    };
-    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload_b64)
-        .ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&payload_bytes).ok()?;
-    v.get("https://api.openai.com/auth")
-        .and_then(|auth| auth.get("chatgpt_account_id"))
-        .and_then(|id| id.as_str())
-        .map(str::to_string)
-}
-
-pub async fn load_auth_manager() -> Option<AuthManager> {
+pub async fn load_auth_manager(chatgpt_base_url: Option<String>) -> Option<AuthManager> {
     // TODO: pass in cli overrides once cloud tasks properly support them.
     let config = Config::load_with_cli_overrides(Vec::new()).await.ok()?;
-    Some(AuthManager::new(
-        config.codex_home.to_path_buf(),
-        /*enable_codex_api_key_env*/ false,
-        config.cli_auth_credentials_store_mode,
-        Some(config.chatgpt_base_url),
-    ))
+    Some(
+        AuthManager::new(
+            config.codex_home.to_path_buf(),
+            /*enable_codex_api_key_env*/ false,
+            config.cli_auth_credentials_store_mode,
+            chatgpt_base_url.or(Some(config.chatgpt_base_url)),
+        )
+        .await,
+    )
 }
 
 /// Build headers for ChatGPT-backed requests: `User-Agent`, optional `Authorization`,
 /// and optional `ChatGPT-Account-Id`.
 pub async fn build_chatgpt_headers() -> HeaderMap {
-    use reqwest::header::AUTHORIZATION;
-    use reqwest::header::HeaderName;
     use reqwest::header::HeaderValue;
     use reqwest::header::USER_AGENT;
 
@@ -85,23 +68,11 @@ pub async fn build_chatgpt_headers() -> HeaderMap {
         USER_AGENT,
         HeaderValue::from_str(&ua).unwrap_or(HeaderValue::from_static("codex-cli")),
     );
-    if let Some(am) = load_auth_manager().await
+    if let Some(am) = load_auth_manager(/*chatgpt_base_url*/ None).await
         && let Some(auth) = am.auth().await
-        && let Ok(tok) = auth.get_token()
-        && !tok.is_empty()
+        && auth.uses_codex_backend()
     {
-        let v = format!("Bearer {tok}");
-        if let Ok(hv) = HeaderValue::from_str(&v) {
-            headers.insert(AUTHORIZATION, hv);
-        }
-        if let Some(acc) = auth
-            .get_account_id()
-            .or_else(|| extract_chatgpt_account_id(&tok))
-            && let Ok(name) = HeaderName::from_bytes(b"ChatGPT-Account-Id")
-            && let Ok(hv) = HeaderValue::from_str(&acc)
-        {
-            headers.insert(name, hv);
-        }
+        headers.extend(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers());
     }
     headers
 }
