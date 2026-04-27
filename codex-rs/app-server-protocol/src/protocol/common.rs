@@ -97,6 +97,12 @@ macro_rules! serialization_scope_expr {
             thread_id: $actual_params.$field.clone(),
         })
     };
+    ($actual_params:ident, optional_thread_id($params:ident . $field:ident)) => {
+        $actual_params
+            .$field
+            .clone()
+            .map(|thread_id| ClientRequestSerializationScope::Thread { thread_id })
+    };
     ($actual_params:ident, thread_or_path($params:ident . $thread_field:ident, $params2:ident . $path_field:ident)) => {
         if !$actual_params.$thread_field.is_empty() {
             Some(ClientRequestSerializationScope::Thread {
@@ -681,7 +687,7 @@ client_request_definitions! {
 
     McpResourceRead => "mcpServer/resource/read" {
         params: v2::McpResourceReadParams,
-        serialization: thread_id(params.thread_id),
+        serialization: optional_thread_id(params.thread_id),
         response: v2::McpResourceReadResponse,
     },
 
@@ -1468,6 +1474,21 @@ mod tests {
             })
         );
 
+        let mcp_resource_read = ClientRequest::McpResourceRead {
+            request_id: request_id(),
+            params: v2::McpResourceReadParams {
+                thread_id: Some("thread-1".to_string()),
+                server: "server-a".to_string(),
+                uri: "file:///tmp/resource".to_string(),
+            },
+        };
+        assert_eq!(
+            mcp_resource_read.serialization_scope(),
+            Some(ClientRequestSerializationScope::Thread {
+                thread_id: "thread-1".to_string()
+            })
+        );
+
         let config_read = ClientRequest::ConfigRead {
             request_id: request_id(),
             params: v2::ConfigReadParams {
@@ -1616,6 +1637,16 @@ mod tests {
             },
         };
         assert_eq!(thread_turns_list.serialization_scope(), None);
+
+        let mcp_resource_read = ClientRequest::McpResourceRead {
+            request_id: request_id(),
+            params: v2::McpResourceReadParams {
+                thread_id: None,
+                server: "server-a".to_string(),
+                uri: "file:///tmp/resource".to_string(),
+            },
+        };
+        assert_eq!(mcp_resource_read.serialization_scope(), None);
     }
 
     #[test]
