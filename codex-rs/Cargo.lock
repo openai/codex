@@ -2122,6 +2122,7 @@ dependencies = [
  "codex-rmcp-client",
  "codex-rollout-trace",
  "codex-sandboxing",
+ "codex-shell-command",
  "codex-state",
  "codex-stdio-to-uds",
  "codex-terminal-detection",
