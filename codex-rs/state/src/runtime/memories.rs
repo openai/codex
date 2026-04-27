@@ -1029,29 +1029,10 @@ WHERE kind = ? AND job_key = ?
         completed_watermark: i64,
         selected_outputs: &[Stage1Output],
     ) -> anyhow::Result<bool> {
-        let now = Utc::now().timestamp();
         let mut tx = self.pool.begin().await?;
-        let rows_affected = sqlx::query(
-            r#"
-UPDATE jobs
-SET
-    status = 'done',
-    finished_at = ?,
-    lease_until = NULL,
-    last_error = NULL,
-    last_success_watermark = max(COALESCE(last_success_watermark, 0), ?)
-WHERE kind = ? AND job_key = ?
-  AND status = 'running' AND ownership_token = ?
-            "#,
-        )
-        .bind(now)
-        .bind(completed_watermark)
-        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
-        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
-        .bind(ownership_token)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
+        let rows_affected =
+            mark_global_phase2_job_succeeded_row(&mut *tx, ownership_token, completed_watermark)
+                .await?;
 
         if rows_affected == 0 {
             tx.commit().await?;
@@ -1089,6 +1070,27 @@ WHERE thread_id = ? AND source_updated_at = ?
 
         tx.commit().await?;
         Ok(true)
+    }
+
+    /// Marks the owned running global phase-2 job as succeeded without
+    /// rewriting the selected stage-1 snapshot.
+    ///
+    /// This is used when the materialized memory workspace is already clean:
+    /// the previous successful phase-2 selection is still authoritative, so
+    /// only the singleton job row needs to be finalized.
+    pub async fn mark_global_phase2_job_succeeded_preserving_selection(
+        &self,
+        ownership_token: &str,
+        completed_watermark: i64,
+    ) -> anyhow::Result<bool> {
+        let rows_affected = mark_global_phase2_job_succeeded_row(
+            self.pool.as_ref(),
+            ownership_token,
+            completed_watermark,
+        )
+        .await?;
+
+        Ok(rows_affected > 0)
     }
 
     /// Marks the owned running global phase-2 job as failed and schedules retry.
@@ -1174,6 +1176,40 @@ WHERE kind = ? AND job_key = ?
 
         Ok(rows_affected > 0)
     }
+}
+
+async fn mark_global_phase2_job_succeeded_row<'e, E>(
+    executor: E,
+    ownership_token: &str,
+    completed_watermark: i64,
+) -> anyhow::Result<u64>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let now = Utc::now().timestamp();
+    let rows_affected = sqlx::query(
+        r#"
+UPDATE jobs
+SET
+    status = 'done',
+    finished_at = ?,
+    lease_until = NULL,
+    last_error = NULL,
+    last_success_watermark = max(COALESCE(last_success_watermark, 0), ?)
+WHERE kind = ? AND job_key = ?
+  AND status = 'running' AND ownership_token = ?
+            "#,
+    )
+    .bind(now)
+    .bind(completed_watermark)
+    .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+    .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+    .bind(ownership_token)
+    .execute(executor)
+    .await?
+    .rows_affected();
+
+    Ok(rows_affected)
 }
 
 async fn enqueue_global_consolidation_with_executor<'e, E>(
@@ -2492,6 +2528,116 @@ WHERE kind = 'memory_stage1'
         assert!(
             matches!(claim_after_success, Phase2JobClaimOutcome::Claimed { .. }),
             "the DB claim is only a lock; git workspace diff decides whether there is work"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase2_success_preserving_selection_does_not_rewrite_stage1_outputs() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.join("workspace"),
+            ))
+            .await
+            .expect("upsert thread");
+
+        let source_updated_at = Utc::now().timestamp();
+        sqlx::query(
+            r#"
+INSERT INTO stage1_outputs (
+    thread_id,
+    source_updated_at,
+    raw_memory,
+    rollout_summary,
+    generated_at,
+    selected_for_phase2,
+    selected_for_phase2_source_updated_at
+) VALUES (?, ?, 'raw', 'summary', ?, 1, ?)
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .bind(source_updated_at)
+        .bind(source_updated_at)
+        .bind(source_updated_at)
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("insert selected stage1 output");
+
+        sqlx::query("CREATE TABLE stage1_update_counter (updates INTEGER NOT NULL)")
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("create update counter");
+        sqlx::query("INSERT INTO stage1_update_counter (updates) VALUES (0)")
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("initialize update counter");
+        sqlx::query(
+            r#"
+CREATE TRIGGER count_stage1_updates
+AFTER UPDATE ON stage1_outputs
+BEGIN
+    UPDATE stage1_update_counter SET updates = updates + 1;
+END
+            "#,
+        )
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("create update trigger");
+
+        runtime
+            .enqueue_global_consolidation(source_updated_at)
+            .await
+            .expect("enqueue phase2");
+        let phase2_claim = runtime
+            .try_claim_global_phase2_job(thread_id, /*lease_seconds*/ 3_600)
+            .await
+            .expect("claim phase2");
+        let (ownership_token, input_watermark) = match phase2_claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => (ownership_token, input_watermark),
+            other => panic!("unexpected phase2 claim outcome: {other:?}"),
+        };
+
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded_preserving_selection(
+                    ownership_token.as_str(),
+                    input_watermark,
+                )
+                .await
+                .expect("mark clean phase2 succeeded"),
+            "clean phase2 success should finalize the job"
+        );
+
+        let updates = sqlx::query_scalar::<_, i64>("SELECT updates FROM stage1_update_counter")
+            .fetch_one(runtime.pool.as_ref())
+            .await
+            .expect("load stage1 update count");
+        assert_eq!(updates, 0);
+
+        let (selected_for_phase2, selected_for_phase2_source_updated_at) =
+            sqlx::query_as::<_, (i64, Option<i64>)>(
+                "SELECT selected_for_phase2, selected_for_phase2_source_updated_at FROM stage1_outputs WHERE thread_id = ?",
+            )
+            .bind(thread_id.to_string())
+            .fetch_one(runtime.pool.as_ref())
+            .await
+            .expect("load selected snapshot");
+        assert_eq!(selected_for_phase2, 1);
+        assert_eq!(
+            selected_for_phase2_source_updated_at,
+            Some(source_updated_at)
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;

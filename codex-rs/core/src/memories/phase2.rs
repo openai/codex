@@ -122,12 +122,11 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     if !workspace_diff.has_changes() {
         tracing::error!("Phase 2 no changes");
         // We check only after sync of the file system.
-        job::succeed(
+        job::succeed_preserving_selection(
             session,
             db,
             &claim,
             new_watermark,
-            &raw_memories,
             "succeeded_no_workspace_changes",
         )
         .await;
@@ -288,6 +287,23 @@ mod job {
             &[("status", reason)],
         );
         db.mark_global_phase2_job_succeeded(&claim.token, completion_watermark, selected_outputs)
+            .await
+            .unwrap_or(false)
+    }
+
+    pub(super) async fn succeed_preserving_selection(
+        session: &Arc<Session>,
+        db: &StateRuntime,
+        claim: &Claim,
+        completion_watermark: i64,
+        reason: &'static str,
+    ) -> bool {
+        session.services.session_telemetry.counter(
+            metrics::MEMORY_PHASE_TWO_JOBS,
+            /*inc*/ 1,
+            &[("status", reason)],
+        );
+        db.mark_global_phase2_job_succeeded_preserving_selection(&claim.token, completion_watermark)
             .await
             .unwrap_or(false)
     }
