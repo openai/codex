@@ -189,7 +189,7 @@ mod tests {
         runtime
             .insert_security_event(&SecurityEventCreateParams {
                 created_at: 1_700_000_002,
-                kind: SecurityEventKind::GuardianAssessment,
+                kind: SecurityEventKind::AutoReviewDecision,
                 thread_id: Some("thread-2".to_string()),
                 turn_id: Some("turn-3".to_string()),
                 call_id: Some("call-3".to_string()),
@@ -210,7 +210,7 @@ mod tests {
                 details_json: None,
             })
             .await
-            .expect("insert guardian event");
+            .expect("insert auto review event");
 
         assert_eq!(
             runtime
@@ -275,15 +275,15 @@ mod tests {
             runtime
                 .list_security_events(&SecurityEventQuery {
                     thread_id: None,
-                    kind: Some(SecurityEventKind::GuardianAssessment),
+                    kind: Some(SecurityEventKind::AutoReviewDecision),
                     limit: Some(1),
                 })
                 .await
-                .expect("list guardian events"),
+                .expect("list auto review events"),
             vec![SecurityEvent {
                 id: 3,
                 created_at: 1_700_000_002,
-                kind: SecurityEventKind::GuardianAssessment,
+                kind: SecurityEventKind::AutoReviewDecision,
                 thread_id: Some("thread-2".to_string()),
                 turn_id: Some("turn-3".to_string()),
                 call_id: Some("call-3".to_string()),
