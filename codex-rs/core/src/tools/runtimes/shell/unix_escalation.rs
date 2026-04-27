@@ -40,7 +40,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GuardianCommandSource;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
@@ -143,7 +142,6 @@ pub(super) async fn try_run_zsh_fork(
         windows_sandbox_level,
         windows_sandbox_private_desktop: _windows_sandbox_private_desktop,
         permission_profile,
-        sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
         windows_sandbox_filesystem_overrides: _windows_sandbox_filesystem_overrides,
@@ -161,7 +159,6 @@ pub(super) async fn try_run_zsh_fork(
         command,
         cwd: sandbox_cwd,
         permission_profile,
-        sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
         sandbox,
@@ -260,7 +257,6 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         command: exec_request.command.clone(),
         cwd: exec_request.cwd.clone(),
         permission_profile: exec_request.permission_profile.clone(),
-        sandbox_policy: exec_request.sandbox_policy.clone(),
         file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
         network_sandbox_policy: exec_request.network_sandbox_policy,
         sandbox: exec_request.sandbox,
@@ -742,7 +738,6 @@ struct CoreShellCommandExecutor {
     command: Vec<String>,
     cwd: AbsolutePathBuf,
     permission_profile: PermissionProfile,
-    sandbox_policy: SandboxPolicy,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
     sandbox: SandboxType,
@@ -796,7 +791,6 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: false,
                 permission_profile: self.permission_profile.clone(),
-                sandbox_policy: self.sandbox_policy.clone(),
                 file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
                 network_sandbox_policy: self.network_sandbox_policy,
                 windows_sandbox_filesystem_overrides: None,

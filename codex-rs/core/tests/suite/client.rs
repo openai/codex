@@ -1091,7 +1091,8 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     config.model_provider = model_provider;
 
     let auth_manager =
-        match CodexAuth::from_auth_storage(codex_home.path(), AuthCredentialsStoreMode::File) {
+        match CodexAuth::from_auth_storage(codex_home.path(), AuthCredentialsStoreMode::File).await
+        {
             Ok(Some(auth)) => codex_core::test_support::auth_manager_from_auth(auth),
             Ok(None) => panic!("No CodexAuth found in codex_home"),
             Err(e) => panic!("Failed to load CodexAuth: {e}"),
@@ -1745,7 +1746,7 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
             cwd: config.cwd.to_path_buf(),
             approval_policy: config.permissions.approval_policy.value(),
             approvals_reviewer: None,
-            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            sandbox_policy: config.legacy_sandbox_policy(),
             permission_profile: None,
             model: session_configured.model.clone(),
             effort: Some(ReasoningEffort::Low),
@@ -1867,7 +1868,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
             cwd: config.cwd.to_path_buf(),
             approval_policy: config.permissions.approval_policy.value(),
             approvals_reviewer: None,
-            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            sandbox_policy: config.legacy_sandbox_policy(),
             permission_profile: None,
             model: session_configured.model,
             effort: None,

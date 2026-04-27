@@ -5,12 +5,12 @@ use std::path::Path;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::memories::ensure_layout;
-use crate::memories::raw_memories_file;
-use crate::memories::rollout_summaries_dir;
+use crate::ensure_layout;
+use crate::raw_memories_file;
+use crate::rollout_summaries_dir;
 
 /// Rebuild `raw_memories.md` from DB-backed stage-1 outputs.
-pub(super) async fn rebuild_raw_memories_file_from_memories(
+pub async fn rebuild_raw_memories_file_from_memories(
     root: &Path,
     memories: &[Stage1Output],
     max_raw_memories_for_consolidation: usize,
@@ -20,7 +20,7 @@ pub(super) async fn rebuild_raw_memories_file_from_memories(
 }
 
 /// Syncs canonical rollout summary files from DB-backed stage-1 output rows.
-pub(super) async fn sync_rollout_summaries_from_memories(
+pub async fn sync_rollout_summaries_from_memories(
     root: &Path,
     memories: &[Stage1Output],
     max_raw_memories_for_consolidation: usize,
@@ -36,24 +36,6 @@ pub(super) async fn sync_rollout_summaries_from_memories(
 
     for memory in retained {
         write_rollout_summary_for_thread(root, memory).await?;
-    }
-
-    if retained.is_empty() {
-        for file_name in ["MEMORY.md", "memory_summary.md"] {
-            let path = root.join(file_name);
-            if let Err(err) = tokio::fs::remove_file(path).await
-                && err.kind() != std::io::ErrorKind::NotFound
-            {
-                return Err(err);
-            }
-        }
-
-        let skills_dir = root.join("skills");
-        if let Err(err) = tokio::fs::remove_dir_all(skills_dir).await
-            && err.kind() != std::io::ErrorKind::NotFound
-        {
-            return Err(err);
-        }
     }
 
     Ok(())
@@ -168,7 +150,7 @@ fn rollout_summary_format_error(err: std::fmt::Error) -> std::io::Error {
     std::io::Error::other(format!("format rollout summary: {err}"))
 }
 
-pub(crate) fn rollout_summary_file_stem(memory: &Stage1Output) -> String {
+pub fn rollout_summary_file_stem(memory: &Stage1Output) -> String {
     rollout_summary_file_stem_from_parts(
         memory.thread_id,
         memory.source_updated_at,
@@ -176,7 +158,7 @@ pub(crate) fn rollout_summary_file_stem(memory: &Stage1Output) -> String {
     )
 }
 
-pub(super) fn rollout_summary_file_stem_from_parts(
+fn rollout_summary_file_stem_from_parts(
     thread_id: codex_protocol::ThreadId,
     source_updated_at: chrono::DateTime<chrono::Utc>,
     rollout_slug: Option<&str>,

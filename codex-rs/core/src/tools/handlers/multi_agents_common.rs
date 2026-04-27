@@ -269,7 +269,7 @@ pub(crate) fn apply_spawn_agent_runtime_overrides(
     config.cwd = turn.cwd.clone();
     config
         .permissions
-        .set_permission_profile(turn.permission_profile(), turn.cwd.as_path())
+        .set_permission_profile(turn.permission_profile())
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!("permission_profile is invalid: {err}"))
         })?;

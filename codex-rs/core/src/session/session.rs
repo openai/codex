@@ -634,7 +634,9 @@ impl Session {
                 config.model_context_window,
                 config.model_auto_compact_token_limit,
                 config.permissions.approval_policy.value(),
-                config.permissions.sandbox_policy.get().clone(),
+                config
+                    .permissions
+                    .legacy_sandbox_policy(session_configuration.cwd.as_path()),
                 mcp_servers.keys().map(String::as_str).collect(),
                 config.active_profile.clone(),
             );

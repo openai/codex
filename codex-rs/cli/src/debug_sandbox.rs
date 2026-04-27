@@ -227,7 +227,9 @@ async fn run_command_under_sandbox(
             let args = create_linux_sandbox_command_args_for_policies(
                 command,
                 cwd.as_path(),
-                config.permissions.sandbox_policy.get(),
+                &config
+                    .permissions
+                    .legacy_sandbox_policy(sandbox_policy_cwd.as_path()),
                 &file_system_sandbox_policy,
                 network_sandbox_policy,
                 sandbox_policy_cwd.as_path(),
@@ -290,7 +292,10 @@ async fn run_command_under_windows_session(
     use codex_windows_sandbox::spawn_windows_sandbox_session_elevated;
     use codex_windows_sandbox::spawn_windows_sandbox_session_legacy;
 
-    let policy_str = match serde_json::to_string(config.permissions.sandbox_policy.get()) {
+    let sandbox_policy = config
+        .permissions
+        .legacy_sandbox_policy(sandbox_policy_cwd.as_path());
+    let policy_str = match serde_json::to_string(&sandbox_policy) {
         Ok(policy_str) => policy_str,
         Err(err) => {
             eprintln!("windows sandbox failed to serialize policy: {err}");

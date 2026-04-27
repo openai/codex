@@ -29,7 +29,6 @@ use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecCommandStatus;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_sandboxing::SandboxType;
 use codex_shell_command::parse_command::parse_command;
@@ -195,7 +194,6 @@ pub(crate) async fn execute_user_shell_command(
             .permissions
             .windows_sandbox_private_desktop,
         permission_profile: permission_profile.clone(),
-        sandbox_policy: SandboxPolicy::DangerFullAccess,
         file_system_sandbox_policy: permission_profile.file_system_sandbox_policy(),
         network_sandbox_policy: permission_profile.network_sandbox_policy(),
         windows_sandbox_filesystem_overrides: None,

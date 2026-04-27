@@ -15,8 +15,6 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::NetworkAccess;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize;
 use pretty_assertions::assert_eq;
@@ -152,9 +150,9 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
         .expect("transform");
 
     assert_eq!(
-        exec_request.sandbox_policy,
-        SandboxPolicy::ExternalSandbox {
-            network_access: NetworkAccess::Enabled,
+        exec_request.permission_profile,
+        PermissionProfile::External {
+            network: NetworkSandboxPolicy::Enabled,
         }
     );
     assert_eq!(

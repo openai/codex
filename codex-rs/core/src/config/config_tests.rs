@@ -806,7 +806,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
         ]),
     );
     assert_eq!(
-        config.permissions.sandbox_policy.get(),
+        &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![memories_root],
             network_access: false,
@@ -840,7 +840,7 @@ async fn permission_profile_override_populates_runtime_permissions() -> std::io:
 
     assert_eq!(config.permissions.permission_profile(), permission_profile);
     assert_eq!(
-        config.permissions.sandbox_policy.get(),
+        &config.legacy_sandbox_policy(),
         &SandboxPolicy::DangerFullAccess
     );
     Ok(())
@@ -869,7 +869,7 @@ async fn permission_profile_override_preserves_managed_unrestricted_filesystem()
 
     assert_eq!(config.permissions.permission_profile(), permission_profile);
     assert_eq!(
-        config.permissions.sandbox_policy.get(),
+        &config.legacy_sandbox_policy(),
         &SandboxPolicy::ExternalSandbox {
             network_access: NetworkAccess::Restricted,
         }
@@ -898,7 +898,7 @@ async fn managed_unrestricted_permission_profile_still_enables_network_requireme
     )
     .await?;
     assert_eq!(
-        config.permissions.sandbox_policy.get(),
+        &config.legacy_sandbox_policy(),
         &SandboxPolicy::DangerFullAccess,
         "the legacy projection is intentionally lossy for managed unrestricted profiles"
     );
@@ -974,7 +974,7 @@ async fn permission_profile_override_applies_runtime_roots_to_legacy_projection(
             .can_write_path_with_cwd(memories_root.as_path(), cwd.path())
     );
     assert_eq!(
-        config.permissions.sandbox_policy.get(),
+        &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![memories_root],
             network_access: false,
@@ -1209,7 +1209,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
             .can_write_path_with_cwd(external_write_path.as_path(), cwd.path())
     );
     assert_eq!(
-        config.permissions.sandbox_policy.get(),
+        &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![external_write_path, memories_root],
             network_access: false,
@@ -1317,7 +1317,7 @@ async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<(
         }]),
     );
     assert_eq!(
-        config.permissions.sandbox_policy.get(),
+        &config.legacy_sandbox_policy(),
         &SandboxPolicy::ReadOnly {
             network_access: false,
         }
@@ -1382,7 +1382,7 @@ async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io
         FileSystemSandboxPolicy::restricted(Vec::new())
     );
     assert_eq!(
-        config.permissions.sandbox_policy.get(),
+        &config.legacy_sandbox_policy(),
         &SandboxPolicy::ReadOnly {
             network_access: false,
         }
@@ -1509,13 +1509,7 @@ async fn permissions_profiles_allow_network_enablement() -> std::io::Result<()> 
         config.permissions.network_sandbox_policy().is_enabled(),
         "expected network sandbox policy to be enabled",
     );
-    assert!(
-        config
-            .permissions
-            .sandbox_policy
-            .get()
-            .has_full_network_access()
-    );
+    assert!(config.legacy_sandbox_policy().has_full_network_access());
     Ok(())
 }
 
@@ -1642,7 +1636,7 @@ network_access = false  # This should be ignored.
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
             /*active_project*/ None,
-            /*sandbox_policy_constraint*/ None,
+            /*permission_profile_constraint*/ None,
         )
         .await;
     assert_eq!(resolution, SandboxPolicy::DangerFullAccess);
@@ -1663,7 +1657,7 @@ network_access = true  # This should be ignored.
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
             /*active_project*/ None,
-            /*sandbox_policy_constraint*/ None,
+            /*permission_profile_constraint*/ None,
         )
         .await;
     assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
@@ -1695,7 +1689,7 @@ trust_level = "trusted"
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
             /*active_project*/ None,
-            /*sandbox_policy_constraint*/ None,
+            /*permission_profile_constraint*/ None,
         )
         .await;
     if cfg!(target_os = "windows") {
@@ -1735,7 +1729,7 @@ exclude_slash_tmp = true
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
             /*active_project*/ None,
-            /*sandbox_policy_constraint*/ None,
+            /*permission_profile_constraint*/ None,
         )
         .await;
     if cfg!(target_os = "windows") {
@@ -1799,7 +1793,7 @@ exclude_slash_tmp = true
         )
         .await?;
 
-        let sandbox_policy = config.permissions.sandbox_policy.get();
+        let sandbox_policy = &config.legacy_sandbox_policy();
         assert_eq!(
             config.permissions.file_system_sandbox_policy(),
             FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd.path()),
@@ -1982,12 +1976,12 @@ async fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<
 
     let expected_backend = backend.abs();
     if cfg!(target_os = "windows") {
-        match config.permissions.sandbox_policy.get() {
+        match &config.legacy_sandbox_policy() {
             SandboxPolicy::ReadOnly { .. } => {}
             other => panic!("expected read-only policy on Windows, got {other:?}"),
         }
     } else {
-        match config.permissions.sandbox_policy.get() {
+        match &config.legacy_sandbox_policy() {
             SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
                 assert_eq!(
                     writable_roots
@@ -2045,7 +2039,7 @@ async fn workspace_write_always_includes_memories_root_once() -> std::io::Result
     .await?;
 
     if cfg!(target_os = "windows") {
-        match config.permissions.sandbox_policy.get() {
+        match &config.legacy_sandbox_policy() {
             SandboxPolicy::ReadOnly { .. } => {}
             other => panic!("expected read-only policy on Windows, got {other:?}"),
         }
@@ -2056,7 +2050,7 @@ async fn workspace_write_always_includes_memories_root_once() -> std::io::Result
             memories_root.display()
         );
         let expected_memories_root = memories_root.abs();
-        match config.permissions.sandbox_policy.get() {
+        match &config.legacy_sandbox_policy() {
             SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
                 assert_eq!(
                     writable_roots
@@ -2375,7 +2369,7 @@ async fn profile_sandbox_mode_overrides_base() -> std::io::Result<()> {
     .await?;
 
     assert!(matches!(
-        config.permissions.sandbox_policy.get(),
+        &config.legacy_sandbox_policy(),
         &SandboxPolicy::DangerFullAccess
     ));
 
@@ -2409,12 +2403,12 @@ async fn cli_override_takes_precedence_over_profile_sandbox_mode() -> std::io::R
 
     if cfg!(target_os = "windows") {
         assert!(matches!(
-            config.permissions.sandbox_policy.get(),
+            &config.legacy_sandbox_policy(),
             SandboxPolicy::ReadOnly { .. }
         ));
     } else {
         assert!(matches!(
-            config.permissions.sandbox_policy.get(),
+            &config.legacy_sandbox_policy(),
             SandboxPolicy::WorkspaceWrite { .. }
         ));
     }
@@ -2538,7 +2532,6 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
         overrides,
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
-        /*host_name*/ None,
     )
     .await?;
     let cfg =
@@ -2674,7 +2667,6 @@ async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
         overrides,
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
-        /*host_name*/ None,
     )
     .await?;
 
@@ -5450,7 +5442,6 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             permissions: Permissions {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
                 permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
-                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 network: None,
                 allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -5644,7 +5635,6 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
             permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -5792,7 +5782,6 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -5925,7 +5914,6 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -6328,7 +6316,7 @@ trust_level = "untrusted"
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
             Some(&active_project),
-            /*sandbox_policy_constraint*/ None,
+            /*permission_profile_constraint*/ None,
         )
         .await;
 
@@ -6349,8 +6337,8 @@ trust_level = "untrusted"
 }
 
 #[tokio::test]
-async fn derive_sandbox_policy_falls_back_to_constraint_value_for_implicit_defaults()
--> anyhow::Result<()> {
+async fn derive_sandbox_policy_falls_back_to_read_only_for_implicit_defaults() -> anyhow::Result<()>
+{
     let project_dir = TempDir::new()?;
     let project_path = project_dir.path().to_path_buf();
     let project_key = project_path.to_string_lossy().to_string();
@@ -6366,14 +6354,14 @@ async fn derive_sandbox_policy_falls_back_to_constraint_value_for_implicit_defau
     let active_project = ProjectConfig {
         trust_level: Some(TrustLevel::Trusted),
     };
-    let constrained = Constrained::new(SandboxPolicy::DangerFullAccess, |candidate| {
-        if matches!(candidate, SandboxPolicy::DangerFullAccess) {
+    let constrained = Constrained::new(PermissionProfile::read_only(), |candidate| {
+        if candidate == &PermissionProfile::read_only() {
             Ok(())
         } else {
             Err(ConstraintError::InvalidValue {
                 field_name: "sandbox_mode",
                 candidate: format!("{candidate:?}"),
-                allowed: "[DangerFullAccess]".to_string(),
+                allowed: "[ReadOnly]".to_string(),
                 requirement_source: RequirementSource::Unknown,
             })
         }
@@ -6389,7 +6377,7 @@ async fn derive_sandbox_policy_falls_back_to_constraint_value_for_implicit_defau
         )
         .await;
 
-    assert_eq!(resolution, SandboxPolicy::DangerFullAccess);
+    assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
     Ok(())
 }
 
@@ -6411,18 +6399,29 @@ async fn derive_sandbox_policy_preserves_windows_downgrade_for_unsupported_fallb
     let active_project = ProjectConfig {
         trust_level: Some(TrustLevel::Trusted),
     };
-    let constrained = Constrained::new(SandboxPolicy::new_workspace_write_policy(), |candidate| {
-        if matches!(candidate, SandboxPolicy::WorkspaceWrite { .. }) {
-            Ok(())
-        } else {
-            Err(ConstraintError::InvalidValue {
-                field_name: "sandbox_mode",
-                candidate: format!("{candidate:?}"),
-                allowed: "[WorkspaceWrite]".to_string(),
-                requirement_source: RequirementSource::Unknown,
-            })
-        }
-    })?;
+    let constrained = Constrained::new(
+        PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
+        |candidate| {
+            if matches!(
+                candidate,
+                PermissionProfile::Managed {
+                    file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+                    ..
+                } if entries
+                        .iter()
+                        .any(|entry| entry.access.can_write())
+            ) {
+                Ok(())
+            } else {
+                Err(ConstraintError::InvalidValue {
+                    field_name: "sandbox_mode",
+                    candidate: format!("{candidate:?}"),
+                    allowed: "[WorkspaceWrite]".to_string(),
+                    requirement_source: RequirementSource::Unknown,
+                })
+            }
+        },
+    )?;
 
     let resolution = cfg
         .derive_sandbox_policy(
@@ -6662,7 +6661,7 @@ async fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow:
     if cfg!(target_os = "windows") {
         assert!(
             matches!(
-                config.permissions.sandbox_policy.get(),
+                &config.legacy_sandbox_policy(),
                 SandboxPolicy::ReadOnly { .. }
             ),
             "Expected ReadOnly on Windows"
@@ -6670,7 +6669,7 @@ async fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow:
     } else {
         assert!(
             matches!(
-                config.permissions.sandbox_policy.get(),
+                &config.legacy_sandbox_policy(),
                 SandboxPolicy::WorkspaceWrite { .. }
             ),
             "Expected WorkspaceWrite sandbox for untrusted project"
@@ -6696,7 +6695,7 @@ async fn requirements_disallowing_default_sandbox_falls_back_to_required_default
         .build()
         .await?;
     assert_eq!(
-        *config.permissions.sandbox_policy.get(),
+        config.legacy_sandbox_policy(),
         SandboxPolicy::new_read_only_policy()
     );
     Ok(())
@@ -6737,7 +6736,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         .build()
         .await?;
     assert_eq!(
-        *config.permissions.sandbox_policy.get(),
+        config.legacy_sandbox_policy(),
         SandboxPolicy::new_read_only_policy()
     );
     Ok(())
@@ -6766,10 +6765,7 @@ async fn permission_profile_override_falls_back_when_disallowed_by_requirements(
         .await?;
 
     let expected_sandbox_policy = SandboxPolicy::new_read_only_policy();
-    assert_eq!(
-        *config.permissions.sandbox_policy.get(),
-        expected_sandbox_policy
-    );
+    assert_eq!(config.legacy_sandbox_policy(), expected_sandbox_policy);
     assert_eq!(
         config.permissions.permission_profile(),
         PermissionProfile::read_only()
@@ -6823,7 +6819,7 @@ async fn permission_profile_override_preserves_split_write_roots() -> std::io::R
             .can_write_path_with_cwd(outside_root.as_path(), config.cwd.as_path())
     );
     assert!(matches!(
-        config.permissions.sandbox_policy.get(),
+        &config.legacy_sandbox_policy(),
         SandboxPolicy::WorkspaceWrite { .. }
     ));
     assert_eq!(
@@ -7352,6 +7348,7 @@ async fn multi_agent_v2_config_from_feature_table() -> std::io::Result<()> {
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features.multi_agent_v2]
 enabled = true
+max_concurrent_threads_per_session = 5
 usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 hide_spawn_agent_metadata = true
@@ -7365,6 +7362,8 @@ hide_spawn_agent_metadata = true
         .await?;
 
     assert!(config.features.enabled(Feature::MultiAgentV2));
+    assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 5);
+    assert_eq!(config.agent_max_threads, Some(4));
     assert!(!config.multi_agent_v2.usage_hint_enabled);
     assert_eq!(
         config.multi_agent_v2.usage_hint_text.as_deref(),
@@ -7383,11 +7382,13 @@ async fn profile_multi_agent_v2_config_overrides_base() -> std::io::Result<()> {
         r#"profile = "no_hint"
 
 [features.multi_agent_v2]
+max_concurrent_threads_per_session = 4
 usage_hint_enabled = true
 usage_hint_text = "base hint"
 hide_spawn_agent_metadata = true
 
 [profiles.no_hint.features.multi_agent_v2]
+max_concurrent_threads_per_session = 6
 usage_hint_enabled = false
 usage_hint_text = "profile hint"
 hide_spawn_agent_metadata = false
@@ -7400,12 +7401,87 @@ hide_spawn_agent_metadata = false
         .build()
         .await?;
 
+    assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 6);
     assert!(!config.multi_agent_v2.usage_hint_enabled);
     assert_eq!(
         config.multi_agent_v2.usage_hint_text.as_deref(),
         Some("profile hint")
     );
     assert!(!config.multi_agent_v2.hide_spawn_agent_metadata);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_default_session_thread_cap_counts_root() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 4);
+    assert_eq!(config.agent_max_threads, Some(3));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_rejects_agents_max_threads() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+
+[agents]
+max_threads = 3
+"#,
+    )?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+        .expect_err("agents.max_threads should conflict with multi_agent_v2");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "agents.max_threads cannot be set when multi_agent_v2 is enabled"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_session_thread_cap_one_disallows_subagents() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+max_concurrent_threads_per_session = 1
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 1);
+    assert_eq!(config.agent_max_threads, Some(0));
 
     Ok(())
 }

@@ -62,7 +62,6 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::TokenUsage;
@@ -964,12 +963,20 @@ fn sandbox_policy_mode(permission_profile: &PermissionProfile, cwd: &Path) -> &'
         PermissionProfile::Disabled => "full_access",
         PermissionProfile::External { .. } => "external_sandbox",
         PermissionProfile::Managed { .. } => {
-            match permission_profile.to_legacy_sandbox_policy(cwd) {
-                Ok(SandboxPolicy::DangerFullAccess) => "full_access",
-                Ok(SandboxPolicy::ReadOnly { .. }) => "read_only",
-                Ok(SandboxPolicy::WorkspaceWrite { .. }) => "workspace_write",
-                Ok(SandboxPolicy::ExternalSandbox { .. }) => "external_sandbox",
-                Err(_) => "workspace_write",
+            let file_system_policy = permission_profile.file_system_sandbox_policy();
+            if file_system_policy.has_full_disk_write_access() {
+                if permission_profile.network_sandbox_policy().is_enabled() {
+                    "full_access"
+                } else {
+                    "external_sandbox"
+                }
+            } else if file_system_policy
+                .get_writable_roots_with_cwd(cwd)
+                .is_empty()
+            {
+                "read_only"
+            } else {
+                "workspace_write"
             }
         }
     }
@@ -1060,5 +1067,27 @@ pub(crate) fn normalize_path_for_skill_id(
                 .replace('\\', "/")
         }
         _ => resolved_path.to_string_lossy().replace('\\', "/"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::models::SandboxEnforcement;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
+
+    #[test]
+    fn managed_full_disk_with_restricted_network_reports_external_sandbox() {
+        let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::Managed,
+            &FileSystemSandboxPolicy::unrestricted(),
+            NetworkSandboxPolicy::Restricted,
+        );
+
+        assert_eq!(
+            sandbox_policy_mode(&permission_profile, Path::new("/")),
+            "external_sandbox"
+        );
     }
 }

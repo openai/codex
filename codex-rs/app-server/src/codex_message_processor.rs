@@ -7,6 +7,7 @@ use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::error_code::invalid_params;
 use crate::fuzzy_file_search::FuzzyFileSearchSession;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::fuzzy_file_search::start_fuzzy_file_search_session;
@@ -359,7 +360,6 @@ use codex_rmcp_client::perform_oauth_login_return_url;
 use codex_rollout::state_db::StateDbHandle;
 use codex_rollout::state_db::get_state_db;
 use codex_rollout::state_db::reconcile_rollout;
-use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadata;
 use codex_state::ThreadMetadataBuilder;
@@ -1354,7 +1354,7 @@ impl CodexMessageProcessor {
             self.config.cli_auth_credentials_store_mode,
         ) {
             Ok(()) => {
-                self.auth_manager.reload();
+                self.auth_manager.reload().await;
                 Ok(())
             }
             Err(err) => Err(JSONRPCErrorError {
@@ -1505,7 +1505,7 @@ impl CodexMessageProcessor {
                             .await;
 
                         if success {
-                            auth_manager.reload();
+                            auth_manager.reload().await;
                             config_manager.replace_cloud_requirements_loader(
                                 auth_manager.clone(),
                                 chatgpt_base_url,
@@ -1613,7 +1613,7 @@ impl CodexMessageProcessor {
                             .await;
 
                         if success {
-                            auth_manager.reload();
+                            auth_manager.reload().await;
                             config_manager.replace_cloud_requirements_loader(
                                 auth_manager.clone(),
                                 chatgpt_base_url,
@@ -1749,7 +1749,7 @@ impl CodexMessageProcessor {
             self.outgoing.send_error(request_id, error).await;
             return;
         }
-        self.auth_manager.reload();
+        self.auth_manager.reload().await;
         self.config_manager.replace_cloud_requirements_loader(
             self.auth_manager.clone(),
             self.config.chatgpt_base_url.clone(),
@@ -2308,7 +2308,11 @@ impl CodexMessageProcessor {
                 }
             }
         } else if let Some(policy) = sandbox_policy.map(|policy| policy.to_core()) {
-            match self.config.permissions.sandbox_policy.can_set(&policy) {
+            match self
+                .config
+                .permissions
+                .can_set_legacy_sandbox_policy(&policy, &sandbox_cwd)
+            {
                 Ok(()) => {
                     let file_system_sandbox_policy =
                         codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&policy, &sandbox_cwd);
@@ -2655,16 +2659,14 @@ impl CodexMessageProcessor {
         // should still be considered "trusted" in this case.
         let requested_permissions_trust_project =
             requested_permissions_trust_project(&typesafe_overrides, config.cwd.as_path());
+        let effective_permissions_trust_project = permission_profile_trusts_project(
+            &config.permissions.permission_profile(),
+            config.cwd.as_path(),
+        );
 
         if requested_cwd.is_some()
             && config.active_project.trust_level.is_none()
-            && (requested_permissions_trust_project
-                || matches!(
-                    config.permissions.sandbox_policy.get(),
-                    codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_protocol::protocol::SandboxPolicy::DangerFullAccess
-                        | codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. }
-                ))
+            && (requested_permissions_trust_project || effective_permissions_trust_project)
         {
             let trust_target = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)
                 .await
@@ -6322,6 +6324,15 @@ impl CodexMessageProcessor {
         self.outgoing.send_error(request_id, error).await;
     }
 
+    async fn send_internal_error(&self, request_id: ConnectionRequestId, message: String) {
+        let error = JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            message,
+            data: None,
+        };
+        self.outgoing.send_error(request_id, error).await;
+    }
+
     fn input_too_large_error(actual_chars: usize) -> JSONRPCErrorError {
         JSONRPCErrorError {
             code: INVALID_PARAMS_ERROR_CODE,
@@ -6342,41 +6353,6 @@ impl CodexMessageProcessor {
             return Err(Self::input_too_large_error(actual_chars));
         }
         Ok(())
-    }
-
-    async fn send_internal_error(&self, request_id: ConnectionRequestId, message: String) {
-        let error = JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message,
-            data: None,
-        };
-        self.outgoing.send_error(request_id, error).await;
-    }
-
-    async fn send_marketplace_error(
-        &self,
-        request_id: ConnectionRequestId,
-        err: MarketplaceError,
-        action: &str,
-    ) {
-        match err {
-            MarketplaceError::MarketplaceNotFound { .. } => {
-                self.send_invalid_request_error(request_id, err.to_string())
-                    .await;
-            }
-            MarketplaceError::Io { .. } => {
-                self.send_internal_error(request_id, format!("failed to {action}: {err}"))
-                    .await;
-            }
-            MarketplaceError::InvalidMarketplaceFile { .. }
-            | MarketplaceError::PluginNotFound { .. }
-            | MarketplaceError::PluginNotAvailable { .. }
-            | MarketplaceError::PluginsDisabled
-            | MarketplaceError::InvalidPlugin(_) => {
-                self.send_invalid_request_error(request_id, err.to_string())
-                    .await;
-            }
-        }
     }
 
     async fn wait_for_thread_shutdown(thread: &Arc<CodexThread>) -> ThreadShutdownResult {
@@ -6457,34 +6433,33 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ThreadUnsubscribeParams,
     ) {
-        let thread_id = match ThreadId::from_string(&params.thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
-                    .await;
-                return;
-            }
-        };
+        let result = self
+            .thread_unsubscribe_response(params, request_id.connection_id)
+            .await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn thread_unsubscribe_response(
+        &self,
+        params: ThreadUnsubscribeParams,
+        connection_id: ConnectionId,
+    ) -> Result<ThreadUnsubscribeResponse, JSONRPCErrorError> {
+        let thread_id = ThreadId::from_string(&params.thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         if self.thread_manager.get_thread(thread_id).await.is_err() {
             // Reconcile stale app-server bookkeeping when the thread has already been
             // removed from the core manager. This keeps loaded-status/subscription state
             // consistent with the source of truth before reporting NotLoaded.
             self.finalize_thread_teardown(thread_id).await;
-            self.outgoing
-                .send_response(
-                    request_id,
-                    ThreadUnsubscribeResponse {
-                        status: ThreadUnsubscribeStatus::NotLoaded,
-                    },
-                )
-                .await;
-            return;
+            return Ok(ThreadUnsubscribeResponse {
+                status: ThreadUnsubscribeStatus::NotLoaded,
+            });
         };
 
         let was_subscribed = self
             .thread_state_manager
-            .unsubscribe_connection_from_thread(thread_id, request_id.connection_id)
+            .unsubscribe_connection_from_thread(thread_id, connection_id)
             .await;
 
         let status = if was_subscribed {
@@ -6492,9 +6467,7 @@ impl CodexMessageProcessor {
         } else {
             ThreadUnsubscribeStatus::NotSubscribed
         };
-        self.outgoing
-            .send_response(request_id, ThreadUnsubscribeResponse { status })
-            .await;
+        Ok(ThreadUnsubscribeResponse { status })
     }
 
     async fn prepare_thread_for_archive(&self, thread_id: ThreadId) {
@@ -6588,6 +6561,16 @@ impl CodexMessageProcessor {
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
     ) {
+        let result = Self::apps_list_response(&outgoing, params, config, environment_manager).await;
+        outgoing.send_result(request_id, result).await;
+    }
+
+    async fn apps_list_response(
+        outgoing: &Arc<OutgoingMessageSender>,
+        params: AppsListParams,
+        config: Config,
+        environment_manager: Arc<EnvironmentManager>,
+    ) -> Result<AppsListResponse, JSONRPCErrorError> {
         let AppsListParams {
             cursor,
             limit,
@@ -6597,15 +6580,7 @@ impl CodexMessageProcessor {
         let start = match cursor {
             Some(cursor) => match cursor.parse::<usize>() {
                 Ok(idx) => idx,
-                Err(_) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid cursor: {cursor}"),
-                        data: None,
-                    };
-                    outgoing.send_error(request_id, error).await;
-                    return;
-                }
+                Err(_) => return Err(invalid_request(format!("invalid cursor: {cursor}"))),
             },
             None => 0,
         };
@@ -6659,7 +6634,7 @@ impl CodexMessageProcessor {
                 accessible_loaded,
                 all_loaded,
             ) {
-                apps_list_helpers::send_app_list_updated_notification(&outgoing, merged.clone())
+                apps_list_helpers::send_app_list_updated_notification(outgoing, merged.clone())
                     .await;
                 last_notified_apps = Some(merged);
             }
@@ -6669,25 +6644,13 @@ impl CodexMessageProcessor {
             let result = match tokio::time::timeout_at(app_list_deadline, rx.recv()).await {
                 Ok(Some(result)) => result,
                 Ok(None) => {
-                    let error = JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: "failed to load app lists".to_string(),
-                        data: None,
-                    };
-                    outgoing.send_error(request_id, error).await;
-                    return;
+                    return Err(internal_error("failed to load app lists"));
                 }
                 Err(_) => {
                     let timeout_seconds = APP_LIST_LOAD_TIMEOUT.as_secs();
-                    let error = JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!(
-                            "timed out waiting for app lists after {timeout_seconds} seconds"
-                        ),
-                        data: None,
-                    };
-                    outgoing.send_error(request_id, error).await;
-                    return;
+                    return Err(internal_error(format!(
+                        "timed out waiting for app lists after {timeout_seconds} seconds"
+                    )));
                 }
             };
 
@@ -6697,26 +6660,14 @@ impl CodexMessageProcessor {
                     accessible_loaded = true;
                 }
                 AppListLoadResult::Accessible(Err(err)) => {
-                    let error = JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: err,
-                        data: None,
-                    };
-                    outgoing.send_error(request_id, error).await;
-                    return;
+                    return Err(internal_error(err));
                 }
                 AppListLoadResult::Directory(Ok(connectors)) => {
                     all_connectors = Some(connectors);
                     all_loaded = true;
                 }
                 AppListLoadResult::Directory(Err(err)) => {
-                    let error = JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: err,
-                        data: None,
-                    };
-                    outgoing.send_error(request_id, error).await;
-                    return;
+                    return Err(internal_error(err));
                 }
             }
 
@@ -6746,27 +6697,26 @@ impl CodexMessageProcessor {
                 all_loaded,
             ) && last_notified_apps.as_ref() != Some(&merged)
             {
-                apps_list_helpers::send_app_list_updated_notification(&outgoing, merged.clone())
+                apps_list_helpers::send_app_list_updated_notification(outgoing, merged.clone())
                     .await;
                 last_notified_apps = Some(merged.clone());
             }
 
             if accessible_loaded && all_loaded {
-                match apps_list_helpers::paginate_apps(merged.as_slice(), start, limit) {
-                    Ok(response) => {
-                        outgoing.send_response(request_id, response).await;
-                        return;
-                    }
-                    Err(error) => {
-                        outgoing.send_error(request_id, error).await;
-                        return;
-                    }
-                }
+                return apps_list_helpers::paginate_apps(merged.as_slice(), start, limit);
             }
         }
     }
 
     async fn skills_list(&self, request_id: ConnectionRequestId, params: SkillsListParams) {
+        let result = self.skills_list_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn skills_list_response(
+        &self,
+        params: SkillsListParams,
+    ) -> Result<SkillsListResponse, JSONRPCErrorError> {
         let SkillsListParams {
             cwds,
             force_reload,
@@ -6791,17 +6741,13 @@ impl CodexMessageProcessor {
 
             let mut valid_extra_roots = Vec::new();
             for root in entry.extra_user_roots {
-                let Ok(root) = AbsolutePathBuf::from_absolute_path_checked(root.as_path()) else {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!(
+                let root =
+                    AbsolutePathBuf::from_absolute_path_checked(root.as_path()).map_err(|_| {
+                        invalid_request(format!(
                             "skills/list perCwdExtraUserRoots extraUserRoots paths must be absolute: {}",
                             root.display()
-                        ),
-                    )
-                    .await;
-                    return;
-                };
+                        ))
+                    })?;
                 valid_extra_roots.push(root);
             }
             extra_roots_by_cwd
@@ -6810,13 +6756,7 @@ impl CodexMessageProcessor {
                 .extend(valid_extra_roots);
         }
 
-        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => config,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let auth = self.auth_manager.auth().await;
         let workspace_codex_plugins_enabled = self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
@@ -6895,9 +6835,7 @@ impl CodexMessageProcessor {
                 errors,
             });
         }
-        self.outgoing
-            .send_response(request_id, SkillsListResponse { data })
-            .await;
+        Ok(SkillsListResponse { data })
     }
     async fn marketplace_remove(
         &self,
@@ -6910,27 +6848,16 @@ impl CodexMessageProcessor {
                 marketplace_name: params.marketplace_name,
             },
         )
-        .await;
-
-        match result {
-            Ok(outcome) => {
-                self.outgoing
-                    .send_response(
-                        request_id,
-                        MarketplaceRemoveResponse {
-                            marketplace_name: outcome.marketplace_name,
-                            installed_root: outcome.removed_installed_root,
-                        },
-                    )
-                    .await;
-            }
-            Err(MarketplaceRemoveError::InvalidRequest(message)) => {
-                self.send_invalid_request_error(request_id, message).await;
-            }
-            Err(MarketplaceRemoveError::Internal(message)) => {
-                self.send_internal_error(request_id, message).await;
-            }
-        }
+        .await
+        .map(|outcome| MarketplaceRemoveResponse {
+            marketplace_name: outcome.marketplace_name,
+            installed_root: outcome.removed_installed_root,
+        })
+        .map_err(|err| match err {
+            MarketplaceRemoveError::InvalidRequest(message) => invalid_request(message),
+            MarketplaceRemoveError::Internal(message) => internal_error(message),
+        });
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn marketplace_upgrade(
@@ -6938,53 +6865,38 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: MarketplaceUpgradeParams,
     ) {
-        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => config,
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-                return;
-            }
-        };
+        let result = self.marketplace_upgrade_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn marketplace_upgrade_response(
+        &self,
+        params: MarketplaceUpgradeParams,
+    ) -> Result<MarketplaceUpgradeResponse, JSONRPCErrorError> {
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let plugins_manager = self.thread_manager.plugins_manager();
         let MarketplaceUpgradeParams { marketplace_name } = params;
 
-        let result = tokio::task::spawn_blocking(move || {
+        let outcome = tokio::task::spawn_blocking(move || {
             plugins_manager
                 .upgrade_configured_marketplaces_for_config(&config, marketplace_name.as_deref())
         })
-        .await;
+        .await
+        .map_err(|err| internal_error(format!("failed to upgrade marketplaces: {err}")))?
+        .map_err(invalid_request)?;
 
-        match result {
-            Ok(Ok(outcome)) => {
-                self.outgoing
-                    .send_response(
-                        request_id,
-                        MarketplaceUpgradeResponse {
-                            selected_marketplaces: outcome.selected_marketplaces,
-                            upgraded_roots: outcome.upgraded_roots,
-                            errors: outcome
-                                .errors
-                                .into_iter()
-                                .map(|err| MarketplaceUpgradeErrorInfo {
-                                    marketplace_name: err.marketplace_name,
-                                    message: err.message,
-                                })
-                                .collect(),
-                        },
-                    )
-                    .await;
-            }
-            Ok(Err(message)) => {
-                self.send_invalid_request_error(request_id, message).await;
-            }
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to upgrade marketplaces: {err}"),
-                )
-                .await;
-            }
-        }
+        Ok(MarketplaceUpgradeResponse {
+            selected_marketplaces: outcome.selected_marketplaces,
+            upgraded_roots: outcome.upgraded_roots,
+            errors: outcome
+                .errors
+                .into_iter()
+                .map(|err| MarketplaceUpgradeErrorInfo {
+                    marketplace_name: err.marketplace_name,
+                    message: err.message,
+                })
+                .collect(),
+        })
     }
 
     async fn marketplace_add(&self, request_id: ConnectionRequestId, params: MarketplaceAddParams) {
@@ -6996,28 +6908,17 @@ impl CodexMessageProcessor {
                 sparse_paths: params.sparse_paths.unwrap_or_default(),
             },
         )
-        .await;
-
-        match result {
-            Ok(outcome) => {
-                self.outgoing
-                    .send_response(
-                        request_id,
-                        MarketplaceAddResponse {
-                            marketplace_name: outcome.marketplace_name,
-                            installed_root: outcome.installed_root,
-                            already_added: outcome.already_added,
-                        },
-                    )
-                    .await;
-            }
-            Err(MarketplaceAddError::InvalidRequest(message)) => {
-                self.send_invalid_request_error(request_id, message).await;
-            }
-            Err(MarketplaceAddError::Internal(message)) => {
-                self.send_internal_error(request_id, message).await;
-            }
-        }
+        .await
+        .map(|outcome| MarketplaceAddResponse {
+            marketplace_name: outcome.marketplace_name,
+            installed_root: outcome.installed_root,
+            already_added: outcome.already_added,
+        })
+        .map_err(|err| match err {
+            MarketplaceAddError::InvalidRequest(message) => invalid_request(message),
+            MarketplaceAddError::Internal(message) => internal_error(message),
+        });
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn skills_config_write(
@@ -7025,6 +6926,14 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: SkillsConfigWriteParams,
     ) {
+        let result = self.skills_config_write_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn skills_config_write_response(
+        &self,
+        params: SkillsConfigWriteParams,
+    ) -> Result<SkillsConfigWriteResponse, JSONRPCErrorError> {
         let SkillsConfigWriteParams {
             path,
             name,
@@ -7039,43 +6948,24 @@ impl CodexMessageProcessor {
                 ConfigEdit::SetSkillConfigByName { name, enabled }
             }
             _ => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_PARAMS_ERROR_CODE,
-                    message: "skills/config/write requires exactly one of path or name".to_string(),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
+                return Err(invalid_params(
+                    "skills/config/write requires exactly one of path or name",
+                ));
             }
         };
         let edits = vec![edit];
-        let result = ConfigEditsBuilder::new(&self.config.codex_home)
+        ConfigEditsBuilder::new(&self.config.codex_home)
             .with_edits(edits)
             .apply()
-            .await;
-
-        match result {
-            Ok(()) => {
+            .await
+            .map(|()| {
                 self.thread_manager.plugins_manager().clear_cache();
                 self.thread_manager.skills_manager().clear_cache();
-                self.outgoing
-                    .send_response(
-                        request_id,
-                        SkillsConfigWriteResponse {
-                            effective_enabled: enabled,
-                        },
-                    )
-                    .await;
-            }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to update skill settings: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-            }
-        }
+                SkillsConfigWriteResponse {
+                    effective_enabled: enabled,
+                }
+            })
+            .map_err(|err| internal_error(format!("failed to update skill settings: {err}")))
     }
 
     async fn turn_start(
@@ -8708,7 +8598,9 @@ impl CodexMessageProcessor {
                 Ok(config) => {
                     let setup_request = WindowsSandboxSetupRequest {
                         mode,
-                        policy: config.permissions.sandbox_policy.get().clone(),
+                        policy: config
+                            .permissions
+                            .legacy_sandbox_policy(config.cwd.as_path()),
                         policy_cwd: config.cwd.to_path_buf(),
                         command_cwd,
                         env_map: std::env::vars().collect(),
@@ -10163,22 +10055,20 @@ fn requested_permissions_trust_project(overrides: &ConfigOverrides, cwd: &Path) 
     overrides
         .permission_profile
         .as_ref()
-        .is_some_and(|profile| {
-            let (file_system_sandbox_policy, network_sandbox_policy) =
-                profile.to_runtime_permissions();
-            let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
-                profile,
-                &file_system_sandbox_policy,
-                network_sandbox_policy,
-                cwd,
-            );
-            matches!(
-                sandbox_policy,
-                codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                    | codex_protocol::protocol::SandboxPolicy::DangerFullAccess
-                    | codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. }
-            )
-        })
+        .is_some_and(|profile| permission_profile_trusts_project(profile, cwd))
+}
+
+fn permission_profile_trusts_project(
+    profile: &codex_protocol::models::PermissionProfile,
+    cwd: &Path,
+) -> bool {
+    match profile {
+        codex_protocol::models::PermissionProfile::Disabled
+        | codex_protocol::models::PermissionProfile::External { .. } => true,
+        codex_protocol::models::PermissionProfile::Managed { .. } => profile
+            .file_system_sandbox_policy()
+            .can_write_path_with_cwd(cwd, cwd),
+    }
 }
 
 fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
@@ -10475,6 +10365,7 @@ mod tests {
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
     use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
@@ -10700,17 +10591,21 @@ mod tests {
         let full_access_profile = codex_protocol::models::PermissionProfile::Disabled;
         let workspace_write_profile = codex_protocol::models::PermissionProfile::workspace_write();
         let read_only_profile = codex_protocol::models::PermissionProfile::read_only();
-        let direct_write_profile =
+        let split_write_profile =
             codex_protocol::models::PermissionProfile::from_runtime_permissions(
-                &codex_protocol::permissions::FileSystemSandboxPolicy::restricted(vec![
+                &FileSystemSandboxPolicy::restricted(vec![
                     FileSystemSandboxEntry {
-                        path: FileSystemPath::Path {
-                            path: test_path_buf("/tmp/other").abs(),
-                        },
+                        path: FileSystemPath::Path { path: cwd.clone() },
                         access: FileSystemAccessMode::Write,
                     },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::GlobPattern {
+                            pattern: "/tmp/project/**/*.env".to_string(),
+                        },
+                        access: FileSystemAccessMode::None,
+                    },
                 ]),
-                codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+                NetworkSandboxPolicy::Restricted,
             );
 
         assert!(requested_permissions_trust_project(
@@ -10729,7 +10624,7 @@ mod tests {
         ));
         assert!(requested_permissions_trust_project(
             &ConfigOverrides {
-                permission_profile: Some(direct_write_profile),
+                permission_profile: Some(split_write_profile),
                 ..Default::default()
             },
             cwd.as_path()

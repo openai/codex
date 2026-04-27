@@ -114,6 +114,7 @@ mod collaboration_modes;
 mod color;
 pub(crate) mod custom_terminal;
 pub use custom_terminal::Terminal;
+mod auto_review_denials;
 mod cwd_prompt;
 mod debug_config;
 mod diff_render;
@@ -794,7 +795,8 @@ pub async fn run_main(
         /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
         chatgpt_base_url,
-    );
+    )
+    .await;
 
     let model_provider_override = if cli.oss {
         let resolved = resolve_oss_provider(
@@ -874,9 +876,12 @@ pub async fn run_main(
 
     set_default_client_residency_requirement(config.enforce_residency.value());
 
-    if let Some(warning) =
-        add_dir_warning_message(&cli.add_dir, config.permissions.sandbox_policy.get())
-    {
+    if let Some(warning) = add_dir_warning_message(
+        &cli.add_dir,
+        &config
+            .permissions
+            .legacy_sandbox_policy(config.cwd.as_path()),
+    ) {
         #[allow(clippy::print_stderr)]
         {
             eprintln!("Error adding directories: {warning}");
@@ -891,7 +896,9 @@ pub async fn run_main(
             auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
             forced_login_method: config.forced_login_method,
             forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
-        }) {
+        })
+        .await
+        {
             eprintln!("{err}");
             std::process::exit(1);
         }
@@ -1162,7 +1169,8 @@ async fn run_ratatui_app(
                 /*enable_codex_api_key_env*/ false,
                 initial_config.cli_auth_credentials_store_mode,
                 initial_config.chatgpt_base_url.clone(),
-            );
+            )
+            .await;
         }
 
         // If the user made an explicit trust decision, or we showed the login flow, reload config
@@ -2205,7 +2213,9 @@ mod tests {
             current_date: None,
             timezone: None,
             approval_policy: config.permissions.approval_policy.value(),
-            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            sandbox_policy: config
+                .permissions
+                .legacy_sandbox_policy(config.cwd.as_path()),
             permission_profile: None,
             network: None,
             file_system_sandbox_policy: None,
@@ -2328,6 +2338,7 @@ trust_level = "untrusted"
             ..Default::default()
         };
         let trusted_config = ConfigBuilder::default()
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
             .codex_home(codex_home.clone())
             .harness_overrides(trusted_overrides.clone())
             .build()
@@ -2342,6 +2353,7 @@ trust_level = "untrusted"
             ..trusted_overrides
         };
         let untrusted_config = ConfigBuilder::default()
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
             .codex_home(codex_home)
             .harness_overrides(untrusted_overrides)
             .build()

@@ -110,7 +110,6 @@ fn exec_server_params_use_env_policy_overlay_contract() {
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
         permission_profile,
-        sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
         windows_sandbox_filesystem_overrides: None,

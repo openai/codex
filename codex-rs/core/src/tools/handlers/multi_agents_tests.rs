@@ -2086,7 +2086,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
-    let expected_sandbox = turn.config.permissions.sandbox_policy.get().clone();
+    let expected_sandbox = turn.config.legacy_sandbox_policy();
     let mut expected_file_system_sandbox_policy =
         FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&expected_sandbox, &turn.cwd);
     expected_file_system_sandbox_policy
@@ -3585,8 +3585,9 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
 #[tokio::test]
 async fn build_agent_spawn_config_uses_turn_context_values() {
     fn pick_allowed_sandbox_policy(
-        constraint: &crate::config::Constrained<SandboxPolicy>,
+        constraint: &crate::config::Constrained<PermissionProfile>,
         base: SandboxPolicy,
+        cwd: &std::path::Path,
     ) -> SandboxPolicy {
         let candidates = [
             SandboxPolicy::new_read_only_policy(),
@@ -3595,7 +3596,21 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         ];
         candidates
             .into_iter()
-            .find(|candidate| *candidate != base && constraint.can_set(candidate).is_ok())
+            .find(|candidate| {
+                if *candidate == base {
+                    return false;
+                }
+                let file_system_sandbox_policy =
+                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(candidate, cwd);
+                let network_sandbox_policy = NetworkSandboxPolicy::from(candidate);
+                let permission_profile =
+                    PermissionProfile::from_runtime_permissions_with_enforcement(
+                        SandboxEnforcement::from_legacy_sandbox_policy(candidate),
+                        &file_system_sandbox_policy,
+                        network_sandbox_policy,
+                    );
+                constraint.can_set(&permission_profile).is_ok()
+            })
             .unwrap_or(base)
     }
 
@@ -3613,8 +3628,9 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     turn.cwd = temp_dir.abs();
     turn.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
     let sandbox_policy = pick_allowed_sandbox_policy(
-        &turn.config.permissions.sandbox_policy,
-        turn.config.permissions.sandbox_policy.get().clone(),
+        &turn.config.permissions.permission_profile,
+        turn.config.legacy_sandbox_policy(),
+        turn.cwd.as_path(),
     );
     let file_system_sandbox_policy =
         FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, &turn.cwd);
@@ -3648,7 +3664,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         .expect("approval policy set");
     expected
         .permissions
-        .set_permission_profile(permission_profile, turn.cwd.as_path())
+        .set_permission_profile(permission_profile)
         .expect("permission profile set");
     assert_eq!(config, expected);
 }
@@ -3699,8 +3715,7 @@ async fn build_agent_resume_config_clears_base_instructions() {
         .expect("approval policy set");
     expected
         .permissions
-        .sandbox_policy
-        .set(turn.sandbox_policy())
-        .expect("sandbox policy set");
+        .set_permission_profile(turn.permission_profile())
+        .expect("permission profile set");
     assert_eq!(config, expected);
 }

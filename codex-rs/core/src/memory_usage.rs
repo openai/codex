@@ -1,38 +1,17 @@
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::unified_exec::ExecCommandArgs;
+use codex_memories_read::usage::MEMORIES_USAGE_METRIC;
+use codex_memories_read::usage::memories_usage_kinds_from_command;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
-use codex_protocol::parse_command::ParsedCommand;
-use codex_shell_command::is_safe_command::is_known_safe_command;
-use codex_shell_command::parse_command::parse_command;
 use std::path::PathBuf;
 
-const MEMORIES_USAGE_METRIC: &str = "codex.memories.usage";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum MemoriesUsageKind {
-    MemoryMd,
-    MemorySummary,
-    RawMemories,
-    RolloutSummaries,
-    Skills,
-}
-
-impl MemoriesUsageKind {
-    fn as_tag(self) -> &'static str {
-        match self {
-            Self::MemoryMd => "memory_md",
-            Self::MemorySummary => "memory_summary",
-            Self::RawMemories => "raw_memories",
-            Self::RolloutSummaries => "rollout_summaries",
-            Self::Skills => "skills",
-        }
-    }
-}
-
 pub(crate) async fn emit_metric_for_tool_read(invocation: &ToolInvocation, success: bool) {
-    let kinds = memories_usage_kinds_from_invocation(invocation).await;
+    let Some((command, _)) = shell_command_for_invocation(invocation) else {
+        return;
+    };
+    let kinds = memories_usage_kinds_from_command(&command);
     if kinds.is_empty() {
         return;
     }
@@ -50,27 +29,6 @@ pub(crate) async fn emit_metric_for_tool_read(invocation: &ToolInvocation, succe
             ],
         );
     }
-}
-
-async fn memories_usage_kinds_from_invocation(
-    invocation: &ToolInvocation,
-) -> Vec<MemoriesUsageKind> {
-    let Some((command, _)) = shell_command_for_invocation(invocation) else {
-        return Vec::new();
-    };
-    if !is_known_safe_command(&command) {
-        return Vec::new();
-    }
-
-    let parsed_commands = parse_command(&command);
-    parsed_commands
-        .into_iter()
-        .filter_map(|command| match command {
-            ParsedCommand::Read { path, .. } => get_memory_kind(path.display().to_string()),
-            ParsedCommand::Search { path, .. } => path.and_then(get_memory_kind),
-            ParsedCommand::ListFiles { .. } | ParsedCommand::Unknown { .. } => None,
-        })
-        .collect()
 }
 
 fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<String>, PathBuf)> {
@@ -127,21 +85,5 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
                 ))
             }),
         (Some(_), _) | (None, _) => None,
-    }
-}
-
-fn get_memory_kind(path: String) -> Option<MemoriesUsageKind> {
-    if path.contains("memories/MEMORY.md") {
-        Some(MemoriesUsageKind::MemoryMd)
-    } else if path.contains("memories/memory_summary.md") {
-        Some(MemoriesUsageKind::MemorySummary)
-    } else if path.contains("memories/raw_memories.md") {
-        Some(MemoriesUsageKind::RawMemories)
-    } else if path.contains("memories/rollout_summaries/") {
-        Some(MemoriesUsageKind::RolloutSummaries)
-    } else if path.contains("memories/skills/") {
-        Some(MemoriesUsageKind::Skills)
-    } else {
-        None
     }
 }

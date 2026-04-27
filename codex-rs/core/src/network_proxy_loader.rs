@@ -54,7 +54,6 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
         overrides,
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
-        /*host_name*/ None,
     )
     .await
     .context("failed to load Codex config")?;

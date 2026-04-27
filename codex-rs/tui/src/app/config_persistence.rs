@@ -300,9 +300,11 @@ impl App {
                 .set_approval_policy(self.config.permissions.approval_policy.value());
         }
         if sandbox_policy_override.is_some()
-            && let Err(err) = self
-                .chat_widget
-                .set_sandbox_policy(self.config.permissions.sandbox_policy.get().clone())
+            && let Err(err) = self.chat_widget.set_sandbox_policy(
+                self.config
+                    .permissions
+                    .legacy_sandbox_policy(self.config.cwd.as_path()),
+            )
         {
             tracing::error!(
                 error = %err,
@@ -312,8 +314,11 @@ impl App {
                 .add_error_message(format!("Failed to enable Auto-review: {err}"));
         }
         if sandbox_policy_override.is_some() {
-            self.runtime_sandbox_policy_override =
-                Some(self.config.permissions.sandbox_policy.get().clone());
+            self.runtime_sandbox_policy_override = Some(
+                self.config
+                    .permissions
+                    .legacy_sandbox_policy(self.config.cwd.as_path()),
+            );
         }
 
         if approval_policy_override.is_some()

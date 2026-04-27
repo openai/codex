@@ -576,6 +576,40 @@ fn collect_guardian_transcript_entries_skips_contextual_user_messages() {
 }
 
 #[test]
+fn collect_guardian_transcript_entries_keeps_manual_approval_developer_message() {
+    let approval_text =
+        format!("{AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX}\n\nApproved action:\n{{}}");
+    let items = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "ordinary developer context".to_string(),
+            }],
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: approval_text.clone(),
+            }],
+            phase: None,
+        },
+    ];
+
+    let entries = collect_guardian_transcript_entries(&items);
+
+    assert_eq!(
+        entries,
+        vec![GuardianTranscriptEntry {
+            kind: GuardianTranscriptEntryKind::Developer,
+            text: approval_text,
+        }]
+    );
+}
+
+#[test]
 fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
     let items = vec![
         ResponseItem::Message {
@@ -1950,8 +1984,10 @@ async fn guardian_review_session_config_preserves_parent_network_proxy() {
         Constrained::allow_only(AskForApproval::Never)
     );
     assert_eq!(
-        guardian_config.permissions.sandbox_policy,
-        Constrained::allow_only(SandboxPolicy::new_read_only_policy())
+        guardian_config.permissions.permission_profile,
+        Constrained::allow_only(PermissionProfile::from_legacy_sandbox_policy(
+            &SandboxPolicy::new_read_only_policy(),
+        ))
     );
 }
 

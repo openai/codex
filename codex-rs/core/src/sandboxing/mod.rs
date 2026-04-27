@@ -55,7 +55,6 @@ pub struct ExecRequest {
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
     pub permission_profile: PermissionProfile,
-    pub sandbox_policy: SandboxPolicy,
     pub file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub network_sandbox_policy: NetworkSandboxPolicy,
     pub(crate) windows_sandbox_filesystem_overrides: Option<WindowsSandboxFilesystemOverrides>,
@@ -80,12 +79,6 @@ impl ExecRequest {
         let windows_sandbox_policy_cwd = cwd.clone();
         let (file_system_sandbox_policy, network_sandbox_policy) =
             permission_profile.to_runtime_permissions();
-        let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
-            &permission_profile,
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
-            cwd.as_path(),
-        );
         Self {
             command,
             cwd,
@@ -99,12 +92,20 @@ impl ExecRequest {
             windows_sandbox_level,
             windows_sandbox_private_desktop,
             permission_profile,
-            sandbox_policy,
             file_system_sandbox_policy,
             network_sandbox_policy,
             windows_sandbox_filesystem_overrides: None,
             arg0,
         }
+    }
+
+    pub(crate) fn compatibility_sandbox_policy(&self) -> SandboxPolicy {
+        compatibility_sandbox_policy_for_permission_profile(
+            &self.permission_profile,
+            &self.file_system_sandbox_policy,
+            self.network_sandbox_policy,
+            self.windows_sandbox_policy_cwd.as_path(),
+        )
     }
 
     pub(crate) fn from_sandbox_exec_request(
@@ -121,7 +122,6 @@ impl ExecRequest {
             windows_sandbox_level,
             windows_sandbox_private_desktop,
             permission_profile,
-            sandbox_policy,
             file_system_sandbox_policy,
             network_sandbox_policy,
             arg0,
@@ -153,7 +153,6 @@ impl ExecRequest {
             windows_sandbox_level,
             windows_sandbox_private_desktop,
             permission_profile,
-            sandbox_policy,
             file_system_sandbox_policy,
             network_sandbox_policy,
             windows_sandbox_filesystem_overrides: None,

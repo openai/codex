@@ -1515,7 +1515,9 @@ async fn session_configured_reports_permission_profile_for_external_sandbox() ->
     };
     let expected_sandbox_policy = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
-        config.permissions.sandbox_policy = codex_config::Constrained::allow_any(sandbox_policy);
+        config
+            .set_legacy_sandbox_policy(sandbox_policy)
+            .expect("set sandbox policy");
         config.permissions.permission_profile =
             codex_config::Constrained::allow_any(PermissionProfile::from_runtime_permissions(
                 &FileSystemSandboxPolicy::external_sandbox(),
@@ -4187,7 +4189,7 @@ async fn user_turn_updates_approvals_reviewer() {
             cwd: config.cwd.to_path_buf(),
             approval_policy: config.permissions.approval_policy.value(),
             approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::AutoReview),
-            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            sandbox_policy: config.legacy_sandbox_policy(),
             permission_profile: None,
             model: turn_context.model_info.slug.clone(),
             effort: config.model_reasoning_effort,

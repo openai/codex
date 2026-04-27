@@ -252,9 +252,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         .set(AskForApproval::OnRequest)
         .expect("set approval policy");
     chat.config
-        .permissions
-        .sandbox_policy
-        .set(SandboxPolicy::new_workspace_write_policy())
+        .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
     chat.config.cwd = test_path_buf("/home/user/main").abs();
 
@@ -312,7 +310,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         AskForApproval::Never
     );
     assert_eq!(
-        chat.config_ref().permissions.sandbox_policy.get(),
+        &chat.config_ref().legacy_sandbox_policy(),
         &expected_sandbox
     );
     assert_eq!(
@@ -374,7 +372,7 @@ async fn session_configured_external_sandbox_keeps_external_runtime_policy() {
     });
 
     assert_eq!(
-        chat.config_ref().permissions.sandbox_policy.get(),
+        &chat.config_ref().legacy_sandbox_policy(),
         &expected_sandbox
     );
     assert_eq!(

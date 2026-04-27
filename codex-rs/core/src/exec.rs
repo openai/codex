@@ -321,10 +321,11 @@ pub fn build_exec_request(
         exec_req.windows_sandbox_level,
         exec_req.network.is_some(),
     );
+    let sandbox_policy = exec_req.compatibility_sandbox_policy();
     exec_req.windows_sandbox_filesystem_overrides = if use_windows_elevated_backend {
         resolve_windows_elevated_filesystem_overrides(
             exec_req.sandbox,
-            &exec_req.sandbox_policy,
+            &sandbox_policy,
             &exec_req.file_system_sandbox_policy,
             exec_req.network_sandbox_policy,
             sandbox_cwd,
@@ -333,7 +334,7 @@ pub fn build_exec_request(
     } else {
         resolve_windows_restricted_token_filesystem_overrides(
             exec_req.sandbox,
-            &exec_req.sandbox_policy,
+            &sandbox_policy,
             &exec_req.file_system_sandbox_policy,
             exec_req.network_sandbox_policy,
             sandbox_cwd,
@@ -349,6 +350,7 @@ pub(crate) async fn execute_exec_request(
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<ExecToolCallOutput> {
+    let sandbox_policy = exec_request.compatibility_sandbox_policy();
     let ExecRequest {
         command,
         cwd,
@@ -362,8 +364,6 @@ pub(crate) async fn execute_exec_request(
         windows_sandbox_level,
         windows_sandbox_private_desktop,
         permission_profile: _,
-        sandbox_policy,
-        // TODO(mbolin): Use file_system_sandbox_policy instead of sandbox_policy.
         file_system_sandbox_policy: _,
         network_sandbox_policy,
         windows_sandbox_filesystem_overrides,
