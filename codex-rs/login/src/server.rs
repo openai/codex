@@ -50,6 +50,8 @@ use tracing::warn;
 
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const DEFAULT_PORT: u16 = 1455;
+// Keep in sync with the Codex CLI Hydra redirect URI allow-list.
+const FALLBACK_PORT: u16 = 1457;
 static LOGIN_ERROR_PAGE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     Template::parse(include_str!("assets/error.html"))
         .unwrap_or_else(|err| panic!("login error page template must parse: {err}"))
@@ -528,10 +530,11 @@ fn send_cancel_request(port: u16) -> io::Result<()> {
 
 fn bind_server(port: u16) -> io::Result<Server> {
     let preferred_bind_address = format!("127.0.0.1:{port}");
+    let fallback_bind_address = format!("127.0.0.1:{FALLBACK_PORT}");
     let mut bind_address = preferred_bind_address.clone();
     let mut cancel_attempted = false;
     let mut attempts = 0;
-    let mut using_ephemeral_fallback = false;
+    let mut using_fallback_port = false;
     const MAX_ATTEMPTS: u32 = 10;
     const RETRY_DELAY: Duration = Duration::from_millis(200);
 
@@ -548,7 +551,7 @@ fn bind_server(port: u16) -> io::Result<Server> {
                 // If the address is in use, there may be another instance of the login server
                 // running. Attempt to cancel it and retry before falling back.
                 if is_addr_in_use {
-                    if !cancel_attempted && !using_ephemeral_fallback {
+                    if !cancel_attempted && !using_fallback_port {
                         cancel_attempted = true;
                         if let Err(cancel_err) = send_cancel_request(port) {
                             eprintln!("Failed to cancel previous login server: {cancel_err}");
@@ -558,14 +561,15 @@ fn bind_server(port: u16) -> io::Result<Server> {
                     thread::sleep(RETRY_DELAY);
 
                     if attempts >= MAX_ATTEMPTS {
-                        if port == DEFAULT_PORT && !using_ephemeral_fallback {
+                        if port == DEFAULT_PORT && !using_fallback_port {
                             warn!(
                                 %preferred_bind_address,
-                                "default login callback port is unavailable; falling back to an ephemeral port"
+                                %fallback_bind_address,
+                                "default login callback port is unavailable; falling back to the registered fallback port"
                             );
-                            bind_address = "127.0.0.1:0".to_string();
+                            bind_address = fallback_bind_address.clone();
                             attempts = 0;
-                            using_ephemeral_fallback = true;
+                            using_fallback_port = true;
                             continue;
                         }
 

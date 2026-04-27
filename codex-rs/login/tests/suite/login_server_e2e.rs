@@ -15,6 +15,7 @@ use core_test_support::skip_if_no_network;
 use tempfile::tempdir;
 
 const DEFAULT_LOGIN_PORT: u16 = 1455;
+const FALLBACK_LOGIN_PORT: u16 = 1457;
 
 // See spawn.rs for details
 
@@ -405,8 +406,17 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn falls_back_to_ephemeral_port_when_default_port_is_in_use() -> Result<()> {
+async fn falls_back_to_registered_fallback_port_when_default_port_is_in_use() -> Result<()> {
     skip_if_no_network!(Ok(()));
+
+    match TcpListener::bind(("127.0.0.1", FALLBACK_LOGIN_PORT)) {
+        Ok(listener) => drop(listener),
+        Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
+            eprintln!("Skipping test because 127.0.0.1:{FALLBACK_LOGIN_PORT} is already in use");
+            return Ok(());
+        }
+        Err(err) => return Err(err.into()),
+    }
 
     let default_port_listener = match TcpListener::bind(("127.0.0.1", DEFAULT_LOGIN_PORT)) {
         Ok(listener) => listener,
@@ -453,9 +463,9 @@ async fn falls_back_to_ephemeral_port_when_default_port_is_in_use() -> Result<()
         .await
         .expect("login server should shut down after cancel");
 
-    assert_ne!(actual_port, DEFAULT_LOGIN_PORT);
+    assert_eq!(actual_port, FALLBACK_LOGIN_PORT);
     assert!(auth_url.contains(&format!(
-        "redirect_uri=http%3A%2F%2Flocalhost%3A{actual_port}%2Fauth%2Fcallback"
+        "redirect_uri=http%3A%2F%2Flocalhost%3A{FALLBACK_LOGIN_PORT}%2Fauth%2Fcallback"
     )));
 
     Ok(())
