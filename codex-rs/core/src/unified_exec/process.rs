@@ -12,6 +12,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
 
+use crate::security_events::SandboxViolationAuditContext;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEvent;
 use codex_exec_server::ProcessSignal as ExecServerProcessSignal;
@@ -87,6 +88,7 @@ pub(crate) struct UnifiedExecProcess {
     state_rx: watch::Receiver<ProcessState>,
     output_task: Option<JoinHandle<()>>,
     sandbox_type: SandboxType,
+    sandbox_violation_context: Option<SandboxViolationAuditContext>,
     _spawn_lifecycle: Option<SpawnLifecycleHandle>,
 }
 
@@ -104,6 +106,7 @@ impl UnifiedExecProcess {
     fn new(
         process_handle: ProcessHandle,
         sandbox_type: SandboxType,
+        sandbox_violation_context: Option<SandboxViolationAuditContext>,
         spawn_lifecycle: Option<SpawnLifecycleHandle>,
     ) -> Self {
         let output_buffer = Arc::new(Mutex::new(HeadTailBuffer::default()));
@@ -128,6 +131,7 @@ impl UnifiedExecProcess {
             state_rx,
             output_task: None,
             sandbox_type,
+            sandbox_violation_context,
             _spawn_lifecycle: spawn_lifecycle,
         }
     }
@@ -302,7 +306,15 @@ impl UnifiedExecProcess {
         };
         let likely_sandbox_denial = is_likely_sandbox_denied(sandbox_type, &exec_output);
         if likely_sandbox_denial {
-            record_filesystem_sandbox_violation(sandbox_type, &exec_output);
+            if let Some(violation) =
+                record_filesystem_sandbox_violation(sandbox_type, &exec_output)
+            {
+                crate::security_events::record_sandbox_violation_audit(
+                    self.sandbox_violation_context.as_ref(),
+                    &codex_sandboxing::SandboxViolationEvent::FileSystem(violation),
+                )
+                .await;
+            }
         }
         if executor_reported_denial || likely_sandbox_denial {
             let snippet = formatted_truncate_text(
@@ -322,6 +334,7 @@ impl UnifiedExecProcess {
     pub(super) async fn from_spawned(
         spawned: SpawnedPty,
         sandbox_type: SandboxType,
+        sandbox_violation_context: Option<SandboxViolationAuditContext>,
         spawn_lifecycle: SpawnLifecycleHandle,
     ) -> Result<Self, UnifiedExecError> {
         let SpawnedPty {
@@ -334,6 +347,7 @@ impl UnifiedExecProcess {
         let mut managed = Self::new(
             ProcessHandle::Local(Box::new(process_handle)),
             sandbox_type,
+            sandbox_violation_context,
             Some(spawn_lifecycle),
         );
         managed.output_task = Some(Self::spawn_local_output_task(
@@ -381,11 +395,14 @@ impl UnifiedExecProcess {
 
     pub(super) async fn from_exec_server_started(
         started: StartedExecProcess,
+        sandbox_type: SandboxType,
+        sandbox_violation_context: Option<SandboxViolationAuditContext>,
     ) -> Result<Self, UnifiedExecError> {
         let process_handle = ProcessHandle::ExecServer(Arc::clone(&started.process));
         let mut managed = Self::new(
             process_handle,
-            SandboxType::None,
+            sandbox_type,
+            sandbox_violation_context,
             /*spawn_lifecycle*/ None,
         );
         let output_handles = managed.output_handles();

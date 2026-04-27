@@ -102,9 +102,13 @@ async fn remote_process(
         }),
     };
 
-    UnifiedExecProcess::from_exec_server_started(started)
-        .await
-        .expect("remote process should start")
+    UnifiedExecProcess::from_exec_server_started(
+        started,
+        SandboxType::None,
+        /*sandbox_violation_context*/ None,
+    )
+    .await
+    .expect("remote process should start")
 }
 
 #[tokio::test]
