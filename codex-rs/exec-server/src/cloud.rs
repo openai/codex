@@ -21,7 +21,7 @@ use crate::connection::JsonRpcConnection;
 use crate::server::ConnectionProcessor;
 
 /// Environment variable fallback for the cloud environments base URL.
-pub const CODEX_CLOUD_ENVIRONMENTS_BASE_URL_ENV_VAR: &str = "CODEX_CLOUD_ENVIRONMENTS_BASE_URL";
+pub const CODEX_REMOTE_BASE_URL_ENV_VAR: &str = "CODEX_REMOTE_BASE_URL";
 
 const PROTOCOL_VERSION: &str = "codex-exec-server-v1";
 const ERROR_BODY_PREVIEW_BYTES: usize = 4096;
@@ -112,20 +112,20 @@ struct CloudEnvironmentExecutorRegistrationResponse {
     url: String,
 }
 
-/// Configuration for registering an exec-server with cloud environments.
+/// Configuration for registering an exec-server for remote use.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct CloudExecutorConfig {
-    pub cloud_base_url: String,
-    pub cloud_environment_id: Option<String>,
-    pub cloud_name: String,
+pub struct RemoteExecutorConfig {
+    pub base_url: String,
+    pub environment_id: Option<String>,
+    pub name: String,
 }
 
-impl CloudExecutorConfig {
-    pub fn new(cloud_base_url: String) -> Self {
+impl RemoteExecutorConfig {
+    pub fn new(base_url: String) -> Self {
         Self {
-            cloud_base_url,
-            cloud_environment_id: None,
-            cloud_name: "codex-exec-server".to_string(),
+            base_url,
+            environment_id: None,
+            name: "codex-exec-server".to_string(),
         }
     }
 
@@ -136,8 +136,8 @@ impl CloudExecutorConfig {
     ) -> Result<CloudEnvironmentRegisterExecutorRequest, ExecServerError> {
         Ok(CloudEnvironmentRegisterExecutorRequest {
             idempotency_id: self.default_idempotency_id(auth, registration_id)?,
-            environment_id: self.cloud_environment_id.clone(),
-            name: Some(self.cloud_name.clone()),
+            environment_id: self.environment_id.clone(),
+            name: Some(self.name.clone()),
             labels: BTreeMap::new(),
             metadata: Value::Object(Default::default()),
         })
@@ -151,9 +151,9 @@ impl CloudExecutorConfig {
         let mut hasher = sha2::Sha256::new();
         hasher.update(chatgpt_account_id(auth)?.as_bytes());
         hasher.update(b"\0");
-        hasher.update(self.cloud_environment_id.as_deref().unwrap_or("auto"));
+        hasher.update(self.environment_id.as_deref().unwrap_or("auto"));
         hasher.update(b"\0");
-        hasher.update(self.cloud_name.as_bytes());
+        hasher.update(self.name.as_bytes());
         hasher.update(b"\0");
         hasher.update(PROTOCOL_VERSION);
         hasher.update(b"\0");
@@ -163,14 +163,14 @@ impl CloudExecutorConfig {
     }
 }
 
-/// Register an exec-server with cloud environments and serve requests over the
-/// returned rendezvous websocket.
-pub async fn run_cloud_executor(
-    config: CloudExecutorConfig,
+/// Register an exec-server for remote use and serve requests over the returned
+/// rendezvous websocket.
+pub async fn run_remote_executor(
+    config: RemoteExecutorConfig,
     auth_manager: Arc<AuthManager>,
     runtime_paths: ExecServerRuntimePaths,
 ) -> Result<(), ExecServerError> {
-    let client = CloudEnvironmentClient::new(config.cloud_base_url.clone(), auth_manager.clone())?;
+    let client = CloudEnvironmentClient::new(config.base_url.clone(), auth_manager.clone())?;
     let processor = ConnectionProcessor::new(runtime_paths);
     let registration_id = Uuid::new_v4();
     let mut backoff = Duration::from_secs(1);
@@ -180,7 +180,7 @@ pub async fn run_cloud_executor(
         let request = config.registration_request(&auth, registration_id)?;
         let response = client.register_executor(&request).await?;
         eprintln!(
-            "codex exec-server cloud executor {} registered in environment {}",
+            "codex exec-server remote executor {} registered in environment {}",
             response.id, response.environment_id
         );
 
@@ -366,7 +366,7 @@ mod tests {
         let server = MockServer::start().await;
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         let registration_id = Uuid::from_u128(1);
-        let request = CloudExecutorConfig::new(server.uri())
+        let request = RemoteExecutorConfig::new(server.uri())
             .registration_request(&auth, registration_id)
             .expect("registration request");
         let expected_request = serde_json::to_value(&request).expect("serialize request");

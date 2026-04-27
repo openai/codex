@@ -458,17 +458,17 @@ struct ExecServerCommand {
     #[arg(long = "remote", default_value_t = false)]
     remote: bool,
 
-    /// Cloud environments service base URL.
-    #[arg(long = "cloud-base-url", value_name = "URL")]
-    cloud_base_url: Option<String>,
+    /// Remote executor registration service base URL.
+    #[arg(long = "base-url", value_name = "URL")]
+    base_url: Option<String>,
 
-    /// Existing cloud environment id to attach to. Omit to let the service create one.
-    #[arg(long = "cloud-environment-id", value_name = "ID")]
-    cloud_environment_id: Option<String>,
+    /// Existing environment id to attach to. Omit to let the service create one.
+    #[arg(long = "environment-id", value_name = "ID")]
+    environment_id: Option<String>,
 
     /// Human-readable executor name.
-    #[arg(long = "cloud-name", value_name = "NAME")]
-    cloud_name: Option<String>,
+    #[arg(long = "name", value_name = "NAME")]
+    name: Option<String>,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -1282,15 +1282,11 @@ async fn run_exec_server_command(
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
     if cmd.remote {
-        let cloud_base_url = cmd
-            .cloud_base_url
-            .or_else(|| {
-                std::env::var(codex_exec_server::CODEX_CLOUD_ENVIRONMENTS_BASE_URL_ENV_VAR).ok()
-            })
+        let base_url = cmd
+            .base_url
+            .or_else(|| std::env::var(codex_exec_server::CODEX_REMOTE_BASE_URL_ENV_VAR).ok())
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "--cloud-base-url or CODEX_CLOUD_ENVIRONMENTS_BASE_URL is required in remote mode"
-                )
+                anyhow::anyhow!("--base-url or CODEX_REMOTE_BASE_URL is required in remote mode")
             })?;
         let cli_overrides = root_config_overrides
             .parse_overrides()
@@ -1298,12 +1294,12 @@ async fn run_exec_server_command(
         let config = Config::load_with_cli_overrides(cli_overrides).await?;
         let auth_manager =
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
-        let mut cloud_config = codex_exec_server::CloudExecutorConfig::new(cloud_base_url);
-        cloud_config.cloud_environment_id = cmd.cloud_environment_id;
-        if let Some(name) = cmd.cloud_name {
-            cloud_config.cloud_name = name;
+        let mut remote_config = codex_exec_server::RemoteExecutorConfig::new(base_url);
+        remote_config.environment_id = cmd.environment_id;
+        if let Some(name) = cmd.name {
+            remote_config.name = name;
         }
-        codex_exec_server::run_cloud_executor(cloud_config, auth_manager, runtime_paths).await?;
+        codex_exec_server::run_remote_executor(remote_config, auth_manager, runtime_paths).await?;
         return Ok(());
     }
     codex_exec_server::run_main(&cmd.listen, runtime_paths)

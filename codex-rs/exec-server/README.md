@@ -22,12 +22,12 @@ the wire.
 The CLI entrypoint supports:
 
 - `ws://IP:PORT` (default)
-- `--remote --cloud-base-url URL [--cloud-environment-id ID] [--cloud-name NAME]`
+- `--remote --base-url URL [--environment-id ID] [--name NAME]`
 
-Remote mode registers the local exec-server with the cloud environments service,
+Remote mode registers the local exec-server with the environment service,
 then reconnects to the service-provided rendezvous websocket as the executor.
-It requires ChatGPT auth, and `CODEX_CLOUD_ENVIRONMENTS_BASE_URL` can be used
-instead of `--cloud-base-url`.
+It requires ChatGPT auth, and `CODEX_REMOTE_BASE_URL` can be used instead of
+`--base-url`.
 
 Wire framing:
 
@@ -314,7 +314,7 @@ The crate exports:
 - `DEFAULT_LISTEN_URL` and `ExecServerListenUrlParseError`
 - `ExecServerRuntimePaths`
 - `run_main()` for embedding the websocket server
-- `CloudExecutorConfig` and `run_cloud_executor()` for embedding cloud
+- `RemoteExecutorConfig` and `run_remote_executor()` for embedding remote
   registration mode
 
 Callers must pass `ExecServerRuntimePaths` to `run_main()`. The top-level
