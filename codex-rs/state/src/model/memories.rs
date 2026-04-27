@@ -115,7 +115,7 @@ pub enum Phase2JobClaimOutcome {
         /// Snapshot of `input_watermark` at claim time.
         input_watermark: i64,
     },
-    /// The global job is in retry backoff or has exhausted its retry budget.
+    /// The global job is in retry backoff.
     SkippedRetryUnavailable,
     /// Another worker currently owns a fresh global consolidation lease.
     SkippedRunning,

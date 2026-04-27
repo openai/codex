@@ -857,7 +857,7 @@ WHERE kind = ? AND job_key = ?
     /// - creates and claims the singleton row when it does not exist yet
     /// - does not use DB watermarks to decide whether Phase 2 has work; git workspace
     ///   dirtiness is the source of truth after the caller materializes inputs
-    /// - returns `SkippedRetryUnavailable` when retries are exhausted or retry backoff is active
+    /// - returns `SkippedRetryUnavailable` when retry backoff is active
     /// - returns `SkippedRunning` when an active running lease exists
     /// - otherwise updates the row to `running`, sets ownership + lease, and
     ///   returns `Claimed`
@@ -875,7 +875,7 @@ WHERE kind = ? AND job_key = ?
 
         let existing_job = sqlx::query(
             r#"
-SELECT status, lease_until, retry_at, retry_remaining, input_watermark
+SELECT status, lease_until, retry_at, input_watermark
 FROM jobs
 WHERE kind = ? AND job_key = ?
             "#,
@@ -932,12 +932,6 @@ INSERT INTO jobs (
         let status: String = existing_job.try_get("status")?;
         let existing_lease_until: Option<i64> = existing_job.try_get("lease_until")?;
         let retry_at: Option<i64> = existing_job.try_get("retry_at")?;
-        let retry_remaining: i64 = existing_job.try_get("retry_remaining")?;
-
-        if retry_remaining <= 0 {
-            tx.commit().await?;
-            return Ok(Phase2JobClaimOutcome::SkippedRetryUnavailable);
-        }
         if retry_at.is_some_and(|retry_at| retry_at > now) {
             tx.commit().await?;
             return Ok(Phase2JobClaimOutcome::SkippedRetryUnavailable);
@@ -963,7 +957,6 @@ SET
 WHERE kind = ? AND job_key = ?
   AND (status != 'running' OR lease_until IS NULL OR lease_until <= ?)
   AND (retry_at IS NULL OR retry_at <= ?)
-  AND retry_remaining > 0
             "#,
         )
         .bind(worker_id.as_str())
@@ -1104,7 +1097,7 @@ WHERE thread_id = ? AND source_updated_at = ?
     /// - updates only the owned running singleton global row
     /// - sets `status='error'`, clears lease
     /// - writes failure reason and retry time
-    /// - decrements `retry_remaining`
+    /// - decrements `retry_remaining` without going below zero
     pub async fn mark_global_phase2_job_failed(
         &self,
         ownership_token: &str,
@@ -1121,7 +1114,7 @@ SET
     finished_at = ?,
     lease_until = NULL,
     retry_at = ?,
-    retry_remaining = retry_remaining - 1,
+    retry_remaining = max(retry_remaining - 1, 0),
     last_error = ?
 WHERE kind = ? AND job_key = ?
   AND status = 'running' AND ownership_token = ?
@@ -1162,7 +1155,7 @@ SET
     finished_at = ?,
     lease_until = NULL,
     retry_at = ?,
-    retry_remaining = retry_remaining - 1,
+    retry_remaining = max(retry_remaining - 1, 0),
     last_error = ?
 WHERE kind = ? AND job_key = ?
   AND status = 'running'
@@ -2499,6 +2492,76 @@ WHERE kind = 'memory_stage1'
         assert!(
             matches!(claim_after_success, Phase2JobClaimOutcome::Claimed { .. }),
             "the DB claim is only a lock; git workspace diff decides whether there is work"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase2_global_lock_can_be_claimed_after_retry_budget_is_exhausted() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .enqueue_global_consolidation(/*input_watermark*/ 100)
+            .await
+            .expect("enqueue global consolidation");
+
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        for attempt in 0..3 {
+            let claim = runtime
+                .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3_600)
+                .await
+                .expect("claim phase2 before retry exhaustion");
+            let ownership_token = match claim {
+                Phase2JobClaimOutcome::Claimed {
+                    ownership_token, ..
+                } => ownership_token,
+                other => panic!(
+                    "attempt {} should claim phase2 before retries are exhausted: {other:?}",
+                    attempt + 1
+                ),
+            };
+            assert!(
+                runtime
+                    .mark_global_phase2_job_failed(
+                        ownership_token.as_str(),
+                        "boom",
+                        /*retry_delay_seconds*/ 0,
+                    )
+                    .await
+                    .expect("mark phase2 failed"),
+                "attempt {} should decrement retry budget",
+                attempt + 1
+            );
+        }
+
+        let job_row =
+            sqlx::query("SELECT retry_remaining FROM jobs WHERE kind = ? AND job_key = ?")
+                .bind("memory_consolidate_global")
+                .bind("global")
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("load phase2 job row after retry exhaustion");
+        assert_eq!(
+            job_row
+                .try_get::<i64, _>("retry_remaining")
+                .expect("retry_remaining"),
+            0
+        );
+
+        let claim_after_exhaustion = runtime
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3_600)
+            .await
+            .expect("claim phase2 after retry exhaustion");
+        assert!(
+            matches!(
+                claim_after_exhaustion,
+                Phase2JobClaimOutcome::Claimed { .. }
+            ),
+            "phase2 claim should only lock; workspace diffing decides whether there is work"
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
