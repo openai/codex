@@ -155,6 +155,8 @@ jobs:
             runs_on:
               group: codex-runners
               labels: codex-windows-x64
+    env:
+      CODEX_SKIP_FORK_MACOS_ARGUMENT_COMMENT_LINT: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.name == 'macOS' }}
     steps:
       - name: Check whether argument comment lint should run
         id: argument_comment_lint_gate
@@ -163,6 +165,12 @@ jobs:
           ARGUMENT_COMMENT_LINT: ${{ needs.changed.outputs.argument_comment_lint }}
           WORKFLOWS: ${{ needs.changed.outputs.workflows }}
         run: |
+          if [[ "$CODEX_SKIP_FORK_MACOS_ARGUMENT_COMMENT_LINT" == "true" ]]; then
+            echo "Skipping macOS argument-comment-lint for fork PRs because BuildBuddy secrets are unavailable and the Apple SDK archive rejects direct CI downloads."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if [[ "$ARGUMENT_COMMENT_LINT" == "true" || "$WORKFLOWS" == "true" ]]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
