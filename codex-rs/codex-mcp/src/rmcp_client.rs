@@ -146,7 +146,7 @@ impl AsyncManagedClient {
         let startup_complete_for_fut = Arc::clone(&startup_complete);
         let cancel_token_for_fut = cancel_token.clone();
         let fut = async move {
-            let outcome = async {
+            let outcome = match async {
                 if let Err(error) = validate_mcp_server_name(&server_name) {
                     return Err(error.into());
                 }
@@ -161,7 +161,7 @@ impl AsyncManagedClient {
                     )
                     .await?,
                 );
-                match start_server_task(
+                start_server_task(
                     server_name,
                     client,
                     StartServerTaskParams {
@@ -175,14 +175,14 @@ impl AsyncManagedClient {
                         codex_apps_tools_cache_context,
                     },
                 )
-                .or_cancel(&cancel_token_for_fut)
                 .await
-                {
-                    Ok(result) => result,
-                    Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
-                }
             }
-            .await;
+            .or_cancel(&cancel_token_for_fut)
+            .await
+            {
+                Ok(result) => result,
+                Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
+            };
 
             startup_complete_for_fut.store(true, Ordering::Release);
             outcome
