@@ -12,6 +12,7 @@ use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::LoaderOverrides;
+use codex_config::loader::HostNameResolver;
 use codex_config::loader::load_config_layers_state;
 use codex_config::permissions_toml::NetworkToml;
 use codex_config::permissions_toml::PermissionsToml;
@@ -54,7 +55,7 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
         overrides,
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
-        /*host_name*/ None,
+        HostNameResolver::disabled(),
     )
     .await
     .context("failed to load Codex config")?;

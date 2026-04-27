@@ -4,6 +4,7 @@ use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLayerStack;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
+use codex_config::loader::HostNameResolver;
 use codex_config::loader::load_config_layers_state;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -33,7 +34,7 @@ pub(crate) struct ConfigManager {
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     arg0_paths: Arg0DispatchPaths,
     thread_config_loader: Arc<RwLock<Arc<dyn ThreadConfigLoader>>>,
-    host_name: Option<String>,
+    host_name_resolver: HostNameResolver,
 }
 
 impl ConfigManager {
@@ -52,7 +53,7 @@ impl ConfigManager {
             cloud_requirements,
             arg0_paths,
             thread_config_loader,
-            codex_config::host_name(),
+            HostNameResolver::system(),
         )
     }
 
@@ -64,7 +65,7 @@ impl ConfigManager {
         cloud_requirements: CloudRequirementsLoader,
         arg0_paths: Arg0DispatchPaths,
         thread_config_loader: Arc<dyn ThreadConfigLoader>,
-        host_name: Option<String>,
+        host_name_resolver: HostNameResolver,
     ) -> Self {
         Self {
             codex_home,
@@ -74,7 +75,7 @@ impl ConfigManager {
             cloud_requirements: Arc::new(RwLock::new(cloud_requirements)),
             arg0_paths,
             thread_config_loader: Arc::new(RwLock::new(thread_config_loader)),
-            host_name,
+            host_name_resolver,
         }
     }
 
@@ -229,7 +230,7 @@ impl ConfigManager {
             .fallback_cwd(fallback_cwd)
             .cloud_requirements(self.current_cloud_requirements())
             .thread_config_loader(self.current_thread_config_loader())
-            .host_name(self.host_name.clone())
+            .host_name_resolver(self.host_name_resolver.clone())
             .build()
             .await?;
         self.apply_runtime_feature_enablement(&mut config);
@@ -257,7 +258,7 @@ impl ConfigManager {
             self.loader_overrides.clone(),
             self.current_cloud_requirements(),
             thread_config_loader.as_ref(),
-            self.host_name.as_deref(),
+            self.host_name_resolver.clone(),
         )
         .await
     }
@@ -294,7 +295,7 @@ impl ConfigManager {
             cloud_requirements,
             Arg0DispatchPaths::default(),
             Arc::new(codex_config::NoopThreadConfigLoader),
-            host_name,
+            HostNameResolver::fixed(host_name),
         )
     }
 

@@ -842,10 +842,10 @@ pub enum ResidencyRequirement {
 
 impl ConfigRequirementsToml {
     pub fn apply_remote_sandbox_config(&mut self, hostname: Option<&str>) {
-        let Some(hostname) = hostname.and_then(normalize_hostname) else {
+        let Some(remote_sandbox_config) = self.remote_sandbox_config.as_ref() else {
             return;
         };
-        let Some(remote_sandbox_config) = self.remote_sandbox_config.as_ref() else {
+        let Some(hostname) = hostname.and_then(normalize_hostname) else {
             return;
         };
         let Some(matched_config) = remote_sandbox_config

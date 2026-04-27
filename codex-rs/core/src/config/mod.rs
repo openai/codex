@@ -27,6 +27,7 @@ use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
 use codex_config::config_toml::ThreadStoreToml;
 use codex_config::config_toml::validate_model_providers;
+use codex_config::loader::HostNameResolver;
 use codex_config::loader::load_config_layers_state;
 use codex_config::loader::project_trust_key;
 use codex_config::profile_toml::ConfigProfile;
@@ -759,7 +760,7 @@ impl AuthManagerConfig for Config {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ConfigBuilder {
     codex_home: Option<PathBuf>,
     cli_overrides: Option<Vec<(String, TomlValue)>>,
@@ -768,22 +769,7 @@ pub struct ConfigBuilder {
     cloud_requirements: CloudRequirementsLoader,
     thread_config_loader: Option<Arc<dyn ThreadConfigLoader>>,
     fallback_cwd: Option<PathBuf>,
-    host_name: Option<String>,
-}
-
-impl Default for ConfigBuilder {
-    fn default() -> Self {
-        Self {
-            codex_home: None,
-            cli_overrides: None,
-            harness_overrides: None,
-            loader_overrides: None,
-            cloud_requirements: CloudRequirementsLoader::default(),
-            thread_config_loader: None,
-            fallback_cwd: None,
-            host_name: codex_config::host_name(),
-        }
-    }
+    host_name_resolver: HostNameResolver,
 }
 
 impl ConfigBuilder {
@@ -826,7 +812,12 @@ impl ConfigBuilder {
     }
 
     pub fn host_name(mut self, host_name: Option<String>) -> Self {
-        self.host_name = host_name;
+        self.host_name_resolver = HostNameResolver::fixed(host_name);
+        self
+    }
+
+    pub fn host_name_resolver(mut self, host_name_resolver: HostNameResolver) -> Self {
+        self.host_name_resolver = host_name_resolver;
         self
     }
 
@@ -839,7 +830,7 @@ impl ConfigBuilder {
             cloud_requirements,
             thread_config_loader,
             fallback_cwd,
-            host_name,
+            host_name_resolver,
         } = self;
         let codex_home = match codex_home {
             Some(codex_home) => AbsolutePathBuf::from_absolute_path(codex_home)?,
@@ -864,7 +855,7 @@ impl ConfigBuilder {
             thread_config_loader
                 .as_deref()
                 .unwrap_or(&codex_config::NoopThreadConfigLoader),
-            host_name.as_deref(),
+            host_name_resolver,
         )
         .await?;
         let merged_toml = config_layer_stack.effective_config();
@@ -1047,7 +1038,7 @@ pub async fn load_config_as_toml_with_cli_and_loader_overrides(
         loader_overrides,
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
-        /*host_name*/ None,
+        HostNameResolver::disabled(),
     )
     .await?;
 
@@ -1229,7 +1220,7 @@ pub async fn load_global_mcp_servers(
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
-        /*host_name*/ None,
+        HostNameResolver::disabled(),
     )
     .await?;
     let merged_toml = config_layer_stack.effective_config();
