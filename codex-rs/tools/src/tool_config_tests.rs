@@ -231,3 +231,40 @@ fn image_generation_requires_feature_and_supported_model() {
     assert!(!auth_disallowed_tools_config.image_gen_tool);
     assert!(!unsupported_tools_config.image_gen_tool);
 }
+
+#[test]
+fn capability_bounds_disable_optional_tool_surfaces() {
+    let model_info = model_info();
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    tools_config.search_tool = true;
+    tools_config.tool_suggest = true;
+    tools_config.image_gen_tool = true;
+    tools_config.js_repl_enabled = true;
+    tools_config.js_repl_tools_only = true;
+
+    let tools_config = tools_config.with_capability_bounds(ToolCapabilityBounds {
+        tool_search: false,
+        tool_suggest: false,
+        image_generation: false,
+        web_search: false,
+        js_repl: false,
+    });
+
+    assert!(!tools_config.search_tool);
+    assert!(!tools_config.tool_suggest);
+    assert!(!tools_config.image_gen_tool);
+    assert_eq!(tools_config.web_search_mode, None);
+    assert!(!tools_config.js_repl_enabled);
+    assert!(!tools_config.js_repl_tools_only);
+}

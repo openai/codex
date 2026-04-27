@@ -41,6 +41,9 @@ pub(super) async fn spawn_review_thread(
         permission_profile: &parent_turn_context.permission_profile,
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
     })
+    .with_capability_bounds(tool_capability_bounds(
+        parent_turn_context.provider.capabilities(),
+    ))
     .with_unified_exec_shell_mode_for_session(
         crate::tools::spec::tool_user_shell_type(sess.services.user_shell.as_ref()),
         sess.services.shell_zsh_path.as_ref(),

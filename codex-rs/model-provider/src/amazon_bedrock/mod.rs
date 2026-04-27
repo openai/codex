@@ -58,14 +58,13 @@ impl ModelProvider for AmazonBedrockModelProvider {
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
-            apps: false,
-            plugins: false,
+            app_connectors: false,
             mcp_servers: false,
             tool_search: false,
             tool_suggest: false,
             image_generation: false,
             web_search: false,
-            apps_instructions: false,
+            js_repl: false,
         }
     }
 
@@ -140,14 +139,13 @@ mod tests {
         assert_eq!(
             provider.capabilities(),
             ProviderCapabilities {
-                apps: false,
-                plugins: false,
+                app_connectors: false,
                 mcp_servers: false,
                 tool_search: false,
                 tool_suggest: false,
                 image_generation: false,
                 web_search: false,
-                apps_instructions: false,
+                js_repl: false,
             }
         );
     }

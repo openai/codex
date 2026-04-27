@@ -218,7 +218,17 @@ impl Session {
             .mcp_manager
             .tool_plugin_provenance(config.as_ref())
             .await;
-        let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
+        let capabilities = turn_context.provider.capabilities();
+        let mcp_servers = if capabilities.mcp_servers {
+            mcp_servers
+        } else {
+            HashMap::new()
+        };
+        let mcp_servers = if capabilities.app_connectors {
+            with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config)
+        } else {
+            mcp_servers
+        };
         let auth_statuses =
             compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
         {

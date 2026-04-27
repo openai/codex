@@ -114,6 +114,27 @@ pub struct ToolsConfig {
     pub agent_type_description: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolCapabilityBounds {
+    pub tool_search: bool,
+    pub tool_suggest: bool,
+    pub image_generation: bool,
+    pub web_search: bool,
+    pub js_repl: bool,
+}
+
+impl Default for ToolCapabilityBounds {
+    fn default() -> Self {
+        Self {
+            tool_search: true,
+            tool_suggest: true,
+            image_generation: true,
+            web_search: true,
+            js_repl: true,
+        }
+    }
+}
+
 pub struct ToolsConfigParams<'a> {
     pub model_info: &'a ModelInfo,
     pub available_models: &'a [ModelPreset],
@@ -236,6 +257,26 @@ impl ToolsConfig {
 
     pub fn with_agent_type_description(mut self, agent_type_description: String) -> Self {
         self.agent_type_description = agent_type_description;
+        self
+    }
+
+    pub fn with_capability_bounds(mut self, bounds: ToolCapabilityBounds) -> Self {
+        if !bounds.tool_search {
+            self.search_tool = false;
+        }
+        if !bounds.tool_suggest {
+            self.tool_suggest = false;
+        }
+        if !bounds.image_generation {
+            self.image_gen_tool = false;
+        }
+        if !bounds.web_search {
+            self.web_search_mode = None;
+        }
+        if !bounds.js_repl {
+            self.js_repl_enabled = false;
+            self.js_repl_tools_only = false;
+        }
         self
     }
 

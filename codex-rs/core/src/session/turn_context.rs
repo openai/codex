@@ -187,6 +187,7 @@ impl TurnContext {
             permission_profile: &self.permission_profile,
             windows_sandbox_level: self.windows_sandbox_level,
         })
+        .with_capability_bounds(tool_capability_bounds(self.provider.capabilities()))
         .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
@@ -453,6 +454,7 @@ impl Session {
             permission_profile: &session_configuration.permission_profile(),
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         })
+        .with_capability_bounds(tool_capability_bounds(provider_for_context.capabilities()))
         .with_unified_exec_shell_mode_for_session(
             crate::tools::spec::tool_user_shell_type(user_shell),
             shell_zsh_path,

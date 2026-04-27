@@ -26,27 +26,25 @@ use crate::models_endpoint::OpenAiModelsEndpoint;
 /// that the active provider marks unsupported here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderCapabilities {
-    pub apps: bool,
-    pub plugins: bool,
+    pub app_connectors: bool,
     pub mcp_servers: bool,
     pub tool_search: bool,
     pub tool_suggest: bool,
     pub image_generation: bool,
     pub web_search: bool,
-    pub apps_instructions: bool,
+    pub js_repl: bool,
 }
 
 impl Default for ProviderCapabilities {
     fn default() -> Self {
         Self {
-            apps: true,
-            plugins: true,
+            app_connectors: true,
             mcp_servers: true,
             tool_search: true,
             tool_suggest: true,
             image_generation: true,
             web_search: true,
-            apps_instructions: true,
+            js_repl: true,
         }
     }
 }
