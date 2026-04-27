@@ -78,7 +78,6 @@ use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-use super::analytics::enable_analytics_capture;
 use super::analytics::mount_analytics_capture;
 use super::analytics::wait_for_analytics_event;
 
@@ -463,7 +462,7 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
         &server.uri(),
         &server.uri(),
     )?;
-    enable_analytics_capture(&server, codex_home.path()).await?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -535,77 +534,6 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
     assert_eq!(event["event_params"]["reasoning_output_tokens"], 0);
     assert_eq!(event["event_params"]["total_tokens"], 0);
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn turn_start_does_not_track_turn_event_analytics_without_feature() -> Result<()> {
-    let responses = vec![create_final_assistant_message_sse_response("Done")?];
-    let server = create_mock_responses_server_sequence_unchecked(responses).await;
-
-    let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml_with_chatgpt_base_url(
-        codex_home.path(),
-        &server.uri(),
-        &server.uri(),
-    )?;
-    let config_path = codex_home.path().join("config.toml");
-    let config_toml = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        format!("{config_toml}\n[features]\ngeneral_analytics = false\n"),
-    )?;
-    mount_analytics_capture(&server, codex_home.path()).await?;
-
-    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
-            model: Some("mock-model".to_string()),
-            ..Default::default()
-        })
-        .await?;
-    let thread_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
-
-    let turn_req = mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id,
-            input: vec![V2UserInput::Text {
-                text: "hello".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    let turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
-    )
-    .await??;
-    let _ = to_response::<TurnStartResponse>(turn_resp)?;
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-
-    let turn_event = wait_for_analytics_event(
-        &server,
-        std::time::Duration::from_millis(250),
-        "codex_turn_event",
-    )
-    .await;
-    assert!(
-        turn_event.is_err(),
-        "turn analytics should be gated off when general_analytics is disabled"
-    );
     Ok(())
 }
 

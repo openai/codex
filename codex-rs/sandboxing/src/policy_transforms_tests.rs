@@ -299,7 +299,7 @@ fn intersect_permission_profiles_accepts_child_path_granted_for_requested_cwd() 
         file_system: Some(FileSystemPermissions {
             entries: vec![FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             }],
@@ -332,7 +332,7 @@ fn intersect_permission_profiles_materializes_cwd_grant_for_reuse() {
         file_system: Some(FileSystemPermissions {
             entries: vec![FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             }],
@@ -383,7 +383,7 @@ fn intersect_permission_profiles_deduplicates_materialized_grants() {
             entries: vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                     },
                     access: FileSystemAccessMode::Write,
                 },
@@ -425,7 +425,7 @@ fn intersect_permission_profiles_materializes_cwd_deny_entries() {
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                     },
                     access: FileSystemAccessMode::None,
                 },
@@ -474,7 +474,7 @@ fn intersect_permission_profiles_drops_deny_entries_without_filesystem_grants() 
             entries: vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                     },
                     access: FileSystemAccessMode::Write,
                 },
@@ -512,7 +512,7 @@ fn intersect_permission_profiles_rejects_concrete_grants_matched_by_requested_de
             entries: vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                     },
                     access: FileSystemAccessMode::Write,
                 },
@@ -550,7 +550,7 @@ fn intersect_permission_profiles_materializes_relative_deny_globs_for_reuse() {
         .expect("absolute later cwd");
     let cwd_write = FileSystemSandboxEntry {
         path: FileSystemPath::Special {
-            value: FileSystemSpecialPath::CurrentWorkingDirectory,
+            value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
         },
         access: FileSystemAccessMode::Write,
     };
@@ -629,7 +629,7 @@ fn intersect_permission_profiles_drops_broader_cwd_grant_for_requested_child_pat
         file_system: Some(FileSystemPermissions {
             entries: vec![FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             }],

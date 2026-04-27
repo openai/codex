@@ -118,7 +118,7 @@ fn sandbox_cwd(sandbox: &FileSystemSandboxContext) -> Result<AbsolutePathBuf, JS
     let file_system_policy = sandbox.permissions.file_system_sandbox_policy();
     if file_system_policy_has_cwd_dependent_entries(&file_system_policy) {
         return Err(invalid_request(
-            "file system sandbox context with cwd-relative permissions requires cwd".to_string(),
+            "file system sandbox context with dynamic permissions requires cwd".to_string(),
         ));
     }
 
@@ -467,7 +467,7 @@ mod tests {
         let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir().as_path())
             .expect("absolute cwd");
         let policy = restricted_policy(vec![special_entry(
-            FileSystemSpecialPath::CurrentWorkingDirectory,
+            FileSystemSpecialPath::project_roots(/*subpath*/ None),
             FileSystemAccessMode::Write,
         )]);
         let sandbox_context = sandbox_context_with_cwd(&policy, cwd.clone());
@@ -479,7 +479,7 @@ mod tests {
     fn sandbox_cwd_rejects_cwd_dependent_profile_without_context_cwd() {
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Write,
         }]);
@@ -491,7 +491,7 @@ mod tests {
 
         assert_eq!(
             err.message,
-            "file system sandbox context with cwd-relative permissions requires cwd"
+            "file system sandbox context with dynamic permissions requires cwd"
         );
     }
 

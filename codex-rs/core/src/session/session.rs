@@ -149,19 +149,19 @@ impl SessionConfiguration {
             );
         let file_system_policy_matches_legacy = current_file_system_sandbox_policy
             .is_semantically_equivalent_to(&legacy_file_system_projection, &self.cwd);
-        let file_system_policy_has_rebindable_cwd_write = current_file_system_sandbox_policy
-            .entries
-            .iter()
-            .any(|entry| {
-                entry.access.can_write()
-                    && matches!(
-                        &entry.path,
-                        FileSystemPath::Special {
-                            value: FileSystemSpecialPath::CurrentWorkingDirectory
-                                | FileSystemSpecialPath::ProjectRoots { subpath: None },
-                        }
-                    )
-            });
+        let file_system_policy_has_rebindable_project_root_write =
+            current_file_system_sandbox_policy
+                .entries
+                .iter()
+                .any(|entry| {
+                    entry.access.can_write()
+                        && matches!(
+                            &entry.path,
+                            FileSystemPath::Special {
+                                value: FileSystemSpecialPath::ProjectRoots { subpath: None },
+                            }
+                        )
+                });
         if let Some(collaboration_mode) = updates.collaboration_mode.clone() {
             next_configuration.collaboration_mode = collaboration_mode;
         }
@@ -228,7 +228,7 @@ impl SessionConfiguration {
             )?;
         } else if cwd_changed
             && file_system_policy_matches_legacy
-            && file_system_policy_has_rebindable_cwd_write
+            && file_system_policy_has_rebindable_project_root_write
         {
             // Preserve richer split policies across cwd-only updates; only
             // rederive when the session is already using a structurally

@@ -102,7 +102,7 @@ impl ApprovalRequest {
         }
     }
 
-    fn matches_resolved_request(&self, request: &ResolvedAppServerRequest) -> bool {
+    pub(super) fn matches_resolved_request(&self, request: &ResolvedAppServerRequest) -> bool {
         match (self, request) {
             (
                 ApprovalRequest::Exec { id, .. },
@@ -875,7 +875,6 @@ fn special_path_label(value: &FileSystemSpecialPath) -> String {
     match value {
         FileSystemSpecialPath::Root => ":root".to_string(),
         FileSystemSpecialPath::Minimal => ":minimal".to_string(),
-        FileSystemSpecialPath::CurrentWorkingDirectory => ":cwd".to_string(),
         FileSystemSpecialPath::ProjectRoots { subpath } => path_label(":project_roots", subpath),
         FileSystemSpecialPath::Tmpdir => ":tmpdir".to_string(),
         FileSystemSpecialPath::SlashTmp => "/tmp".to_string(),

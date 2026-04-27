@@ -154,6 +154,8 @@ where
     inline_styles: Vec<Style>,
     indent_stack: Vec<IndentContext>,
     list_indices: Vec<Option<u64>>,
+    list_needs_blank_before_next_item: Vec<bool>,
+    list_item_contains_code_block: Vec<bool>,
     link: Option<LinkState>,
     needs_newline: bool,
     pending_marker_line: bool,
@@ -184,6 +186,8 @@ where
             inline_styles: Vec::new(),
             indent_stack: Vec::new(),
             list_indices: Vec::new(),
+            list_needs_blank_before_next_item: Vec::new(),
+            list_item_contains_code_block: Vec::new(),
             link: None,
             needs_newline: false,
             pending_marker_line: false,
@@ -292,6 +296,11 @@ where
             TagEnd::CodeBlock => self.end_codeblock(),
             TagEnd::List(_) => self.end_list(),
             TagEnd::Item => {
+                if self.list_item_contains_code_block.pop().unwrap_or(false)
+                    && let Some(needs_blank) = self.list_needs_blank_before_next_item.last_mut()
+                {
+                    *needs_blank = true;
+                }
                 self.indent_stack.pop();
                 self.pending_marker_line = false;
             }
@@ -476,15 +485,26 @@ where
             self.push_line(Line::default());
         }
         self.list_indices.push(index);
+        self.list_needs_blank_before_next_item.push(false);
     }
 
     fn end_list(&mut self) {
         self.list_indices.pop();
+        self.list_needs_blank_before_next_item.pop();
         self.needs_newline = true;
     }
 
     fn start_item(&mut self) {
+        if self
+            .list_needs_blank_before_next_item
+            .last_mut()
+            .map(std::mem::take)
+            .unwrap_or(false)
+        {
+            self.push_blank_line();
+        }
         self.pending_marker_line = true;
+        self.list_item_contains_code_block.push(false);
         let depth = self.list_indices.len();
         let is_ordered = self
             .list_indices
@@ -524,6 +544,9 @@ where
     }
 
     fn start_codeblock(&mut self, lang: Option<String>, indent: Option<Span<'static>>) {
+        for item_contains_code_block in &mut self.list_item_contains_code_block {
+            *item_contains_code_block = true;
+        }
         self.flush_current_line();
         if !self.text.lines.is_empty() {
             self.push_blank_line();
