@@ -444,7 +444,7 @@ async fn falls_back_to_registered_fallback_port_when_default_port_is_in_use() ->
     let mut opts = ServerOptions::new(
         tmp.path().to_path_buf(),
         codex_login::CLIENT_ID.to_string(),
-        None,
+        /*forced_chatgpt_workspace_id*/ None,
         AuthCredentialsStoreMode::File,
     );
     opts.issuer = issuer;
