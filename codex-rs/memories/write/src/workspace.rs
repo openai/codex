@@ -6,7 +6,7 @@ use codex_git_utils::reset_git_repository;
 use std::path::Path;
 
 /// Generated diff file the Phase 2 consolidation agent reads before editing memories.
-pub(super) const WORKSPACE_DIFF_FILENAME: &str = "phase2_workspace_diff.md";
+pub const WORKSPACE_DIFF_FILENAME: &str = "phase2_workspace_diff.md";
 
 const WORKSPACE_DIFF_MAX_BYTES: usize = 4 * 1024 * 1024;
 
@@ -15,7 +15,7 @@ const WORKSPACE_DIFF_MAX_BYTES: usize = 4 * 1024 * 1024;
 /// This keeps an existing usable `.git/` baseline intact. It initializes a new git baseline when the
 /// metadata is missing or unusable, and removes any stale generated `phase2_workspace_diff.md` file
 /// so that the next diff does not include a previous prompt artifact.
-pub(super) async fn prepare_memory_workspace(root: &Path) -> anyhow::Result<()> {
+pub async fn prepare_memory_workspace(root: &Path) -> anyhow::Result<()> {
     tokio::fs::create_dir_all(root)
         .await
         .with_context(|| format!("create memory workspace {}", root.display()))?;
@@ -28,16 +28,13 @@ pub(super) async fn prepare_memory_workspace(root: &Path) -> anyhow::Result<()> 
 ///
 /// The removed file is only `phase2_workspace_diff.md`; memory artifacts and `.git/` metadata are
 /// left intact.
-pub(super) async fn memory_workspace_diff(root: &Path) -> anyhow::Result<GitBaselineDiff> {
+pub async fn memory_workspace_diff(root: &Path) -> anyhow::Result<GitBaselineDiff> {
     remove_workspace_diff(root).await?;
     diff_since_latest_init(root).await
 }
 
 /// Writes `phase2_workspace_diff.md` with a bounded git-style diff from the current baseline.
-pub(super) async fn write_workspace_diff(
-    root: &Path,
-    diff: &GitBaselineDiff,
-) -> anyhow::Result<()> {
+pub async fn write_workspace_diff(root: &Path, diff: &GitBaselineDiff) -> anyhow::Result<()> {
     let path = root.join(WORKSPACE_DIFF_FILENAME);
     tokio::fs::write(&path, render_workspace_diff_file(diff))
         .await
@@ -48,7 +45,7 @@ pub(super) async fn write_workspace_diff(
 ///
 /// The generated diff file is removed before resetting the baseline so deleted memory content is
 /// not retained in the prompt artifact or in unreachable git objects.
-pub(super) async fn reset_memory_workspace_baseline(root: &Path) -> anyhow::Result<()> {
+pub async fn reset_memory_workspace_baseline(root: &Path) -> anyhow::Result<()> {
     remove_workspace_diff(root).await?;
     reset_git_repository(root).await
 }

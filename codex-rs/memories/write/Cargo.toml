@@ -1,0 +1,31 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-memories-write"
+version.workspace = true
+
+[lib]
+name = "codex_memories_write"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+codex-git-utils = { workspace = true }
+codex-protocol = { workspace = true }
+codex-state = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+codex-utils-output-truncation = { workspace = true }
+codex-utils-template = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
+tracing = { workspace = true, features = ["log"] }
+uuid = { workspace = true, features = ["v4", "v5"] }
+
+[dev-dependencies]
+codex-models-manager = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros"] }

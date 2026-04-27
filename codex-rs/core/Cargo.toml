@@ -39,6 +39,8 @@ codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-feedback = { workspace = true }
 codex-login = { workspace = true }
+codex-memories-read = { workspace = true }
+codex-memories-write = { workspace = true }
 codex-mcp = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-models-manager = { workspace = true }

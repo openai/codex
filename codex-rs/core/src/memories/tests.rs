@@ -1,13 +1,13 @@
-use super::control::clear_memory_root_contents;
-use super::storage::rebuild_raw_memories_file_from_memories;
-use super::storage::sync_rollout_summaries_from_memories;
-use crate::memories::ensure_layout;
-use crate::memories::memory_root;
-use crate::memories::raw_memories_file;
-use crate::memories::rollout_summaries_dir;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_config::types::DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION;
+use codex_memories_write::clear_memory_roots_contents;
+use codex_memories_write::ensure_layout;
+use codex_memories_write::memory_root;
+use codex_memories_write::raw_memories_file;
+use codex_memories_write::rebuild_raw_memories_file_from_memories;
+use codex_memories_write::rollout_summaries_dir;
+use codex_memories_write::sync_rollout_summaries_from_memories;
 use codex_protocol::ThreadId;
 use codex_state::Stage1Output;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -68,7 +68,7 @@ fn stage_one_output_schema_requires_rollout_slug_and_keeps_it_nullable() {
 #[tokio::test]
 async fn clear_memory_root_contents_preserves_root_directory() {
     let dir = tempdir().expect("tempdir");
-    let root = dir.path().join("memory");
+    let root = dir.path().join("memories");
     let nested_dir = root.join("rollout_summaries");
     tokio::fs::create_dir_all(&nested_dir)
         .await
@@ -80,7 +80,7 @@ async fn clear_memory_root_contents_preserves_root_directory() {
         .await
         .expect("write rollout summary");
 
-    clear_memory_root_contents(&root)
+    clear_memory_roots_contents(dir.path())
         .await
         .expect("clear memory root contents");
 
@@ -116,10 +116,10 @@ async fn clear_memory_root_contents_rejects_symlinked_root() {
         .await
         .expect("write target file");
 
-    let root = dir.path().join("memory");
+    let root = dir.path().join("memories");
     std::os::unix::fs::symlink(&target, &root).expect("create memory root symlink");
 
-    let err = clear_memory_root_contents(&root)
+    let err = clear_memory_roots_contents(dir.path())
         .await
         .expect_err("symlinked memory root should be rejected");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
@@ -509,13 +509,7 @@ mod phase2 {
     use crate::agent::AgentControl;
     use crate::config::Config;
     use crate::config::test_config;
-    use crate::memories::memory_root;
     use crate::memories::phase2;
-    use crate::memories::raw_memories_file;
-    use crate::memories::rollout_summaries_dir;
-    use crate::memories::storage::rebuild_raw_memories_file_from_memories;
-    use crate::memories::storage::sync_rollout_summaries_from_memories;
-    use crate::memories::workspace::prepare_memory_workspace;
     use crate::session::session::Session;
     use crate::session::tests::make_session_and_context;
     use chrono::Duration as ChronoDuration;
@@ -524,6 +518,12 @@ mod phase2 {
     use codex_config::types::McpServerConfig;
     use codex_features::Feature;
     use codex_login::CodexAuth;
+    use codex_memories_write::memory_root;
+    use codex_memories_write::raw_memories_file;
+    use codex_memories_write::rebuild_raw_memories_file_from_memories;
+    use codex_memories_write::rollout_summaries_dir;
+    use codex_memories_write::sync_rollout_summaries_from_memories;
+    use codex_memories_write::workspace::prepare_memory_workspace;
     use codex_protocol::AgentPath;
     use codex_protocol::ThreadId;
     use codex_protocol::models::PermissionProfile;

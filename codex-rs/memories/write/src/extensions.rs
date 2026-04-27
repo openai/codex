@@ -1,4 +1,4 @@
-use crate::memories::memory_extensions_root;
+use crate::memory_extensions_root;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::NaiveDateTime;
@@ -7,9 +7,9 @@ use std::path::Path;
 use tracing::warn;
 
 const FILENAME_TS_FORMAT: &str = "%Y-%m-%dT%H-%M-%S";
-pub(super) const EXTENSION_RESOURCE_RETENTION_DAYS: i64 = 7;
+const EXTENSION_RESOURCE_RETENTION_DAYS: i64 = 7;
 
-pub(super) async fn prune_old_extension_resources(memory_root: &Path) {
+pub async fn prune_old_extension_resources(memory_root: &Path) {
     prune_old_extension_resources_with_now(memory_root, Utc::now()).await
 }
 

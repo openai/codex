@@ -1,33 +1,25 @@
-use crate::memories::memory_extensions_root;
-use crate::memories::memory_root;
-use crate::memories::phase_one;
-use crate::memories::workspace::WORKSPACE_DIFF_FILENAME;
+use crate::DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT;
+use crate::STAGE_ONE_CONTEXT_WINDOW_PERCENT;
+use crate::memory_extensions_root;
+use crate::workspace::WORKSPACE_DIFF_FILENAME;
 use codex_protocol::openai_models::ModelInfo;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use codex_utils_template::Template;
 use std::path::Path;
 use std::sync::LazyLock;
-use tokio::fs;
 use tracing::warn;
 
 static CONSOLIDATION_PROMPT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     parse_embedded_template(
-        include_str!("../../templates/memories/consolidation.md"),
+        include_str!("../templates/memories/consolidation.md"),
         "memories/consolidation.md",
     )
 });
 static STAGE_ONE_INPUT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     parse_embedded_template(
-        include_str!("../../templates/memories/stage_one_input.md"),
+        include_str!("../templates/memories/stage_one_input.md"),
         "memories/stage_one_input.md",
-    )
-});
-static MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    parse_embedded_template(
-        include_str!("../../templates/memories/read_path.md"),
-        "memories/read_path.md",
     )
 });
 static MEMORY_EXTENSIONS_FOLDER_STRUCTURE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
@@ -77,7 +69,7 @@ signal to remove stale memories derived only from those resources.
 "#;
 
 /// Builds the consolidation subagent prompt for a specific memory root.
-pub(super) fn build_consolidation_prompt(memory_root: &Path) -> String {
+pub fn build_consolidation_prompt(memory_root: &Path) -> String {
     let memory_extensions_root = memory_extensions_root(memory_root);
     let memory_extensions_exist = memory_extensions_root.is_dir();
     let memory_root = memory_root.display().to_string();
@@ -136,7 +128,7 @@ fn render_memory_extensions_block(template: &Template, memory_extensions_root: &
 ///
 /// Large rollout payloads are truncated to 70% of the active model's effective
 /// input window token budget while keeping both head and tail context.
-pub(super) fn build_stage_one_input_message(
+pub fn build_stage_one_input_message(
     model_info: &ModelInfo,
     rollout_path: &Path,
     rollout_cwd: &Path,
@@ -146,9 +138,9 @@ pub(super) fn build_stage_one_input_message(
         .resolved_context_window()
         .and_then(|limit| (limit > 0).then_some(limit))
         .map(|limit| limit.saturating_mul(model_info.effective_context_window_percent) / 100)
-        .map(|limit| (limit.saturating_mul(phase_one::CONTEXT_WINDOW_PERCENT) / 100).max(1))
+        .map(|limit| (limit.saturating_mul(STAGE_ONE_CONTEXT_WINDOW_PERCENT) / 100).max(1))
         .and_then(|limit| usize::try_from(limit).ok())
-        .unwrap_or(phase_one::DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT);
+        .unwrap_or(DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT);
     let truncated_rollout_contents = truncate_text(
         rollout_contents,
         TruncationPolicy::Tokens(rollout_token_limit),
@@ -161,35 +153,6 @@ pub(super) fn build_stage_one_input_message(
         ("rollout_cwd", rollout_cwd.as_str()),
         ("rollout_contents", truncated_rollout_contents.as_str()),
     ])?)
-}
-
-/// Build prompt used for read path. This prompt must be added to the developer instructions. In
-/// case of large memory files, the `memory_summary.md` is truncated at
-/// [phase_one::MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT].
-pub(crate) async fn build_memory_tool_developer_instructions(
-    codex_home: &AbsolutePathBuf,
-) -> Option<String> {
-    let base_path = memory_root(codex_home);
-    let memory_summary_path = base_path.join("memory_summary.md");
-    let memory_summary = fs::read_to_string(&memory_summary_path)
-        .await
-        .ok()?
-        .trim()
-        .to_string();
-    let memory_summary = truncate_text(
-        &memory_summary,
-        TruncationPolicy::Tokens(phase_one::MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT),
-    );
-    if memory_summary.is_empty() {
-        return None;
-    }
-    let base_path = base_path.display().to_string();
-    MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_TEMPLATE
-        .render([
-            ("base_path", base_path.as_str()),
-            ("memory_summary", memory_summary.as_str()),
-        ])
-        .ok()
 }
 
 #[cfg(test)]
