@@ -7,17 +7,29 @@ use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
 use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
+use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_model_provider::BearerAuthProvider;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_rollout_trace::ExecutionStatus;
+use codex_rollout_trace::InferenceTraceContext;
+use codex_rollout_trace::RawTraceEventPayload;
+use codex_rollout_trace::TraceWriter;
+use codex_rollout_trace::replay_bundle;
+use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::sync::Arc;
+use std::time::Duration;
+use tempfile::TempDir;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
@@ -149,6 +161,97 @@ async fn summarize_memories_returns_empty_for_empty_input() {
         .await
         .expect("empty summarize request should succeed");
     assert_eq!(output.len(), 0);
+}
+
+#[tokio::test]
+async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = Arc::new(TraceWriter::create(
+        temp.path(),
+        "trace-1".to_string(),
+        "rollout-1".to_string(),
+        "thread-root".to_string(),
+    )?);
+    writer.append(RawTraceEventPayload::ThreadStarted {
+        thread_id: "thread-root".to_string(),
+        agent_path: "/root".to_string(),
+        metadata_payload: None,
+    })?;
+    writer.append(RawTraceEventPayload::CodexTurnStarted {
+        codex_turn_id: "turn-1".to_string(),
+        thread_id: "thread-root".to_string(),
+    })?;
+
+    let inference_trace = InferenceTraceContext::enabled(
+        writer,
+        "thread-root".to_string(),
+        "turn-1".to_string(),
+        "gpt-test".to_string(),
+        "test-provider".to_string(),
+    );
+    let attempt = inference_trace.start_attempt();
+    attempt.record_started(&json!({
+        "model": "gpt-test",
+        "input": [{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hello"}]
+        }],
+    }));
+
+    // The provider has produced one complete output item, but no terminal
+    // response.completed event. The harness has enough information to keep this
+    // item in history, so the trace should preserve it when the stream is
+    // abandoned.
+    let item = ResponseItem::Message {
+        id: Some("msg-1".to_string()),
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "partial answer".to_string(),
+        }],
+        phase: None,
+    };
+    let api_stream = futures::stream::iter([Ok(ResponseEvent::OutputItemDone(item))])
+        .chain(futures::stream::pending());
+    let (mut stream, _) = super::map_response_stream(api_stream, test_session_telemetry(), attempt);
+
+    let observed = stream
+        .next()
+        .await
+        .expect("mapped stream should yield output item")?;
+    assert!(matches!(observed, ResponseEvent::OutputItemDone(_)));
+
+    // Dropping the consumer is how turn interruption/preemption stops polling
+    // the provider stream. The mapper task observes that drop asynchronously
+    // and records cancellation using the output items it has already seen.
+    drop(stream);
+
+    // Cancellation is recorded by the mapper task after Drop wakes it, so the
+    // replay may need a short wait before the terminal event appears on disk.
+    let mut rollout = replay_bundle(temp.path())?;
+    for _ in 0..50 {
+        let inference = rollout
+            .inference_calls
+            .values()
+            .next()
+            .expect("inference should be reduced");
+        if inference.execution.status == ExecutionStatus::Cancelled {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        rollout = replay_bundle(temp.path())?;
+    }
+    let inference = rollout
+        .inference_calls
+        .values()
+        .next()
+        .expect("inference should be reduced");
+
+    assert_eq!(inference.execution.status, ExecutionStatus::Cancelled);
+    assert_eq!(inference.response_item_ids.len(), 1);
+    assert_eq!(rollout.raw_payloads.len(), 2);
+
+    Ok(())
 }
 
 #[test]

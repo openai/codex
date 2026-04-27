@@ -103,6 +103,35 @@ impl TraceReducer {
         Ok(())
     }
 
+    /// Closes any inference streams that are still live when the owning turn ends.
+    ///
+    /// Normal completion events close the active inference before the turn ends.
+    /// If a call is still `Running`, Codex stopped observing that provider stream
+    /// earlier and the reduced graph should not present it as live.
+    pub(super) fn close_running_inference_calls_for_turn_end(
+        &mut self,
+        seq: RawEventSeq,
+        wall_time_unix_ms: i64,
+        codex_turn_id: &str,
+        turn_status: &ExecutionStatus,
+    ) {
+        let inference_status = match turn_status {
+            ExecutionStatus::Running => return,
+            ExecutionStatus::Completed | ExecutionStatus::Cancelled => ExecutionStatus::Cancelled,
+            ExecutionStatus::Failed => ExecutionStatus::Failed,
+            ExecutionStatus::Aborted => ExecutionStatus::Aborted,
+        };
+        for inference in self.rollout.inference_calls.values_mut() {
+            if inference.codex_turn_id == codex_turn_id
+                && inference.execution.status == ExecutionStatus::Running
+            {
+                inference.execution.ended_at_unix_ms = Some(wall_time_unix_ms);
+                inference.execution.ended_seq = Some(seq);
+                inference.execution.status = inference_status.clone();
+            }
+        }
+    }
+
     /// Completes an inference call and, when present, reduces response output items.
     pub(super) fn complete_inference_call(
         &mut self,
@@ -141,3 +170,7 @@ impl TraceReducer {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "inference_tests.rs"]
+mod tests;

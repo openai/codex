@@ -98,6 +98,7 @@ use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
@@ -1232,7 +1233,7 @@ impl ModelClientSession {
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
-                    inference_trace_attempt.record_failed(&unauthorized_transport);
+                    inference_trace_attempt.record_failed(&unauthorized_transport, &[]);
                     pending_retry = PendingUnauthorizedRetry::from_recovery(
                         handle_unauthorized(
                             unauthorized_transport,
@@ -1245,7 +1246,7 @@ impl ModelClientSession {
                 }
                 Err(err) => {
                     let err = map_api_error(err);
-                    inference_trace_attempt.record_failed(&err);
+                    inference_trace_attempt.record_failed(&err, &[]);
                     return Err(err);
                 }
             }
@@ -1372,7 +1373,7 @@ impl ModelClientSession {
                 .await
                 .map_err(|err| {
                     let err = map_api_error(err);
-                    inference_trace_attempt.record_failed(&err);
+                    inference_trace_attempt.record_failed(&err, &[]);
                     err
                 })?;
             let (stream, last_request_rx) = map_response_stream(
@@ -1634,13 +1635,28 @@ where
 {
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
     let (tx_last_response, rx_last_response) = oneshot::channel::<LastResponse>();
+    let consumer_dropped = CancellationToken::new();
+    let consumer_dropped_for_stream = consumer_dropped.clone();
 
     tokio::spawn(async move {
         let mut logged_error = false;
         let mut tx_last_response = Some(tx_last_response);
         let mut items_added: Vec<ResponseItem> = Vec::new();
         let mut api_stream = api_stream;
-        while let Some(event) = api_stream.next().await {
+        loop {
+            let event = tokio::select! {
+                _ = consumer_dropped.cancelled() => {
+                    inference_trace_attempt.record_cancelled(
+                        "response stream dropped before provider terminal event",
+                        &items_added,
+                    );
+                    return;
+                }
+                event = api_stream.next() => event,
+            };
+            let Some(event) = event else {
+                break;
+            };
             match event {
                 Ok(ResponseEvent::OutputItemDone(item)) => {
                     items_added.push(item.clone());
@@ -1696,7 +1712,7 @@ where
                 }
                 Err(err) => {
                     let mapped = map_api_error(err);
-                    inference_trace_attempt.record_failed(&mapped);
+                    inference_trace_attempt.record_failed(&mapped, &items_added);
                     if !logged_error {
                         session_telemetry.see_event_completed_failed(&mapped);
                         logged_error = true;
@@ -1707,9 +1723,17 @@ where
                 }
             }
         }
+        inference_trace_attempt
+            .record_failed("stream closed before response.completed", &items_added);
     });
 
-    (ResponseStream { rx_event }, rx_last_response)
+    (
+        ResponseStream {
+            rx_event,
+            consumer_dropped: consumer_dropped_for_stream,
+        },
+        rx_last_response,
+    )
 }
 
 /// Handles a 401 response by optionally refreshing ChatGPT tokens once.
