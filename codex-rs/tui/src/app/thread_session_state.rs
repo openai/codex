@@ -12,7 +12,10 @@ impl App {
 
         let approval_policy = self.config.permissions.approval_policy.value();
         let approvals_reviewer = self.config.approvals_reviewer;
-        let sandbox_policy = self.config.permissions.sandbox_policy.get().clone();
+        let sandbox_policy = self
+            .config
+            .permissions
+            .legacy_sandbox_policy(self.config.cwd.as_path());
         let permission_profile = Some(
             self.chat_widget
                 .config_ref()
@@ -45,7 +48,10 @@ impl App {
         thread_id: ThreadId,
         thread: &Thread,
     ) -> ThreadSessionState {
-        let sandbox_policy = self.config.permissions.sandbox_policy.get().clone();
+        let sandbox_policy = self
+            .config
+            .permissions
+            .legacy_sandbox_policy(self.config.cwd.as_path());
         let mut session = self
             .primary_session_configured
             .clone()
@@ -185,8 +191,10 @@ mod tests {
         app.chat_widget
             .set_sandbox_policy(expected_sandbox_policy.clone())
             .expect("set widget sandbox policy");
-        app.config.permissions.sandbox_policy =
-            codex_config::Constrained::allow_any(expected_sandbox_policy.clone());
+        app.config
+            .permissions
+            .set_legacy_sandbox_policy(expected_sandbox_policy.clone(), app.config.cwd.as_path())
+            .expect("set app sandbox policy");
 
         app.sync_active_thread_permission_settings_to_cached_session()
             .await;

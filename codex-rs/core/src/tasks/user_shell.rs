@@ -3,6 +3,10 @@ use std::time::Duration;
 
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
+use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
+use codex_network_proxy::PROXY_ENV_KEYS;
+#[cfg(target_os = "macos")]
+use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -33,10 +37,9 @@ use codex_shell_command::parse_command::parse_command;
 use super::SessionTask;
 use super::SessionTaskContext;
 use crate::session::session::Session;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::NetworkSandboxPolicy;
 
 const USER_SHELL_TIMEOUT_MS: u64 = 60 * 60 * 1000; // 1 hour
 
@@ -124,10 +127,24 @@ pub(crate) async fn execute_user_shell_command(
     let use_login_shell = true;
     let session_shell = session.user_shell();
     let display_command = session_shell.derive_exec_args(&command, use_login_shell);
-    let exec_env_map = create_env(
+    let mut exec_env_map = create_env(
         &turn_context.shell_environment_policy,
         Some(session.conversation_id),
     );
+    if exec_env_map.contains_key(PROXY_ACTIVE_ENV_KEY) {
+        for key in PROXY_ENV_KEYS {
+            exec_env_map.remove(*key);
+        }
+        #[cfg(target_os = "macos")]
+        if exec_env_map
+            .get(PROXY_GIT_SSH_COMMAND_ENV_KEY)
+            .is_some_and(|value| {
+                value.starts_with(codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER)
+            })
+        {
+            exec_env_map.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
+        }
+    }
     let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
         session_shell.as_ref(),
@@ -157,7 +174,7 @@ pub(crate) async fn execute_user_shell_command(
         )
         .await;
 
-    let sandbox_policy = SandboxPolicy::DangerFullAccess;
+    let permission_profile = PermissionProfile::Disabled;
     let exec_env = ExecRequest {
         command: exec_command.clone(),
         cwd: cwd.clone(),
@@ -177,9 +194,10 @@ pub(crate) async fn execute_user_shell_command(
             .config
             .permissions
             .windows_sandbox_private_desktop,
-        sandbox_policy: sandbox_policy.clone(),
-        file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
-        network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
+        permission_profile: permission_profile.clone(),
+        sandbox_policy: SandboxPolicy::DangerFullAccess,
+        file_system_sandbox_policy: permission_profile.file_system_sandbox_policy(),
+        network_sandbox_policy: permission_profile.network_sandbox_policy(),
         windows_sandbox_filesystem_overrides: None,
         arg0: None,
     };

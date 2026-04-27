@@ -5,13 +5,12 @@ use crate::bwrap::is_wsl1;
 use crate::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args_for_policies;
-use crate::policy_transforms::EffectiveSandboxPermissions;
-use crate::policy_transforms::effective_file_system_sandbox_policy;
-use crate::policy_transforms::effective_network_sandbox_policy;
+use crate::policy_transforms::effective_permission_profile;
 use crate::policy_transforms::should_require_platform_sandbox;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
@@ -80,6 +79,7 @@ pub struct SandboxExecRequest {
     pub sandbox: SandboxType,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
+    pub permission_profile: PermissionProfile,
     pub sandbox_policy: SandboxPolicy,
     pub file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub network_sandbox_policy: NetworkSandboxPolicy,
@@ -91,9 +91,7 @@ pub struct SandboxExecRequest {
 /// This keeps call sites self-documenting when several fields are optional.
 pub struct SandboxTransformRequest<'a> {
     pub command: SandboxCommand,
-    pub policy: &'a SandboxPolicy,
-    pub file_system_policy: &'a FileSystemSandboxPolicy,
-    pub network_policy: NetworkSandboxPolicy,
+    pub permissions: &'a PermissionProfile,
     pub sandbox: SandboxType,
     pub enforce_managed_network: bool,
     // TODO(viyatb): Evaluate switching this to Option<Arc<NetworkProxy>>
@@ -174,9 +172,7 @@ impl SandboxManager {
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
         let SandboxTransformRequest {
             mut command,
-            policy,
-            file_system_policy,
-            network_policy,
+            permissions,
             sandbox,
             enforce_managed_network,
             network,
@@ -187,15 +183,16 @@ impl SandboxManager {
             windows_sandbox_private_desktop,
         } = request;
         let additional_permissions = command.additional_permissions.take();
-        let EffectiveSandboxPermissions {
-            sandbox_policy: effective_policy,
-        } = EffectiveSandboxPermissions::new(policy, additional_permissions.as_ref());
-        let effective_file_system_policy = effective_file_system_sandbox_policy(
-            file_system_policy,
-            additional_permissions.as_ref(),
+        let effective_permission_profile =
+            effective_permission_profile(permissions, additional_permissions.as_ref());
+        let (effective_file_system_policy, effective_network_policy) =
+            effective_permission_profile.to_runtime_permissions();
+        let effective_policy = compatibility_sandbox_policy_for_permission_profile(
+            &effective_permission_profile,
+            &effective_file_system_policy,
+            effective_network_policy,
+            sandbox_policy_cwd,
         );
-        let effective_network_policy =
-            effective_network_sandbox_policy(network_policy, additional_permissions.as_ref());
         let mut argv = Vec::with_capacity(1 + command.args.len());
         argv.push(command.program);
         argv.extend(command.args.into_iter().map(OsString::from));
@@ -264,11 +261,56 @@ impl SandboxManager {
             sandbox,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
+            permission_profile: effective_permission_profile,
             sandbox_policy: effective_policy,
             file_system_sandbox_policy: effective_file_system_policy,
             network_sandbox_policy: effective_network_policy,
             arg0: arg0_override,
         })
+    }
+}
+
+pub fn compatibility_sandbox_policy_for_permission_profile(
+    permissions: &PermissionProfile,
+    file_system_policy: &FileSystemSandboxPolicy,
+    network_policy: NetworkSandboxPolicy,
+    cwd: &Path,
+) -> SandboxPolicy {
+    permissions
+        .to_legacy_sandbox_policy(cwd)
+        .unwrap_or_else(|_| {
+            compatibility_workspace_write_policy(file_system_policy, network_policy, cwd)
+        })
+}
+
+fn compatibility_workspace_write_policy(
+    file_system_policy: &FileSystemSandboxPolicy,
+    network_policy: NetworkSandboxPolicy,
+    cwd: &Path,
+) -> SandboxPolicy {
+    let cwd_abs = AbsolutePathBuf::from_absolute_path(cwd).ok();
+    let writable_roots = file_system_policy
+        .get_writable_roots_with_cwd(cwd)
+        .into_iter()
+        .map(|root| root.root)
+        .filter(|root| cwd_abs.as_ref() != Some(root))
+        .collect();
+    let tmpdir_writable = std::env::var_os("TMPDIR")
+        .filter(|tmpdir| !tmpdir.is_empty())
+        .and_then(|tmpdir| {
+            AbsolutePathBuf::from_absolute_path(std::path::PathBuf::from(tmpdir)).ok()
+        })
+        .is_some_and(|tmpdir| file_system_policy.can_write_path_with_cwd(tmpdir.as_path(), cwd));
+    let slash_tmp = Path::new("/tmp");
+    let slash_tmp_writable = slash_tmp.is_absolute()
+        && slash_tmp.is_dir()
+        && file_system_policy.can_write_path_with_cwd(slash_tmp, cwd);
+
+    SandboxPolicy::WorkspaceWrite {
+        writable_roots,
+        network_access: network_policy.is_enabled(),
+        exclude_tmpdir_env_var: !tmpdir_writable,
+        exclude_slash_tmp: !slash_tmp_writable,
     }
 }
 

@@ -30,6 +30,7 @@ use codex_protocol::error::Result;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -220,9 +221,7 @@ pub struct StdoutStream {
 #[allow(clippy::too_many_arguments)]
 pub async fn process_exec_tool_call(
     params: ExecParams,
-    sandbox_policy: &SandboxPolicy,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
+    permission_profile: &PermissionProfile,
     sandbox_cwd: &AbsolutePathBuf,
     codex_linux_sandbox_exe: &Option<PathBuf>,
     use_legacy_landlock: bool,
@@ -230,9 +229,7 @@ pub async fn process_exec_tool_call(
 ) -> Result<ExecToolCallOutput> {
     let exec_req = build_exec_request(
         params,
-        sandbox_policy,
-        file_system_sandbox_policy,
-        network_sandbox_policy,
+        permission_profile,
         sandbox_cwd,
         codex_linux_sandbox_exe,
         use_legacy_landlock,
@@ -246,9 +243,7 @@ pub async fn process_exec_tool_call(
 /// spawned under the requested sandbox policy.
 pub fn build_exec_request(
     params: ExecParams,
-    sandbox_policy: &SandboxPolicy,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
+    permission_profile: &PermissionProfile,
     sandbox_cwd: &AbsolutePathBuf,
     codex_linux_sandbox_exe: &Option<PathBuf>,
     use_legacy_landlock: bool,
@@ -271,8 +266,10 @@ pub fn build_exec_request(
     } = params;
 
     let enforce_managed_network = network.is_some();
+    let (file_system_sandbox_policy, network_sandbox_policy) =
+        permission_profile.to_runtime_permissions();
     let sandbox_type = select_process_exec_tool_sandbox_type(
-        file_system_sandbox_policy,
+        &file_system_sandbox_policy,
         network_sandbox_policy,
         windows_sandbox_level,
         enforce_managed_network,
@@ -304,9 +301,7 @@ pub fn build_exec_request(
     let mut exec_req = manager
         .transform(SandboxTransformRequest {
             command,
-            policy: sandbox_policy,
-            file_system_policy: file_system_sandbox_policy,
-            network_policy: network_sandbox_policy,
+            permissions: permission_profile,
             sandbox: sandbox_type,
             enforce_managed_network,
             network: network.as_ref(),
@@ -366,6 +361,7 @@ pub(crate) async fn execute_exec_request(
         windows_sandbox_policy_cwd: _,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
+        permission_profile: _,
         sandbox_policy,
         // TODO(mbolin): Use file_system_sandbox_policy instead of sandbox_policy.
         file_system_sandbox_policy: _,

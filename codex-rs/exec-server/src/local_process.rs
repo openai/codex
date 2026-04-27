@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_config::shell_environment;
-use codex_config::types::EnvironmentVariablePattern;
-use codex_config::types::ShellEnvironmentPolicy;
+use codex_protocol::config_types::EnvironmentVariablePattern;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::shell_environment;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::TerminalSize;
 use tokio::sync::Mutex;
@@ -706,7 +706,7 @@ fn notification_sender(inner: &Inner) -> Option<RpcNotificationSender> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_config::types::ShellEnvironmentPolicyInherit;
+    use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
     use codex_utils_pty::ProcessDriver;
     use pretty_assertions::assert_eq;
     use tokio::sync::oneshot;

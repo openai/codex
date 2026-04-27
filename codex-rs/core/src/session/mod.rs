@@ -176,8 +176,8 @@ use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
-use codex_config::types::ShellEnvironmentPolicy;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
@@ -604,9 +604,7 @@ impl Codex {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             approvals_reviewer: config.approvals_reviewer,
-            sandbox_policy: config.permissions.sandbox_policy.clone(),
-            file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
-            network_sandbox_policy: config.permissions.network_sandbox_policy,
+            permission_profile: config.permissions.permission_profile.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -847,8 +845,10 @@ impl Session {
         }
     }
 
-    fn managed_network_proxy_active_for_sandbox_policy(sandbox_policy: &SandboxPolicy) -> bool {
-        !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
+    fn managed_network_proxy_active_for_permission_profile(
+        permission_profile: &PermissionProfile,
+    ) -> bool {
+        !matches!(permission_profile, PermissionProfile::Disabled)
     }
 
     /// Builds the `x-codex-beta-features` header value for this session.
@@ -881,7 +881,7 @@ impl Session {
     async fn start_managed_network_proxy(
         spec: &crate::config::NetworkProxySpec,
         exec_policy: &codex_execpolicy::Policy,
-        sandbox_policy: &SandboxPolicy,
+        permission_profile: &PermissionProfile,
         network_policy_decider: Option<Arc<dyn codex_network_proxy::NetworkPolicyDecider>>,
         blocked_request_observer: Option<Arc<dyn codex_network_proxy::BlockedRequestObserver>>,
         managed_network_requirements_enabled: bool,
@@ -898,7 +898,7 @@ impl Session {
             .unwrap_or_else(|_| spec.clone());
         let network_proxy = spec
             .start_proxy(
-                sandbox_policy,
+                permission_profile,
                 network_policy_decider,
                 blocked_request_observer,
                 managed_network_requirements_enabled,
@@ -916,7 +916,7 @@ impl Session {
         Ok((network_proxy, session_network_proxy))
     }
 
-    async fn refresh_managed_network_proxy_for_current_sandbox_policy(&self) {
+    async fn refresh_managed_network_proxy_for_current_permission_profile(&self) {
         let Some(started_proxy) = self.services.network_proxy.as_ref() else {
             return;
         };
@@ -938,7 +938,7 @@ impl Session {
         };
 
         let spec = match spec
-            .recompute_for_sandbox_policy(session_configuration.sandbox_policy.get())
+            .recompute_for_permission_profile(&session_configuration.permission_profile())
         {
             Ok(spec) => spec,
             Err(err) => {
@@ -1288,7 +1288,7 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let (previous_cwd, sandbox_policy_changed, next_cwd, codex_home, session_source) = {
+        let (previous_cwd, permission_profile_changed, next_cwd, codex_home, session_source) = {
             let mut state = self.state.lock().await;
             let updated = match state.session_configuration.apply(&updates) {
                 Ok(updated) => updated,
@@ -1299,15 +1299,17 @@ impl Session {
             };
 
             let previous_cwd = state.session_configuration.cwd.clone();
-            let sandbox_policy_changed =
-                state.session_configuration.sandbox_policy != updated.sandbox_policy;
+            let previous_permission_profile = state.session_configuration.permission_profile();
+            let updated_permission_profile = updated.permission_profile();
+            let permission_profile_changed =
+                previous_permission_profile != updated_permission_profile;
             let next_cwd = updated.cwd.clone();
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
             state.session_configuration = updated;
             (
                 previous_cwd,
-                sandbox_policy_changed,
+                permission_profile_changed,
                 next_cwd,
                 codex_home,
                 session_source,
@@ -1320,8 +1322,8 @@ impl Session {
             &codex_home,
             &session_source,
         );
-        if sandbox_policy_changed {
-            self.refresh_managed_network_proxy_for_current_sandbox_policy()
+        if permission_profile_changed {
+            self.refresh_managed_network_proxy_for_current_permission_profile()
                 .await;
         }
 
@@ -2362,7 +2364,6 @@ impl Session {
             content: vec![ContentItem::InputText {
                 text: format!("Warning: {}", message.into()),
             }],
-            end_turn: None,
             phase: None,
         };
 
@@ -2518,8 +2519,8 @@ impl Session {
         }
         if turn_context.config.include_permissions_instructions {
             developer_sections.push(
-                PermissionsInstructions::from_policy(
-                    turn_context.sandbox_policy.get(),
+                PermissionsInstructions::from_permission_profile(
+                    &turn_context.permission_profile,
                     turn_context.approval_policy.value(),
                     turn_context.config.approvals_reviewer,
                     self.services.exec_policy.current().as_ref(),

@@ -104,7 +104,6 @@ pub(crate) fn interrupted_turn_history_marker(
                 content: vec![ContentItem::InputText {
                     text: marker.render(),
                 }],
-                end_turn: None,
                 phase: None,
             })
         }

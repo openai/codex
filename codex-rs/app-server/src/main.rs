@@ -6,7 +6,7 @@ use codex_app_server::PluginStartupTasks;
 use codex_app_server::run_main_with_transport_options;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
-use codex_core::config_loader::LoaderOverrides;
+use codex_config::LoaderOverrides;
 use codex_protocol::protocol::SessionSource;
 use codex_utils_cli::CliConfigOverrides;
 use std::path::PathBuf;

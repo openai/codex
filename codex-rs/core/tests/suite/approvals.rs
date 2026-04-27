@@ -2,15 +2,15 @@
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigLayerStackOrdering;
+use codex_config::NetworkConstraints;
+use codex_config::NetworkRequirementsToml;
+use codex_config::RequirementSource;
+use codex_config::Sourced;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::CodexThread;
 use codex_core::config::Constrained;
-use codex_core::config_loader::ConfigLayerStack;
-use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::config_loader::NetworkConstraints;
-use codex_core::config_loader::NetworkRequirementsToml;
-use codex_core::config_loader::RequirementSource;
-use codex_core::config_loader::Sourced;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -2880,7 +2880,11 @@ allow_local_binding = true
     };
     let mut builder = test_codex().with_home(home).with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config.permissions.sandbox_policy = Constrained::allow_any(SandboxPolicy::DangerFullAccess);
+        let cwd = config.cwd.clone();
+        config
+            .permissions
+            .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess, cwd.as_path())
+            .expect("test setup should allow sandbox policy");
         let layers = config
             .config_layer_stack
             .get_layers(

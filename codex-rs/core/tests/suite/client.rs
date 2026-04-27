@@ -290,7 +290,6 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         content: vec![codex_protocol::models::ContentItem::InputText {
             text: "resumed user message".to_string(),
         }],
-        end_turn: None,
         phase: None,
     };
     let prior_user_json = serde_json::to_value(&prior_user).unwrap();
@@ -312,7 +311,6 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         content: vec![codex_protocol::models::ContentItem::OutputText {
             text: "resumed system instruction".to_string(),
         }],
-        end_turn: None,
         phase: None,
     };
     let prior_system_json = serde_json::to_value(&prior_system).unwrap();
@@ -334,7 +332,6 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         content: vec![codex_protocol::models::ContentItem::OutputText {
             text: "resumed assistant message".to_string(),
         }],
-        end_turn: None,
         phase: Some(MessagePhase::Commentary),
     };
     let prior_item_json = serde_json::to_value(&prior_item).unwrap();
@@ -517,7 +514,6 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
                     image_url: legacy_image_url.to_string(),
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 }],
-                end_turn: None,
                 phase: None,
             }),
         },
@@ -903,7 +899,6 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         content: vec![ContentItem::InputText {
             text: "hello".to_string(),
         }],
-        end_turn: None,
         phase: None,
     });
 
@@ -2318,7 +2313,6 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         content: vec![ContentItem::OutputText {
             text: "message".into(),
         }],
-        end_turn: None,
         phase: None,
     });
     prompt.input.push(ResponseItem::WebSearchCall {

@@ -2286,15 +2286,20 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "codex-app-server-protocol",
+ "codex-exec-server",
  "codex-execpolicy",
  "codex-features",
+ "codex-git-utils",
  "codex-model-provider-info",
  "codex-network-proxy",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-path",
+ "core-foundation 0.9.4",
  "dns-lookup",
+ "dunce",
  "futures",
  "gethostname",
  "libc",
@@ -2318,6 +2323,7 @@ dependencies = [
  "tracing",
  "wildmatch",
  "winapi-util",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2398,7 +2404,6 @@ dependencies = [
  "codex-utils-string",
  "codex-utils-template",
  "codex-windows-sandbox",
- "core-foundation 0.9.4",
  "core_test_support",
  "csv",
  "ctor 0.6.3",
@@ -2449,7 +2454,6 @@ dependencies = [
  "walkdir",
  "which 8.0.0",
  "whoami",
- "windows-sys 0.52.0",
  "wiremock",
  "zstd 0.13.3",
 ]
@@ -2559,6 +2563,7 @@ dependencies = [
  "codex-apply-patch",
  "codex-arg0",
  "codex-cloud-requirements",
+ "codex-config",
  "codex-core",
  "codex-feedback",
  "codex-git-utils",
@@ -2602,7 +2607,6 @@ dependencies = [
  "bytes",
  "codex-app-server-protocol",
  "codex-client",
- "codex-config",
  "codex-protocol",
  "codex-sandboxing",
  "codex-test-binary-support",
@@ -2780,7 +2784,6 @@ version = "0.0.0"
 dependencies = [
  "cc",
  "clap",
- "codex-config",
  "codex-core",
  "codex-protocol",
  "codex-sandboxing",
@@ -3117,6 +3120,7 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
+ "wildmatch",
 ]
 
 [[package]]

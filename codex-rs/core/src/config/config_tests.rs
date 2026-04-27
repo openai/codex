@@ -4,11 +4,10 @@ use crate::config::ThreadStoreConfig;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
-use crate::config_loader::RequirementSource;
-use crate::config_loader::project_trust_key;
 use crate::plugins::PluginsManager;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::RequirementSource;
 use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
 use codex_config::config_toml::AutoReviewToml;
@@ -21,6 +20,7 @@ use codex_config::config_toml::RealtimeTransport;
 use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
 use codex_config::config_toml::ToolsToml;
+use codex_config::loader::project_trust_key;
 use codex_config::permissions_toml::FilesystemPermissionToml;
 use codex_config::permissions_toml::FilesystemPermissionsToml;
 use codex_config::permissions_toml::NetworkDomainPermissionToml;
@@ -56,13 +56,16 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SandboxPolicy;
 use serde::Deserialize;
@@ -774,7 +777,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
 
     let memories_root = codex_home.path().join("memories").abs();
     assert_eq!(
-        config.permissions.file_system_sandbox_policy,
+        config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -812,7 +815,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
         }
     );
     assert_eq!(
-        config.permissions.network_sandbox_policy,
+        config.permissions.network_sandbox_policy(),
         NetworkSandboxPolicy::Restricted
     );
     Ok(())
@@ -839,6 +842,145 @@ async fn permission_profile_override_populates_runtime_permissions() -> std::io:
     assert_eq!(
         config.permissions.sandbox_policy.get(),
         &SandboxPolicy::DangerFullAccess
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_profile_override_preserves_managed_unrestricted_filesystem()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let permission_profile = PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Unrestricted,
+        network: NetworkSandboxPolicy::Restricted,
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            permission_profile: Some(permission_profile.clone()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.permissions.permission_profile(), permission_profile);
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::ExternalSandbox {
+            network_access: NetworkAccess::Restricted,
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_unrestricted_permission_profile_still_enables_network_requirements()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let permission_profile = PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Unrestricted,
+        network: NetworkSandboxPolicy::Enabled,
+    };
+
+    let mut config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            permission_profile: Some(permission_profile),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::DangerFullAccess,
+        "the legacy projection is intentionally lossy for managed unrestricted profiles"
+    );
+
+    let layers = config
+        .config_layer_stack
+        .get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
+        .into_iter()
+        .cloned()
+        .collect();
+    let mut requirements = config.config_layer_stack.requirements().clone();
+    requirements.network = Some(Sourced::new(
+        codex_config::NetworkConstraints {
+            enabled: Some(true),
+            ..Default::default()
+        },
+        RequirementSource::CloudRequirements,
+    ));
+    let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
+    requirements_toml.network = Some(codex_config::NetworkRequirementsToml {
+        enabled: Some(true),
+        ..Default::default()
+    });
+    config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
+        .expect("config layer stack with network requirements");
+
+    assert!(config.managed_network_requirements_enabled());
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_profile_override_applies_runtime_roots_to_legacy_projection()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            permission_profile: Some(permission_profile),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let memories_root = codex_home.path().join("memories").abs();
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy()
+            .can_write_path_with_cwd(memories_root.as_path(), cwd.path())
+    );
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![memories_root],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        }
     );
     Ok(())
 }
@@ -941,7 +1083,7 @@ async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::i
     assert_eq!(
         config
             .permissions
-            .file_system_sandbox_policy
+            .file_system_sandbox_policy()
             .glob_scan_max_depth,
         Some(2)
     );
@@ -951,7 +1093,7 @@ async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::i
     assert!(
         config
             .permissions
-            .file_system_sandbox_policy
+            .file_system_sandbox_policy()
             .entries
             .contains(&FileSystemSandboxEntry {
                 path: FileSystemPath::GlobPattern {
@@ -963,7 +1105,7 @@ async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::i
     assert!(
         !config
             .permissions
-            .file_system_sandbox_policy
+            .file_system_sandbox_policy()
             .entries
             .iter()
             .any(|entry| matches!(
@@ -1020,13 +1162,16 @@ async fn permissions_profiles_require_default_permissions() -> std::io::Result<(
 }
 
 #[tokio::test]
-async fn permissions_profiles_reject_writes_outside_workspace_root() -> std::io::Result<()> {
+async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
+-> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
-    let external_write_path = if cfg!(windows) { r"C:\temp" } else { "/tmp" };
+    let external_write_dir = TempDir::new()?;
+    let external_write_path =
+        AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(external_write_dir.path())?)?;
 
-    let err = Config::load_from_base_config_with_overrides(
+    let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
             default_permissions: Some("workspace".to_string()),
             permissions: Some(PermissionsToml {
@@ -1036,7 +1181,7 @@ async fn permissions_profiles_reject_writes_outside_workspace_root() -> std::io:
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
-                                external_write_path.to_string(),
+                                external_write_path.to_string_lossy().into_owned(),
                                 FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
                             )]),
                         }),
@@ -1052,14 +1197,25 @@ async fn permissions_profiles_reject_writes_outside_workspace_root() -> std::io:
         },
         codex_home.abs(),
     )
-    .await
-    .expect_err("writes outside the workspace root should be rejected");
+    .await?;
 
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    let memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
+        codex_home.path().join("memories"),
+    )?)?;
     assert!(
-        err.to_string()
-            .contains("filesystem writes outside the workspace root"),
-        "{err}"
+        config
+            .permissions
+            .file_system_sandbox_policy()
+            .can_write_path_with_cwd(external_write_path.as_path(), cwd.path())
+    );
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![external_write_path, memories_root],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        }
     );
     Ok(())
 }
@@ -1149,7 +1305,7 @@ async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<(
     .await?;
 
     assert_eq!(
-        config.permissions.file_system_sandbox_policy,
+        config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::unknown(
@@ -1195,7 +1351,7 @@ async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
     .await?;
 
     assert_eq!(
-        config.permissions.file_system_sandbox_policy,
+        config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::unknown(":future_special_path", Some("docs".into())),
@@ -1222,7 +1378,7 @@ async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io
     .await?;
 
     assert_eq!(
-        config.permissions.file_system_sandbox_policy,
+        config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(Vec::new())
     );
     assert_eq!(
@@ -1253,7 +1409,7 @@ async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::
     .await?;
 
     assert_eq!(
-        config.permissions.file_system_sandbox_policy,
+        config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(Vec::new())
     );
     assert!(
@@ -1350,7 +1506,7 @@ async fn permissions_profiles_allow_network_enablement() -> std::io::Result<()> 
     .await?;
 
     assert!(
-        config.permissions.network_sandbox_policy.is_enabled(),
+        config.permissions.network_sandbox_policy().is_enabled(),
         "expected network sandbox policy to be enabled",
     );
     assert!(
@@ -1645,20 +1801,20 @@ exclude_slash_tmp = true
 
         let sandbox_policy = config.permissions.sandbox_policy.get();
         assert_eq!(
-            config.permissions.file_system_sandbox_policy,
+            config.permissions.file_system_sandbox_policy(),
             FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd.path()),
             "case `{name}` should preserve filesystem semantics from legacy config"
         );
         assert_eq!(
-            config.permissions.network_sandbox_policy,
+            config.permissions.network_sandbox_policy(),
             NetworkSandboxPolicy::from(sandbox_policy),
             "case `{name}` should preserve network semantics from legacy config"
         );
         assert_eq!(
             config
                 .permissions
-                .file_system_sandbox_policy
-                .to_legacy_sandbox_policy(config.permissions.network_sandbox_policy, cwd.path())
+                .file_system_sandbox_policy()
+                .to_legacy_sandbox_policy(config.permissions.network_sandbox_policy(), cwd.path())
                 .unwrap_or_else(|err| panic!("case `{name}` should round-trip: {err}")),
             sandbox_policy.clone(),
             "case `{name}` should round-trip through split policies without drift"
@@ -2103,24 +2259,25 @@ fn web_search_mode_disabled_overrides_legacy_request() {
 #[test]
 fn web_search_mode_for_turn_uses_preference_for_read_only() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
-    let mode =
-        resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::new_read_only_policy());
+    let permission_profile =
+        PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::new_read_only_policy());
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &permission_profile);
 
     assert_eq!(mode, WebSearchMode::Cached);
 }
 
 #[test]
-fn web_search_mode_for_turn_prefers_live_for_danger_full_access() {
+fn web_search_mode_for_turn_prefers_live_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::DangerFullAccess);
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
 
     assert_eq!(mode, WebSearchMode::Live);
 }
 
 #[test]
-fn web_search_mode_for_turn_respects_disabled_for_danger_full_access() {
+fn web_search_mode_for_turn_respects_disabled_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Disabled);
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::DangerFullAccess);
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
 
     assert_eq!(mode, WebSearchMode::Disabled);
 }
@@ -2140,7 +2297,7 @@ fn web_search_mode_for_turn_falls_back_when_live_is_disallowed() -> anyhow::Resu
             })
         }
     })?;
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::DangerFullAccess);
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
 
     assert_eq!(mode, WebSearchMode::Cached);
     Ok(())
@@ -2381,7 +2538,6 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
         overrides,
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
-        /*host_name*/ None,
     )
     .await?;
     let cfg =
@@ -2517,7 +2673,6 @@ async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
         overrides,
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
-        /*host_name*/ None,
     )
     .await?;
 
@@ -3826,7 +3981,7 @@ async fn load_config_uses_requirements_guardian_policy_config() -> std::io::Resu
     let config_layer_stack = ConfigLayerStack::new(
         Vec::new(),
         Default::default(),
-        crate::config_loader::ConfigRequirementsToml {
+        codex_config::ConfigRequirementsToml {
             guardian_policy_config: Some(
                 "  Use the workspace-managed guardian policy.  ".to_string(),
             ),
@@ -3907,7 +4062,7 @@ async fn requirements_guardian_policy_beats_auto_review() -> std::io::Result<()>
     let config_layer_stack = ConfigLayerStack::new(
         Vec::new(),
         Default::default(),
-        crate::config_loader::ConfigRequirementsToml {
+        codex_config::ConfigRequirementsToml {
             guardian_policy_config: Some("Use the managed guardian policy.".to_string()),
             ..Default::default()
         },
@@ -3971,7 +4126,7 @@ async fn load_config_ignores_empty_requirements_guardian_policy_config() -> std:
     let config_layer_stack = ConfigLayerStack::new(
         Vec::new(),
         Default::default(),
-        crate::config_loader::ConfigRequirementsToml {
+        codex_config::ConfigRequirementsToml {
             guardian_policy_config: Some("   ".to_string()),
             ..Default::default()
         },
@@ -4103,15 +4258,15 @@ config_file = "./agents/researcher.toml"
 "#,
     )
     .expect("agent role layer config should parse");
-    let config_layer_stack = crate::config_loader::ConfigLayerStack::new(
-        vec![crate::config_loader::ConfigLayerEntry::new(
+    let config_layer_stack = codex_config::ConfigLayerStack::new(
+        vec![codex_config::ConfigLayerEntry::new(
             codex_app_server_protocol::ConfigLayerSource::User {
                 file: codex_home.path().join(CONFIG_TOML_FILE).abs(),
             },
             layer_config,
         )],
         Default::default(),
-        crate::config_loader::ConfigRequirementsToml::default(),
+        codex_config::ConfigRequirementsToml::default(),
     )
     .map_err(std::io::Error::other)?;
 
@@ -5292,11 +5447,8 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             model_provider: fixture.openai_provider.clone(),
             permissions: Permissions {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
+                permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-                file_system_sandbox_policy: FileSystemSandboxPolicy::from(
-                    &SandboxPolicy::new_read_only_policy(),
-                ),
-                network_sandbox_policy: NetworkSandboxPolicy::Restricted,
                 network: None,
                 allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -5489,11 +5641,8 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_custom_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-            file_system_sandbox_policy: FileSystemSandboxPolicy::from(
-                &SandboxPolicy::new_read_only_policy(),
-            ),
-            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -5640,11 +5789,8 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-            file_system_sandbox_policy: FileSystemSandboxPolicy::from(
-                &SandboxPolicy::new_read_only_policy(),
-            ),
-            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -5776,11 +5922,8 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-            file_system_sandbox_policy: FileSystemSandboxPolicy::from(
-                &SandboxPolicy::new_read_only_policy(),
-            ),
-            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -5892,14 +6035,12 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
 {
     let fixture = create_test_fixture()?;
 
-    let requirements_toml = crate::config_loader::ConfigRequirementsToml {
+    let requirements_toml = codex_config::ConfigRequirementsToml {
         allowed_approval_policies: None,
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: None,
         remote_sandbox_config: None,
-        allowed_web_search_modes: Some(vec![
-            crate::config_loader::WebSearchModeRequirement::Cached,
-        ]),
+        allowed_web_search_modes: Some(vec![codex_config::WebSearchModeRequirement::Cached]),
         feature_requirements: None,
         hooks: None,
         mcp_servers: None,
@@ -5910,7 +6051,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         permissions: None,
         guardian_policy_config: None,
     };
-    let requirement_source = crate::config_loader::RequirementSource::Unknown;
+    let requirement_source = codex_config::RequirementSource::Unknown;
     let requirement_source_for_error = requirement_source.clone();
     let allowed = vec![WebSearchMode::Disabled, WebSearchMode::Cached];
     let constrained = Constrained::new(WebSearchMode::Cached, move |candidate| {
@@ -5925,15 +6066,15 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
             })
         }
     })?;
-    let requirements = crate::config_loader::ConfigRequirements {
-        web_search_mode: crate::config_loader::ConstrainedWithSource::new(
+    let requirements = codex_config::ConfigRequirements {
+        web_search_mode: codex_config::ConstrainedWithSource::new(
             constrained,
             Some(requirement_source),
         ),
         ..Default::default()
     };
     let config_layer_stack =
-        crate::config_loader::ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
+        codex_config::ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
             .expect("config layer stack");
 
     let config = Config::load_config_with_layer_stack(
@@ -6545,10 +6686,8 @@ async fn requirements_disallowing_default_sandbox_falls_back_to_required_default
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                allowed_sandbox_modes: Some(vec![
-                    crate::config_loader::SandboxModeRequirement::ReadOnly,
-                ]),
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
                 ..Default::default()
             }))
         }))
@@ -6570,10 +6709,10 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
 "#,
     )?;
 
-    let requirements = crate::config_loader::ConfigRequirementsToml {
+    let requirements = codex_config::ConfigRequirementsToml {
         allowed_approval_policies: None,
         allowed_approvals_reviewers: None,
-        allowed_sandbox_modes: Some(vec![crate::config_loader::SandboxModeRequirement::ReadOnly]),
+        allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
         remote_sandbox_config: None,
         allowed_web_search_modes: None,
         feature_requirements: None,
@@ -6603,6 +6742,96 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
 }
 
 #[tokio::test]
+async fn permission_profile_override_falls_back_when_disallowed_by_requirements()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let requirements = codex_config::ConfigRequirementsToml {
+        allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
+        ..Default::default()
+    };
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .harness_overrides(ConfigOverrides {
+            permission_profile: Some(PermissionProfile::Disabled),
+            ..Default::default()
+        })
+        .cloud_requirements(CloudRequirementsLoader::new(async move {
+            Ok(Some(requirements))
+        }))
+        .build()
+        .await?;
+
+    let expected_sandbox_policy = SandboxPolicy::new_read_only_policy();
+    assert_eq!(
+        *config.permissions.sandbox_policy.get(),
+        expected_sandbox_policy
+    );
+    assert_eq!(
+        config.permissions.permission_profile(),
+        PermissionProfile::read_only()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_profile_override_preserves_split_write_roots() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = codex_home.path().join("workspace");
+    let outside_root = codex_home.path().join("outside-write");
+    std::fs::create_dir_all(&cwd)?;
+    std::fs::create_dir_all(&outside_root)?;
+    let outside_root =
+        AbsolutePathBuf::from_absolute_path(outside_root).expect("outside root is absolute");
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: outside_root.clone(),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+    ]);
+    let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        SandboxEnforcement::Managed,
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd))
+        .harness_overrides(ConfigOverrides {
+            permission_profile: Some(permission_profile),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy()
+            .can_write_path_with_cwd(outside_root.as_path(), config.cwd.as_path())
+    );
+    assert!(matches!(
+        config.permissions.sandbox_policy.get(),
+        SandboxPolicy::WorkspaceWrite { .. }
+    ));
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Restricted
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn requirements_web_search_mode_overrides_danger_full_access_default() -> std::io::Result<()>
 {
     let codex_home = TempDir::new()?;
@@ -6616,9 +6845,9 @@ async fn requirements_web_search_mode_overrides_danger_full_access_default() -> 
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
+            Ok(Some(codex_config::ConfigRequirementsToml {
                 allowed_web_search_modes: Some(vec![
-                    crate::config_loader::WebSearchModeRequirement::Cached,
+                    codex_config::WebSearchModeRequirement::Cached,
                 ]),
                 ..Default::default()
             }))
@@ -6630,7 +6859,7 @@ async fn requirements_web_search_mode_overrides_danger_full_access_default() -> 
     assert_eq!(
         resolve_web_search_mode_for_turn(
             &config.web_search_mode,
-            config.permissions.sandbox_policy.get(),
+            &config.permissions.permission_profile(),
         ),
         WebSearchMode::Cached,
     );
@@ -6657,7 +6886,7 @@ trust_level = "untrusted"
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(workspace.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
+            Ok(Some(codex_config::ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                 ..Default::default()
             }))
@@ -6686,7 +6915,7 @@ async fn explicit_approval_policy_falls_back_when_disallowed_by_requirements() -
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
+            Ok(Some(codex_config::ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                 ..Default::default()
             }))
@@ -6707,8 +6936,8 @@ async fn feature_requirements_normalize_effective_feature_values() -> std::io::R
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                feature_requirements: Some(codex_config::FeatureRequirementsToml {
                     entries: BTreeMap::from([
                         ("personality".to_string(), true),
                         ("shell_tool".to_string(), false),
@@ -6741,8 +6970,8 @@ async fn feature_requirements_auto_review_disables_guardian_approval() -> std::i
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                feature_requirements: Some(codex_config::FeatureRequirementsToml {
                     entries: BTreeMap::from([("auto_review".to_string(), false)]),
                 }),
                 ..Default::default()
@@ -6763,8 +6992,8 @@ async fn browser_feature_requirements_are_valid() -> std::io::Result<()> {
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                feature_requirements: Some(codex_config::FeatureRequirementsToml {
                     entries: BTreeMap::from([
                         ("in_app_browser".to_string(), false),
                         ("browser_use".to_string(), false),
@@ -6798,8 +7027,8 @@ shell_tool = true
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                feature_requirements: Some(codex_config::FeatureRequirementsToml {
                     entries: BTreeMap::from([
                         ("personality".to_string(), true),
                         ("shell_tool".to_string(), false),
@@ -6945,7 +7174,7 @@ async fn requirements_disallowing_default_approvals_reviewer_falls_back_to_requi
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
+            Ok(Some(codex_config::ConfigRequirementsToml {
                 allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
                 ..Default::default()
             }))
@@ -6971,7 +7200,7 @@ async fn root_approvals_reviewer_falls_back_when_disallowed_by_requirements() ->
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
+            Ok(Some(codex_config::ConfigRequirementsToml {
                 allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
                 ..Default::default()
             }))
@@ -7008,7 +7237,7 @@ approvals_reviewer = "user"
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
+            Ok(Some(codex_config::ConfigRequirementsToml {
                 allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
                 ..Default::default()
             }))
@@ -7034,7 +7263,7 @@ async fn approvals_reviewer_preserves_valid_user_choice_when_allowed_by_requirem
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
+            Ok(Some(codex_config::ConfigRequirementsToml {
                 allowed_approvals_reviewers: Some(vec![
                     ApprovalsReviewer::User,
                     ApprovalsReviewer::AutoReview,
@@ -7186,8 +7415,8 @@ async fn feature_requirements_normalize_runtime_feature_mutations() -> std::io::
     let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                feature_requirements: Some(codex_config::FeatureRequirementsToml {
                     entries: BTreeMap::from([
                         ("personality".to_string(), true),
                         ("shell_tool".to_string(), false),
@@ -7222,8 +7451,8 @@ async fn feature_requirements_warn_on_collab_legacy_alias() -> std::io::Result<(
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                feature_requirements: Some(codex_config::FeatureRequirementsToml {
                     entries: BTreeMap::from([("collab".to_string(), true)]),
                 }),
                 ..Default::default()
@@ -7252,8 +7481,8 @@ async fn feature_requirements_warn_and_ignore_unknown_feature() -> std::io::Resu
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                feature_requirements: Some(codex_config::FeatureRequirementsToml {
                     entries: BTreeMap::from([("made_up_feature".to_string(), true)]),
                 }),
                 ..Default::default()

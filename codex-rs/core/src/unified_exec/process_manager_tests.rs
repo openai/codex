@@ -71,6 +71,16 @@ fn exec_server_params_use_env_policy_overlay_contract() {
         .expect("current dir")
         .try_into()
         .expect("absolute path");
+    let sandbox_policy = codex_protocol::protocol::SandboxPolicy::DangerFullAccess;
+    let file_system_sandbox_policy =
+        codex_protocol::permissions::FileSystemSandboxPolicy::from(&sandbox_policy);
+    let network_sandbox_policy = codex_protocol::permissions::NetworkSandboxPolicy::Restricted;
+    let permission_profile =
+        codex_protocol::models::PermissionProfile::from_runtime_permissions_with_enforcement(
+            codex_protocol::models::SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
+        );
     let request = ExecRequest {
         command: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
         cwd: cwd.clone(),
@@ -81,7 +91,7 @@ fn exec_server_params_use_env_policy_overlay_contract() {
         ]),
         exec_server_env_config: Some(ExecServerEnvConfig {
             policy: codex_exec_server::ExecEnvPolicy {
-                inherit: codex_config::types::ShellEnvironmentPolicyInherit::Core,
+                inherit: codex_protocol::config_types::ShellEnvironmentPolicyInherit::Core,
                 ignore_default_excludes: false,
                 exclude: Vec::new(),
                 r#set: HashMap::new(),
@@ -99,11 +109,10 @@ fn exec_server_params_use_env_policy_overlay_contract() {
         windows_sandbox_policy_cwd: cwd,
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
-        sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-        file_system_sandbox_policy: codex_protocol::permissions::FileSystemSandboxPolicy::from(
-            &codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-        ),
-        network_sandbox_policy: codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+        permission_profile,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
         windows_sandbox_filesystem_overrides: None,
         arg0: None,
     };
