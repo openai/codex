@@ -1623,6 +1623,9 @@ fn parent_thread_id_header_value(session_source: &SessionSource) -> Option<Strin
     }
 }
 
+const RESPONSE_STREAM_CHANNEL_CAPACITY: usize = 1600;
+const STREAM_DROPPED_REASON: &str = "response stream dropped before provider terminal event";
+
 fn map_response_stream<S>(
     api_stream: S,
     session_telemetry: SessionTelemetry,
@@ -1634,7 +1637,8 @@ where
         + Send
         + 'static,
 {
-    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
+    let (tx_event, rx_event) =
+        mpsc::channel::<Result<ResponseEvent>>(RESPONSE_STREAM_CHANNEL_CAPACITY);
     let (tx_last_response, rx_last_response) = oneshot::channel::<LastResponse>();
     let consumer_dropped = CancellationToken::new();
     let consumer_dropped_for_stream = consumer_dropped.clone();
@@ -1647,10 +1651,7 @@ where
         loop {
             let event = tokio::select! {
                 _ = consumer_dropped.cancelled() => {
-                    inference_trace_attempt.record_cancelled(
-                        "response stream dropped before provider terminal event",
-                        &items_added,
-                    );
+                    inference_trace_attempt.record_cancelled(STREAM_DROPPED_REASON, &items_added);
                     return;
                 }
                 event = api_stream.next() => event,
@@ -1666,6 +1667,8 @@ where
                         .await
                         .is_err()
                     {
+                        inference_trace_attempt
+                            .record_cancelled(STREAM_DROPPED_REASON, &items_added);
                         return;
                     }
                 }
@@ -1708,6 +1711,8 @@ where
                 }
                 Ok(event) => {
                     if tx_event.send(Ok(event)).await.is_err() {
+                        inference_trace_attempt
+                            .record_cancelled(STREAM_DROPPED_REASON, &items_added);
                         return;
                     }
                 }
