@@ -39,7 +39,6 @@ use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
@@ -570,9 +569,7 @@ impl BottomPane {
             }
             let records_composer_activity =
                 matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-                    && !key_event
-                        .modifiers
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                    && !key_hint::has_ctrl_or_alt(key_event.modifiers)
                     && matches!(
                         key_event.code,
                         KeyCode::Char(_)
