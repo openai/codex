@@ -20,9 +20,6 @@ use crate::ExecServerRuntimePaths;
 use crate::connection::JsonRpcConnection;
 use crate::server::ConnectionProcessor;
 
-/// Environment variable fallback for the cloud environments base URL.
-pub const CODEX_REMOTE_BASE_URL_ENV_VAR: &str = "CODEX_REMOTE_BASE_URL";
-
 const PROTOCOL_VERSION: &str = "codex-exec-server-v1";
 const ERROR_BODY_PREVIEW_BYTES: usize = 4096;
 

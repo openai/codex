@@ -22,12 +22,11 @@ the wire.
 The CLI entrypoint supports:
 
 - `ws://IP:PORT` (default)
-- `--remote --base-url URL [--environment-id ID] [--name NAME]`
+- `--remote URL [--environment-id ID] [--name NAME]`
 
 Remote mode registers the local exec-server with the environment service,
 then reconnects to the service-provided rendezvous websocket as the executor.
-It requires ChatGPT auth, and `CODEX_REMOTE_BASE_URL` can be used instead of
-`--base-url`.
+It requires ChatGPT auth.
 
 Wire framing:
 

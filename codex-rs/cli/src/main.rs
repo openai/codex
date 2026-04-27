@@ -447,20 +447,12 @@ struct AppServerCommand {
 #[derive(Debug, Parser)]
 struct ExecServerCommand {
     /// Transport endpoint URL. Supported values: `ws://IP:PORT` (default), `stdio`, `stdio://`.
-    #[arg(
-        long = "listen",
-        value_name = "URL",
-        default_value = "ws://127.0.0.1:0"
-    )]
-    listen: String,
+    #[arg(long = "listen", value_name = "URL", conflicts_with = "remote")]
+    listen: Option<String>,
 
-    /// Register this exec-server as a remote executor instead of listening locally.
-    #[arg(long = "remote", default_value_t = false)]
-    remote: bool,
-
-    /// Remote executor registration service base URL.
-    #[arg(long = "base-url", value_name = "URL")]
-    base_url: Option<String>,
+    /// Register this exec-server as a remote executor using the given base URL.
+    #[arg(long = "remote", value_name = "URL")]
+    remote: Option<String>,
 
     /// Existing environment id to attach to. Omit to let the service create one.
     #[arg(long = "environment-id", value_name = "ID")]
@@ -1281,13 +1273,10 @@ async fn run_exec_server_command(
         codex_self_exe,
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
-    if cmd.remote {
-        let base_url = cmd
-            .base_url
-            .or_else(|| std::env::var(codex_exec_server::CODEX_REMOTE_BASE_URL_ENV_VAR).ok())
-            .ok_or_else(|| {
-                anyhow::anyhow!("--base-url or CODEX_REMOTE_BASE_URL is required in remote mode")
-            })?;
+    if let Some(base_url) = cmd.remote {
+        // `-c` overrides can affect auth loading (for example ChatGPT base URL
+        // or credential store settings), so load config before constructing the
+        // auth manager for remote registration.
         let cli_overrides = root_config_overrides
             .parse_overrides()
             .map_err(anyhow::Error::msg)?;
@@ -1302,7 +1291,11 @@ async fn run_exec_server_command(
         codex_exec_server::run_remote_executor(remote_config, auth_manager, runtime_paths).await?;
         return Ok(());
     }
-    codex_exec_server::run_main(&cmd.listen, runtime_paths)
+    let listen_url = cmd
+        .listen
+        .as_deref()
+        .unwrap_or(codex_exec_server::DEFAULT_LISTEN_URL);
+    codex_exec_server::run_main(listen_url, runtime_paths)
         .await
         .map_err(anyhow::Error::from_boxed)
 }

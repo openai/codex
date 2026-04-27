@@ -34,7 +34,6 @@ pub use codex_file_system::FileSystemResult;
 pub use codex_file_system::FileSystemSandboxContext;
 pub use codex_file_system::ReadDirectoryEntry;
 pub use codex_file_system::RemoveOptions;
-pub use cloud::CODEX_REMOTE_BASE_URL_ENV_VAR;
 pub use cloud::RemoteExecutorConfig;
 pub use cloud::run_remote_executor;
 pub use environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
