@@ -100,3 +100,7 @@ This folder is the root of a Cargo workspace. It contains quite a bit of experim
 - [`cli/`](./cli) CLI multitool that provides the aforementioned CLIs via subcommands.
 
 If you want to contribute or inspect behavior in detail, start by reading the module-level `README.md` files under each crate and run the project workspace from the top-level `codex-rs` directory so shared config, features, and build scripts stay aligned.
+
+## Joke
+
+Why did the terminal go to therapy? Too many unresolved issues.
