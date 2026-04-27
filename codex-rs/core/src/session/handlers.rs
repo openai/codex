@@ -944,6 +944,11 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         .unified_exec_manager
         .terminate_all_processes()
         .await;
+    let mcp_shutdown = {
+        let mut manager = sess.services.mcp_connection_manager.write().await;
+        manager.begin_shutdown()
+    };
+    mcp_shutdown.await;
     sess.guardian_review_session.shutdown().await;
     info!("Shutting down Codex instance");
     let history = sess.clone_history().await;
@@ -1232,8 +1237,18 @@ pub(super) async fn submission_loop(
             break;
         }
     }
-    // Also drain cached guardian state if the submission loop exits because
-    // the channel closed without receiving an explicit shutdown op.
+    // If the submission loop exits because the channel closed without an
+    // explicit shutdown op, still run process teardown for child processes
+    // owned by this session.
+    sess.services
+        .unified_exec_manager
+        .terminate_all_processes()
+        .await;
+    let mcp_shutdown = {
+        let mut manager = sess.services.mcp_connection_manager.write().await;
+        manager.begin_shutdown()
+    };
+    mcp_shutdown.await;
     sess.guardian_review_session.shutdown().await;
     debug!("Agent loop exited");
 }

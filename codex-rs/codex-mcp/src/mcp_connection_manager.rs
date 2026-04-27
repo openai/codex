@@ -203,6 +203,7 @@ pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     server_origins: HashMap<String, String>,
     elicitation_requests: ElicitationRequestManager,
+    startup_cancellation_token: CancellationToken,
 }
 
 /// Runtime placement information used when starting MCP server transports.
@@ -502,6 +503,7 @@ struct AsyncManagedClient {
     startup_snapshot: Option<Vec<ToolInfo>>,
     startup_complete: Arc<AtomicBool>,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
+    cancel_token: CancellationToken,
 }
 
 impl AsyncManagedClient {
@@ -529,6 +531,7 @@ impl AsyncManagedClient {
         let startup_tool_filter = tool_filter;
         let startup_complete = Arc::new(AtomicBool::new(false));
         let startup_complete_for_fut = Arc::clone(&startup_complete);
+        let cancel_token_for_fut = cancel_token.clone();
         let fut = async move {
             let outcome = async {
                 if let Err(error) = validate_mcp_server_name(&server_name) {
@@ -559,7 +562,7 @@ impl AsyncManagedClient {
                         codex_apps_tools_cache_context,
                     },
                 )
-                .or_cancel(&cancel_token)
+                .or_cancel(&cancel_token_for_fut)
                 .await
                 {
                     Ok(result) => result,
@@ -584,11 +587,23 @@ impl AsyncManagedClient {
             startup_snapshot,
             startup_complete,
             tool_plugin_provenance,
+            cancel_token,
         }
     }
 
     async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
         self.client.clone().await
+    }
+
+    async fn shutdown(&self) {
+        self.cancel_token.cancel();
+        match self.client().await {
+            Ok(client) => client.client.shutdown().await,
+            Err(StartupOutcomeError::Cancelled) => {}
+            Err(error) => {
+                warn!("failed to initialize MCP client during shutdown: {error:#}");
+            }
+        }
     }
 
     fn startup_snapshot_while_initializing(&self) -> Option<Vec<ToolInfo>> {
@@ -675,11 +690,30 @@ impl McpConnectionManager {
                 approval_policy.value(),
                 sandbox_policy.get().clone(),
             ),
+            startup_cancellation_token: CancellationToken::new(),
         }
     }
 
     pub fn has_servers(&self) -> bool {
         !self.clients.is_empty()
+    }
+
+    /// Drain all MCP clients from this manager and return a future that stops
+    /// them and terminates their stdio server processes.
+    pub fn begin_shutdown(&mut self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        self.startup_cancellation_token.cancel();
+        let clients = std::mem::take(&mut self.clients);
+        self.server_origins.clear();
+        async move {
+            for client in clients.into_values() {
+                client.shutdown().await;
+            }
+        }
+    }
+
+    /// Stop all MCP clients owned by this manager and terminate stdio server processes.
+    pub async fn shutdown(&mut self) {
+        self.begin_shutdown().await;
     }
 
     pub fn server_origin(&self, server_name: &str) -> Option<&str> {
@@ -811,6 +845,7 @@ impl McpConnectionManager {
             clients,
             server_origins,
             elicitation_requests: elicitation_requests.clone(),
+            startup_cancellation_token: cancel_token.clone(),
         };
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
@@ -1196,6 +1231,13 @@ impl McpConnectionManager {
             .client()
             .await
             .context("failed to get client")
+    }
+}
+
+impl Drop for McpConnectionManager {
+    fn drop(&mut self) {
+        self.startup_cancellation_token.cancel();
+        self.clients.clear();
     }
 }
 
