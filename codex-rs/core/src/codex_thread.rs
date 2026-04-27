@@ -272,6 +272,14 @@ impl CodexThread {
         self.codex.session.token_usage_info().await
     }
 
+    pub async fn recompute_token_usage(&self) {
+        let turn_context = self.codex.session.new_default_turn().await;
+        self.codex
+            .session
+            .recompute_token_usage(&turn_context)
+            .await;
+    }
+
     /// Records a user-role session-prefix message without creating a new user turn boundary.
     pub(crate) async fn inject_user_message_without_turn(&self, message: String) {
         let message = ResponseItem::Message {

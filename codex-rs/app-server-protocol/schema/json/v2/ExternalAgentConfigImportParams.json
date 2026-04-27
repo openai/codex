@@ -1,7 +1,29 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "ExternalAgentConfigMigrationItem": {
+    "ExternalAgentConfigImportMigrationDetailsParams": {
+      "properties": {
+        "plugins": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/PluginsMigration"
+          },
+          "type": "array"
+        },
+        "sessions": {
+          "default": null,
+          "items": {
+            "$ref": "#/definitions/SessionMigration"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ExternalAgentConfigImportMigrationItem": {
       "properties": {
         "cwd": {
           "description": "Null or empty means home-scoped migration; non-empty means repo-scoped migration.",
@@ -16,7 +38,7 @@
         "details": {
           "anyOf": [
             {
-              "$ref": "#/definitions/MigrationDetails"
+              "$ref": "#/definitions/ExternalAgentConfigImportMigrationDetailsParams"
             },
             {
               "type": "null"
@@ -39,23 +61,10 @@
         "CONFIG",
         "SKILLS",
         "PLUGINS",
-        "MCP_SERVER_CONFIG"
+        "MCP_SERVER_CONFIG",
+        "SESSIONS"
       ],
       "type": "string"
-    },
-    "MigrationDetails": {
-      "properties": {
-        "plugins": {
-          "items": {
-            "$ref": "#/definitions/PluginsMigration"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "plugins"
-      ],
-      "type": "object"
     },
     "PluginsMigration": {
       "properties": {
@@ -74,12 +83,33 @@
         "pluginNames"
       ],
       "type": "object"
+    },
+    "SessionMigration": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cwd",
+        "path"
+      ],
+      "type": "object"
     }
   },
   "properties": {
     "migrationItems": {
       "items": {
-        "$ref": "#/definitions/ExternalAgentConfigMigrationItem"
+        "$ref": "#/definitions/ExternalAgentConfigImportMigrationItem"
       },
       "type": "array"
     }

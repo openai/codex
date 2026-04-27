@@ -334,7 +334,9 @@ impl AppServerSession {
         self.client
             .request_typed(ClientRequest::ExternalAgentConfigImport {
                 request_id,
-                params: ExternalAgentConfigImportParams { migration_items },
+                params: ExternalAgentConfigImportParams {
+                    migration_items: migration_items.into_iter().map(Into::into).collect(),
+                },
             })
             .await
             .wrap_err("externalAgentConfig/import failed during TUI startup")

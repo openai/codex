@@ -808,21 +808,29 @@
       },
       "type": "object"
     },
-    "ExternalAgentConfigImportParams": {
+    "ExternalAgentConfigImportMigrationDetailsParams": {
       "properties": {
-        "migrationItems": {
+        "plugins": {
+          "default": [],
           "items": {
-            "$ref": "#/definitions/ExternalAgentConfigMigrationItem"
+            "$ref": "#/definitions/PluginsMigration"
           },
           "type": "array"
+        },
+        "sessions": {
+          "default": null,
+          "items": {
+            "$ref": "#/definitions/SessionMigration"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
-      "required": [
-        "migrationItems"
-      ],
       "type": "object"
     },
-    "ExternalAgentConfigMigrationItem": {
+    "ExternalAgentConfigImportMigrationItem": {
       "properties": {
         "cwd": {
           "description": "Null or empty means home-scoped migration; non-empty means repo-scoped migration.",
@@ -837,7 +845,7 @@
         "details": {
           "anyOf": [
             {
-              "$ref": "#/definitions/MigrationDetails"
+              "$ref": "#/definitions/ExternalAgentConfigImportMigrationDetailsParams"
             },
             {
               "type": "null"
@@ -854,13 +862,28 @@
       ],
       "type": "object"
     },
+    "ExternalAgentConfigImportParams": {
+      "properties": {
+        "migrationItems": {
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportMigrationItem"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "migrationItems"
+      ],
+      "type": "object"
+    },
     "ExternalAgentConfigMigrationItemType": {
       "enum": [
         "AGENTS_MD",
         "CONFIG",
         "SKILLS",
         "PLUGINS",
-        "MCP_SERVER_CONFIG"
+        "MCP_SERVER_CONFIG",
+        "SESSIONS"
       ],
       "type": "string"
     },
@@ -1818,20 +1841,6 @@
           "type": "string"
         }
       ]
-    },
-    "MigrationDetails": {
-      "properties": {
-        "plugins": {
-          "items": {
-            "$ref": "#/definitions/PluginsMigration"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "plugins"
-      ],
-      "type": "object"
     },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
@@ -3084,6 +3093,27 @@
         "flex"
       ],
       "type": "string"
+    },
+    "SessionMigration": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cwd",
+        "path"
+      ],
+      "type": "object"
     },
     "Settings": {
       "description": "Settings for a collaboration mode.",

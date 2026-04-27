@@ -4,4 +4,4 @@
 import type { PluginsMigration } from "./PluginsMigration";
 import type { SessionMigration } from "./SessionMigration";
 
-export type MigrationDetails = { plugins: Array<PluginsMigration>, sessions: Array<SessionMigration>, };
+export type ExternalAgentConfigImportMigrationDetailsParams = { plugins: Array<PluginsMigration>, sessions?: Array<SessionMigration> | null, };
