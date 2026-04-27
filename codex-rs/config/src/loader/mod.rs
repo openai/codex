@@ -1,8 +1,6 @@
 mod layer_io;
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(test)]
-mod tests;
 
 use self::layer_io::LoadedConfigLayers;
 use crate::CONFIG_TOML_FILE;
@@ -41,7 +39,6 @@ use std::io;
 use std::path::Path;
 #[cfg(windows)]
 use std::path::PathBuf;
-use std::sync::Arc;
 use toml::Value as TomlValue;
 
 #[cfg(unix)]
@@ -52,43 +49,6 @@ const DEFAULT_PROGRAM_DATA_DIR_WINDOWS: &str = r"C:\ProgramData";
 
 async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> Option<ConfigError> {
     typed_first_layer_config_error_from_entries::<ConfigToml>(layers, CONFIG_TOML_FILE).await
-}
-
-/// Lazily resolves the local hostname when host-specific requirements need it.
-#[derive(Clone)]
-pub struct HostNameResolver {
-    resolver: Arc<dyn Fn() -> Option<String> + Send + Sync>,
-}
-
-impl HostNameResolver {
-    /// Resolve the best-effort system hostname when first needed.
-    pub fn system() -> Self {
-        Self {
-            resolver: Arc::new(crate::host_name),
-        }
-    }
-
-    /// Always return a caller-provided hostname.
-    pub fn fixed(host_name: Option<String>) -> Self {
-        Self {
-            resolver: Arc::new(move || host_name.clone()),
-        }
-    }
-
-    /// Skip host-specific requirement matching.
-    pub fn disabled() -> Self {
-        Self::fixed(/*host_name*/ None)
-    }
-
-    fn resolve(&self) -> Option<String> {
-        (self.resolver)()
-    }
-}
-
-impl Default for HostNameResolver {
-    fn default() -> Self {
-        Self::system()
-    }
 }
 
 /// To build up the set of admin-enforced constraints, we build up from multiple
@@ -131,7 +91,6 @@ pub async fn load_config_layers_state(
     overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     thread_config_loader: &dyn ThreadConfigLoader,
-    host_name_resolver: HostNameResolver,
 ) -> io::Result<ConfigLayerStack> {
     let ignore_user_config = overrides.ignore_user_config;
     let ignore_user_and_project_exec_policy_rules =
@@ -143,7 +102,6 @@ pub async fn load_config_layers_state(
             &mut config_requirements_toml,
             RequirementSource::CloudRequirements,
             requirements,
-            &host_name_resolver,
         );
     }
 
@@ -153,19 +111,12 @@ pub async fn load_config_layers_state(
         overrides
             .macos_managed_config_requirements_base64
             .as_deref(),
-        &host_name_resolver,
     )
     .await?;
 
     // Honor the system requirements.toml location.
     let requirements_toml_file = system_requirements_toml_file_with_overrides(&overrides)?;
-    load_requirements_toml(
-        fs,
-        &mut config_requirements_toml,
-        &requirements_toml_file,
-        &host_name_resolver,
-    )
-    .await?;
+    load_requirements_toml(fs, &mut config_requirements_toml, &requirements_toml_file).await?;
 
     // Make a best-effort to support the legacy `managed_config.toml` as a
     // requirements specification.
@@ -174,7 +125,6 @@ pub async fn load_config_layers_state(
     load_requirements_from_legacy_scheme(
         &mut config_requirements_toml,
         loaded_config_layers.clone(),
-        &host_name_resolver,
     )
     .await?;
 
@@ -428,7 +378,6 @@ pub async fn load_requirements_toml(
     fs: &dyn ExecutorFileSystem,
     config_requirements_toml: &mut ConfigRequirementsWithSources,
     requirements_toml_file: &AbsolutePathBuf,
-    host_name_resolver: &HostNameResolver,
 ) -> io::Result<()> {
     match fs
         .read_file_text(requirements_toml_file, /*sandbox*/ None)
@@ -461,7 +410,6 @@ pub async fn load_requirements_toml(
                     file: requirements_toml_file.clone(),
                 },
                 requirements_config,
-                host_name_resolver,
             );
         }
         Err(e) => {
@@ -594,7 +542,6 @@ fn windows_program_data_dir_from_known_folder() -> io::Result<PathBuf> {
 async fn load_requirements_from_legacy_scheme(
     config_requirements_toml: &mut ConfigRequirementsWithSources,
     loaded_config_layers: LoadedConfigLayers,
-    host_name_resolver: &HostNameResolver,
 ) -> io::Result<()> {
     // In this implementation, earlier layers cannot be overwritten by later
     // layers, so list managed_config_from_mdm first because it has the highest
@@ -631,7 +578,6 @@ async fn load_requirements_from_legacy_scheme(
             config_requirements_toml,
             source,
             ConfigRequirementsToml::from(legacy_config),
-            host_name_resolver,
         );
     }
 
@@ -642,10 +588,9 @@ pub(super) fn merge_requirements_with_remote_sandbox_config(
     target: &mut ConfigRequirementsWithSources,
     source: RequirementSource,
     mut requirements: ConfigRequirementsToml,
-    host_name_resolver: &HostNameResolver,
 ) {
     if requirements.remote_sandbox_config.is_some() {
-        let host_name = host_name_resolver.resolve();
+        let host_name = crate::host_name();
         requirements.apply_remote_sandbox_config(host_name.as_deref());
     }
     target.merge_unset_fields(source, requirements);

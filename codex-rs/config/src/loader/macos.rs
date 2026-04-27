@@ -1,4 +1,3 @@
-use super::HostNameResolver;
 use super::merge_requirements_with_remote_sandbox_config;
 use crate::config_requirements::ConfigRequirementsToml;
 use crate::config_requirements::ConfigRequirementsWithSources;
@@ -66,7 +65,6 @@ fn load_managed_admin_config() -> io::Result<Option<ManagedAdminConfigLayer>> {
 pub(crate) async fn load_managed_admin_requirements_toml(
     target: &mut ConfigRequirementsWithSources,
     override_base64: Option<&str>,
-    host_name_resolver: &HostNameResolver,
 ) -> io::Result<()> {
     if let Some(encoded) = override_base64 {
         let trimmed = encoded.trim();
@@ -78,7 +76,6 @@ pub(crate) async fn load_managed_admin_requirements_toml(
             target,
             managed_preferences_requirements_source(),
             parse_managed_requirements_base64(trimmed)?,
-            host_name_resolver,
         );
         return Ok(());
     }
@@ -90,7 +87,6 @@ pub(crate) async fn load_managed_admin_requirements_toml(
                     target,
                     managed_preferences_requirements_source(),
                     requirements,
-                    host_name_resolver,
                 );
             }
             Ok(())

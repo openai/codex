@@ -10,7 +10,7 @@ This module is the canonical place to **load and describe Codex configuration la
 
 Exported from `codex_config::loader`:
 
-- `load_config_layers_state(fs, codex_home, cwd_opt, cli_overrides, overrides, cloud_requirements, thread_config_loader, host_name_resolver) -> ConfigLayerStack`
+- `load_config_layers_state(fs, codex_home, cwd_opt, cli_overrides, overrides, cloud_requirements, thread_config_loader) -> ConfigLayerStack`
 - `ConfigLayerStack`
   - `effective_config() -> toml::Value`
   - `origins() -> HashMap<String, ConfigLayerMetadata>`
@@ -44,7 +44,6 @@ Most callers want the effective config plus metadata:
 use codex_config::NoopThreadConfigLoader;
 use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
-use codex_config::loader::HostNameResolver;
 use codex_config::loader::load_config_layers_state;
 use codex_exec_server::LOCAL_FS;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -60,7 +59,6 @@ let layers = load_config_layers_state(
     LoaderOverrides::default(),
     CloudRequirementsLoader::default(),
     &NoopThreadConfigLoader,
-    HostNameResolver::disabled(),
 ).await?;
 
 let effective = layers.effective_config();

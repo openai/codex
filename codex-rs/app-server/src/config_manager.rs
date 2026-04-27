@@ -4,7 +4,6 @@ use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLayerStack;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
-use codex_config::loader::HostNameResolver;
 use codex_config::loader::load_config_layers_state;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -34,7 +33,6 @@ pub(crate) struct ConfigManager {
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     arg0_paths: Arg0DispatchPaths,
     thread_config_loader: Arc<RwLock<Arc<dyn ThreadConfigLoader>>>,
-    host_name_resolver: HostNameResolver,
 }
 
 impl ConfigManager {
@@ -46,27 +44,6 @@ impl ConfigManager {
         arg0_paths: Arg0DispatchPaths,
         thread_config_loader: Arc<dyn ThreadConfigLoader>,
     ) -> Self {
-        Self::new_with_host_name(
-            codex_home,
-            cli_overrides,
-            loader_overrides,
-            cloud_requirements,
-            arg0_paths,
-            thread_config_loader,
-            HostNameResolver::system(),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn new_with_host_name(
-        codex_home: PathBuf,
-        cli_overrides: Vec<(String, TomlValue)>,
-        loader_overrides: LoaderOverrides,
-        cloud_requirements: CloudRequirementsLoader,
-        arg0_paths: Arg0DispatchPaths,
-        thread_config_loader: Arc<dyn ThreadConfigLoader>,
-        host_name_resolver: HostNameResolver,
-    ) -> Self {
         Self {
             codex_home,
             cli_overrides: Arc::new(RwLock::new(cli_overrides)),
@@ -75,7 +52,6 @@ impl ConfigManager {
             cloud_requirements: Arc::new(RwLock::new(cloud_requirements)),
             arg0_paths,
             thread_config_loader: Arc::new(RwLock::new(thread_config_loader)),
-            host_name_resolver,
         }
     }
 
@@ -230,7 +206,6 @@ impl ConfigManager {
             .fallback_cwd(fallback_cwd)
             .cloud_requirements(self.current_cloud_requirements())
             .thread_config_loader(self.current_thread_config_loader())
-            .host_name_resolver(self.host_name_resolver.clone())
             .build()
             .await?;
         self.apply_runtime_feature_enablement(&mut config);
@@ -258,7 +233,6 @@ impl ConfigManager {
             self.loader_overrides.clone(),
             self.current_cloud_requirements(),
             thread_config_loader.as_ref(),
-            self.host_name_resolver.clone(),
         )
         .await
     }
@@ -286,16 +260,14 @@ impl ConfigManager {
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
         cloud_requirements: CloudRequirementsLoader,
-        host_name: Option<String>,
     ) -> Self {
-        Self::new_with_host_name(
+        Self::new(
             codex_home,
             cli_overrides,
             loader_overrides,
             cloud_requirements,
             Arg0DispatchPaths::default(),
             Arc::new(codex_config::NoopThreadConfigLoader),
-            HostNameResolver::fixed(host_name),
         )
     }
 
@@ -306,7 +278,6 @@ impl ConfigManager {
             Vec::new(),
             LoaderOverrides::without_managed_config_for_tests(),
             CloudRequirementsLoader::default(),
-            /*host_name*/ None,
         )
     }
 }

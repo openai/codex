@@ -27,7 +27,6 @@ use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
 use codex_config::config_toml::ThreadStoreToml;
 use codex_config::config_toml::validate_model_providers;
-use codex_config::loader::HostNameResolver;
 use codex_config::loader::load_config_layers_state;
 use codex_config::loader::project_trust_key;
 use codex_config::profile_toml::ConfigProfile;
@@ -769,7 +768,6 @@ pub struct ConfigBuilder {
     cloud_requirements: CloudRequirementsLoader,
     thread_config_loader: Option<Arc<dyn ThreadConfigLoader>>,
     fallback_cwd: Option<PathBuf>,
-    host_name_resolver: HostNameResolver,
 }
 
 impl ConfigBuilder {
@@ -811,16 +809,6 @@ impl ConfigBuilder {
         self
     }
 
-    pub fn host_name(mut self, host_name: Option<String>) -> Self {
-        self.host_name_resolver = HostNameResolver::fixed(host_name);
-        self
-    }
-
-    pub fn host_name_resolver(mut self, host_name_resolver: HostNameResolver) -> Self {
-        self.host_name_resolver = host_name_resolver;
-        self
-    }
-
     pub async fn build(self) -> std::io::Result<Config> {
         let Self {
             codex_home,
@@ -830,7 +818,6 @@ impl ConfigBuilder {
             cloud_requirements,
             thread_config_loader,
             fallback_cwd,
-            host_name_resolver,
         } = self;
         let codex_home = match codex_home {
             Some(codex_home) => AbsolutePathBuf::from_absolute_path(codex_home)?,
@@ -855,7 +842,6 @@ impl ConfigBuilder {
             thread_config_loader
                 .as_deref()
                 .unwrap_or(&codex_config::NoopThreadConfigLoader),
-            host_name_resolver,
         )
         .await?;
         let merged_toml = config_layer_stack.effective_config();
@@ -1038,7 +1024,6 @@ pub async fn load_config_as_toml_with_cli_and_loader_overrides(
         loader_overrides,
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
-        HostNameResolver::disabled(),
     )
     .await?;
 
@@ -1220,7 +1205,6 @@ pub async fn load_global_mcp_servers(
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
-        HostNameResolver::disabled(),
     )
     .await?;
     let merged_toml = config_layer_stack.effective_config();
