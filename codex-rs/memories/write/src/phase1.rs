@@ -513,6 +513,48 @@ mod job {
                 );
             }
         }
+
+        #[test]
+        fn output_schema_requires_rollout_slug_and_keeps_it_nullable() {
+            let schema = output_schema();
+            let properties = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("properties object");
+            let required = schema
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("required array");
+
+            let mut required_keys = required
+                .iter()
+                .map(|key| key.as_str().expect("required key string"))
+                .collect::<Vec<_>>();
+            required_keys.sort_unstable();
+
+            assert!(
+                properties.contains_key("rollout_slug"),
+                "schema should declare rollout_slug"
+            );
+
+            let rollout_slug_type = properties
+                .get("rollout_slug")
+                .and_then(Value::as_object)
+                .and_then(|entry| entry.get("type"))
+                .and_then(Value::as_array)
+                .expect("rollout_slug type array");
+            let mut rollout_slug_types = rollout_slug_type
+                .iter()
+                .map(|entry| entry.as_str().expect("type entry string"))
+                .collect::<Vec<_>>();
+            rollout_slug_types.sort_unstable();
+
+            assert_eq!(
+                required_keys,
+                vec!["raw_memory", "rollout_slug", "rollout_summary"]
+            );
+            assert_eq!(rollout_slug_types, vec!["null", "string"]);
+        }
     }
 }
 

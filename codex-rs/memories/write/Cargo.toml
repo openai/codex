@@ -38,6 +38,8 @@ uuid = { workspace = true, features = ["v4", "v5"] }
 
 [dev-dependencies]
 codex-models-manager = { workspace = true }
+core_test_support = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["fs", "macros"] }
+wiremock = { workspace = true }

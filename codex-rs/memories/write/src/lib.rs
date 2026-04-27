@@ -41,6 +41,9 @@ pub const DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT: usize = 150_000;
 /// and model output.
 pub const STAGE_ONE_CONTEXT_WINDOW_PERCENT: i64 = 70;
 
+#[cfg(test)]
+mod startup_tests;
+
 mod artifacts {
     pub(super) const EXTENSIONS_SUBDIR: &str = "extensions";
     pub(super) const ROLLOUT_SUMMARIES_SUBDIR: &str = "rollout_summaries";

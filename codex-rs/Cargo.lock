@@ -2962,6 +2962,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-output-truncation",
  "codex-utils-template",
+ "core_test_support",
  "futures",
  "pretty_assertions",
  "serde",
@@ -2970,6 +2971,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
