@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::de::Error as SerdeError;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::path::Display;
 use std::path::Path;
@@ -46,16 +47,23 @@ impl AbsolutePathBuf {
         base_path: B,
     ) -> Self {
         let expanded = Self::maybe_expand_home_directory(path.as_ref());
-        Self(absolutize::absolutize_from(&expanded, base_path.as_ref()))
+        let expanded = normalize_path_for_platform(&expanded);
+        let base_path = normalize_path_for_platform(base_path.as_ref());
+        Self(absolutize::absolutize_from(
+            expanded.as_ref(),
+            base_path.as_ref(),
+        ))
     }
 
     pub fn from_absolute_path<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
         let expanded = Self::maybe_expand_home_directory(path.as_ref());
-        Ok(Self(absolutize::absolutize(&expanded)?))
+        let expanded = normalize_path_for_platform(&expanded);
+        Ok(Self(absolutize::absolutize(expanded.as_ref())?))
     }
 
     pub fn from_absolute_path_checked<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
         let expanded = Self::maybe_expand_home_directory(path.as_ref());
+        let expanded = normalize_path_for_platform(&expanded);
         if !expanded.is_absolute() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -63,15 +71,14 @@ impl AbsolutePathBuf {
             ));
         }
 
-        Ok(Self(absolutize::absolutize_from(&expanded, Path::new("/"))))
+        Ok(Self(absolutize::absolutize_from(
+            expanded.as_ref(),
+            Path::new("/"),
+        )))
     }
 
     pub fn current_dir() -> std::io::Result<Self> {
-        let current_dir = std::env::current_dir()?;
-        Ok(Self(absolutize::absolutize_from(
-            &current_dir,
-            &current_dir,
-        )))
+        Self::from_absolute_path(std::env::current_dir()?)
     }
 
     /// Construct an absolute path from `path`, resolving relative paths against
@@ -130,6 +137,45 @@ impl AbsolutePathBuf {
     pub fn display(&self) -> Display<'_> {
         self.0.display()
     }
+}
+
+fn normalize_path_for_platform(path: &Path) -> Cow<'_, Path> {
+    if cfg!(windows)
+        && let Some(path) = path.to_str()
+        && let Some(normalized) = normalize_windows_device_path(path)
+    {
+        return Cow::Owned(PathBuf::from(normalized));
+    }
+
+    Cow::Borrowed(path)
+}
+
+fn normalize_windows_device_path(path: &str) -> Option<String> {
+    if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+        return Some(format!(r"\\{unc}"));
+    }
+    if let Some(unc) = path.strip_prefix(r"\\.\UNC\") {
+        return Some(format!(r"\\{unc}"));
+    }
+    if let Some(path) = path.strip_prefix(r"\\?\")
+        && is_windows_drive_absolute_path(path)
+    {
+        return Some(path.to_string());
+    }
+    if let Some(path) = path.strip_prefix(r"\\.\")
+        && is_windows_drive_absolute_path(path)
+    {
+        return Some(path.to_string());
+    }
+    None
+}
+
+fn is_windows_drive_absolute_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
 }
 
 /// Canonicalize a path when possible, but preserve the logical absolute path
@@ -389,6 +435,43 @@ mod tests {
             .expect_err("relative path should fail");
 
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn normalize_windows_device_path_strips_supported_verbatim_prefixes() {
+        assert_eq!(
+            normalize_windows_device_path(r"\\?\D:\c\x\worktrees\2508\swift-base"),
+            Some(r"D:\c\x\worktrees\2508\swift-base".to_string())
+        );
+        assert_eq!(
+            normalize_windows_device_path(r"\\.\D:\c\x\worktrees\2508\swift-base"),
+            Some(r"D:\c\x\worktrees\2508\swift-base".to_string())
+        );
+        assert_eq!(
+            normalize_windows_device_path(r"\\?\UNC\server\share\workspace"),
+            Some(r"\\server\share\workspace".to_string())
+        );
+        assert_eq!(
+            normalize_windows_device_path(r"\\.\UNC\server\share\workspace"),
+            Some(r"\\server\share\workspace".to_string())
+        );
+        assert_eq!(
+            normalize_windows_device_path(r"\\?\GLOBALROOT\Device"),
+            None
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn from_absolute_path_strips_windows_verbatim_prefix() {
+        let path =
+            AbsolutePathBuf::from_absolute_path_checked(r"\\?\D:\c\x\worktrees\2508\swift-base")
+                .expect("verbatim drive path should be absolute");
+
+        assert_eq!(
+            path.as_path(),
+            Path::new(r"D:\c\x\worktrees\2508\swift-base")
+        );
     }
 
     #[test]

@@ -59,7 +59,6 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Resu
         content: vec![ContentItem::OutputText {
             text: injected_text.to_string(),
         }],
-        end_turn: None,
         phase: None,
     };
 
@@ -195,7 +194,6 @@ async fn thread_inject_items_adds_raw_response_items_after_a_turn() -> Result<()
         content: vec![ContentItem::OutputText {
             text: "Injected after first turn".to_string(),
         }],
-        end_turn: None,
         phase: None,
     };
     let injected_value = serde_json::to_value(&injected_item)?;

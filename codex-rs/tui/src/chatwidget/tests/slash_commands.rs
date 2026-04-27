@@ -210,6 +210,10 @@ async fn queued_bang_shell_dispatches_after_active_turn() {
         Ok(Op::RunUserShellCommand { command }) => assert_eq!(command, "echo hi"),
         other => panic!("expected queued shell command op, got {other:?}"),
     }
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::AddToHistory { text }) if text == "!echo hi"
+    );
     assert!(chat.queued_user_messages.is_empty());
 }
 
@@ -287,7 +291,10 @@ async fn queued_bang_shell_waits_for_user_shell_completion_before_next_input() {
         Ok(Op::RunUserShellCommand { command }) => assert_eq!(command, "echo hi"),
         other => panic!("expected queued shell command op, got {other:?}"),
     }
-    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::AddToHistory { text }) if text == "!echo hi"
+    );
     assert_eq!(chat.queued_user_messages.len(), 1);
 
     let begin = begin_exec_with_source(

@@ -24,8 +24,7 @@ async fn spawn_command_under_sandbox(
     use codex_core::exec::build_exec_request;
     use codex_core::sandboxing::SandboxPermissions;
     use codex_protocol::config_types::WindowsSandboxLevel;
-    use codex_protocol::permissions::FileSystemSandboxPolicy;
-    use codex_protocol::permissions::NetworkSandboxPolicy;
+    use codex_protocol::models::PermissionProfile;
     use std::process::Stdio;
 
     let codex_linux_sandbox_exe = None;
@@ -43,9 +42,7 @@ async fn spawn_command_under_sandbox(
             justification: None,
             arg0: None,
         },
-        sandbox_policy,
-        &FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, sandbox_cwd),
-        NetworkSandboxPolicy::from(sandbox_policy),
+        &PermissionProfile::from_legacy_sandbox_policy(sandbox_policy),
         sandbox_cwd,
         &codex_linux_sandbox_exe,
         /*use_legacy_landlock*/ false,
@@ -92,13 +89,16 @@ async fn spawn_command_under_sandbox(
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
     use codex_core::spawn_command_under_linux_sandbox;
+    use codex_protocol::models::PermissionProfile;
+
     let codex_linux_sandbox_exe = core_test_support::find_codex_linux_sandbox_exe()
         .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
+    let permission_profile = PermissionProfile::from_legacy_sandbox_policy(sandbox_policy);
     spawn_command_under_linux_sandbox(
         codex_linux_sandbox_exe,
         command,
         command_cwd,
-        sandbox_policy,
+        &permission_profile,
         sandbox_cwd,
         /*use_legacy_landlock*/ false,
         stdio_policy,

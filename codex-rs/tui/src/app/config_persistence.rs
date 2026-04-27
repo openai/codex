@@ -72,15 +72,15 @@ impl App {
                 "Failed to carry forward approval policy override: {err}"
             ));
         }
-        if let Some(policy) = self.runtime_sandbox_policy_override.as_ref() {
-            if let Err(err) = config.permissions.sandbox_policy.set(policy.clone()) {
-                tracing::warn!(%err, "failed to carry forward sandbox policy override");
-                self.chat_widget.add_error_message(format!(
-                    "Failed to carry forward sandbox policy override: {err}"
-                ));
-            } else {
-                sync_runtime_permissions_from_legacy_sandbox_policy(config);
-            }
+        if let Some(policy) = self.runtime_sandbox_policy_override.as_ref()
+            && let Err(err) = config
+                .permissions
+                .set_legacy_sandbox_policy(policy.clone(), config.cwd.as_path())
+        {
+            tracing::warn!(%err, "failed to carry forward sandbox policy override");
+            self.chat_widget.add_error_message(format!(
+                "Failed to carry forward sandbox policy override: {err}"
+            ));
         }
     }
 
@@ -113,13 +113,15 @@ impl App {
         user_message_prefix: &str,
         log_message: &str,
     ) -> bool {
-        if let Err(err) = config.permissions.sandbox_policy.set(policy) {
+        if let Err(err) = config
+            .permissions
+            .set_legacy_sandbox_policy(policy, config.cwd.as_path())
+        {
             tracing::warn!(error = %err, "{log_message}");
             self.chat_widget
                 .add_error_message(format!("{user_message_prefix}: {err}"));
             return false;
         }
-        sync_runtime_permissions_from_legacy_sandbox_policy(config);
 
         true
     }
@@ -298,9 +300,11 @@ impl App {
                 .set_approval_policy(self.config.permissions.approval_policy.value());
         }
         if sandbox_policy_override.is_some()
-            && let Err(err) = self
-                .chat_widget
-                .set_sandbox_policy(self.config.permissions.sandbox_policy.get().clone())
+            && let Err(err) = self.chat_widget.set_sandbox_policy(
+                self.config
+                    .permissions
+                    .legacy_sandbox_policy(self.config.cwd.as_path()),
+            )
         {
             tracing::error!(
                 error = %err,
@@ -310,8 +314,11 @@ impl App {
                 .add_error_message(format!("Failed to enable Auto-review: {err}"));
         }
         if sandbox_policy_override.is_some() {
-            self.runtime_sandbox_policy_override =
-                Some(self.config.permissions.sandbox_policy.get().clone());
+            self.runtime_sandbox_policy_override = Some(
+                self.config
+                    .permissions
+                    .legacy_sandbox_policy(self.config.cwd.as_path()),
+            );
         }
 
         if approval_policy_override.is_some()
@@ -541,17 +548,6 @@ impl App {
             Personality::Pragmatic => "Pragmatic",
         }
     }
-}
-
-fn sync_runtime_permissions_from_legacy_sandbox_policy(config: &mut Config) {
-    let sandbox_policy = config.permissions.sandbox_policy.get();
-    config.permissions.file_system_sandbox_policy =
-        codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-            sandbox_policy,
-            &config.cwd,
-        );
-    config.permissions.network_sandbox_policy =
-        codex_protocol::permissions::NetworkSandboxPolicy::from(sandbox_policy);
 }
 
 #[cfg(test)]

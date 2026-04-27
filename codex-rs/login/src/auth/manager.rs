@@ -207,12 +207,12 @@ impl CodexAuth {
             return Ok(Self::from_api_key(api_key));
         }
         if auth_mode == ApiAuthMode::AgentIdentity {
-            let Some(record) = auth_dot_json.agent_identity else {
+            let Some(agent_identity) = auth_dot_json.agent_identity else {
                 return Err(std::io::Error::other(
-                    "agent identity auth is missing an agent identity record.",
+                    "agent identity auth is missing an agent identity token.",
                 ));
             };
-            return Ok(Self::AgentIdentity(AgentIdentityAuth::new(record)));
+            return Self::from_agent_identity_jwt(&agent_identity);
         }
 
         let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
@@ -243,6 +243,11 @@ impl CodexAuth {
             /*enable_codex_api_key_env*/ false,
             auth_credentials_store_mode,
         )
+    }
+
+    pub fn from_agent_identity_jwt(jwt: &str) -> std::io::Result<Self> {
+        let record = AgentIdentityAuthRecord::from_agent_identity_jwt(jwt)?;
+        Ok(Self::AgentIdentity(AgentIdentityAuth::new(record)))
     }
 
     pub fn auth_mode(&self) -> AuthMode {
@@ -318,10 +323,10 @@ impl CodexAuth {
 
     pub async fn initialize_runtime(
         &self,
-        chatgpt_base_url: Option<String>,
+        _chatgpt_base_url: Option<String>,
     ) -> std::io::Result<()> {
         match self {
-            Self::AgentIdentity(auth) => auth.ensure_runtime(chatgpt_base_url).await,
+            Self::AgentIdentity(auth) => auth.ensure_runtime().await,
             Self::ApiKey(_) | Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => Ok(()),
         }
     }
@@ -474,6 +479,7 @@ impl ChatgptAuth {
 
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 pub const CODEX_API_KEY_ENV_VAR: &str = "CODEX_API_KEY";
+pub const CODEX_AGENT_IDENTITY_ENV_VAR: &str = "CODEX_AGENT_IDENTITY";
 
 pub fn read_openai_api_key_from_env() -> Option<String> {
     env::var(OPENAI_API_KEY_ENV_VAR)
@@ -484,6 +490,13 @@ pub fn read_openai_api_key_from_env() -> Option<String> {
 
 pub fn read_codex_api_key_from_env() -> Option<String> {
     env::var(CODEX_API_KEY_ENV_VAR)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+pub fn read_codex_agent_identity_from_env() -> Option<String> {
+    env::var(CODEX_AGENT_IDENTITY_ENV_VAR)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -525,6 +538,23 @@ pub fn login_with_api_key(
         tokens: None,
         last_refresh: None,
         agent_identity: None,
+    };
+    save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
+}
+
+/// Writes an `auth.json` that contains only the Agent Identity token.
+pub fn login_with_agent_identity(
+    codex_home: &Path,
+    agent_identity: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<()> {
+    AgentIdentityAuthRecord::from_agent_identity_jwt(agent_identity)?;
+    let auth_dot_json = AuthDotJson {
+        auth_mode: Some(ApiAuthMode::AgentIdentity),
+        openai_api_key: None,
+        tokens: None,
+        last_refresh: None,
+        agent_identity: Some(agent_identity.to_string()),
     };
     save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
 }
@@ -712,6 +742,10 @@ fn load_auth(
     // If the caller explicitly requested ephemeral auth, there is no persisted fallback.
     if auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral {
         return Ok(None);
+    }
+
+    if let Some(agent_identity) = read_codex_agent_identity_from_env() {
+        return CodexAuth::from_agent_identity_jwt(&agent_identity).map(Some);
     }
 
     // Fall back to the configured persistent store (file/keyring/auto) for managed auth.

@@ -75,11 +75,14 @@ mod tests {
     #[tokio::test]
     async fn test_unix_executes_script_without_extension() -> Result<()> {
         let env = TestExecutableEnv::new()?;
-        let mut cmd = Command::new(&env.executable_path);
+        let mut cmd = Command::new(&env.program_name);
         cmd.envs(&env.mcp_env);
 
         let output = cmd.output().await;
-        assert!(output.is_ok(), "Unix should execute scripts directly");
+        assert!(
+            output.is_ok(),
+            "Unix should execute PATH-resolved scripts directly: {output:?}"
+        );
         Ok(())
     }
 
@@ -143,8 +146,6 @@ mod tests {
         // Held to prevent the temporary directory from being deleted.
         _temp_dir: TempDir,
         program_name: String,
-        #[cfg(unix)]
-        executable_path: std::path::PathBuf,
         mcp_env: HashMap<OsString, OsString>,
     }
 
@@ -167,8 +168,6 @@ mod tests {
             let mcp_env = create_env_for_mcp_server(Some(extra_env), &[])?;
 
             Ok(Self {
-                #[cfg(unix)]
-                executable_path: Self::executable_path(dir_path),
                 _temp_dir: temp_dir,
                 program_name: Self::TEST_PROGRAM.to_string(),
                 mcp_env,
@@ -191,11 +190,6 @@ mod tests {
             }
 
             Ok(())
-        }
-
-        #[cfg(unix)]
-        fn executable_path(dir: &Path) -> std::path::PathBuf {
-            dir.join(Self::TEST_PROGRAM)
         }
 
         #[cfg(unix)]

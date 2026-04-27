@@ -386,6 +386,76 @@ impl Default for PermissionProfile {
 }
 
 impl PermissionProfile {
+    /// Managed read-only filesystem access with restricted network access.
+    pub fn read_only() -> Self {
+        Self::Managed {
+            file_system: ManagedFileSystemPermissions::Restricted {
+                entries: vec![FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Root,
+                    },
+                    access: FileSystemAccessMode::Read,
+                }],
+                glob_scan_max_depth: None,
+            },
+            network: NetworkSandboxPolicy::Restricted,
+        }
+    }
+
+    /// Managed workspace-write filesystem access with restricted network access.
+    pub fn workspace_write() -> Self {
+        Self::Managed {
+            file_system: ManagedFileSystemPermissions::Restricted {
+                entries: vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        access: FileSystemAccessMode::Read,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                        },
+                        access: FileSystemAccessMode::Write,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::SlashTmp,
+                        },
+                        access: FileSystemAccessMode::Write,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Tmpdir,
+                        },
+                        access: FileSystemAccessMode::Write,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::project_roots(Some(".git".into())),
+                        },
+                        access: FileSystemAccessMode::Read,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::project_roots(Some(".agents".into())),
+                        },
+                        access: FileSystemAccessMode::Read,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::project_roots(Some(".codex".into())),
+                        },
+                        access: FileSystemAccessMode::Read,
+                    },
+                ],
+                glob_scan_max_depth: None,
+            },
+            network: NetworkSandboxPolicy::Restricted,
+        }
+    }
+
     pub fn from_runtime_permissions(
         file_system_sandbox_policy: &FileSystemSandboxPolicy,
         network_sandbox_policy: NetworkSandboxPolicy,
@@ -412,10 +482,7 @@ impl PermissionProfile {
             FileSystemSandboxKind::ExternalSandbox => Self::External {
                 network: network_sandbox_policy,
             },
-            FileSystemSandboxKind::Unrestricted
-                if enforcement == SandboxEnforcement::Disabled
-                    && network_sandbox_policy.is_enabled() =>
-            {
+            FileSystemSandboxKind::Unrestricted if enforcement == SandboxEnforcement::Disabled => {
                 Self::Disabled
             }
             FileSystemSandboxKind::Restricted | FileSystemSandboxKind::Unrestricted => {
@@ -690,10 +757,6 @@ pub enum ResponseItem {
         id: Option<String>,
         role: String,
         content: Vec<ContentItem>,
-        // Do not use directly, no available consistently across all providers.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        end_turn: Option<bool>,
         // Optional output-message phase (for example: "commentary", "final_answer").
         // Availability varies by provider/model, so downstream consumers must
         // preserve fallback behavior when this is absent.
@@ -1047,7 +1110,6 @@ impl From<ResponseInputItem> for ResponseItem {
                 role,
                 content,
                 id: None,
-                end_turn: None,
                 phase: None,
             },
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
@@ -1763,6 +1825,20 @@ mod tests {
     }
 
     #[test]
+    fn permission_profile_presets_match_legacy_defaults() {
+        assert_eq!(
+            PermissionProfile::read_only(),
+            PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::new_read_only_policy())
+        );
+        assert_eq!(
+            PermissionProfile::workspace_write(),
+            PermissionProfile::from_legacy_sandbox_policy(
+                &SandboxPolicy::new_workspace_write_policy()
+            )
+        );
+    }
+
+    #[test]
     fn permission_profile_round_trip_preserves_disabled_sandbox() -> Result<()> {
         let cwd = tempdir()?;
         let permission_profile =
@@ -1781,6 +1857,17 @@ mod tests {
             )
         );
         Ok(())
+    }
+
+    #[test]
+    fn disabled_permission_profile_ignores_runtime_network_policy() {
+        let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::Disabled,
+            &FileSystemSandboxPolicy::unrestricted(),
+            NetworkSandboxPolicy::Restricted,
+        );
+
+        assert_eq!(permission_profile, PermissionProfile::Disabled);
     }
 
     #[test]

@@ -3096,7 +3096,6 @@ mod tests {
                 content: vec![codex_protocol::models::ContentItem::InputText {
                     text: "plain text".into(),
                 }],
-                end_turn: None,
                 phase: None,
             }),
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {

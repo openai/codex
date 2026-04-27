@@ -939,10 +939,14 @@ impl App {
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
         {
+            let startup_sandbox_policy = app
+                .config
+                .permissions
+                .legacy_sandbox_policy(app.config.cwd.as_path());
             let should_check = WindowsSandboxLevel::from_config(&app.config)
                 != WindowsSandboxLevel::Disabled
                 && matches!(
-                    app.config.permissions.sandbox_policy.get(),
+                    &startup_sandbox_policy,
                     codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
                         | codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
                 )
@@ -956,7 +960,7 @@ impl App {
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
-                let sandbox_policy = app.config.permissions.sandbox_policy.get().clone();
+                let sandbox_policy = startup_sandbox_policy;
                 Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
             }
         }

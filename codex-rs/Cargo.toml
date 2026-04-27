@@ -46,6 +46,8 @@ members = [
     "login",
     "codex-mcp",
     "mcp-server",
+    "memories/read",
+    "memories/write",
     "model-provider-info",
     "models-manager",
     "network-proxy",
@@ -153,6 +155,8 @@ codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
+codex-memories-read = { path = "memories/read" }
+codex-memories-write = { path = "memories/write" }
 codex-mcp = { path = "codex-mcp" }
 codex-mcp-server = { path = "mcp-server" }
 codex-model-provider-info = { path = "model-provider-info" }
