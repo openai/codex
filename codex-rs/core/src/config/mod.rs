@@ -17,6 +17,7 @@ use codex_config::FeatureRequirementsToml;
 use codex_config::LoaderOverrides;
 use codex_config::McpServerIdentity;
 use codex_config::McpServerRequirement;
+use codex_config::PluginRequirementsToml;
 use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
@@ -913,8 +914,20 @@ impl Config {
     ) -> McpConfig {
         let loaded_plugins = plugins_manager.plugins_for_config(self).await;
         let mut configured_mcp_servers = self.mcp_servers.get().clone();
-        for (name, plugin_server) in loaded_plugins.effective_mcp_servers() {
-            configured_mcp_servers.entry(name).or_insert(plugin_server);
+        for plugin in loaded_plugins
+            .plugins()
+            .iter()
+            .filter(|plugin| plugin.is_active())
+        {
+            let mut plugin_mcp_servers = plugin.mcp_servers.clone();
+            filter_plugin_mcp_servers_by_requirements(
+                &plugin.config_name,
+                &mut plugin_mcp_servers,
+                self.config_layer_stack.requirements().plugins.as_ref(),
+            );
+            for (name, plugin_server) in plugin_mcp_servers {
+                configured_mcp_servers.entry(name).or_insert(plugin_server);
+            }
         }
 
         McpConfig {
@@ -1111,6 +1124,35 @@ fn filter_mcp_servers_by_requirements(
         let allowed = allowlist
             .value
             .get(name)
+            .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
+        if allowed {
+            server.disabled_reason = None;
+        } else {
+            server.enabled = false;
+            server.disabled_reason = Some(McpServerDisabledReason::Requirements {
+                source: source.clone(),
+            });
+        }
+    }
+}
+
+fn filter_plugin_mcp_servers_by_requirements(
+    plugin_config_name: &str,
+    mcp_servers: &mut HashMap<String, McpServerConfig>,
+    plugin_requirements: Option<&Sourced<BTreeMap<String, PluginRequirementsToml>>>,
+) {
+    let Some(requirements) = plugin_requirements else {
+        return;
+    };
+    let source = requirements.source.clone();
+    let plugin_mcp_requirements = requirements
+        .value
+        .get(plugin_config_name)
+        .and_then(|plugin| plugin.mcp_servers.as_ref());
+
+    for (name, server) in mcp_servers.iter_mut() {
+        let allowed = plugin_mcp_requirements
+            .and_then(|mcp_requirements| mcp_requirements.get(name))
             .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
         if allowed {
             server.disabled_reason = None;
@@ -1706,6 +1748,7 @@ impl Config {
             feature_requirements,
             managed_hooks: _,
             mcp_servers,
+            plugins: _,
             exec_policy: _,
             enforce_residency,
             network: network_requirements,

@@ -1952,6 +1952,195 @@ fn filter_mcp_servers_by_allowlist_blocks_all_when_empty() {
     );
 }
 
+#[test]
+fn filter_plugin_mcp_servers_by_allowlist_enforces_plugin_and_identity_rules() {
+    const MATCHED_SERVER: &str = "matched-should-allow";
+    const MISMATCHED_SERVER: &str = "mismatched-should-disable";
+    const UNLISTED_SERVER: &str = "unlisted-should-disable";
+    const GOOD_CMD: &str = "good-cmd";
+
+    let mut servers = HashMap::from([
+        (MATCHED_SERVER.to_string(), stdio_mcp(GOOD_CMD)),
+        (MISMATCHED_SERVER.to_string(), stdio_mcp("bad-cmd")),
+        (
+            UNLISTED_SERVER.to_string(),
+            http_mcp("https://example.com/mcp"),
+        ),
+    ]);
+    let source = RequirementSource::CloudRequirements;
+    let requirements = Sourced::new(
+        BTreeMap::from([(
+            "sample@test".to_string(),
+            codex_config::PluginRequirementsToml {
+                mcp_servers: Some(BTreeMap::from([
+                    (
+                        MATCHED_SERVER.to_string(),
+                        McpServerRequirement {
+                            identity: McpServerIdentity::Command {
+                                command: GOOD_CMD.to_string(),
+                            },
+                        },
+                    ),
+                    (
+                        MISMATCHED_SERVER.to_string(),
+                        McpServerRequirement {
+                            identity: McpServerIdentity::Command {
+                                command: GOOD_CMD.to_string(),
+                            },
+                        },
+                    ),
+                ])),
+            },
+        )]),
+        source.clone(),
+    );
+
+    filter_plugin_mcp_servers_by_requirements("sample@test", &mut servers, Some(&requirements));
+
+    let reason = Some(McpServerDisabledReason::Requirements { source });
+    assert_eq!(
+        servers
+            .iter()
+            .map(|(name, server)| (
+                name.clone(),
+                (server.enabled, server.disabled_reason.clone())
+            ))
+            .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
+        HashMap::from([
+            (MATCHED_SERVER.to_string(), (true, None)),
+            (MISMATCHED_SERVER.to_string(), (false, reason.clone())),
+            (UNLISTED_SERVER.to_string(), (false, reason)),
+        ])
+    );
+}
+
+#[test]
+fn filter_plugin_mcp_servers_by_allowlist_blocks_unlisted_plugin() {
+    let mut servers = HashMap::from([("server-a".to_string(), stdio_mcp("cmd-a"))]);
+    let source = RequirementSource::CloudRequirements;
+    let requirements = Sourced::new(
+        BTreeMap::from([(
+            "other@test".to_string(),
+            codex_config::PluginRequirementsToml {
+                mcp_servers: Some(BTreeMap::from([(
+                    "server-a".to_string(),
+                    McpServerRequirement {
+                        identity: McpServerIdentity::Command {
+                            command: "cmd-a".to_string(),
+                        },
+                    },
+                )])),
+            },
+        )]),
+        source.clone(),
+    );
+
+    filter_plugin_mcp_servers_by_requirements("sample@test", &mut servers, Some(&requirements));
+
+    assert_eq!(
+        servers
+            .iter()
+            .map(|(name, server)| (
+                name.clone(),
+                (server.enabled, server.disabled_reason.clone())
+            ))
+            .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
+        HashMap::from([(
+            "server-a".to_string(),
+            (
+                false,
+                Some(McpServerDisabledReason::Requirements { source })
+            )
+        )])
+    );
+}
+
+#[tokio::test]
+async fn to_mcp_config_applies_plugin_mcp_cloud_requirements() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "sample": {
+      "type": "http",
+      "url": "https://sample.example/mcp"
+    },
+    "unlisted": {
+      "type": "http",
+      "url": "https://unlisted.example/mcp"
+    }
+  }
+}"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[features]
+plugins = true
+
+[plugins."sample@test"]
+enabled = true
+"#,
+    )?;
+
+    let requirements = codex_config::ConfigRequirementsToml {
+        plugins: Some(BTreeMap::from([(
+            "sample@test".to_string(),
+            codex_config::PluginRequirementsToml {
+                mcp_servers: Some(BTreeMap::from([(
+                    "sample".to_string(),
+                    McpServerRequirement {
+                        identity: McpServerIdentity::Url {
+                            url: "https://sample.example/mcp".to_string(),
+                        },
+                    },
+                )])),
+            },
+        )])),
+        ..Default::default()
+    };
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_requirements(CloudRequirementsLoader::new(async move {
+            Ok(Some(requirements))
+        }))
+        .build()
+        .await?;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+
+    assert_eq!(
+        mcp_config
+            .configured_mcp_servers
+            .get("sample")
+            .map(|server| (server.enabled, server.disabled_reason.clone())),
+        Some((true, None))
+    );
+    assert_eq!(
+        mcp_config
+            .configured_mcp_servers
+            .get("unlisted")
+            .map(|server| (server.enabled, server.disabled_reason.clone())),
+        Some((
+            false,
+            Some(McpServerDisabledReason::Requirements {
+                source: RequirementSource::CloudRequirements,
+            })
+        ))
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<()> {
     let temp_dir = TempDir::new()?;
@@ -6034,6 +6223,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         feature_requirements: None,
         hooks: None,
         mcp_servers: None,
+        plugins: None,
         apps: None,
         rules: None,
         enforce_residency: None,
@@ -6719,6 +6909,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         feature_requirements: None,
         hooks: None,
         mcp_servers: None,
+        plugins: None,
         apps: None,
         rules: None,
         enforce_residency: None,
