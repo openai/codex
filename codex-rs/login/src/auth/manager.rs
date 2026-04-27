@@ -18,7 +18,6 @@ use tokio::sync::Semaphore;
 
 use codex_agent_identity::decode_agent_identity_jwt;
 use codex_agent_identity::fetch_agent_identity_jwks;
-use codex_agent_identity::normalize_chatgpt_base_url;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -258,8 +257,11 @@ impl CodexAuth {
         jwt: &str,
         chatgpt_base_url: Option<&str>,
     ) -> std::io::Result<Self> {
-        let normalized_base_url = normalized_agent_identity_base_url(chatgpt_base_url);
-        let record = verified_agent_identity_record(jwt, &normalized_base_url).await?;
+        let base_url = chatgpt_base_url
+            .unwrap_or(DEFAULT_CHATGPT_BACKEND_BASE_URL)
+            .trim_end_matches('/')
+            .to_string();
+        let record = verified_agent_identity_record(jwt, &base_url).await?;
         Ok(Self::AgentIdentity(AgentIdentityAuth::load(record).await?))
     }
 
@@ -505,10 +507,6 @@ pub fn read_codex_agent_identity_from_env() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn normalized_agent_identity_base_url(chatgpt_base_url: Option<&str>) -> String {
-    normalize_chatgpt_base_url(chatgpt_base_url.unwrap_or(DEFAULT_CHATGPT_BACKEND_BASE_URL))
-}
-
 async fn verified_agent_identity_record(
     jwt: &str,
     chatgpt_base_url: &str,
@@ -569,8 +567,11 @@ pub async fn login_with_agent_identity(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     chatgpt_base_url: Option<&str>,
 ) -> std::io::Result<()> {
-    let normalized_base_url = normalized_agent_identity_base_url(chatgpt_base_url);
-    verified_agent_identity_record(agent_identity, &normalized_base_url).await?;
+    let base_url = chatgpt_base_url
+        .unwrap_or(DEFAULT_CHATGPT_BACKEND_BASE_URL)
+        .trim_end_matches('/')
+        .to_string();
+    verified_agent_identity_record(agent_identity, &base_url).await?;
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(ApiAuthMode::AgentIdentity),
         openai_api_key: None,

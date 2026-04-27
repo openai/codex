@@ -129,14 +129,16 @@ pub async fn fetch_agent_identity_jwks(
     client: &reqwest::Client,
     chatgpt_base_url: &str,
 ) -> Result<JwkSet> {
-    client
+    let response = client
         .get(agent_identity_jwks_url(chatgpt_base_url))
         .timeout(AGENT_IDENTITY_JWKS_TIMEOUT)
         .send()
         .await
-        .context("failed to fetch agent identity JWKS")?
+        .context("failed to request agent identity JWKS")?
         .error_for_status()
-        .context("failed to fetch agent identity JWKS")?
+        .context("agent identity JWKS endpoint returned an error")?;
+
+    response
         .json()
         .await
         .context("failed to decode agent identity JWKS")
@@ -311,13 +313,7 @@ pub fn agent_identity_biscuit_url(chatgpt_base_url: &str) -> String {
 
 pub fn agent_identity_jwks_url(chatgpt_base_url: &str) -> String {
     let trimmed = chatgpt_base_url.trim_end_matches('/');
-    if trimmed.contains("/backend-api") {
-        format!("{trimmed}/wham/agent-identities/jwks")
-    } else if trimmed.contains("/api/codex") {
-        format!("{trimmed}/agent-identities/jwks")
-    } else {
-        format!("{trimmed}/api/codex/agent-identities/jwks")
-    }
+    format!("{trimmed}/wham/agent-identities/jwks")
 }
 
 pub fn agent_identity_request_id() -> Result<String> {
@@ -329,33 +325,6 @@ pub fn agent_identity_request_id() -> Result<String> {
         "codex-agent-identity-{}",
         URL_SAFE_NO_PAD.encode(request_id_bytes)
     ))
-}
-
-pub fn normalize_chatgpt_base_url(chatgpt_base_url: &str) -> String {
-    let mut base_url = chatgpt_base_url.trim_end_matches('/').to_string();
-    for suffix in [
-        "/wham/remote/control/server/enroll",
-        "/wham/remote/control/server",
-    ] {
-        if let Some(stripped) = base_url.strip_suffix(suffix) {
-            base_url = stripped.to_string();
-            break;
-        }
-    }
-    if base_url.ends_with("/codex")
-        && !base_url.ends_with("/api/codex")
-        && let Some(stripped) = base_url.strip_suffix("/codex")
-    {
-        base_url = stripped.to_string();
-    }
-    if (base_url.starts_with("https://chatgpt.com")
-        || base_url.starts_with("https://chat.openai.com"))
-        && !base_url.contains("/backend-api")
-        && !base_url.contains("/api/codex")
-    {
-        base_url = format!("{base_url}/backend-api");
-    }
-    base_url
 }
 
 pub fn build_abom(session_source: SessionSource) -> AgentBillOfMaterials {
@@ -708,30 +677,14 @@ J1bwkqKZTB5dHolX9A58e/xXnfZ5P8f3Z83+Izap3FwqQulk7b1WO1MQcHuVg2NN
     }
 
     #[test]
-    fn normalize_chatgpt_base_url_strips_codex_before_backend_api() {
-        assert_eq!(
-            normalize_chatgpt_base_url("https://chatgpt.com/codex"),
-            "https://chatgpt.com/backend-api"
-        );
-        assert_eq!(
-            normalize_chatgpt_base_url("http://localhost:8080/api/codex"),
-            "http://localhost:8080/api/codex"
-        );
-        assert_eq!(
-            normalize_chatgpt_base_url("https://chatgpt.com/api/codex"),
-            "https://chatgpt.com/api/codex"
-        );
-    }
-
-    #[test]
-    fn agent_identity_jwks_url_matches_base_url_style() {
+    fn agent_identity_jwks_url_uses_backend_api_base_url() {
         assert_eq!(
             agent_identity_jwks_url("https://chatgpt.com/backend-api"),
             "https://chatgpt.com/backend-api/wham/agent-identities/jwks"
         );
         assert_eq!(
-            agent_identity_jwks_url("http://localhost:8080/api/codex"),
-            "http://localhost:8080/api/codex/agent-identities/jwks"
+            agent_identity_jwks_url("https://chatgpt.com/backend-api/"),
+            "https://chatgpt.com/backend-api/wham/agent-identities/jwks"
         );
     }
 
