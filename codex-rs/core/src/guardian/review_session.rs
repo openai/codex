@@ -848,7 +848,6 @@ pub(crate) fn build_guardian_review_session_config(
     guardian_config.permissions.permission_profile = Constrained::allow_only(
         PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy),
     );
-    guardian_config.permissions.sandbox_policy = Constrained::allow_only(sandbox_policy.clone());
     guardian_config
         .permissions
         .set_legacy_sandbox_policy(sandbox_policy, guardian_config.cwd.as_path())

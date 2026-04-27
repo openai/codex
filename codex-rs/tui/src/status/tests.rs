@@ -99,16 +99,12 @@ async fn status_snapshot_includes_reasoning_details() {
     config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
     config.cwd = test_path_buf("/workspace/tests").abs();
     config
-        .permissions
-        .set_legacy_sandbox_policy(
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: Vec::new(),
-                network_access: false,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            },
-            config.cwd.as_path(),
-        )
+        .set_legacy_sandbox_policy(SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        })
         .expect("set sandbox policy");
 
     let account_display = test_status_account_display();
@@ -185,16 +181,12 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
         .expect("set approval policy");
     config.cwd = test_path_buf("/workspace/tests").abs();
     config
-        .permissions
-        .set_legacy_sandbox_policy(
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: Vec::new(),
-                network_access: true,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            },
-            config.cwd.as_path(),
-        )
+        .set_legacy_sandbox_policy(SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: true,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        })
         .expect("set sandbox policy");
 
     let account_display = test_status_account_display();

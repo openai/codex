@@ -2545,7 +2545,9 @@ async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
             .features
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
-        config.permissions.sandbox_policy = Constrained::allow_any(read_only_policy_for_config);
+        config
+            .set_legacy_sandbox_policy(read_only_policy_for_config)
+            .expect("set sandbox policy");
         let mut file_system_sandbox_policy = FileSystemSandboxPolicy::default();
         file_system_sandbox_policy
             .entries

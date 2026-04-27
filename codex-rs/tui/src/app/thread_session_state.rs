@@ -192,9 +192,8 @@ mod tests {
             .set_sandbox_policy(expected_sandbox_policy.clone())
             .expect("set widget sandbox policy");
         app.config
-            .permissions
-            .set_legacy_sandbox_policy(expected_sandbox_policy.clone(), app.config.cwd.as_path())
-            .expect("set app sandbox policy");
+            .set_legacy_sandbox_policy(expected_sandbox_policy.clone())
+            .expect("set sandbox policy");
 
         app.sync_active_thread_permission_settings_to_cached_session()
             .await;

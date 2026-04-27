@@ -383,8 +383,6 @@ impl Session {
         per_turn_config.approvals_reviewer = session_configuration.approvals_reviewer;
         per_turn_config.permissions.permission_profile =
             session_configuration.permission_profile.clone();
-        let sandbox_policy = session_configuration.sandbox_policy();
-        per_turn_config.permissions.sandbox_policy = Constrained::allow_only(sandbox_policy);
         let permission_profile = session_configuration.permission_profile();
         let resolved_web_search_mode =
             resolve_web_search_mode_for_turn(&per_turn_config.web_search_mode, &permission_profile);

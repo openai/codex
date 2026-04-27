@@ -1583,7 +1583,9 @@ allow_local_binding = true
                 .enable(Feature::CodexHooks)
                 .expect("test config should allow feature update");
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-            config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+            config
+                .set_legacy_sandbox_policy(sandbox_policy_for_config)
+                .expect("set sandbox policy");
             let layers = config
                 .config_layer_stack
                 .get_layers(

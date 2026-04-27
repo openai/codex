@@ -489,7 +489,7 @@ mod phase2 {
             );
             config
                 .permissions
-                .set_permission_profile(permission_profile, config.cwd.as_path())
+                .set_permission_profile(permission_profile)
                 .expect("permissions are configurable");
             configure(&mut config);
             let config = Arc::new(config);
@@ -935,8 +935,9 @@ mod phase2 {
             .await
             .expect("enqueue global consolidation");
         let mut constrained_config = harness.config.as_ref().clone();
-        constrained_config.permissions.sandbox_policy =
-            Constrained::allow_only(SandboxPolicy::DangerFullAccess);
+        constrained_config.permissions.permission_profile = Constrained::allow_only(
+            PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::DangerFullAccess),
+        );
 
         phase2::run(&harness.session, Arc::new(constrained_config)).await;
 

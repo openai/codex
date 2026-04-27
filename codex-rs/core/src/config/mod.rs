@@ -195,11 +195,6 @@ pub struct Permissions {
     /// Canonical effective runtime permissions after config requirements and
     /// runtime readable-root additions have been applied.
     pub permission_profile: Constrained<PermissionProfile>,
-    /// Effective sandbox policy used for shell/unified exec.
-    ///
-    /// Legacy projection retained while runtime call sites migrate to
-    /// `permission_profile`.
-    pub sandbox_policy: Constrained<SandboxPolicy>,
     /// Effective network configuration applied to all spawned processes.
     pub network: Option<NetworkProxySpec>,
     /// Whether the model may request a login shell for shell-based tools.
@@ -250,13 +245,12 @@ impl Permissions {
     }
 
     /// Check whether a legacy sandbox policy can be applied to this permission
-    /// set under both legacy and canonical profile constraints.
+    /// set after projecting it into the canonical permission profile.
     pub fn can_set_legacy_sandbox_policy(
         &self,
         sandbox_policy: &SandboxPolicy,
         cwd: &Path,
     ) -> ConstraintResult<()> {
-        self.sandbox_policy.can_set(sandbox_policy)?;
         let file_system_sandbox_policy =
             FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd);
         let network_sandbox_policy = NetworkSandboxPolicy::from(sandbox_policy);
@@ -285,31 +279,18 @@ impl Permissions {
             network_sandbox_policy,
         );
 
-        self.sandbox_policy.set(sandbox_policy)?;
         self.permission_profile.set(permission_profile)?;
         Ok(())
     }
 
-    /// Replace permissions from the canonical profile and update compatibility
-    /// projections for legacy consumers.
+    /// Replace permissions from the canonical profile.
     pub fn set_permission_profile(
         &mut self,
         permission_profile: PermissionProfile,
-        cwd: &Path,
     ) -> ConstraintResult<()> {
-        let (file_system_sandbox_policy, network_sandbox_policy) =
-            permission_profile.to_runtime_permissions();
-        let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
-            &permission_profile,
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
-            cwd,
-        );
         self.permission_profile.can_set(&permission_profile)?;
-        self.sandbox_policy.can_set(&sandbox_policy)?;
 
         self.permission_profile.set(permission_profile)?;
-        self.sandbox_policy.set(sandbox_policy)?;
         Ok(())
     }
 }
@@ -915,6 +896,18 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    pub fn legacy_sandbox_policy(&self) -> SandboxPolicy {
+        self.permissions.legacy_sandbox_policy(self.cwd.as_path())
+    }
+
+    pub fn set_legacy_sandbox_policy(
+        &mut self,
+        sandbox_policy: SandboxPolicy,
+    ) -> ConstraintResult<()> {
+        self.permissions
+            .set_legacy_sandbox_policy(sandbox_policy, self.cwd.as_path())
+    }
+
     pub fn to_models_manager_config(&self) -> ModelsManagerConfig {
         ModelsManagerConfig {
             model_context_window: self.model_context_window,
@@ -2484,7 +2477,6 @@ impl Config {
             permissions: Permissions {
                 approval_policy: constrained_approval_policy.value,
                 permission_profile: constrained_permission_profile,
-                sandbox_policy: constrained_sandbox_policy.value,
                 network,
                 allow_login_shell,
                 shell_environment_policy,

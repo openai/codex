@@ -114,6 +114,7 @@ mod collaboration_modes;
 mod color;
 pub(crate) mod custom_terminal;
 pub use custom_terminal::Terminal;
+mod auto_review_denials;
 mod cwd_prompt;
 mod debug_config;
 mod diff_render;

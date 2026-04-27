@@ -552,7 +552,9 @@ async fn shell_enforces_glob_deny_read_policy() -> Result<()> {
     let mut builder = test_codex()
         .with_model("gpt-5.4")
         .with_config(move |config| {
-            config.permissions.sandbox_policy = Constrained::allow_any(read_only_policy_for_config);
+            config
+                .set_legacy_sandbox_policy(read_only_policy_for_config)
+                .expect("set sandbox policy");
             let mut file_system_sandbox_policy = FileSystemSandboxPolicy::default();
             file_system_sandbox_policy
                 .entries
@@ -789,9 +791,7 @@ async fn shell_timeout_handles_background_grandchild_stdout() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
         config
-            .permissions
-            .sandbox_policy
-            .set(SandboxPolicy::DangerFullAccess)
+            .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess)
             .expect("set sandbox policy");
     });
     let test = builder.build(&server).await?;
@@ -885,9 +885,7 @@ async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|cfg| {
-        cfg.permissions
-            .sandbox_policy
-            .set(SandboxPolicy::DangerFullAccess)
+        cfg.set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess)
             .expect("set sandbox policy");
     });
     let test = builder.build(&server).await?;

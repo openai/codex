@@ -1,13 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
-fn set_legacy_sandbox_policy(chat: &mut ChatWidget, sandbox_policy: SandboxPolicy) {
-    chat.config
-        .permissions
-        .set_legacy_sandbox_policy(sandbox_policy, chat.config.cwd.as_path())
-        .expect("set sandbox policy");
-}
-
 #[tokio::test]
 async fn approvals_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -354,7 +347,9 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
         .approval_policy
         .set(AskForApproval::Never)
         .expect("set approval policy");
-    set_legacy_sandbox_policy(&mut chat, SandboxPolicy::DangerFullAccess);
+    chat.config
+        .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess)
+        .expect("set sandbox policy");
 
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, /*width*/ 120);
@@ -393,7 +388,9 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("set approval policy");
-    set_legacy_sandbox_policy(&mut chat, SandboxPolicy::new_workspace_write_policy());
+    chat.config
+        .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
+        .expect("set sandbox policy");
 
     chat.open_permissions_popup();
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -448,7 +445,9 @@ async fn permissions_selection_hides_auto_review_when_feature_disabled_even_if_a
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("set approval policy");
-    set_legacy_sandbox_policy(&mut chat, SandboxPolicy::new_workspace_write_policy());
+    chat.config
+        .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
+        .expect("set sandbox policy");
 
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, /*width*/ 120);
@@ -573,7 +572,9 @@ async fn permissions_selection_can_disable_auto_review() {
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("set approval policy");
-    set_legacy_sandbox_policy(&mut chat, SandboxPolicy::new_workspace_write_policy());
+    chat.config
+        .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
+        .expect("set sandbox policy");
 
     chat.open_permissions_popup();
     chat.handle_key_event(KeyEvent::from(KeyCode::Up));
@@ -610,7 +611,9 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("set approval policy");
-    set_legacy_sandbox_policy(&mut chat, SandboxPolicy::new_workspace_write_policy());
+    chat.config
+        .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
+        .expect("set sandbox policy");
     chat.set_approvals_reviewer(ApprovalsReviewer::User);
 
     chat.open_permissions_popup();
