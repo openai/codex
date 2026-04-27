@@ -47,6 +47,7 @@ use self::realtime::PendingSteerCompareKey;
 use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_command::AppCommand;
 use crate::app_event::RealtimeAudioDeviceKind;
+use crate::app_server_approval_conversions::file_update_changes_to_core;
 use crate::app_server_approval_conversions::network_approval_context_to_core;
 use crate::app_server_session::ThreadSessionState;
 #[cfg(not(target_os = "linux"))]
@@ -1772,36 +1773,6 @@ fn patch_approval_request_from_params(
         reason: params.reason,
         grant_root: params.grant_root,
     }
-}
-
-fn app_server_patch_changes_to_core(
-    changes: Vec<codex_app_server_protocol::FileUpdateChange>,
-) -> HashMap<PathBuf, codex_protocol::protocol::FileChange> {
-    changes
-        .into_iter()
-        .map(|change| {
-            let path = PathBuf::from(change.path);
-            let file_change = match change.kind {
-                codex_app_server_protocol::PatchChangeKind::Add => {
-                    codex_protocol::protocol::FileChange::Add {
-                        content: change.diff,
-                    }
-                }
-                codex_app_server_protocol::PatchChangeKind::Delete => {
-                    codex_protocol::protocol::FileChange::Delete {
-                        content: change.diff,
-                    }
-                }
-                codex_app_server_protocol::PatchChangeKind::Update { move_path } => {
-                    codex_protocol::protocol::FileChange::Update {
-                        unified_diff: change.diff,
-                        move_path,
-                    }
-                }
-            };
-            (path, file_change)
-        })
-        .collect()
 }
 
 fn app_server_collab_thread_id_to_core(thread_id: &str) -> Option<ThreadId> {
@@ -6151,9 +6122,26 @@ impl ChatWidget {
         }
     }
 
+    fn submit_shell_command_with_history(
+        &mut self,
+        command: &str,
+        history_text: &str,
+    ) -> QueueDrain {
+        let drain = self.submit_shell_command(command);
+        if drain == QueueDrain::Stop {
+            self.submit_op(Op::AddToHistory {
+                text: history_text.to_string(),
+            });
+        }
+        drain
+    }
+
     fn submit_queued_shell_prompt(&mut self, user_message: UserMessage) -> QueueDrain {
         match user_message.text.strip_prefix('!') {
-            Some(command) => self.submit_shell_command(command),
+            Some(command) => {
+                let history_text = user_message.text.clone();
+                self.submit_shell_command_with_history(command, &history_text)
+            }
             None => {
                 self.submit_user_message(user_message);
                 QueueDrain::Stop
@@ -6249,7 +6237,7 @@ impl ChatWidget {
         if shell_escape_policy == ShellEscapePolicy::Allow
             && let Some(stripped) = text.strip_prefix('!')
         {
-            let app_command = match self.submit_shell_command(stripped) {
+            let app_command = match self.submit_shell_command_with_history(stripped, &text) {
                 QueueDrain::Continue => None,
                 QueueDrain::Stop => Some(AppCommand::run_user_shell_command(
                     stripped.trim().to_string(),
@@ -6780,7 +6768,7 @@ impl ChatWidget {
                             status,
                             codex_app_server_protocol::PatchApplyStatus::Failed
                         ),
-                        changes: app_server_patch_changes_to_core(changes),
+                        changes: file_update_changes_to_core(changes),
                         status: match status {
                             codex_app_server_protocol::PatchApplyStatus::Completed => {
                                 codex_protocol::protocol::PatchApplyStatus::Completed
@@ -7339,7 +7327,7 @@ impl ChatWidget {
                     call_id: id,
                     turn_id: notification.turn_id,
                     auto_approved: false,
-                    changes: app_server_patch_changes_to_core(changes),
+                    changes: file_update_changes_to_core(changes),
                 });
             }
             ThreadItem::McpToolCall {

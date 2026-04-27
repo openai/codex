@@ -194,6 +194,17 @@ impl App {
         store.session.as_ref().map(|session| session.cwd.clone())
     }
 
+    async fn thread_file_change_changes(
+        &self,
+        thread_id: ThreadId,
+        turn_id: &str,
+        item_id: &str,
+    ) -> Option<Vec<codex_app_server_protocol::FileUpdateChange>> {
+        let channel = self.thread_event_channels.get(&thread_id)?;
+        let store = channel.store.lock().await;
+        store.file_change_changes(turn_id, item_id)
+    }
+
     pub(super) async fn interactive_request_for_thread_request(
         &self,
         thread_id: ThreadId,
@@ -264,7 +275,11 @@ impl App {
                         .thread_cwd(thread_id)
                         .await
                         .unwrap_or_else(|| self.config.cwd.clone()),
-                    changes: HashMap::new(),
+                    changes: self
+                        .thread_file_change_changes(thread_id, &params.turn_id, &params.item_id)
+                        .await
+                        .map(crate::app_server_approval_conversions::file_update_changes_to_core)
+                        .unwrap_or_default(),
                 }),
             ),
             ServerRequest::McpServerElicitationRequest { request_id, params } => {
@@ -311,6 +326,7 @@ impl App {
     pub(super) fn push_thread_interactive_request(&mut self, request: ThreadInteractiveRequest) {
         match request {
             ThreadInteractiveRequest::Approval(request) => {
+                self.render_inactive_patch_preview(&request);
                 self.chat_widget.push_approval_request(request);
             }
             ThreadInteractiveRequest::McpServerElicitation(request) => {
@@ -318,6 +334,23 @@ impl App {
                     .push_mcp_server_elicitation_request(request);
             }
         }
+    }
+
+    fn render_inactive_patch_preview(&mut self, request: &ApprovalRequest) {
+        let ApprovalRequest::ApplyPatch {
+            thread_label,
+            cwd,
+            changes,
+            ..
+        } = request
+        else {
+            return;
+        };
+        if thread_label.is_none() || changes.is_empty() {
+            return;
+        }
+        self.chat_widget
+            .add_to_history(history_cell::new_patch_event(changes.clone(), cwd));
     }
 
     pub(super) async fn pending_inactive_thread_requests(&self) -> Vec<(ThreadId, ServerRequest)> {
