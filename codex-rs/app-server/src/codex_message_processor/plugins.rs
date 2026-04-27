@@ -1,4 +1,6 @@
 use super::*;
+use crate::error_code::internal_error;
+use crate::error_code::invalid_request;
 use codex_app_server_protocol::PluginInstallPolicy;
 
 impl CodexMessageProcessor {
@@ -7,46 +9,33 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: PluginListParams,
     ) {
+        let result = self.plugin_list_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn plugin_list_response(
+        &self,
+        params: PluginListParams,
+    ) -> Result<PluginListResponse, JSONRPCErrorError> {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginListParams { cwds } = params;
         let roots = cwds.unwrap_or_default();
 
-        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => config,
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-                return;
-            }
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let empty_response = || PluginListResponse {
+            marketplaces: Vec::new(),
+            marketplace_load_errors: Vec::new(),
+            featured_plugin_ids: Vec::new(),
         };
         if !config.features.enabled(Feature::Plugins) {
-            self.outgoing
-                .send_response(
-                    request_id,
-                    PluginListResponse {
-                        marketplaces: Vec::new(),
-                        marketplace_load_errors: Vec::new(),
-                        featured_plugin_ids: Vec::new(),
-                    },
-                )
-                .await;
-            return;
+            return Ok(empty_response());
         }
         let auth = self.auth_manager.auth().await;
         if !self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await
         {
-            self.outgoing
-                .send_response(
-                    request_id,
-                    PluginListResponse {
-                        marketplaces: Vec::new(),
-                        marketplace_load_errors: Vec::new(),
-                        featured_plugin_ids: Vec::new(),
-                    },
-                )
-                .await;
-            return;
+            return Ok(empty_response());
         }
         plugins_manager.maybe_start_non_curated_plugin_cache_refresh(&roots);
 
@@ -100,18 +89,11 @@ impl CodexMessageProcessor {
         .await
         {
             Ok(Ok(outcome)) => outcome,
-            Ok(Err(err)) => {
-                self.send_marketplace_error(request_id, err, "list marketplace plugins")
-                    .await;
-                return;
-            }
+            Ok(Err(err)) => return Err(Self::marketplace_error(err, "list marketplace plugins")),
             Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to list marketplace plugins: {err}"),
-                )
-                .await;
-                return;
+                return Err(internal_error(format!(
+                    "failed to list marketplace plugins: {err}"
+                )));
             }
         };
 
@@ -174,16 +156,11 @@ impl CodexMessageProcessor {
             Vec::new()
         };
 
-        self.outgoing
-            .send_response(
-                request_id,
-                PluginListResponse {
-                    marketplaces: data,
-                    marketplace_load_errors,
-                    featured_plugin_ids,
-                },
-            )
-            .await;
+        Ok(PluginListResponse {
+            marketplaces: data,
+            marketplace_load_errors,
+            featured_plugin_ids,
+        })
     }
 
     pub(super) async fn plugin_read(
@@ -191,6 +168,14 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: PluginReadParams,
     ) {
+        let result = self.plugin_read_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn plugin_read_response(
+        &self,
+        params: PluginReadParams,
+    ) -> Result<PluginReadResponse, JSONRPCErrorError> {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginReadParams {
             marketplace_path,
@@ -201,30 +186,16 @@ impl CodexMessageProcessor {
             (Some(marketplace_path), None) => Ok(marketplace_path),
             (None, Some(remote_marketplace_name)) => Err(remote_marketplace_name),
             (Some(_), Some(_)) | (None, None) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: "plugin/read requires exactly one of marketplacePath or remoteMarketplaceName".to_string(),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
+                return Err(invalid_request(
+                    "plugin/read requires exactly one of marketplacePath or remoteMarketplaceName",
+                ));
             }
         };
         let config_cwd = read_source.as_ref().ok().and_then(|marketplace_path| {
             marketplace_path.as_path().parent().map(Path::to_path_buf)
         });
 
-        let config = match self.load_latest_config(config_cwd).await {
-            Ok(config) => config,
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-                return;
-            }
-        };
+        let config = self.load_latest_config(config_cwd).await?;
 
         let plugin = match read_source {
             Ok(marketplace_path) => {
@@ -232,17 +203,10 @@ impl CodexMessageProcessor {
                     plugin_name,
                     marketplace_path,
                 };
-                let outcome = match plugins_manager
+                let outcome = plugins_manager
                     .read_plugin_for_config(&config, &request)
                     .await
-                {
-                    Ok(outcome) => outcome,
-                    Err(err) => {
-                        self.send_marketplace_error(request_id, err, "read plugin details")
-                            .await;
-                        return;
-                    }
-                };
+                    .map_err(|err| Self::marketplace_error(err, "read plugin details"))?;
                 let environment_manager = self.thread_manager.environment_manager();
                 let app_summaries = plugin_app_helpers::load_plugin_app_summaries(
                     &config,
@@ -287,19 +251,9 @@ impl CodexMessageProcessor {
                 if !config.features.enabled(Feature::Plugins)
                     || !config.features.enabled(Feature::RemotePlugin)
                 {
-                    self.outgoing
-                        .send_error(
-                            request_id,
-                            JSONRPCErrorError {
-                                code: INVALID_REQUEST_ERROR_CODE,
-                                message: format!(
-                                    "remote plugin read is not enabled for marketplace {remote_marketplace_name}"
-                                ),
-                                data: None,
-                            },
-                        )
-                        .await;
-                    return;
+                    return Err(invalid_request(format!(
+                        "remote plugin read is not enabled for marketplace {remote_marketplace_name}"
+                    )));
                 }
                 let auth = self.auth_manager.auth().await;
                 let remote_plugin_service_config = RemotePluginServiceConfig {
@@ -310,36 +264,20 @@ impl CodexMessageProcessor {
                         .chars()
                         .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '~')
                 {
-                    self.send_invalid_request_error(
-                        request_id,
-                        "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed"
-                            .to_string(),
-                    )
-                    .await;
-                    return;
+                    return Err(invalid_request(
+                        "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed",
+                    ));
                 }
-                let remote_detail = match codex_core_plugins::remote::fetch_remote_plugin_detail(
+                let remote_detail = codex_core_plugins::remote::fetch_remote_plugin_detail(
                     &remote_plugin_service_config,
                     auth.as_ref(),
                     &remote_marketplace_name,
                     &plugin_name,
                 )
                 .await
-                {
-                    Ok(remote_detail) => remote_detail,
-                    Err(err) => {
-                        self.outgoing
-                            .send_error(
-                                request_id,
-                                remote_plugin_catalog_error_to_jsonrpc(
-                                    err,
-                                    "read remote plugin details",
-                                ),
-                            )
-                            .await;
-                        return;
-                    }
-                };
+                .map_err(|err| {
+                    remote_plugin_catalog_error_to_jsonrpc(err, "read remote plugin details")
+                })?;
                 let plugin_apps = remote_detail
                     .app_ids
                     .iter()
@@ -357,9 +295,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        self.outgoing
-            .send_response(request_id, PluginReadResponse { plugin })
-            .await;
+        Ok(PluginReadResponse { plugin })
     }
 
     pub(super) async fn plugin_install(
@@ -367,6 +303,14 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: PluginInstallParams,
     ) {
+        let result = self.plugin_install_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn plugin_install_response(
+        &self,
+        params: PluginInstallParams,
+    ) -> Result<PluginInstallResponse, JSONRPCErrorError> {
         let PluginInstallParams {
             marketplace_path,
             remote_marketplace_name,
@@ -375,44 +319,27 @@ impl CodexMessageProcessor {
         let marketplace_path = match (marketplace_path, remote_marketplace_name) {
             (Some(marketplace_path), None) => marketplace_path,
             (None, Some(remote_marketplace_name)) => {
-                self.remote_plugin_install(request_id, remote_marketplace_name, plugin_name)
+                return self
+                    .remote_plugin_install_response(remote_marketplace_name, plugin_name)
                     .await;
-                return;
             }
             (Some(_), Some(_)) | (None, None) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: "plugin/install requires exactly one of marketplacePath or remoteMarketplaceName".to_string(),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
+                return Err(invalid_request(
+                    "plugin/install requires exactly one of marketplacePath or remoteMarketplaceName",
+                ));
             }
         };
         let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
-        let config = match self.load_latest_config(config_cwd.clone()).await {
-            Ok(config) => config,
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-                return;
-            }
-        };
+        let config = self.load_latest_config(config_cwd.clone()).await?;
         let auth = self.auth_manager.auth().await;
 
         if !self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await
         {
-            self.send_invalid_request_error(
-                request_id,
-                "Codex plugins are disabled for this workspace".to_string(),
-            )
-            .await;
-            return;
+            return Err(invalid_request(
+                "Codex plugins are disabled for this workspace",
+            ));
         }
 
         let plugins_manager = self.thread_manager.plugins_manager();
@@ -421,197 +348,103 @@ impl CodexMessageProcessor {
             marketplace_path,
         };
 
-        let install_result = plugins_manager.install_plugin(request).await;
-
-        match install_result {
-            Ok(result) => {
-                let config = match self.load_latest_config(config_cwd).await {
-                    Ok(config) => config,
-                    Err(err) => {
-                        warn!(
-                            "failed to reload config after plugin install, using current config: {err:?}"
-                        );
-                        config
-                    }
-                };
-
-                self.clear_plugin_related_caches();
-
-                let plugin_mcp_servers =
-                    load_plugin_mcp_servers(result.installed_path.as_path()).await;
-
-                if !plugin_mcp_servers.is_empty() {
-                    if let Err(err) = self.queue_mcp_server_refresh_for_config(&config).await {
-                        warn!(
-                            plugin = result.plugin_id.as_key(),
-                            "failed to queue MCP refresh after plugin install: {err:?}"
-                        );
-                    }
-                    self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
-                        .await;
-                }
-
-                let plugin_apps = load_plugin_apps(result.installed_path.as_path()).await;
-                let auth = self.auth_manager.auth().await;
-                let apps_needing_auth = self
-                    .plugin_apps_needing_auth_for_install(
-                        &config,
-                        auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth),
-                        &result.plugin_id.as_key(),
-                        &plugin_apps,
-                    )
-                    .await;
-
-                self.outgoing
-                    .send_response(
-                        request_id,
-                        PluginInstallResponse {
-                            auth_policy: result.auth_policy.into(),
-                            apps_needing_auth,
-                        },
-                    )
-                    .await;
-            }
-            Err(err) => {
-                if err.is_invalid_request() {
-                    self.send_invalid_request_error(request_id, err.to_string())
-                        .await;
-                    return;
-                }
-
-                match err {
-                    CorePluginInstallError::Marketplace(err) => {
-                        self.send_marketplace_error(request_id, err, "install plugin")
-                            .await;
-                    }
-                    CorePluginInstallError::Config(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to persist installed plugin config: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginInstallError::Remote(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to enable remote plugin: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginInstallError::Join(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to install plugin: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginInstallError::Store(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to install plugin: {err}"),
-                        )
-                        .await;
-                    }
-                }
-            }
-        }
-    }
-
-    async fn remote_plugin_install(
-        &self,
-        request_id: ConnectionRequestId,
-        remote_marketplace_name: String,
-        plugin_name: String,
-    ) {
-        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
+        let result = plugins_manager
+            .install_plugin(request)
+            .await
+            .map_err(Self::plugin_install_error)?;
+        let config = match self.load_latest_config(config_cwd).await {
             Ok(config) => config,
             Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-                return;
+                warn!(
+                    "failed to reload config after plugin install, using current config: {err:?}"
+                );
+                config
             }
         };
+
+        self.clear_plugin_related_caches();
+
+        let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
+
+        if !plugin_mcp_servers.is_empty() {
+            if let Err(err) = self.queue_mcp_server_refresh_for_config(&config).await {
+                warn!(
+                    plugin = result.plugin_id.as_key(),
+                    "failed to queue MCP refresh after plugin install: {err:?}"
+                );
+            }
+            self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
+                .await;
+        }
+
+        let plugin_apps = load_plugin_apps(result.installed_path.as_path()).await;
+        let auth = self.auth_manager.auth().await;
+        let apps_needing_auth = self
+            .plugin_apps_needing_auth_for_install(
+                &config,
+                auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth),
+                &result.plugin_id.as_key(),
+                &plugin_apps,
+            )
+            .await;
+
+        Ok(PluginInstallResponse {
+            auth_policy: result.auth_policy.into(),
+            apps_needing_auth,
+        })
+    }
+
+    async fn remote_plugin_install_response(
+        &self,
+        remote_marketplace_name: String,
+        plugin_name: String,
+    ) -> Result<PluginInstallResponse, JSONRPCErrorError> {
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         if !config.features.enabled(Feature::Plugins)
             || !config.features.enabled(Feature::RemotePlugin)
         {
-            self.outgoing
-                .send_error(
-                    request_id,
-                    JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!(
-                            "remote plugin install is not enabled for marketplace {remote_marketplace_name}"
-                        ),
-                        data: None,
-                    },
-                )
-                .await;
-            return;
+            return Err(invalid_request(format!(
+                "remote plugin install is not enabled for marketplace {remote_marketplace_name}"
+            )));
         }
         if plugin_name.is_empty()
             || !plugin_name
                 .chars()
                 .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '~')
         {
-            self.send_invalid_request_error(
-                request_id,
-                "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed"
-                    .to_string(),
-            )
-            .await;
-            return;
+            return Err(invalid_request(
+                "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed",
+            ));
         }
 
         let auth = self.auth_manager.auth().await;
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
-        let remote_detail = match codex_core_plugins::remote::fetch_remote_plugin_detail(
+        let remote_detail = codex_core_plugins::remote::fetch_remote_plugin_detail(
             &remote_plugin_service_config,
             auth.as_ref(),
             &remote_marketplace_name,
             &plugin_name,
         )
         .await
-        {
-            Ok(remote_detail) => remote_detail,
-            Err(err) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        remote_plugin_catalog_error_to_jsonrpc(
-                            err,
-                            "read remote plugin details before install",
-                        ),
-                    )
-                    .await;
-                return;
-            }
-        };
+        .map_err(|err| {
+            remote_plugin_catalog_error_to_jsonrpc(err, "read remote plugin details before install")
+        })?;
         if remote_detail.summary.install_policy == PluginInstallPolicy::NotAvailable {
-            self.send_invalid_request_error(
-                request_id,
-                format!("remote plugin {plugin_name} is not available for install"),
-            )
-            .await;
-            return;
+            return Err(invalid_request(format!(
+                "remote plugin {plugin_name} is not available for install"
+            )));
         }
 
-        if let Err(err) = codex_core_plugins::remote::install_remote_plugin(
+        codex_core_plugins::remote::install_remote_plugin(
             &remote_plugin_service_config,
             auth.as_ref(),
             &remote_marketplace_name,
             &plugin_name,
         )
         .await
-        {
-            self.outgoing
-                .send_error(
-                    request_id,
-                    remote_plugin_catalog_error_to_jsonrpc(err, "install remote plugin"),
-                )
-                .await;
-            return;
-        }
+        .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "install remote plugin"))?;
 
         self.clear_plugin_related_caches();
 
@@ -629,15 +462,10 @@ impl CodexMessageProcessor {
             )
             .await;
 
-        self.outgoing
-            .send_response(
-                request_id,
-                PluginInstallResponse {
-                    auth_policy: remote_detail.summary.auth_policy,
-                    apps_needing_auth,
-                },
-            )
-            .await;
+        Ok(PluginInstallResponse {
+            auth_policy: remote_detail.summary.auth_policy,
+            apps_needing_auth,
+        })
     }
 
     async fn plugin_apps_needing_auth_for_install(
@@ -709,59 +537,82 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: PluginUninstallParams,
     ) {
+        let result = self.plugin_uninstall_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn plugin_uninstall_response(
+        &self,
+        params: PluginUninstallParams,
+    ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
         let PluginUninstallParams { plugin_id } = params;
         let plugins_manager = self.thread_manager.plugins_manager();
 
-        let uninstall_result = plugins_manager.uninstall_plugin(plugin_id).await;
+        plugins_manager
+            .uninstall_plugin(plugin_id)
+            .await
+            .map_err(Self::plugin_uninstall_error)?;
+        self.clear_plugin_related_caches();
+        Ok(PluginUninstallResponse {})
+    }
 
-        match uninstall_result {
-            Ok(()) => {
-                self.clear_plugin_related_caches();
-                self.outgoing
-                    .send_response(request_id, PluginUninstallResponse {})
-                    .await;
-            }
-            Err(err) => {
-                if err.is_invalid_request() {
-                    self.send_invalid_request_error(request_id, err.to_string())
-                        .await;
-                    return;
-                }
+    fn plugin_install_error(err: CorePluginInstallError) -> JSONRPCErrorError {
+        if err.is_invalid_request() {
+            return invalid_request(err.to_string());
+        }
 
-                match err {
-                    CorePluginUninstallError::Config(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to clear plugin config: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginUninstallError::Remote(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to uninstall remote plugin: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginUninstallError::Join(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to uninstall plugin: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginUninstallError::Store(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to uninstall plugin: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginUninstallError::InvalidPluginId(_) => {
-                        unreachable!("invalid plugin ids are handled above");
-                    }
-                }
+        match err {
+            CorePluginInstallError::Marketplace(err) => {
+                Self::marketplace_error(err, "install plugin")
             }
+            CorePluginInstallError::Config(err) => {
+                internal_error(format!("failed to persist installed plugin config: {err}"))
+            }
+            CorePluginInstallError::Remote(err) => {
+                internal_error(format!("failed to enable remote plugin: {err}"))
+            }
+            CorePluginInstallError::Join(err) => {
+                internal_error(format!("failed to install plugin: {err}"))
+            }
+            CorePluginInstallError::Store(err) => {
+                internal_error(format!("failed to install plugin: {err}"))
+            }
+        }
+    }
+
+    fn plugin_uninstall_error(err: CorePluginUninstallError) -> JSONRPCErrorError {
+        if err.is_invalid_request() {
+            return invalid_request(err.to_string());
+        }
+
+        match err {
+            CorePluginUninstallError::Config(err) => {
+                internal_error(format!("failed to clear plugin config: {err}"))
+            }
+            CorePluginUninstallError::Remote(err) => {
+                internal_error(format!("failed to uninstall remote plugin: {err}"))
+            }
+            CorePluginUninstallError::Join(err) => {
+                internal_error(format!("failed to uninstall plugin: {err}"))
+            }
+            CorePluginUninstallError::Store(err) => {
+                internal_error(format!("failed to uninstall plugin: {err}"))
+            }
+            CorePluginUninstallError::InvalidPluginId(_) => {
+                unreachable!("invalid plugin ids are handled above");
+            }
+        }
+    }
+
+    fn marketplace_error(err: MarketplaceError, action: &str) -> JSONRPCErrorError {
+        match err {
+            MarketplaceError::MarketplaceNotFound { .. }
+            | MarketplaceError::InvalidMarketplaceFile { .. }
+            | MarketplaceError::PluginNotFound { .. }
+            | MarketplaceError::PluginNotAvailable { .. }
+            | MarketplaceError::PluginsDisabled
+            | MarketplaceError::InvalidPlugin(_) => invalid_request(err.to_string()),
+            MarketplaceError::Io { .. } => internal_error(format!("failed to {action}: {err}")),
         }
     }
 }

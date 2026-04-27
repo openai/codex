@@ -1038,6 +1038,10 @@ async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
         Ok(Op::RunUserShellCommand { command }) => assert_eq!(command, "echo hi"),
         other => panic!("expected RunUserShellCommand op, got {other:?}"),
     }
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::AddToHistory { text }) if text == "!echo hi"
+    );
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 
@@ -1317,10 +1321,9 @@ async fn approval_modal_patch_snapshot() -> anyhow::Result<()> {
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw patch approval modal");
-    assert_chatwidget_snapshot!(
-        "approval_modal_patch",
-        terminal.backend().vt100().screen().contents()
-    );
+    let contents = terminal.backend().vt100().screen().contents();
+    assert!(!contents.contains("$ apply_patch"));
+    assert_chatwidget_snapshot!("approval_modal_patch", contents);
 
     Ok(())
 }
@@ -1465,27 +1468,10 @@ async fn apply_patch_events_emit_history_cells() {
         id: "s1".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ev),
     });
-    let cells = drain_insert_history(&mut rx);
     assert!(
-        cells.is_empty(),
+        drain_insert_history(&mut rx).is_empty(),
         "expected approval request to surface via modal without emitting history cells"
     );
-
-    let area = Rect::new(0, 0, 80, chat.desired_height(/*width*/ 80));
-    let mut buf = ratatui::buffer::Buffer::empty(area);
-    chat.render(area, &mut buf);
-    let mut saw_summary = false;
-    for y in 0..area.height {
-        let mut row = String::new();
-        for x in 0..area.width {
-            row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
-        }
-        if row.contains("foo.txt (+1 -0)") {
-            saw_summary = true;
-            break;
-        }
-    }
-    assert!(saw_summary, "expected approval modal to show diff summary");
 
     // 2) Begin apply -> per-file apply block cell (no global header)
     let mut changes2 = HashMap::new();
@@ -1816,7 +1802,7 @@ async fn apply_patch_untrusted_shows_approval_modal() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn apply_patch_request_shows_diff_summary() -> anyhow::Result<()> {
+async fn apply_patch_request_omits_diff_summary_from_modal() -> anyhow::Result<()> {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     // Ensure we are in OnRequest so an approval is surfaced
@@ -1845,43 +1831,24 @@ async fn apply_patch_request_shows_diff_summary() -> anyhow::Result<()> {
         }),
     });
 
-    // No history entries yet; the modal should contain the diff summary
-    let cells = drain_insert_history(&mut rx);
     assert!(
-        cells.is_empty(),
+        drain_insert_history(&mut rx).is_empty(),
         "expected approval request to render via modal instead of history"
     );
 
     let area = Rect::new(0, 0, 80, chat.desired_height(/*width*/ 80));
     let mut buf = ratatui::buffer::Buffer::empty(area);
     chat.render(area, &mut buf);
-
-    let mut saw_header = false;
-    let mut saw_line1 = false;
-    let mut saw_line2 = false;
+    let mut contents = String::new();
     for y in 0..area.height {
-        let mut row = String::new();
         for x in 0..area.width {
-            row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            contents.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
         }
-        if row.contains("README.md (+2 -0)") {
-            saw_header = true;
-        }
-        if row.contains("+line one") {
-            saw_line1 = true;
-        }
-        if row.contains("+line two") {
-            saw_line2 = true;
-        }
-        if saw_header && saw_line1 && saw_line2 {
-            break;
-        }
+        contents.push('\n');
     }
-    assert!(saw_header, "expected modal to show diff header with totals");
-    assert!(
-        saw_line1 && saw_line2,
-        "expected modal to show per-line diff summary"
-    );
+    assert!(!contents.contains("README.md (+2 -0)"));
+    assert!(!contents.contains("+line one"));
+    assert!(!contents.contains("+line two"));
 
     Ok(())
 }
