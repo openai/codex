@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_login::CodexAuth;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -25,7 +26,9 @@ use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses;
+use core_test_support::responses::assert_tools_payload_does_not_defer;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::namespace_child_tool_names;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
@@ -353,6 +356,100 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
                 ("Remote Post-Compaction History Layout", follow_up_request),
             ]
         )
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_filters_deferred_dynamic_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let mut test = builder.build(&server).await?;
+    let hidden_tool = "hidden_dynamic_tool";
+    let visible_tool = "visible_dynamic_tool";
+    let input_schema = json!({
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false,
+    });
+    let dynamic_tools = vec![
+        DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
+            name: hidden_tool.to_string(),
+            description: "Hidden until discovered.".to_string(),
+            input_schema: input_schema.clone(),
+            defer_loading: true,
+        },
+        DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
+            name: visible_tool.to_string(),
+            description: "Visible immediately.".to_string(),
+            input_schema,
+            defer_loading: false,
+        },
+    ];
+    let new_thread = test
+        .thread_manager
+        .start_thread_with_tools(
+            test.config.clone(),
+            dynamic_tools,
+            /*persist_extended_history*/ false,
+        )
+        .await?;
+    test.codex = new_thread.thread;
+    test.session_configured = new_thread.session_configured;
+    let codex = test.codex.clone();
+
+    let responses_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let compact_mock = responses::mount_compact_json_once(
+        &server,
+        serde_json::json!({
+            "output": compacted_summary_only_output("compact summary"),
+        }),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+
+    let first_response_body = responses_mock.single_request().body_json();
+    let compact_body = compact_mock.single_request().body_json();
+    assert_eq!(
+        compact_body["tools"], first_response_body["tools"],
+        "compact requests should send the same model-visible tools payload as /v1/responses"
+    );
+    assert_tools_payload_does_not_defer(&first_response_body);
+    assert_tools_payload_does_not_defer(&compact_body);
+    assert_eq!(
+        namespace_child_tool_names(&first_response_body, "codex_app"),
+        vec![visible_tool.to_string()]
+    );
+    assert_eq!(
+        namespace_child_tool_names(&compact_body, "codex_app"),
+        vec![visible_tool.to_string()]
     );
 
     Ok(())

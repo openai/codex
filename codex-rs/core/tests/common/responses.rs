@@ -344,6 +344,53 @@ pub fn namespace_child_tool<'a>(
     None
 }
 
+pub fn assert_tools_payload_does_not_defer(body: &Value) {
+    if let Some(tools) = body.get("tools") {
+        assert!(
+            !contains_defer_loading(tools),
+            "model-visible tools should not include deferred declarations: {tools}"
+        );
+    }
+}
+
+pub fn namespace_child_tool_names(body: &Value, namespace: &str) -> Vec<String> {
+    body.get("tools")
+        .and_then(Value::as_array)
+        .and_then(|tools| {
+            tools.iter().find_map(|tool| {
+                if tool.get("type").and_then(Value::as_str) == Some("namespace")
+                    && tool.get("name").and_then(Value::as_str) == Some(namespace)
+                {
+                    tool.get("tools").and_then(Value::as_array).map(|children| {
+                        children
+                            .iter()
+                            .filter_map(|child| {
+                                child
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string)
+                            })
+                            .collect()
+                    })
+                } else {
+                    None
+                }
+            })
+        })
+        .unwrap_or_default()
+}
+
+fn contains_defer_loading(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            map.get("defer_loading").and_then(Value::as_bool) == Some(true)
+                || map.values().any(contains_defer_loading)
+        }
+        Value::Array(values) => values.iter().any(contains_defer_loading),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
