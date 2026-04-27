@@ -1206,11 +1206,9 @@ fn openai_file_input_params_for_server(
     server: &str,
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Option<Vec<String>> {
-    if server != CODEX_APPS_MCP_SERVER_NAME {
-        return None;
-    }
-
-    Some(declared_openai_file_input_param_names(meta)).filter(|params| !params.is_empty())
+    (server == CODEX_APPS_MCP_SERVER_NAME)
+        .then_some(declared_openai_file_input_param_names(meta))
+        .filter(|params| !params.is_empty())
 }
 
 fn get_mcp_app_resource_uri(
