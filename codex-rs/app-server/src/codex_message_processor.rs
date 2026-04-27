@@ -5075,63 +5075,51 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ModelListParams,
     ) {
-        let ModelListParams {
-            limit,
-            cursor,
-            include_hidden,
-        } = params;
-        let models = supported_models(thread_manager, include_hidden.unwrap_or(false)).await;
-        let total = models.len();
+        let result = async {
+            let ModelListParams {
+                limit,
+                cursor,
+                include_hidden,
+            } = params;
+            let models = supported_models(thread_manager, include_hidden.unwrap_or(false)).await;
+            let total = models.len();
 
-        if total == 0 {
-            let response = ModelListResponse {
-                data: Vec::new(),
-                next_cursor: None,
+            if total == 0 {
+                return Ok(ModelListResponse {
+                    data: Vec::new(),
+                    next_cursor: None,
+                });
+            }
+
+            let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
+            let effective_limit = effective_limit.min(total);
+            let start = match cursor {
+                Some(cursor) => cursor
+                    .parse::<usize>()
+                    .map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))?,
+                None => 0,
             };
-            outgoing.send_response(request_id, response).await;
-            return;
-        }
 
-        let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
-        let effective_limit = effective_limit.min(total);
-        let start = match cursor {
-            Some(cursor) => match cursor.parse::<usize>() {
-                Ok(idx) => idx,
-                Err(_) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid cursor: {cursor}"),
-                        data: None,
-                    };
-                    outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            },
-            None => 0,
-        };
+            if start > total {
+                return Err(invalid_request(format!(
+                    "cursor {start} exceeds total models {total}"
+                )));
+            }
 
-        if start > total {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("cursor {start} exceeds total models {total}"),
-                data: None,
+            let end = start.saturating_add(effective_limit).min(total);
+            let items = models[start..end].to_vec();
+            let next_cursor = if end < total {
+                Some(end.to_string())
+            } else {
+                None
             };
-            outgoing.send_error(request_id, error).await;
-            return;
+            Ok::<_, JSONRPCErrorError>(ModelListResponse {
+                data: items,
+                next_cursor,
+            })
         }
-
-        let end = start.saturating_add(effective_limit).min(total);
-        let items = models[start..end].to_vec();
-        let next_cursor = if end < total {
-            Some(end.to_string())
-        } else {
-            None
-        };
-        let response = ModelListResponse {
-            data: items,
-            next_cursor,
-        };
-        outgoing.send_response(request_id, response).await;
+        .await;
+        outgoing.send_result(request_id, result).await;
     }
 
     async fn list_collaboration_modes(
@@ -5155,14 +5143,16 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ExperimentalFeatureListParams,
     ) {
+        let result = self.experimental_feature_list_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn experimental_feature_list_response(
+        &self,
+        params: ExperimentalFeatureListParams,
+    ) -> Result<ExperimentalFeatureListResponse, JSONRPCErrorError> {
         let ExperimentalFeatureListParams { cursor, limit } = params;
-        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => config,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let auth = self.auth_manager.auth().await;
         let workspace_codex_plugins_enabled = self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
@@ -5211,16 +5201,10 @@ impl CodexMessageProcessor {
 
         let total = data.len();
         if total == 0 {
-            self.outgoing
-                .send_response(
-                    request_id,
-                    ExperimentalFeatureListResponse {
-                        data: Vec::new(),
-                        next_cursor: None,
-                    },
-                )
-                .await;
-            return;
+            return Ok(ExperimentalFeatureListResponse {
+                data: Vec::new(),
+                next_cursor: None,
+            });
         }
 
         // Clamp to 1 so limit=0 cannot return a non-advancing page.
@@ -5229,25 +5213,15 @@ impl CodexMessageProcessor {
         let start = match cursor {
             Some(cursor) => match cursor.parse::<usize>() {
                 Ok(idx) => idx,
-                Err(_) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("invalid cursor: {cursor}"),
-                    )
-                    .await;
-                    return;
-                }
+                Err(_) => return Err(invalid_request(format!("invalid cursor: {cursor}"))),
             },
             None => 0,
         };
 
         if start > total {
-            self.send_invalid_request_error(
-                request_id,
-                format!("cursor {start} exceeds total feature flags {total}"),
-            )
-            .await;
-            return;
+            return Err(invalid_request(format!(
+                "cursor {start} exceeds total feature flags {total}"
+            )));
         }
 
         let end = start.saturating_add(effective_limit).min(total);
@@ -5258,12 +5232,7 @@ impl CodexMessageProcessor {
             None
         };
 
-        self.outgoing
-            .send_response(
-                request_id,
-                ExperimentalFeatureListResponse { data, next_cursor },
-            )
-            .await;
+        Ok(ExperimentalFeatureListResponse { data, next_cursor })
     }
 
     async fn mock_experimental_method(
@@ -5277,21 +5246,13 @@ impl CodexMessageProcessor {
     }
 
     async fn mcp_server_refresh(&self, request_id: ConnectionRequestId, _params: Option<()>) {
-        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => config,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
-        if let Err(error) = self.queue_mcp_server_refresh_for_config(&config).await {
-            self.outgoing.send_error(request_id, error).await;
-            return;
+        let result = async {
+            let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+            self.queue_mcp_server_refresh_for_config(&config).await?;
+            Ok::<_, JSONRPCErrorError>(McpServerRefreshResponse {})
         }
-
-        let response = McpServerRefreshResponse {};
-        self.outgoing.send_response(request_id, response).await;
+        .await;
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn queue_mcp_server_refresh_for_config(
@@ -5345,14 +5306,15 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: McpServerOauthLoginParams,
     ) {
-        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => config,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let result = self.mcp_server_oauth_login_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
 
+    async fn mcp_server_oauth_login_response(
+        &self,
+        params: McpServerOauthLoginParams,
+    ) -> Result<McpServerOauthLoginResponse, JSONRPCErrorError> {
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let McpServerOauthLoginParams {
             name,
             scopes,
@@ -5365,13 +5327,9 @@ impl CodexMessageProcessor {
             .configured_servers(&config)
             .await;
         let Some(server) = configured_servers.get(&name) else {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("No MCP server named '{name}' found."),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
+            return Err(invalid_request(format!(
+                "No MCP server named '{name}' found."
+            )));
         };
 
         let (url, http_headers, env_http_headers) = match &server.transport {
@@ -5382,14 +5340,9 @@ impl CodexMessageProcessor {
                 ..
             } => (url.clone(), http_headers.clone(), env_http_headers.clone()),
             _ => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: "OAuth login is only supported for streamable HTTP servers."
-                        .to_string(),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
+                return Err(invalid_request(
+                    "OAuth login is only supported for streamable HTTP servers.",
+                ));
             }
         };
 
@@ -5401,7 +5354,7 @@ impl CodexMessageProcessor {
         let resolved_scopes =
             resolve_oauth_scopes(scopes, server.scopes.clone(), discovered_scopes);
 
-        match perform_oauth_login_return_url(
+        let handle = perform_oauth_login_return_url(
             &name,
             &url,
             config.mcp_oauth_credentials_store_mode,
@@ -5414,40 +5367,28 @@ impl CodexMessageProcessor {
             config.mcp_oauth_callback_url.as_deref(),
         )
         .await
-        {
-            Ok(handle) => {
-                let authorization_url = handle.authorization_url().to_string();
-                let notification_name = name.clone();
-                let outgoing = Arc::clone(&self.outgoing);
+        .map_err(|err| internal_error(format!("failed to login to MCP server '{name}': {err}")))?;
+        let authorization_url = handle.authorization_url().to_string();
+        let notification_name = name.clone();
+        let outgoing = Arc::clone(&self.outgoing);
 
-                tokio::spawn(async move {
-                    let (success, error) = match handle.wait().await {
-                        Ok(()) => (true, None),
-                        Err(err) => (false, Some(err.to_string())),
-                    };
+        tokio::spawn(async move {
+            let (success, error) = match handle.wait().await {
+                Ok(()) => (true, None),
+                Err(err) => (false, Some(err.to_string())),
+            };
 
-                    let notification = ServerNotification::McpServerOauthLoginCompleted(
-                        McpServerOauthLoginCompletedNotification {
-                            name: notification_name,
-                            success,
-                            error,
-                        },
-                    );
-                    outgoing.send_server_notification(notification).await;
-                });
+            let notification = ServerNotification::McpServerOauthLoginCompleted(
+                McpServerOauthLoginCompletedNotification {
+                    name: notification_name,
+                    success,
+                    error,
+                },
+            );
+            outgoing.send_server_notification(notification).await;
+        });
 
-                let response = McpServerOauthLoginResponse { authorization_url };
-                self.outgoing.send_response(request_id, response).await;
-            }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to login to MCP server '{name}': {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-            }
-        }
+        Ok(McpServerOauthLoginResponse { authorization_url })
     }
 
     async fn list_mcp_server_status(
@@ -5505,6 +5446,26 @@ impl CodexMessageProcessor {
         auth: Option<CodexAuth>,
         runtime_environment: McpRuntimeEnvironment,
     ) {
+        let result = Self::list_mcp_server_status_response(
+            request_id.request_id.to_string(),
+            params,
+            config,
+            mcp_config,
+            auth,
+            runtime_environment,
+        )
+        .await;
+        outgoing.send_result(request_id, result).await;
+    }
+
+    async fn list_mcp_server_status_response(
+        request_id: String,
+        params: ListMcpServerStatusParams,
+        config: Config,
+        mcp_config: codex_mcp::McpConfig,
+        auth: Option<CodexAuth>,
+        runtime_environment: McpRuntimeEnvironment,
+    ) -> Result<ListMcpServerStatusResponse, JSONRPCErrorError> {
         let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
             McpServerStatusDetail::Full => McpSnapshotDetail::Full,
             McpServerStatusDetail::ToolsAndAuthOnly => McpSnapshotDetail::ToolsAndAuthOnly,
@@ -5513,7 +5474,7 @@ impl CodexMessageProcessor {
         let snapshot = collect_mcp_server_status_snapshot_with_detail(
             &mcp_config,
             auth.as_ref(),
-            request_id.request_id.to_string(),
+            request_id,
             runtime_environment,
             detail,
         )
@@ -5548,27 +5509,15 @@ impl CodexMessageProcessor {
         let start = match params.cursor {
             Some(cursor) => match cursor.parse::<usize>() {
                 Ok(idx) => idx,
-                Err(_) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid cursor: {cursor}"),
-                        data: None,
-                    };
-                    outgoing.send_error(request_id, error).await;
-                    return;
-                }
+                Err(_) => return Err(invalid_request(format!("invalid cursor: {cursor}"))),
             },
             None => 0,
         };
 
         if start > total {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("cursor {start} exceeds total MCP servers {total}"),
-                data: None,
-            };
-            outgoing.send_error(request_id, error).await;
-            return;
+            return Err(invalid_request(format!(
+                "cursor {start} exceeds total MCP servers {total}"
+            )));
         }
 
         let end = start.saturating_add(effective_limit).min(total);
@@ -5594,9 +5543,7 @@ impl CodexMessageProcessor {
             None
         };
 
-        let response = ListMcpServerStatusResponse { data, next_cursor };
-
-        outgoing.send_response(request_id, response).await;
+        Ok(ListMcpServerStatusResponse { data, next_cursor })
     }
 
     async fn read_mcp_resource(
@@ -5670,39 +5617,16 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         result: anyhow::Result<serde_json::Value>,
     ) {
-        match result {
-            Ok(result) => match serde_json::from_value::<McpResourceReadResponse>(result) {
-                Ok(response) => {
-                    outgoing.send_response(request_id, response).await;
-                }
-                Err(error) => {
-                    outgoing
-                        .send_error(
-                            request_id,
-                            JSONRPCErrorError {
-                                code: INTERNAL_ERROR_CODE,
-                                message: format!(
-                                    "failed to deserialize MCP resource read response: {error}"
-                                ),
-                                data: None,
-                            },
-                        )
-                        .await;
-                }
-            },
-            Err(error) => {
-                outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INTERNAL_ERROR_CODE,
-                            message: format!("{error:#}"),
-                            data: None,
-                        },
-                    )
-                    .await;
-            }
-        }
+        let result = result
+            .map_err(|error| internal_error(format!("{error:#}")))
+            .and_then(|result| {
+                serde_json::from_value::<McpResourceReadResponse>(result).map_err(|error| {
+                    internal_error(format!(
+                        "failed to deserialize MCP resource read response: {error}"
+                    ))
+                })
+            });
+        outgoing.send_result(request_id, result).await;
     }
 
     async fn call_mcp_server_tool(
@@ -5724,26 +5648,10 @@ impl CodexMessageProcessor {
         tokio::spawn(async move {
             let result = thread
                 .call_mcp_tool(&params.server, &params.tool, params.arguments, meta)
-                .await;
-            match result {
-                Ok(result) => {
-                    outgoing
-                        .send_response(request_id, McpServerToolCallResponse::from(result))
-                        .await;
-                }
-                Err(error) => {
-                    outgoing
-                        .send_error(
-                            request_id,
-                            JSONRPCErrorError {
-                                code: INTERNAL_ERROR_CODE,
-                                message: format!("{error:#}"),
-                                data: None,
-                            },
-                        )
-                        .await;
-                }
-            }
+                .await
+                .map(McpServerToolCallResponse::from)
+                .map_err(|error| internal_error(format!("{error:#}")));
+            outgoing.send_result(request_id, result).await;
         });
     }
 
@@ -5763,18 +5671,18 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn send_invalid_request_error(&self, request_id: ConnectionRequestId, message: String) {
+    async fn send_internal_error(&self, request_id: ConnectionRequestId, message: String) {
         let error = JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
+            code: INTERNAL_ERROR_CODE,
             message,
             data: None,
         };
         self.outgoing.send_error(request_id, error).await;
     }
 
-    async fn send_internal_error(&self, request_id: ConnectionRequestId, message: String) {
+    async fn send_invalid_request_error(&self, request_id: ConnectionRequestId, message: String) {
         let error = JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
+            code: INVALID_REQUEST_ERROR_CODE,
             message,
             data: None,
         };
