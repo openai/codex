@@ -7348,6 +7348,7 @@ async fn multi_agent_v2_config_from_feature_table() -> std::io::Result<()> {
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features.multi_agent_v2]
 enabled = true
+max_concurrent_threads_per_session = 5
 usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 hide_spawn_agent_metadata = true
@@ -7361,6 +7362,8 @@ hide_spawn_agent_metadata = true
         .await?;
 
     assert!(config.features.enabled(Feature::MultiAgentV2));
+    assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 5);
+    assert_eq!(config.agent_max_threads, Some(4));
     assert!(!config.multi_agent_v2.usage_hint_enabled);
     assert_eq!(
         config.multi_agent_v2.usage_hint_text.as_deref(),
@@ -7379,11 +7382,13 @@ async fn profile_multi_agent_v2_config_overrides_base() -> std::io::Result<()> {
         r#"profile = "no_hint"
 
 [features.multi_agent_v2]
+max_concurrent_threads_per_session = 4
 usage_hint_enabled = true
 usage_hint_text = "base hint"
 hide_spawn_agent_metadata = true
 
 [profiles.no_hint.features.multi_agent_v2]
+max_concurrent_threads_per_session = 6
 usage_hint_enabled = false
 usage_hint_text = "profile hint"
 hide_spawn_agent_metadata = false
@@ -7396,12 +7401,87 @@ hide_spawn_agent_metadata = false
         .build()
         .await?;
 
+    assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 6);
     assert!(!config.multi_agent_v2.usage_hint_enabled);
     assert_eq!(
         config.multi_agent_v2.usage_hint_text.as_deref(),
         Some("profile hint")
     );
     assert!(!config.multi_agent_v2.hide_spawn_agent_metadata);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_default_session_thread_cap_counts_root() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 4);
+    assert_eq!(config.agent_max_threads, Some(3));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_rejects_agents_max_threads() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+
+[agents]
+max_threads = 3
+"#,
+    )?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+        .expect_err("agents.max_threads should conflict with multi_agent_v2");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "agents.max_threads cannot be set when multi_agent_v2 is enabled"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_session_thread_cap_one_disallows_subagents() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+max_concurrent_threads_per_session = 1
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 1);
+    assert_eq!(config.agent_max_threads, Some(0));
 
     Ok(())
 }

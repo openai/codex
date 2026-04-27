@@ -131,6 +131,7 @@ pub use codex_git_utils::GhostSnapshotConfig;
 /// the context window.
 pub(crate) const AGENTS_MD_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
+pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usize = 4;
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
@@ -704,6 +705,7 @@ pub struct Config {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MultiAgentV2Config {
+    pub max_concurrent_threads_per_session: usize,
     pub usage_hint_enabled: bool,
     pub usage_hint_text: Option<String>,
     pub hide_spawn_agent_metadata: bool,
@@ -712,6 +714,8 @@ pub struct MultiAgentV2Config {
 impl Default for MultiAgentV2Config {
     fn default() -> Self {
         Self {
+            max_concurrent_threads_per_session:
+                DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION,
             usage_hint_enabled: true,
             usage_hint_text: None,
             hide_spawn_agent_metadata: false,
@@ -1579,6 +1583,10 @@ fn resolve_multi_agent_v2_config(
     let profile = multi_agent_v2_toml_config(config_profile.features.as_ref());
     let default = MultiAgentV2Config::default();
 
+    let max_concurrent_threads_per_session = profile
+        .and_then(|config| config.max_concurrent_threads_per_session)
+        .or_else(|| base.and_then(|config| config.max_concurrent_threads_per_session))
+        .unwrap_or(default.max_concurrent_threads_per_session);
     let usage_hint_enabled = profile
         .and_then(|config| config.usage_hint_enabled)
         .or_else(|| base.and_then(|config| config.usage_hint_enabled))
@@ -1594,6 +1602,7 @@ fn resolve_multi_agent_v2_config(
         .unwrap_or(default.hide_spawn_agent_metadata);
 
     MultiAgentV2Config {
+        max_concurrent_threads_per_session,
         usage_hint_enabled,
         usage_hint_text,
         hide_spawn_agent_metadata,
@@ -2078,17 +2087,35 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
-        let agent_max_threads = cfg
-            .agents
-            .as_ref()
-            .and_then(|agents| agents.max_threads)
-            .or(DEFAULT_AGENT_MAX_THREADS);
-        if agent_max_threads == Some(0) {
+        if multi_agent_v2.max_concurrent_threads_per_session == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "agents.max_threads must be at least 1",
+                "features.multi_agent_v2.max_concurrent_threads_per_session must be at least 1",
             ));
         }
+        let agent_max_threads_from_config = cfg.agents.as_ref().and_then(|agents| agents.max_threads);
+        let agent_max_threads = if features.enabled(Feature::MultiAgentV2) {
+            if agent_max_threads_from_config.is_some() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "agents.max_threads cannot be set when multi_agent_v2 is enabled",
+                ));
+            }
+            Some(
+                multi_agent_v2
+                    .max_concurrent_threads_per_session
+                    .saturating_sub(1),
+            )
+        } else {
+            let agent_max_threads = agent_max_threads_from_config.or(DEFAULT_AGENT_MAX_THREADS);
+            if agent_max_threads == Some(0) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "agents.max_threads must be at least 1",
+                ));
+            }
+            agent_max_threads
+        };
         let agent_max_depth = cfg
             .agents
             .as_ref()
