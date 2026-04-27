@@ -26,9 +26,7 @@ use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses;
-use core_test_support::responses::assert_tools_payload_does_not_defer;
 use core_test_support::responses::mount_sse_once;
-use core_test_support::responses::namespace_child_tool_names;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
@@ -39,6 +37,7 @@ use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 use tokio::time::Duration;
 use wiremock::ResponseTemplate;
@@ -56,6 +55,53 @@ fn estimate_compact_input_tokens(request: &responses::ResponsesRequest) -> i64 {
 fn estimate_compact_payload_tokens(request: &responses::ResponsesRequest) -> i64 {
     estimate_compact_input_tokens(request)
         .saturating_add(approx_token_count(&request.instructions_text()))
+}
+
+fn assert_tools_payload_does_not_defer(body: &Value) {
+    if let Some(tools) = body.get("tools") {
+        assert!(
+            !contains_defer_loading(tools),
+            "model-visible tools should not include deferred declarations: {tools}"
+        );
+    }
+}
+
+fn namespace_child_tool_names(body: &Value, namespace: &str) -> Vec<String> {
+    body.get("tools")
+        .and_then(Value::as_array)
+        .and_then(|tools| {
+            tools.iter().find_map(|tool| {
+                if tool.get("type").and_then(Value::as_str) == Some("namespace")
+                    && tool.get("name").and_then(Value::as_str) == Some(namespace)
+                {
+                    tool.get("tools").and_then(Value::as_array).map(|children| {
+                        children
+                            .iter()
+                            .filter_map(|child| {
+                                child
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string)
+                            })
+                            .collect()
+                    })
+                } else {
+                    None
+                }
+            })
+        })
+        .unwrap_or_default()
+}
+
+fn contains_defer_loading(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            map.get("defer_loading").and_then(Value::as_bool) == Some(true)
+                || map.values().any(contains_defer_loading)
+        }
+        Value::Array(values) => values.iter().any(contains_defer_loading),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
+    }
 }
 
 const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
