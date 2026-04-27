@@ -376,16 +376,19 @@ client_request_definitions! {
     #[experimental("thread/goal/set")]
     ThreadGoalSet => "thread/goal/set" {
         params: v2::ThreadGoalSetParams,
+        serialization: thread_id(params.thread_id),
         response: v2::ThreadGoalSetResponse,
     },
     #[experimental("thread/goal/get")]
     ThreadGoalGet => "thread/goal/get" {
         params: v2::ThreadGoalGetParams,
+        serialization: thread_id(params.thread_id),
         response: v2::ThreadGoalGetResponse,
     },
     #[experimental("thread/goal/clear")]
     ThreadGoalClear => "thread/goal/clear" {
         params: v2::ThreadGoalClearParams,
+        serialization: thread_id(params.thread_id),
         response: v2::ThreadGoalClearResponse,
     },
     ThreadMetadataUpdate => "thread/metadata/update" {
@@ -422,6 +425,7 @@ client_request_definitions! {
     },
     ThreadApproveGuardianDeniedAction => "thread/approveGuardianDeniedAction" {
         params: v2::ThreadApproveGuardianDeniedActionParams,
+        serialization: thread_id(params.thread_id),
         response: v2::ThreadApproveGuardianDeniedActionResponse,
     },
     #[experimental("thread/backgroundTerminals/clean")]
@@ -452,6 +456,8 @@ client_request_definitions! {
     },
     ThreadTurnsList => "thread/turns/list" {
         params: v2::ThreadTurnsListParams,
+        // Explicitly concurrent: this primarily reads append-only rollout storage.
+        serialization: None,
         response: v2::ThreadTurnsListResponse,
     },
     /// Append raw Responses API items to the thread history without starting a user turn.
@@ -472,10 +478,12 @@ client_request_definitions! {
     },
     MarketplaceRemove => "marketplace/remove" {
         params: v2::MarketplaceRemoveParams,
+        serialization: global("config"),
         response: v2::MarketplaceRemoveResponse,
     },
     MarketplaceUpgrade => "marketplace/upgrade" {
         params: v2::MarketplaceUpgradeParams,
+        serialization: global("config"),
         response: v2::MarketplaceUpgradeResponse,
     },
     PluginList => "plugin/list" {
@@ -495,14 +503,17 @@ client_request_definitions! {
     },
     DeviceKeyCreate => "device/key/create" {
         params: v2::DeviceKeyCreateParams,
+        serialization: global("device-key"),
         response: v2::DeviceKeyCreateResponse,
     },
     DeviceKeyPublic => "device/key/public" {
         params: v2::DeviceKeyPublicParams,
+        serialization: global("device-key"),
         response: v2::DeviceKeyPublicResponse,
     },
     DeviceKeySign => "device/key/sign" {
         params: v2::DeviceKeySignParams,
+        serialization: global("device-key"),
         response: v2::DeviceKeySignResponse,
     },
     // File system requests are intentionally concurrent. Desktop already treats local
@@ -713,6 +724,7 @@ client_request_definitions! {
 
     SendAddCreditsNudgeEmail => "account/sendAddCreditsNudgeEmail" {
         params: v2::SendAddCreditsNudgeEmailParams,
+        serialization: global("account-auth"),
         response: v2::SendAddCreditsNudgeEmailResponse,
     },
 
@@ -1478,6 +1490,71 @@ mod tests {
             account_read.serialization_scope(),
             Some(ClientRequestSerializationScope::Global("account-auth"))
         );
+
+        let thread_goal_set = ClientRequest::ThreadGoalSet {
+            request_id: request_id(),
+            params: v2::ThreadGoalSetParams {
+                thread_id: "goal-thread".to_string(),
+                objective: Some("ship it".to_string()),
+                status: None,
+                token_budget: None,
+            },
+        };
+        assert_eq!(
+            thread_goal_set.serialization_scope(),
+            Some(ClientRequestSerializationScope::Thread {
+                thread_id: "goal-thread".to_string()
+            })
+        );
+
+        let guardian_approval = ClientRequest::ThreadApproveGuardianDeniedAction {
+            request_id: request_id(),
+            params: v2::ThreadApproveGuardianDeniedActionParams {
+                thread_id: "guardian-thread".to_string(),
+                event: json!({ "type": "guardian" }),
+            },
+        };
+        assert_eq!(
+            guardian_approval.serialization_scope(),
+            Some(ClientRequestSerializationScope::Thread {
+                thread_id: "guardian-thread".to_string()
+            })
+        );
+
+        let marketplace_remove = ClientRequest::MarketplaceRemove {
+            request_id: request_id(),
+            params: v2::MarketplaceRemoveParams {
+                marketplace_name: "marketplace".to_string(),
+            },
+        };
+        assert_eq!(
+            marketplace_remove.serialization_scope(),
+            Some(ClientRequestSerializationScope::Global("config"))
+        );
+
+        let device_key_create = ClientRequest::DeviceKeyCreate {
+            request_id: request_id(),
+            params: v2::DeviceKeyCreateParams {
+                protection_policy: None,
+                account_user_id: "user".to_string(),
+                client_id: "client".to_string(),
+            },
+        };
+        assert_eq!(
+            device_key_create.serialization_scope(),
+            Some(ClientRequestSerializationScope::Global("device-key"))
+        );
+
+        let add_credits_nudge = ClientRequest::SendAddCreditsNudgeEmail {
+            request_id: request_id(),
+            params: v2::SendAddCreditsNudgeEmailParams {
+                credit_type: v2::AddCreditsNudgeCreditType::Credits,
+            },
+        };
+        assert_eq!(
+            add_credits_nudge.serialization_scope(),
+            Some(ClientRequestSerializationScope::Global("account-auth"))
+        );
     }
 
     #[test]
@@ -1528,6 +1605,17 @@ mod tests {
             },
         };
         assert_eq!(fs_read.serialization_scope(), None);
+
+        let thread_turns_list = ClientRequest::ThreadTurnsList {
+            request_id: request_id(),
+            params: v2::ThreadTurnsListParams {
+                thread_id: "thread-1".to_string(),
+                cursor: None,
+                limit: None,
+                sort_direction: None,
+            },
+        };
+        assert_eq!(thread_turns_list.serialization_scope(), None);
     }
 
     #[test]
