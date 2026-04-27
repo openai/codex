@@ -350,9 +350,7 @@ fn materialize_cwd_dependent_entry(
 ) -> FileSystemSandboxEntry {
     match &entry.path {
         FileSystemPath::Special {
-            value:
-                FileSystemSpecialPath::CurrentWorkingDirectory
-                | FileSystemSpecialPath::ProjectRoots { .. },
+            value: FileSystemSpecialPath::ProjectRoots { .. },
         } => resolve_permission_path(&entry.path, cwd)
             .map(|path| FileSystemSandboxEntry {
                 path: FileSystemPath::Path { path },
@@ -379,9 +377,6 @@ fn resolve_permission_path(path: &FileSystemPath, cwd: &Path) -> Option<Absolute
             FileSystemSpecialPath::Root => {
                 let root = cwd.ancestors().last()?;
                 AbsolutePathBuf::from_absolute_path(root).ok()
-            }
-            FileSystemSpecialPath::CurrentWorkingDirectory => {
-                AbsolutePathBuf::from_absolute_path(cwd).ok()
             }
             FileSystemSpecialPath::ProjectRoots { subpath } => {
                 let cwd = AbsolutePathBuf::from_absolute_path(cwd).ok()?;

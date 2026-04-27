@@ -653,14 +653,12 @@ impl MessageProcessor {
                     }
                 }
             }
-            if self.config.features.enabled(Feature::GeneralAnalytics) {
-                self.analytics_events_client.track_initialize(
-                    connection_id.0,
-                    analytics_initialize_params,
-                    originator,
-                    self.rpc_transport,
-                );
-            }
+            self.analytics_events_client.track_initialize(
+                connection_id.0,
+                analytics_initialize_params,
+                originator,
+                self.rpc_transport,
+            );
             set_default_client_residency_requirement(self.config.enforce_residency.value());
             if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
                 *suffix = Some(user_agent_suffix);
@@ -716,9 +714,8 @@ impl MessageProcessor {
             return Err(invalid_request(experimental_required_message(reason)));
         }
         let connection_id = connection_request_id.connection_id;
-        if self.config.features.enabled(Feature::GeneralAnalytics)
-            && let ClientRequest::TurnStart { request_id, .. }
-            | ClientRequest::TurnSteer { request_id, .. } = &codex_request
+        if let ClientRequest::TurnStart { request_id, .. }
+        | ClientRequest::TurnSteer { request_id, .. } = &codex_request
         {
             self.analytics_events_client.track_request(
                 connection_id.0,

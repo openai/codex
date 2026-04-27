@@ -262,7 +262,6 @@ impl AgentControl {
                 parent_thread_id, ..
             },
         )) = notification_source.as_ref()
-            && new_thread.thread.enabled(Feature::GeneralAnalytics)
         {
             let client_metadata = match state.get_thread(*parent_thread_id).await {
                 Ok(parent_thread) => {

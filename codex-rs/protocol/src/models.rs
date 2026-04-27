@@ -402,7 +402,11 @@ impl PermissionProfile {
         }
     }
 
-    /// Managed workspace-write filesystem access with restricted network access.
+    /// Managed workspace-write filesystem access with restricted network
+    /// access.
+    ///
+    /// The returned profile contains symbolic `:project_roots` entries that
+    /// must be resolved against the active permission root before enforcement.
     pub fn workspace_write() -> Self {
         Self::Managed {
             file_system: ManagedFileSystemPermissions::Restricted {
@@ -415,7 +419,7 @@ impl PermissionProfile {
                     },
                     FileSystemSandboxEntry {
                         path: FileSystemPath::Special {
-                            value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                            value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                         },
                         access: FileSystemAccessMode::Write,
                     },
