@@ -163,17 +163,15 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         .get_agent_config_snapshot(thread_id)
         .await
     {
-        if session.enabled(Feature::GeneralAnalytics) {
-            let client_metadata = session.app_server_client_metadata().await;
-            emit_subagent_session_started(
-                &session.services.analytics_events_client,
-                client_metadata,
-                thread_id,
-                /*parent_thread_id*/ None,
-                thread_config,
-                SubAgentSource::MemoryConsolidation,
-            );
-        }
+        let client_metadata = session.app_server_client_metadata().await;
+        emit_subagent_session_started(
+            &session.services.analytics_events_client,
+            client_metadata,
+            thread_id,
+            /*parent_thread_id*/ None,
+            thread_config,
+            SubAgentSource::MemoryConsolidation,
+        );
     } else {
         warn!("failed to load memory consolidation thread config for analytics: {thread_id}");
     }

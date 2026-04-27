@@ -444,9 +444,19 @@ impl RolloutRecorder {
             ));
         }
 
-        // Warm the DB by repairing every filesystem hit before querying SQLite.
+        // For metadata-filtered listings the filesystem page is the page we return. Track those
+        // IDs so the later DB page only triggers full reconciliation for DB-only hits.
+        let fs_page_thread_ids = fs_page
+            .items
+            .iter()
+            .filter_map(|item| item.thread_id)
+            .collect::<HashSet<_>>();
+
+        // Warm the DB by repairing every filesystem hit before querying SQLite. Source/provider/cwd
+        // filters are already validated from rollout head metadata, so lightweight read-repair is
+        // enough there. Search can depend on full title metadata, so keep full reconciliation.
         for item in &fs_page.items {
-            if listing_has_metadata_filters {
+            if search_term.is_some() {
                 state_db::reconcile_rollout(
                     state_db_ctx.as_deref(),
                     item.path.as_path(),
@@ -517,6 +527,12 @@ impl RolloutRecorder {
             }
             if listing_has_metadata_filters {
                 for item in &db_page.items {
+                    // Rows that also appeared in the filesystem page were just validated from the
+                    // rollout head. Rows only found by SQLite may be stale filter matches, so fully
+                    // reconcile those before returning the filesystem-backed page.
+                    if fs_page_thread_ids.contains(&item.id) {
+                        continue;
+                    }
                     state_db::reconcile_rollout(
                         state_db_ctx.as_deref(),
                         item.rollout_path.as_path(),

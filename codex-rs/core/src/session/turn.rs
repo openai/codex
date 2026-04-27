@@ -95,9 +95,7 @@ use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
-use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
-use codex_tools::ToolSpec;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
@@ -664,10 +662,6 @@ async fn track_turn_resolved_config_analytics(
     turn_context: &TurnContext,
     input: &[UserInput],
 ) {
-    if !sess.enabled(Feature::GeneralAnalytics) {
-        return;
-    }
-
     let thread_config = {
         let state = sess.state.lock().await;
         state.session_configuration.thread_config_snapshot()
@@ -946,25 +940,9 @@ pub(crate) fn build_prompt(
     turn_context: &TurnContext,
     base_instructions: BaseInstructions,
 ) -> Prompt {
-    let deferred_dynamic_tools = turn_context
-        .dynamic_tools
-        .iter()
-        .filter(|tool| tool.defer_loading)
-        .map(|tool| ToolName::new(tool.namespace.clone(), tool.name.clone()))
-        .collect::<HashSet<_>>();
-    let tools = if deferred_dynamic_tools.is_empty() {
-        router.model_visible_specs()
-    } else {
-        router
-            .model_visible_specs()
-            .into_iter()
-            .filter_map(|spec| filter_deferred_dynamic_tool_spec(spec, &deferred_dynamic_tools))
-            .collect()
-    };
-
     Prompt {
         input,
-        tools,
+        tools: router.model_visible_specs(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,
         personality: turn_context.personality,
@@ -972,35 +950,6 @@ pub(crate) fn build_prompt(
         output_schema_strict: !crate::guardian::is_guardian_reviewer_source(
             &turn_context.session_source,
         ),
-    }
-}
-
-fn filter_deferred_dynamic_tool_spec(
-    spec: ToolSpec,
-    deferred_dynamic_tools: &HashSet<ToolName>,
-) -> Option<ToolSpec> {
-    match spec {
-        ToolSpec::Function(tool) => {
-            if deferred_dynamic_tools.contains(&ToolName::plain(tool.name.as_str())) {
-                None
-            } else {
-                Some(ToolSpec::Function(tool))
-            }
-        }
-        ToolSpec::Namespace(mut namespace) => {
-            let namespace_name = namespace.name.clone();
-            namespace.tools.retain(|tool| match tool {
-                ResponsesApiNamespaceTool::Function(tool) => !deferred_dynamic_tools.contains(
-                    &ToolName::namespaced(namespace_name.as_str(), tool.name.as_str()),
-                ),
-            });
-            if namespace.tools.is_empty() {
-                None
-            } else {
-                Some(ToolSpec::Namespace(namespace))
-            }
-        }
-        spec => Some(spec),
     }
 }
 

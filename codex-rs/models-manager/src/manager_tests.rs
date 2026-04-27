@@ -206,7 +206,7 @@ fn static_manager_for_tests(model_catalog: ModelsResponse) -> StaticModelsManage
     )
 }
 
-fn chatgpt_auth_tokens_for_tests(codex_home: &Path) -> CodexAuth {
+async fn chatgpt_auth_tokens_for_tests(codex_home: &Path) -> CodexAuth {
     let auth_dot_json = codex_login::AuthDotJson {
         auth_mode: Some(AuthMode::ChatgptAuthTokens),
         openai_api_key: None,
@@ -232,6 +232,7 @@ c2ln",
     .expect("auth.json should be written");
 
     CodexAuth::from_auth_storage(codex_home, AuthCredentialsStoreMode::File)
+        .await
         .expect("auth should load")
         .expect("auth should be present")
 }
@@ -685,7 +686,7 @@ async fn refresh_available_models_fetches_with_chatgpt_auth_tokens() {
         "ChatGPT Auth Tokens",
         /*priority*/ 1,
     )]]);
-    let auth = chatgpt_auth_tokens_for_tests(codex_home.path());
+    let auth = chatgpt_auth_tokens_for_tests(codex_home.path()).await;
     let manager = openai_manager_for_tests_with_auth(
         codex_home.path().to_path_buf(),
         endpoint.clone(),
