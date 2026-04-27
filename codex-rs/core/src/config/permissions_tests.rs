@@ -30,6 +30,18 @@ fn normalize_absolute_path_for_platform_simplifies_windows_verbatim_paths() {
     assert_eq!(parsed, PathBuf::from(r"D:\c\x\worktrees\2508\swift-base"));
 }
 
+#[test]
+fn windows_verbatim_path_prefix_does_not_count_as_glob_syntax() {
+    assert!(!contains_glob_chars_for_platform(
+        r"\\?\D:\c\x\worktrees\2508\swift-base",
+        /*is_windows*/ true,
+    ));
+    assert!(contains_glob_chars_for_platform(
+        r"\\?\D:\c\x\worktrees\2508\**\*.env",
+        /*is_windows*/ true,
+    ));
+}
+
 #[tokio::test]
 async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Result<()> {
     let temp_dir = TempDir::new()?;
@@ -77,7 +89,7 @@ async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Resu
     let expected_zsh = AbsolutePathBuf::try_from(zsh_path)?;
     let expected_allowed_arg0_dir = AbsolutePathBuf::try_from(allowed_arg0_dir)?;
     let expected_sibling_arg0_dir = AbsolutePathBuf::try_from(sibling_arg0_dir)?;
-    let policy = &config.permissions.file_system_sandbox_policy;
+    let policy = config.permissions.file_system_sandbox_policy();
 
     assert!(
         policy.can_read_path_with_cwd(expected_zsh.as_path(), &cwd),

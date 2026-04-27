@@ -16,10 +16,9 @@ use std::path::Path;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tokio::time::timeout;
-use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::client_async;
 use tokio_tungstenite::tungstenite::Bytes;
 use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
-use tokio_tungstenite::tungstenite::protocol::Role;
 use tokio_util::sync::CancellationToken;
 
 #[test]
@@ -54,7 +53,7 @@ fn listen_unix_socket_accepts_relative_custom_path() {
 }
 
 #[tokio::test]
-async fn control_socket_acceptor_forwards_websocket_text_messages_and_pings() {
+async fn control_socket_acceptor_upgrades_and_forwards_websocket_text_messages_and_pings() {
     let temp_dir = tempfile::TempDir::new().expect("temp dir");
     let socket_path = test_socket_path(temp_dir.path());
     let (transport_event_tx, mut transport_event_rx) =
@@ -71,7 +70,10 @@ async fn control_socket_acceptor_forwards_websocket_text_messages_and_pings() {
     let stream = connect_to_socket(socket_path.as_path())
         .await
         .expect("client should connect");
-    let mut websocket = WebSocketStream::from_raw_socket(stream, Role::Client, None).await;
+    let (mut websocket, response) = client_async("ws://localhost/rpc", stream)
+        .await
+        .expect("websocket upgrade should complete");
+    assert_eq!(response.status().as_u16(), 101);
 
     let opened = timeout(Duration::from_secs(1), transport_event_rx.recv())
         .await

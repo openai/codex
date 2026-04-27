@@ -1,12 +1,12 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use codex_arg0::Arg0DispatchPaths;
+use codex_config::ConfigLayerStackOrdering;
+use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
-use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::config_loader::LoaderOverrides;
 use codex_exec_server::EnvironmentManagerArgs;
 use codex_features::Feature;
 use codex_login::AuthManager;
@@ -42,11 +42,11 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
+use codex_config::ConfigLoadError;
+use codex_config::TextRange as CoreTextRange;
 use codex_core::ExecPolicyError;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::find_codex_home;
-use codex_core::config_loader::ConfigLoadError;
-use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
@@ -362,6 +362,25 @@ pub async fn run_main(
     .await
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginStartupTasks {
+    Start,
+    Skip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppServerRuntimeOptions {
+    pub plugin_startup_tasks: PluginStartupTasks,
+}
+
+impl Default for AppServerRuntimeOptions {
+    fn default() -> Self {
+        Self {
+            plugin_startup_tasks: PluginStartupTasks::Start,
+        }
+    }
+}
+
 pub async fn run_main_with_transport(
     arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
@@ -370,6 +389,30 @@ pub async fn run_main_with_transport(
     transport: AppServerTransport,
     session_source: SessionSource,
     auth: AppServerWebsocketAuthSettings,
+) -> IoResult<()> {
+    run_main_with_transport_options(
+        arg0_paths,
+        cli_config_overrides,
+        loader_overrides,
+        default_analytics_enabled,
+        transport,
+        session_source,
+        auth,
+        AppServerRuntimeOptions::default(),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run_main_with_transport_options(
+    arg0_paths: Arg0DispatchPaths,
+    cli_config_overrides: CliConfigOverrides,
+    loader_overrides: LoaderOverrides,
+    default_analytics_enabled: bool,
+    transport: AppServerTransport,
+    session_source: SessionSource,
+    auth: AppServerWebsocketAuthSettings,
+    runtime_options: AppServerRuntimeOptions,
 ) -> IoResult<()> {
     let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::from_env(
         ExecServerRuntimePaths::from_optional_paths(
@@ -475,7 +518,7 @@ pub async fn run_main_with_transport(
         });
     }
     if let Some(warning) =
-        codex_core::config::system_bwrap_warning(config.permissions.sandbox_policy.get())
+        codex_core::config::system_bwrap_warning(config.permissions.permission_profile.get())
     {
         config_warnings.push(ConfigWarningNotification {
             summary: warning,
@@ -683,6 +726,7 @@ pub async fn run_main_with_transport(
             auth_manager,
             rpc_transport: analytics_rpc_transport(&transport),
             remote_control_handle: Some(remote_control_handle),
+            plugin_startup_tasks: runtime_options.plugin_startup_tasks,
         }));
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();

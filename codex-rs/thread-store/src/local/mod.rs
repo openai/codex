@@ -27,6 +27,7 @@ use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
 use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
+use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::StoredThread;
@@ -205,6 +206,19 @@ impl ThreadStore for LocalThreadStore {
 
     async fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreResult<StoredThread> {
         read_thread::read_thread(self, params).await
+    }
+
+    async fn read_thread_by_rollout_path(
+        &self,
+        params: ReadThreadByRolloutPathParams,
+    ) -> ThreadStoreResult<StoredThread> {
+        read_thread::read_thread_by_rollout_path(
+            self,
+            params.rollout_path,
+            params.include_archived,
+            params.include_history,
+        )
+        .await
     }
 
     async fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreResult<ThreadPage> {
@@ -506,6 +520,51 @@ mod tests {
                 RolloutItem::EventMsg(EventMsg::UserMessage(event)) if event.message == "archived live history item"
             )
         }));
+    }
+
+    #[tokio::test]
+    async fn read_thread_by_rollout_path_includes_history() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let thread_id = ThreadId::default();
+
+        store
+            .create_thread(create_thread_params(thread_id))
+            .await
+            .expect("create thread");
+        store
+            .append_items(AppendThreadItemsParams {
+                thread_id,
+                items: vec![user_message_item("path read")],
+            })
+            .await
+            .expect("append item");
+        store.flush_thread(thread_id).await.expect("flush thread");
+        let rollout_path = store
+            .live_rollout_path(thread_id)
+            .await
+            .expect("load rollout path");
+
+        let thread = store
+            .read_thread_by_rollout_path(
+                rollout_path,
+                /*include_archived*/ true,
+                /*include_history*/ true,
+            )
+            .await
+            .expect("read thread by rollout path");
+
+        assert_eq!(thread.thread_id, thread_id);
+        assert_eq!(
+            thread
+                .history
+                .expect("history")
+                .items
+                .into_iter()
+                .filter(|item| matches!(item, RolloutItem::EventMsg(EventMsg::UserMessage(_))))
+                .count(),
+            1
+        );
     }
 
     fn create_thread_params(thread_id: ThreadId) -> CreateThreadParams {

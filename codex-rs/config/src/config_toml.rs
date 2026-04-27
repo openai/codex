@@ -47,9 +47,9 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path::normalize_for_path_comparison;
@@ -213,10 +213,12 @@ pub struct ConfigToml {
     /// Default: `300000` (5 minutes).
     pub background_terminal_max_timeout: Option<u64>,
 
-    /// Optional absolute path to the Node runtime used by `js_repl`.
+    /// Deprecated: ignored.
+    #[schemars(skip)]
     pub js_repl_node_path: Option<AbsolutePathBuf>,
 
-    /// Ordered list of directories to search for Node modules in `js_repl`.
+    /// Deprecated: ignored.
+    #[schemars(skip)]
     pub js_repl_node_module_dirs: Option<Vec<AbsolutePathBuf>>,
 
     /// Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution.
@@ -317,6 +319,9 @@ pub struct ConfigToml {
     /// Experimental / do not use. When set, app-server fetches thread-scoped
     /// config from a remote service at this endpoint.
     pub experimental_thread_config_endpoint: Option<String>,
+
+    /// Experimental / do not use. Selects the thread store implementation.
+    pub experimental_thread_store: Option<ThreadStoreToml>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, or live.
@@ -411,6 +416,20 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ThreadStoreToml {
+    Local {},
+    Remote {
+        endpoint: String,
+    },
+    #[cfg(debug_assertions)]
+    #[schemars(skip)]
+    InMemory {
+        id: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -629,7 +648,7 @@ impl ConfigToml {
         profile_sandbox_mode: Option<SandboxMode>,
         windows_sandbox_level: WindowsSandboxLevel,
         active_project: Option<&ProjectConfig>,
-        sandbox_policy_constraint: Option<&crate::Constrained<SandboxPolicy>>,
+        permission_profile_constraint: Option<&crate::Constrained<PermissionProfile>>,
     ) -> SandboxPolicy {
         let sandbox_mode_was_explicit = sandbox_mode_override.is_some()
             || profile_sandbox_mode.is_some()
@@ -668,7 +687,6 @@ impl ConfigToml {
                     exclude_slash_tmp,
                 }) => SandboxPolicy::WorkspaceWrite {
                     writable_roots: writable_roots.clone(),
-                    read_only_access: ReadOnlyAccess::FullAccess,
                     network_access: *network_access,
                     exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                     exclude_slash_tmp: *exclude_slash_tmp,
@@ -690,14 +708,16 @@ impl ConfigToml {
             downgrade_workspace_write_if_unsupported(&mut sandbox_policy);
         }
         if !sandbox_mode_was_explicit
-            && let Some(constraint) = sandbox_policy_constraint
-            && let Err(err) = constraint.can_set(&sandbox_policy)
+            && let Some(constraint) = permission_profile_constraint
+            && let Err(err) = constraint.can_set(&PermissionProfile::from_legacy_sandbox_policy(
+                &sandbox_policy,
+            ))
         {
             tracing::warn!(
                 error = %err,
                 "default sandbox policy is disallowed by requirements; falling back to required default"
             );
-            sandbox_policy = constraint.get().clone();
+            sandbox_policy = SandboxPolicy::new_read_only_policy();
             downgrade_workspace_write_if_unsupported(&mut sandbox_policy);
         }
         sandbox_policy

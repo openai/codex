@@ -19,9 +19,7 @@ codex_rust_crate(
             "Cargo.toml",
         ],
         allow_empty = True,
-    ) + [
-        "//codex-rs:node-version.txt",
-    ],
+    ),
     rustc_env = {
         # Keep manifest-root path lookups inside the Bazel execroot for code
         # that relies on env!("CARGO_MANIFEST_DIR").
@@ -48,7 +46,7 @@ codex_rust_crate(
         "//:AGENTS.md",
     ],
     test_shard_counts = {
-        "core-all-test": 8,
+        "core-all-test": 16,
         "core-unit-tests": 8,
     },
     test_tags = ["no-sandbox"],

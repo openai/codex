@@ -16,8 +16,8 @@ use codex_config::types::McpServerToolConfig;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
 use codex_model_provider::create_model_provider;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::PathExt;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -669,9 +669,13 @@ async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
     )
     .expect("turn metadata json");
 
-    let meta =
-        build_mcp_tool_call_request_meta(&turn_context, "custom_server", /*metadata*/ None)
-            .expect("custom servers should receive turn metadata");
+    let meta = build_mcp_tool_call_request_meta(
+        &turn_context,
+        "custom_server",
+        "call-custom",
+        /*metadata*/ None,
+    )
+    .expect("custom servers should receive turn metadata");
 
     assert_eq!(
         meta,
@@ -716,14 +720,43 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
         build_mcp_tool_call_request_meta(
             &turn_context,
             CODEX_APPS_MCP_SERVER_NAME,
+            "call_abc123xyz789",
             Some(&metadata),
         ),
         Some(serde_json::json!({
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
             MCP_TOOL_CODEX_APPS_META_KEY: {
+                "call_id": "call_abc123xyz789",
                 "resource_uri": "connector://calendar/tools/calendar_create_event",
                 "contains_mcp_source": true,
                 "connector_id": "calendar",
+            },
+        }))
+    );
+}
+
+#[tokio::test]
+async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_codex_apps_meta() {
+    let (_, turn_context) = make_session_and_context().await;
+    let expected_turn_metadata = serde_json::from_str::<serde_json::Value>(
+        &turn_context
+            .turn_metadata_state
+            .current_header_value()
+            .expect("turn metadata header"),
+    )
+    .expect("turn metadata json");
+
+    assert_eq!(
+        build_mcp_tool_call_request_meta(
+            &turn_context,
+            CODEX_APPS_MCP_SERVER_NAME,
+            "call_abc123xyz789",
+            /*metadata*/ None,
+        ),
+        Some(serde_json::json!({
+            crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
+            MCP_TOOL_CODEX_APPS_META_KEY: {
+                "call_id": "call_abc123xyz789",
             },
         }))
     );
@@ -2129,10 +2162,7 @@ async fn full_access_mode_skips_arc_monitor_for_all_approval_modes() {
         .approval_policy
         .set(AskForApproval::Never)
         .expect("test setup should allow updating approval policy");
-    turn_context
-        .sandbox_policy
-        .set(SandboxPolicy::DangerFullAccess)
-        .expect("test setup should allow updating sandbox policy");
+    turn_context.permission_profile = PermissionProfile::Disabled;
     let mut config = (*turn_context.config).clone();
     config.chatgpt_base_url = server.uri();
     turn_context.config = Arc::new(config);

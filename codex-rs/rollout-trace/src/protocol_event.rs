@@ -226,6 +226,7 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         | EventMsg::ModelVerification(_)
         | EventMsg::ContextCompacted(_)
         | EventMsg::ThreadRolledBack(_)
+        | EventMsg::ThreadGoalUpdated(_)
         | EventMsg::TurnStarted(_)
         | EventMsg::TurnComplete(_)
         | EventMsg::TokenCount(_)
@@ -317,6 +318,7 @@ pub(crate) fn wrapped_protocol_event_type(event: &EventMsg) -> Option<&'static s
         | EventMsg::AgentReasoningRawContent(_)
         | EventMsg::AgentReasoningRawContentDelta(_)
         | EventMsg::AgentReasoningSectionBreak(_)
+        | EventMsg::ThreadGoalUpdated(_)
         | EventMsg::McpStartupUpdate(_)
         | EventMsg::McpStartupComplete(_)
         | EventMsg::McpToolCallBegin(_)
@@ -403,8 +405,9 @@ impl TraceExecutionStatus for PatchApplyStatus {
 
 fn execution_status_for_abort_reason(reason: &TurnAbortReason) -> ExecutionStatus {
     match reason {
-        TurnAbortReason::Interrupted | TurnAbortReason::Replaced | TurnAbortReason::ReviewEnded => {
-            ExecutionStatus::Cancelled
-        }
+        TurnAbortReason::Interrupted
+        | TurnAbortReason::Replaced
+        | TurnAbortReason::ReviewEnded
+        | TurnAbortReason::BudgetLimited => ExecutionStatus::Cancelled,
     }
 }

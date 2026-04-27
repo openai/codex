@@ -11,13 +11,13 @@ use crate::config::Config;
 use crate::config::ConfigOverrides;
 use crate::config::agent_roles::parse_agent_role_file_contents;
 use crate::config::deserialize_config_toml_with_base;
-use crate::config_loader::ConfigLayerEntry;
-use crate::config_loader::ConfigLayerStack;
-use crate::config_loader::ConfigLayerStackOrdering;
-use crate::config_loader::resolve_relative_paths_in_config_toml;
 use anyhow::anyhow;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigLayerStackOrdering;
 use codex_config::config_toml::ConfigToml;
+use codex_config::loader::resolve_relative_paths_in_config_toml;
 use codex_exec_server::LOCAL_FS;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -267,7 +267,6 @@ mod reload {
             model_provider: preserve_current_provider.then(|| config.model_provider_id.clone()),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
-            js_repl_node_path: config.js_repl_node_path.clone(),
             ..Default::default()
         }
     }

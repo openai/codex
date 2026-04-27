@@ -50,7 +50,7 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
-use codex_config::types::ShellEnvironmentPolicy;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::protocol::ExecCommandSource;
@@ -664,7 +664,8 @@ impl UnifiedExecProcessManager {
 
         #[cfg(target_os = "windows")]
         if request.sandbox == codex_sandboxing::SandboxType::WindowsRestrictedToken {
-            let policy_json = serde_json::to_string(&request.sandbox_policy).map_err(|err| {
+            let sandbox_policy = request.compatibility_sandbox_policy();
+            let policy_json = serde_json::to_string(&sandbox_policy).map_err(|err| {
                 UnifiedExecError::create_process(format!(
                     "failed to serialize Windows sandbox policy: {err}"
                 ))
@@ -788,6 +789,7 @@ impl UnifiedExecProcessManager {
             self,
             context.turn.tools_config.unified_exec_shell_mode.clone(),
         );
+        let file_system_sandbox_policy = context.turn.file_system_sandbox_policy();
         let exec_approval_requirement = context
             .session
             .services
@@ -795,8 +797,9 @@ impl UnifiedExecProcessManager {
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &request.command,
                 approval_policy: context.turn.approval_policy.value(),
-                sandbox_policy: context.turn.sandbox_policy.get(),
-                file_system_sandbox_policy: &context.turn.file_system_sandbox_policy,
+                permission_profile: context.turn.permission_profile(),
+                file_system_sandbox_policy: &file_system_sandbox_policy,
+                sandbox_cwd: context.turn.cwd.as_path(),
                 sandbox_permissions: if request.additional_permissions_preapproved {
                     crate::sandboxing::SandboxPermissions::UseDefault
                 } else {

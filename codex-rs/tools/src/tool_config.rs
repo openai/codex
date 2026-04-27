@@ -4,13 +4,13 @@ use codex_features::Features;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::WebSearchToolType;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -99,10 +99,9 @@ pub struct ToolsConfig {
     pub request_permissions_tool_enabled: bool,
     pub code_mode_enabled: bool,
     pub code_mode_only_enabled: bool,
-    pub js_repl_enabled: bool,
-    pub js_repl_tools_only: bool,
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
+    pub goal_tools: bool,
     pub multi_agent_v2: bool,
     pub hide_spawn_agent_metadata: bool,
     pub spawn_agent_usage_hint: bool,
@@ -122,7 +121,7 @@ pub struct ToolsConfigParams<'a> {
     pub image_generation_tool_auth_allowed: bool,
     pub web_search_mode: Option<WebSearchMode>,
     pub session_source: SessionSource,
-    pub sandbox_policy: &'a SandboxPolicy,
+    pub permission_profile: &'a PermissionProfile,
     pub windows_sandbox_level: WindowsSandboxLevel,
 }
 
@@ -135,16 +134,14 @@ impl ToolsConfig {
             image_generation_tool_auth_allowed,
             web_search_mode,
             session_source,
-            sandbox_policy,
+            permission_profile,
             windows_sandbox_level,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_code_mode = features.enabled(Feature::CodeMode);
         let include_code_mode_only = include_code_mode && features.enabled(Feature::CodeModeOnly);
-        let include_js_repl = features.enabled(Feature::JsRepl);
-        let include_js_repl_tools_only =
-            include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
+        let include_goal_tools = features.enabled(Feature::Goals);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
         let include_default_mode_request_user_input =
@@ -170,7 +167,7 @@ impl ToolsConfig {
             };
         let unified_exec_allowed = unified_exec_allowed_in_environment(
             cfg!(target_os = "windows"),
-            sandbox_policy,
+            permission_profile,
             *windows_sandbox_level,
         );
         let shell_type = if !features.enabled(Feature::ShellTool) {
@@ -221,10 +218,9 @@ impl ToolsConfig {
             request_permissions_tool_enabled,
             code_mode_enabled: include_code_mode,
             code_mode_only_enabled: include_code_mode_only,
-            js_repl_enabled: include_js_repl,
-            js_repl_tools_only: include_js_repl_tools_only,
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
+            goal_tools: include_goal_tools,
             multi_agent_v2: include_multi_agent_v2,
             hide_spawn_agent_metadata: false,
             spawn_agent_usage_hint: true,
@@ -258,6 +254,11 @@ impl ToolsConfig {
 
     pub fn with_hide_spawn_agent_metadata(mut self, hide_spawn_agent_metadata: bool) -> Self {
         self.hide_spawn_agent_metadata = hide_spawn_agent_metadata;
+        self
+    }
+
+    pub fn with_goal_tools_allowed(mut self, allowed: bool) -> Self {
+        self.goal_tools = self.goal_tools && allowed;
         self
     }
 
@@ -321,15 +322,19 @@ fn supports_image_generation(model_info: &ModelInfo) -> bool {
 
 fn unified_exec_allowed_in_environment(
     is_windows: bool,
-    sandbox_policy: &SandboxPolicy,
+    permission_profile: &PermissionProfile,
     windows_sandbox_level: WindowsSandboxLevel,
 ) -> bool {
+    let managed_sandbox_required = match permission_profile {
+        PermissionProfile::Managed {
+            file_system,
+            network,
+        } => !file_system.to_sandbox_policy().has_full_disk_write_access() || !network.is_enabled(),
+        PermissionProfile::Disabled | PermissionProfile::External { .. } => false,
+    };
     !(is_windows
         && windows_sandbox_level != WindowsSandboxLevel::Disabled
-        && !matches!(
-            sandbox_policy,
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-        ))
+        && managed_sandbox_required)
 }
 
 #[cfg(test)]

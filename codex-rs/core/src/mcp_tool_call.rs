@@ -159,8 +159,12 @@ pub(crate) async fn handle_mcp_tool_call(
                 .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
         };
     }
-    let request_meta =
-        build_mcp_tool_call_request_meta(turn_context.as_ref(), &server, metadata.as_ref());
+    let request_meta = build_mcp_tool_call_request_meta(
+        turn_context.as_ref(),
+        &server,
+        &call_id,
+        metadata.as_ref(),
+    );
     let connector_id = metadata
         .as_ref()
         .and_then(|metadata| metadata.connector_id.clone());
@@ -520,7 +524,7 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
 
     let sandbox_state = serde_json::to_value(SandboxState {
         permission_profile: Some(turn_context.permission_profile()),
-        sandbox_policy: turn_context.sandbox_policy.get().clone(),
+        sandbox_policy: turn_context.sandbox_policy(),
         codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
         sandbox_cwd: turn_context.cwd.to_path_buf(),
         use_legacy_landlock: turn_context.features.use_legacy_landlock(),
@@ -694,6 +698,7 @@ fn custom_mcp_tool_approval_mode(
 fn build_mcp_tool_call_request_meta(
     turn_context: &TurnContext,
     server: &str,
+    call_id: &str,
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> Option<serde_json::Value> {
     let mut request_meta = serde_json::Map::new();
@@ -705,10 +710,14 @@ fn build_mcp_tool_call_request_meta(
         );
     }
 
-    if server == CODEX_APPS_MCP_SERVER_NAME
-        && let Some(codex_apps_meta) =
-            metadata.and_then(|metadata| metadata.codex_apps_meta.clone())
-    {
+    if server == CODEX_APPS_MCP_SERVER_NAME {
+        let mut codex_apps_meta = metadata
+            .and_then(|metadata| metadata.codex_apps_meta.clone())
+            .unwrap_or_default();
+        codex_apps_meta.insert(
+            "call_id".to_string(),
+            serde_json::Value::String(call_id.to_string()),
+        );
         request_meta.insert(
             MCP_TOOL_CODEX_APPS_META_KEY.to_string(),
             serde_json::Value::Object(codex_apps_meta),
@@ -821,7 +830,7 @@ async fn maybe_request_mcp_tool_approval(
 ) -> Option<McpToolApprovalDecision> {
     if mcp_permission_prompt_is_auto_approved(
         turn_context.approval_policy.value(),
-        turn_context.sandbox_policy.get(),
+        &turn_context.permission_profile(),
     ) {
         return None;
     }

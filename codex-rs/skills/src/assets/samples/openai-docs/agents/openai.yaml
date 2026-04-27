@@ -1,9 +1,9 @@
 interface:
   display_name: "OpenAI Docs"
-  short_description: "Reference official OpenAI docs, including upgrade guidance"
+  short_description: "Reference docs, choose models, and migrate OpenAI API integrations"
   icon_small: "./assets/openai-small.svg"
   icon_large: "./assets/openai.png"
-  default_prompt: "Look up official OpenAI docs, load relevant GPT-5.4 upgrade references when applicable, and answer with concise, cited guidance."
+  default_prompt: "Use OpenAI Docs for official docs lookup, model selection, model migration, and prompt-upgrade work."
 
 dependencies:
   tools:

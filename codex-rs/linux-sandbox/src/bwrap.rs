@@ -32,7 +32,7 @@ use globset::GlobSet;
 use globset::GlobSetBuilder;
 
 /// Linux "platform defaults" that keep common system binaries and dynamic
-/// libraries readable when `ReadOnlyAccess::Restricted` requests them.
+/// libraries readable when a split filesystem policy requests `:minimal`.
 ///
 /// These are intentionally system-level paths only (plus Nix store roots) so
 /// `include_platform_defaults` does not silently widen access to user data.
@@ -1002,7 +1002,6 @@ mod tests {
     use codex_protocol::protocol::FileSystemSandboxEntry;
     use codex_protocol::protocol::FileSystemSandboxPolicy;
     use codex_protocol::protocol::FileSystemSpecialPath;
-    use codex_protocol::protocol::ReadOnlyAccess;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -1371,7 +1370,6 @@ mod tests {
                 AbsolutePathBuf::try_from(existing_root.as_path()).expect("absolute existing root"),
                 AbsolutePathBuf::try_from(missing_root.as_path()).expect("absolute missing root"),
             ],
-            read_only_access: Default::default(),
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1402,7 +1400,6 @@ mod tests {
     fn mounts_dev_before_writable_dev_binds() {
         let sandbox_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![AbsolutePathBuf::try_from(Path::new("/dev")).expect("/dev path")],
-            read_only_access: Default::default(),
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1449,23 +1446,17 @@ mod tests {
         let readable_root = temp_dir.path().join("readable");
         std::fs::create_dir(&readable_root).expect("create readable root");
 
-        let policy = SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: false,
-                readable_roots: vec![
-                    AbsolutePathBuf::try_from(readable_root.as_path())
-                        .expect("absolute readable root"),
-                ],
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(readable_root.as_path())
+                    .expect("absolute readable root"),
             },
-            network_access: false,
-        };
+            access: FileSystemAccessMode::Read,
+        }]);
 
-        let args = create_filesystem_args(
-            &FileSystemSandboxPolicy::from(&policy),
-            temp_dir.path(),
-            NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH,
-        )
-        .expect("filesystem args");
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
 
         assert_eq!(args.args[0..4], ["--tmpfs", "/", "--dev", "/dev"]);
 
@@ -1483,23 +1474,16 @@ mod tests {
     #[test]
     fn restricted_read_only_with_platform_defaults_includes_usr_when_present() {
         let temp_dir = TempDir::new().expect("temp dir");
-        let policy = SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: true,
-                readable_roots: Vec::new(),
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Minimal,
             },
-            network_access: false,
-        };
+            access: FileSystemAccessMode::Read,
+        }]);
 
-        // `ReadOnlyAccess::Restricted` always includes `cwd` as a readable
-        // root. Using `"/"` here would intentionally collapse to broad read
-        // access, so use a non-root cwd to exercise the restricted path.
-        let args = create_filesystem_args(
-            &FileSystemSandboxPolicy::from(&policy),
-            temp_dir.path(),
-            NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH,
-        )
-        .expect("filesystem args");
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
 
         assert!(
             args.args

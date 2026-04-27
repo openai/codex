@@ -54,7 +54,6 @@ async fn preset_matching_accepts_workspace_write_with_extra_roots() {
     let extra_root = test_path_buf("/tmp/extra").abs();
     let current_sandbox = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![extra_root],
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -348,8 +347,9 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
         .approval_policy
         .set(AskForApproval::Never)
         .expect("set approval policy");
-    chat.config.permissions.sandbox_policy =
-        Constrained::allow_any(SandboxPolicy::DangerFullAccess);
+    chat.config
+        .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess)
+        .expect("set sandbox policy");
 
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, /*width*/ 120);
@@ -389,9 +389,7 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
         .set(AskForApproval::OnRequest)
         .expect("set approval policy");
     chat.config
-        .permissions
-        .sandbox_policy
-        .set(SandboxPolicy::new_workspace_write_policy())
+        .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
 
     chat.open_permissions_popup();
@@ -448,9 +446,7 @@ async fn permissions_selection_hides_auto_review_when_feature_disabled_even_if_a
         .set(AskForApproval::OnRequest)
         .expect("set approval policy");
     chat.config
-        .permissions
-        .sandbox_policy
-        .set(SandboxPolicy::new_workspace_write_policy())
+        .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
 
     chat.open_permissions_popup();
@@ -537,7 +533,6 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
             approvals_reviewer: ApprovalsReviewer::AutoReview,
             sandbox_policy: SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![extra_root],
-                read_only_access: ReadOnlyAccess::FullAccess,
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -578,9 +573,7 @@ async fn permissions_selection_can_disable_auto_review() {
         .set(AskForApproval::OnRequest)
         .expect("set approval policy");
     chat.config
-        .permissions
-        .sandbox_policy
-        .set(SandboxPolicy::new_workspace_write_policy())
+        .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
 
     chat.open_permissions_popup();
@@ -619,9 +612,7 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
         .set(AskForApproval::OnRequest)
         .expect("set approval policy");
     chat.config
-        .permissions
-        .sandbox_policy
-        .set(SandboxPolicy::new_workspace_write_policy())
+        .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
     chat.set_approvals_reviewer(ApprovalsReviewer::User);
 

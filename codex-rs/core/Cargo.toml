@@ -120,9 +120,6 @@ uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 whoami = { workspace = true }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-core-foundation = "0.9"
-
 # Build OpenSSL from source for musl builds.
 [target.x86_64-unknown-linux-musl.dependencies]
 openssl-sys = { workspace = true, features = ["vendored"] }
@@ -130,13 +127,6 @@ openssl-sys = { workspace = true, features = ["vendored"] }
 # Build OpenSSL from source for musl builds.
 [target.aarch64-unknown-linux-musl.dependencies]
 openssl-sys = { workspace = true, features = ["vendored"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.52", features = [
-    "Win32_Foundation",
-    "Win32_System_Com",
-    "Win32_UI_Shell",
-] }
 
 [target.'cfg(unix)'.dependencies]
 codex-shell-escalation = { workspace = true }

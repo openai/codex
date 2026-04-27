@@ -2,10 +2,10 @@
 
 use anyhow::Ok;
 use codex_app_server_protocol::ConfigLayerSource;
-use codex_core::config_loader::ConfigLayerEntry;
-use codex_core::config_loader::ConfigLayerStack;
-use codex_core::config_loader::ConfigRequirements;
-use codex_core::config_loader::ConfigRequirementsToml;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigRequirements;
+use codex_config::ConfigRequirementsToml;
 use codex_features::Feature;
 use codex_protocol::protocol::DeprecationNoticeEvent;
 use codex_protocol::protocol::EventMsg;

@@ -692,13 +692,14 @@ async fn track_turn_resolved_config_analytics(
             session_source: thread_config.session_source,
             model: turn_context.model_info.slug.clone(),
             model_provider: turn_context.config.model_provider_id.clone(),
-            sandbox_policy: turn_context.sandbox_policy.get().clone(),
+            permission_profile: turn_context.permission_profile(),
+            permission_profile_cwd: turn_context.cwd.to_path_buf(),
             reasoning_effort: turn_context.reasoning_effort,
             reasoning_summary: Some(turn_context.reasoning_summary),
             service_tier: turn_context.config.service_tier,
             approval_policy: turn_context.approval_policy.value(),
             approvals_reviewer: turn_context.config.approvals_reviewer,
-            sandbox_network_access: turn_context.network_sandbox_policy.is_enabled(),
+            sandbox_network_access: turn_context.network_sandbox_policy().is_enabled(),
             collaboration_mode: turn_context.collaboration_mode.mode,
             personality: turn_context.personality,
             is_first_turn,
@@ -1502,6 +1503,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::AgentReasoningSectionBreak(_)
         | EventMsg::SessionConfigured(_)
         | EventMsg::ThreadNameUpdated(_)
+        | EventMsg::ThreadGoalUpdated(_)
         | EventMsg::McpStartupUpdate(_)
         | EventMsg::McpStartupComplete(_)
         | EventMsg::McpToolCallBegin(_)
@@ -1870,7 +1872,7 @@ async fn try_run_sampling_request(
     feedback_tags!(
         model = turn_context.model_info.slug.clone(),
         approval_policy = turn_context.approval_policy.value(),
-        sandbox_policy = turn_context.sandbox_policy.get(),
+        sandbox_policy = &turn_context.sandbox_policy(),
         effort = turn_context.reasoning_effort,
         auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
@@ -2131,6 +2133,7 @@ async fn try_run_sampling_request(
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
+                end_turn,
             } => {
                 flush_assistant_text_segments_all(
                     &sess,
@@ -2142,7 +2145,9 @@ async fn try_run_sampling_request(
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
                 should_emit_turn_diff = true;
-
+                if let Some(false) = end_turn {
+                    needs_follow_up = true;
+                }
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,

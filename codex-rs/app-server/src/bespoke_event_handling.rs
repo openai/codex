@@ -78,6 +78,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SkillsChangedNotification;
 use codex_app_server_protocol::TerminalInteractionNotification;
+use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
@@ -1949,6 +1950,20 @@ pub(crate) async fn apply_bespoke_event_handling(
                 };
                 outgoing
                     .send_global_server_notification(ServerNotification::ThreadNameUpdated(
+                        notification,
+                    ))
+                    .await;
+            }
+        }
+        EventMsg::ThreadGoalUpdated(thread_goal_event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = ThreadGoalUpdatedNotification {
+                    thread_id: thread_goal_event.thread_id.to_string(),
+                    turn_id: thread_goal_event.turn_id,
+                    goal: thread_goal_event.goal.clone().into(),
+                };
+                outgoing
+                    .send_global_server_notification(ServerNotification::ThreadGoalUpdated(
                         notification,
                     ))
                     .await;

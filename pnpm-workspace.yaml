@@ -7,6 +7,11 @@ ignoredBuiltDependencies:
   - esbuild
 
 minimumReleaseAge: 10080
+minimumReleaseAgeExclude: []
 
 blockExoticSubdeps: true
 strictDepBuilds: true
+trustPolicy: no-downgrade
+trustPolicyIgnoreAfter: 10080
+trustPolicyExclude: []
+allowBuilds: {}

@@ -555,6 +555,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
             .structured_content,
         Some(json!({
             "_codex_apps": {
+                "call_id": "calendar-call-1",
                 "resource_uri": CALENDAR_CREATE_EVENT_RESOURCE_URI,
                 "contains_mcp_source": true,
                 "connector_id": "calendar",
@@ -586,6 +587,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     assert_eq!(
         apps_tool_call.pointer("/params/_meta/_codex_apps"),
         Some(&json!({
+            "call_id": "calendar-call-1",
             "resource_uri": CALENDAR_CREATE_EVENT_RESOURCE_URI,
             "contains_mcp_source": true,
             "connector_id": "calendar",

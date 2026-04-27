@@ -25,7 +25,6 @@ mod codex_delegate;
 mod command_canonicalization;
 mod commit_attribution;
 pub mod config;
-pub mod config_loader;
 pub mod connectors;
 pub mod context;
 mod context_manager;
@@ -37,6 +36,7 @@ pub mod file_watcher;
 mod flags;
 #[cfg(test)]
 mod git_info_tests;
+mod goals;
 mod guardian;
 mod hook_runtime;
 mod installation_id;

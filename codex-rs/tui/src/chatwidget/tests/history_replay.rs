@@ -252,13 +252,11 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         .set(AskForApproval::OnRequest)
         .expect("set approval policy");
     chat.config
-        .permissions
-        .sandbox_policy
-        .set(SandboxPolicy::new_workspace_write_policy())
+        .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
     chat.config.cwd = test_path_buf("/home/user/main").abs();
 
-    let expected_sandbox = SandboxPolicy::new_read_only_policy();
+    let legacy_fallback_sandbox = SandboxPolicy::new_read_only_policy();
     let expected_cwd = test_path_buf("/home/user/sub-agent").abs();
     let expected_file_system_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
@@ -279,6 +277,9 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
             &expected_file_system_policy,
             NetworkSandboxPolicy::Restricted,
         );
+    let expected_sandbox = expected_permission_profile
+        .to_legacy_sandbox_policy(expected_cwd.as_path())
+        .expect("permission profile should project to legacy sandbox policy");
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
@@ -288,7 +289,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: expected_sandbox.clone(),
+        sandbox_policy: legacy_fallback_sandbox,
         permission_profile: Some(expected_permission_profile.clone()),
         cwd: expected_cwd.clone(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -309,7 +310,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         AskForApproval::Never
     );
     assert_eq!(
-        chat.config_ref().permissions.sandbox_policy.get(),
+        &chat.config_ref().legacy_sandbox_policy(),
         &expected_sandbox
     );
     assert_eq!(
@@ -321,13 +322,20 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
     let updated_sandbox = SandboxPolicy::new_workspace_write_policy();
     chat.set_sandbox_policy(updated_sandbox.clone())
         .expect("set sandbox policy");
+    let updated_file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+        &updated_sandbox,
+        &expected_cwd,
+    );
     assert_eq!(
         chat.config_ref().permissions.permission_profile(),
-        codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
-            &updated_sandbox,
-            &expected_cwd
+        codex_protocol::models::PermissionProfile::from_runtime_permissions_with_enforcement(
+            codex_protocol::models::SandboxEnforcement::from_legacy_sandbox_policy(
+                &updated_sandbox
+            ),
+            &updated_file_system_policy,
+            NetworkSandboxPolicy::from(&updated_sandbox),
         ),
-        "local sandbox changes should replace SessionConfigured profile-derived runtime permissions"
+        "local sandbox changes should replace SessionConfigured profile-derived runtime permissions using the widget cwd"
     );
 }
 
@@ -364,18 +372,18 @@ async fn session_configured_external_sandbox_keeps_external_runtime_policy() {
     });
 
     assert_eq!(
-        chat.config_ref().permissions.sandbox_policy.get(),
+        &chat.config_ref().legacy_sandbox_policy(),
         &expected_sandbox
     );
     assert_eq!(
         chat.config_ref()
             .permissions
-            .file_system_sandbox_policy
+            .file_system_sandbox_policy()
             .kind,
         FileSystemSandboxKind::ExternalSandbox,
     );
     assert_eq!(
-        chat.config_ref().permissions.network_sandbox_policy,
+        chat.config_ref().permissions.network_sandbox_policy(),
         NetworkSandboxPolicy::Restricted,
     );
 }

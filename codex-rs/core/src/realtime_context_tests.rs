@@ -70,7 +70,6 @@ fn message(role: &str, content: ContentItem) -> ResponseItem {
         id: None,
         role: role.to_string(),
         content: vec![content],
-        end_turn: None,
         phase: None,
     }
 }

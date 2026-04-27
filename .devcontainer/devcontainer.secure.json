@@ -8,7 +8,7 @@
       "TZ": "${localEnv:TZ:UTC}",
       "NODE_MAJOR": "22",
       "RUST_TOOLCHAIN": "1.92.0",
-      "CODEX_NPM_VERSION": "latest"
+      "CODEX_NPM_VERSION": "0.121.0"
     }
   },
   "runArgs": [

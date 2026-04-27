@@ -1,4 +1,5 @@
-use codex_protocol::protocol::SandboxPolicy;
+use crate::policy_transforms::should_require_platform_sandbox;
+use codex_protocol::models::PermissionProfile;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -26,8 +27,8 @@ const USER_NAMESPACE_FAILURES: [&str; 4] = [
     "No permissions to create a new namespace",
 ];
 
-pub fn system_bwrap_warning(sandbox_policy: &SandboxPolicy) -> Option<String> {
-    if !should_warn_about_system_bwrap(sandbox_policy) {
+pub fn system_bwrap_warning(permission_profile: &PermissionProfile) -> Option<String> {
+    if !should_warn_about_system_bwrap(permission_profile) {
         return None;
     }
 
@@ -35,10 +36,12 @@ pub fn system_bwrap_warning(sandbox_policy: &SandboxPolicy) -> Option<String> {
     system_bwrap_warning_for_path(system_bwrap_path.as_deref())
 }
 
-fn should_warn_about_system_bwrap(sandbox_policy: &SandboxPolicy) -> bool {
-    !matches!(
-        sandbox_policy,
-        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+fn should_warn_about_system_bwrap(permission_profile: &PermissionProfile) -> bool {
+    let (file_system_policy, network_policy) = permission_profile.to_runtime_permissions();
+    should_require_platform_sandbox(
+        &file_system_policy,
+        network_policy,
+        /*has_managed_network_requirements*/ false,
     )
 }
 

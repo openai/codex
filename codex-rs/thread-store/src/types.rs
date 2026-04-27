@@ -96,6 +96,17 @@ pub struct ReadThreadParams {
     pub include_history: bool,
 }
 
+/// Parameters for reading a local rollout-backed thread by path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadThreadByRolloutPathParams {
+    /// Local rollout JSONL path to read.
+    pub rollout_path: PathBuf,
+    /// Whether archived threads are eligible.
+    pub include_archived: bool,
+    /// Whether persisted rollout items should be included in the response.
+    pub include_history: bool,
+}
+
 /// The sort key to use when listing stored threads.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThreadSortKey {

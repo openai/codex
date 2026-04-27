@@ -5,8 +5,6 @@ use codex_protocol::protocol::FileSystemSandboxPolicy;
 #[cfg(test)]
 use codex_protocol::protocol::NetworkSandboxPolicy;
 #[cfg(test)]
-use codex_protocol::protocol::ReadOnlyAccess;
-#[cfg(test)]
 use codex_protocol::protocol::SandboxPolicy;
 #[cfg(test)]
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -456,7 +454,6 @@ fn resolve_sandbox_policies_accepts_semantically_equivalent_workspace_write_inpu
     let workspace = AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute workspace");
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![workspace],
-        read_only_access: ReadOnlyAccess::FullAccess,
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
