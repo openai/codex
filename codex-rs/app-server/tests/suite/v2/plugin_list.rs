@@ -1066,7 +1066,7 @@ async fn app_server_startup_remote_plugin_sync_runs_once() -> Result<()> {
         .join(STARTUP_REMOTE_PLUGIN_SYNC_MARKER_FILE);
 
     {
-        let mut mcp = McpProcess::new(codex_home.path()).await?;
+        let mut mcp = McpProcess::new_with_plugin_startup_tasks(codex_home.path()).await?;
         timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
         wait_for_path_exists(&marker_path).await?;
@@ -1102,7 +1102,7 @@ async fn app_server_startup_remote_plugin_sync_runs_once() -> Result<()> {
     assert!(config.contains(r#"[plugins."linear@openai-curated"]"#));
 
     {
-        let mut mcp = McpProcess::new(codex_home.path()).await?;
+        let mut mcp = McpProcess::new_with_plugin_startup_tasks(codex_home.path()).await?;
         timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     }
 
@@ -1490,7 +1490,7 @@ async fn plugin_list_uses_warmed_featured_plugin_ids_cache_on_first_request() ->
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_with_plugin_startup_tasks(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     wait_for_featured_plugin_request_count(&server, /*expected_count*/ 1).await?;
 

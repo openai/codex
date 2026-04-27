@@ -1,9 +1,14 @@
 use codex_app_server_protocol::AdditionalNetworkPermissions;
+use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::GrantedPermissionProfile;
 use codex_app_server_protocol::NetworkApprovalContext as AppServerNetworkApprovalContext;
+use codex_app_server_protocol::PatchChangeKind;
+use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::NetworkApprovalProtocol;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 pub(crate) fn network_approval_context_to_core(
     value: AppServerNetworkApprovalContext,
@@ -38,21 +43,50 @@ pub(crate) fn granted_permission_profile_from_request(
     }
 }
 
+pub(crate) fn file_update_changes_to_core(
+    changes: Vec<FileUpdateChange>,
+) -> HashMap<PathBuf, FileChange> {
+    changes
+        .into_iter()
+        .map(|change| {
+            let path = PathBuf::from(change.path);
+            let file_change = match change.kind {
+                PatchChangeKind::Add => FileChange::Add {
+                    content: change.diff,
+                },
+                PatchChangeKind::Delete => FileChange::Delete {
+                    content: change.diff,
+                },
+                PatchChangeKind::Update { move_path } => FileChange::Update {
+                    unified_diff: change.diff,
+                    move_path,
+                },
+            };
+            (path, file_change)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    use super::file_update_changes_to_core;
     use super::granted_permission_profile_from_request;
     use super::network_approval_context_to_core;
+    use codex_app_server_protocol::FileUpdateChange;
+    use codex_app_server_protocol::PatchChangeKind;
     use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::NetworkPermissions;
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
     use codex_protocol::permissions::FileSystemSandboxEntry;
     use codex_protocol::permissions::FileSystemSpecialPath;
+    use codex_protocol::protocol::FileChange;
     use codex_protocol::protocol::NetworkApprovalContext;
     use codex_protocol::protocol::NetworkApprovalProtocol;
     use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     fn absolute_path(path: &str) -> AbsolutePathBuf {
@@ -70,6 +104,23 @@ mod tests {
                 host: "example.com".to_string(),
                 protocol: NetworkApprovalProtocol::Socks5Tcp,
             }
+        );
+    }
+
+    #[test]
+    fn converts_file_update_changes_to_core() {
+        assert_eq!(
+            file_update_changes_to_core(vec![FileUpdateChange {
+                path: "foo.txt".to_string(),
+                kind: PatchChangeKind::Add,
+                diff: "hello\n".to_string(),
+            }]),
+            HashMap::from([(
+                PathBuf::from("foo.txt"),
+                FileChange::Add {
+                    content: "hello\n".to_string(),
+                },
+            )])
         );
     }
 

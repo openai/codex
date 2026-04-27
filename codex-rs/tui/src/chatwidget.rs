@@ -47,6 +47,7 @@ use self::realtime::PendingSteerCompareKey;
 use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_command::AppCommand;
 use crate::app_event::RealtimeAudioDeviceKind;
+use crate::app_server_approval_conversions::file_update_changes_to_core;
 use crate::app_server_approval_conversions::network_approval_context_to_core;
 use crate::app_server_session::ThreadSessionState;
 #[cfg(not(target_os = "linux"))]
@@ -141,8 +142,12 @@ use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::MessagePhase;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
 #[cfg(test)]
@@ -317,6 +322,8 @@ use crate::app_event::RateLimitRefreshOrigin;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
+use crate::auto_review_denials;
+use crate::auto_review_denials::RecentAutoReviewDenials;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
@@ -906,6 +913,7 @@ pub(crate) struct ChatWidget {
     // Guardian review keeps its own pending set so it can derive a single
     // footer summary from one or more in-flight review events.
     pending_guardian_review_status: PendingGuardianReviewStatus,
+    recent_auto_review_denials: RecentAutoReviewDenials,
     // Active hook runs render in a dedicated live cell so they can run alongside tools.
     active_hook_cell: Option<HookCell>,
     // Semantic status used for terminal-title status rendering.
@@ -1767,36 +1775,6 @@ fn patch_approval_request_from_params(
     }
 }
 
-fn app_server_patch_changes_to_core(
-    changes: Vec<codex_app_server_protocol::FileUpdateChange>,
-) -> HashMap<PathBuf, codex_protocol::protocol::FileChange> {
-    changes
-        .into_iter()
-        .map(|change| {
-            let path = PathBuf::from(change.path);
-            let file_change = match change.kind {
-                codex_app_server_protocol::PatchChangeKind::Add => {
-                    codex_protocol::protocol::FileChange::Add {
-                        content: change.diff,
-                    }
-                }
-                codex_app_server_protocol::PatchChangeKind::Delete => {
-                    codex_protocol::protocol::FileChange::Delete {
-                        content: change.diff,
-                    }
-                }
-                codex_app_server_protocol::PatchChangeKind::Update { move_path } => {
-                    codex_protocol::protocol::FileChange::Update {
-                        unified_diff: change.diff,
-                        move_path,
-                    }
-                }
-            };
-            (path, file_change)
-        })
-        .collect()
-}
-
 fn app_server_collab_thread_id_to_core(thread_id: &str) -> Option<ThreadId> {
     match ThreadId::from_string(thread_id) {
         Ok(thread_id) => Some(thread_id),
@@ -2034,12 +2012,25 @@ impl ChatWidget {
     }
 
     fn flush_answer_stream_with_separator(&mut self) {
-        if let Some(mut controller) = self.stream_controller.take()
-            && let Some(cell) = controller.finalize()
-        {
-            self.add_boxed_history(cell);
+        let had_stream_controller = self.stream_controller.is_some();
+        if let Some(mut controller) = self.stream_controller.take() {
+            let (cell, source) = controller.finalize();
+            if let Some(cell) = cell {
+                self.add_boxed_history(cell);
+            }
+            // Consolidate the run of streaming AgentMessageCells into a single AgentMarkdownCell
+            // that can re-render from source on resize.
+            if let Some(source) = source {
+                self.app_event_tx.send(AppEvent::ConsolidateAgentMessage {
+                    source,
+                    cwd: self.config.cwd.to_path_buf(),
+                });
+            }
         }
         self.adaptive_chunking.reset();
+        if had_stream_controller && self.stream_controllers_idle() {
+            self.app_event_tx.send(AppEvent::StopCommitAnimation);
+        }
     }
 
     fn stream_controllers_idle(&self) -> bool {
@@ -2320,20 +2311,6 @@ impl ChatWidget {
         display: SessionConfiguredDisplay,
         fork_parent_title: Option<String>,
     ) {
-        let (file_system_sandbox_policy, network_sandbox_policy) = match event
-            .permission_profile
-            .as_ref()
-        {
-            Some(permission_profile) => permission_profile.to_runtime_permissions(),
-            None => (
-                codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                    &event.sandbox_policy,
-                    &event.cwd,
-                ),
-                codex_protocol::permissions::NetworkSandboxPolicy::from(&event.sandbox_policy),
-            ),
-        };
-
         self.last_agent_markdown = None;
         self.agent_turn_markdowns.clear();
         self.visible_user_turn_count = 0;
@@ -2343,7 +2320,11 @@ impl ChatWidget {
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(/*skills*/ None);
         self.session_network_proxy = event.network_proxy.clone();
+        let previous_thread_id = self.thread_id;
         self.thread_id = Some(event.session_id);
+        if previous_thread_id != self.thread_id {
+            self.recent_auto_review_denials = RecentAutoReviewDenials::default();
+        }
         self.last_turn_id = None;
         self.thread_name = event.thread_name.clone();
         self.current_goal_status_indicator = None;
@@ -2366,18 +2347,33 @@ impl ChatWidget {
             self.config.permissions.approval_policy =
                 Constrained::allow_only(event.approval_policy);
         }
-        if let Err(err) = self
-            .config
-            .permissions
-            .sandbox_policy
-            .set(event.sandbox_policy.clone())
-        {
-            tracing::warn!(%err, "failed to sync sandbox_policy from SessionConfigured");
-            self.config.permissions.sandbox_policy =
-                Constrained::allow_only(event.sandbox_policy.clone());
+        let permission_sync = match event.permission_profile.clone() {
+            Some(permission_profile) => self
+                .config
+                .permissions
+                .set_permission_profile(permission_profile),
+            None => self
+                .config
+                .permissions
+                .set_legacy_sandbox_policy(event.sandbox_policy.clone(), event.cwd.as_path()),
+        };
+        if let Err(err) = permission_sync {
+            tracing::warn!(%err, "failed to sync permissions from SessionConfigured");
+            let permission_profile = event.permission_profile.clone().unwrap_or_else(|| {
+                let file_system_sandbox_policy =
+                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+                        &event.sandbox_policy,
+                        event.cwd.as_path(),
+                    );
+                PermissionProfile::from_runtime_permissions_with_enforcement(
+                    SandboxEnforcement::from_legacy_sandbox_policy(&event.sandbox_policy),
+                    &file_system_sandbox_policy,
+                    NetworkSandboxPolicy::from(&event.sandbox_policy),
+                )
+            });
+            self.config.permissions.permission_profile =
+                Constrained::allow_only(permission_profile);
         }
-        self.config.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
-        self.config.permissions.network_sandbox_policy = network_sandbox_policy;
         self.config.approvals_reviewer = event.approvals_reviewer;
         self.status_line_project_root_name_cache = None;
         let forked_from_id = event.forked_from_id;
@@ -2626,7 +2622,7 @@ impl ChatWidget {
 
         if self.plan_stream_controller.is_none() {
             self.plan_stream_controller = Some(PlanStreamController::new(
-                self.last_rendered_width.get().map(|w| w.saturating_sub(4)),
+                self.current_stream_width(/*reserved_cols*/ 4),
                 &self.config.cwd,
             ));
         }
@@ -2656,18 +2652,25 @@ impl ChatWidget {
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.saw_plan_item_this_turn = true;
-        let finalized_streamed_cell =
+        let (finalized_streamed_cell, consolidated_plan_source) =
             if let Some(mut controller) = self.plan_stream_controller.take() {
                 controller.finalize()
             } else {
-                None
+                (None, None)
             };
         if let Some(cell) = finalized_streamed_cell {
             self.add_boxed_history(cell);
             // TODO: Replace streamed output with the final plan item text if plan streaming is
             // removed or if we need to reconcile mismatches between streamed and final content.
+            if let Some(source) = consolidated_plan_source {
+                self.app_event_tx
+                    .send(AppEvent::ConsolidateProposedPlan(source));
+            }
         } else if !plan_text.is_empty() {
             self.add_to_history(history_cell::new_proposed_plan(plan_text, &self.config.cwd));
+        } else if let Some(source) = consolidated_plan_source {
+            self.app_event_tx
+                .send(AppEvent::ConsolidateProposedPlan(source));
         }
         if should_restore_after_stream {
             self.pending_status_indicator_restore = true;
@@ -2785,10 +2788,15 @@ impl ChatWidget {
         self.saw_copy_source_this_turn = false;
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
-        if let Some(mut controller) = self.plan_stream_controller.take()
-            && let Some(cell) = controller.finalize()
-        {
-            self.add_boxed_history(cell);
+        if let Some(mut controller) = self.plan_stream_controller.take() {
+            let (cell, source) = controller.finalize();
+            if let Some(cell) = cell {
+                self.add_boxed_history(cell);
+            }
+            if let Some(source) = source {
+                self.app_event_tx
+                    .send(AppEvent::ConsolidateProposedPlan(source));
+            }
         }
         self.flush_unified_exec_wait_streak();
         if !from_replay {
@@ -4148,6 +4156,7 @@ impl ChatWidget {
         if ev.status != GuardianAssessmentStatus::Denied {
             return;
         }
+        self.recent_auto_review_denials.push(ev.clone());
         let cell = if let Some(command) = guardian_command(&ev.action) {
             history_cell::new_approval_decision_cell(
                 command,
@@ -5042,7 +5051,7 @@ impl ChatWidget {
                 self.needs_final_message_separator = false;
             }
             self.stream_controller = Some(StreamController::new(
-                self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
+                self.current_stream_width(/*reserved_cols*/ 2),
                 &self.config.cwd,
             ));
         }
@@ -5567,6 +5576,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status: StatusIndicatorState::working(),
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
+            recent_auto_review_denials: RecentAutoReviewDenials::default(),
             active_hook_cell: None,
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
@@ -6112,9 +6122,26 @@ impl ChatWidget {
         }
     }
 
+    fn submit_shell_command_with_history(
+        &mut self,
+        command: &str,
+        history_text: &str,
+    ) -> QueueDrain {
+        let drain = self.submit_shell_command(command);
+        if drain == QueueDrain::Stop {
+            self.submit_op(Op::AddToHistory {
+                text: history_text.to_string(),
+            });
+        }
+        drain
+    }
+
     fn submit_queued_shell_prompt(&mut self, user_message: UserMessage) -> QueueDrain {
         match user_message.text.strip_prefix('!') {
-            Some(command) => self.submit_shell_command(command),
+            Some(command) => {
+                let history_text = user_message.text.clone();
+                self.submit_shell_command_with_history(command, &history_text)
+            }
             None => {
                 self.submit_user_message(user_message);
                 QueueDrain::Stop
@@ -6210,7 +6237,7 @@ impl ChatWidget {
         if shell_escape_policy == ShellEscapePolicy::Allow
             && let Some(stripped) = text.strip_prefix('!')
         {
-            let app_command = match self.submit_shell_command(stripped) {
+            let app_command = match self.submit_shell_command_with_history(stripped, &text) {
                 QueueDrain::Continue => None,
                 QueueDrain::Stop => Some(AppCommand::run_user_shell_command(
                     stripped.trim().to_string(),
@@ -6389,19 +6416,14 @@ impl ChatWidget {
             None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
             None => None,
         };
-        let permission_profile = if matches!(
-            self.config.permissions.sandbox_policy.get(),
-            SandboxPolicy::ExternalSandbox { .. }
-        ) {
-            None
-        } else {
-            Some(self.config.permissions.permission_profile())
-        };
+        let permission_profile = Some(self.config.permissions.permission_profile());
         let op = AppCommand::user_turn(
             items,
             self.config.cwd.to_path_buf(),
             self.config.permissions.approval_policy.value(),
-            self.config.permissions.sandbox_policy.get().clone(),
+            self.config
+                .permissions
+                .legacy_sandbox_policy(self.config.cwd.as_path()),
             permission_profile,
             effective_mode.model().to_string(),
             effective_mode.reasoning_effort(),
@@ -6746,7 +6768,7 @@ impl ChatWidget {
                             status,
                             codex_app_server_protocol::PatchApplyStatus::Failed
                         ),
-                        changes: app_server_patch_changes_to_core(changes),
+                        changes: file_update_changes_to_core(changes),
                         status: match status {
                             codex_app_server_protocol::PatchApplyStatus::Completed => {
                                 codex_protocol::protocol::PatchApplyStatus::Completed
@@ -7305,7 +7327,7 @@ impl ChatWidget {
                     call_id: id,
                     turn_id: notification.turn_id,
                     auto_approved: false,
-                    changes: app_server_patch_changes_to_core(changes),
+                    changes: file_update_changes_to_core(changes),
                 });
             }
             ThreadItem::McpToolCall {
@@ -9452,7 +9474,10 @@ impl ChatWidget {
     pub(crate) fn open_permissions_popup(&mut self) {
         let include_read_only = cfg!(target_os = "windows");
         let current_approval = self.config.permissions.approval_policy.value();
-        let current_sandbox = self.config.permissions.sandbox_policy.get();
+        let current_sandbox = self
+            .config
+            .permissions
+            .legacy_sandbox_policy(self.config.cwd.as_path());
         let guardian_approval_enabled = self.config.features.enabled(Feature::GuardianApproval);
         let current_review_policy = self.config.approvals_reviewer;
         let mut items: Vec<SelectionItem> = Vec::new();
@@ -9586,7 +9611,11 @@ impl ChatWidget {
                     name: base_name.clone(),
                     description: base_description.clone(),
                     is_current: current_review_policy == ApprovalsReviewer::User
-                        && Self::preset_matches_current(current_approval, current_sandbox, &preset),
+                        && Self::preset_matches_current(
+                            current_approval,
+                            &current_sandbox,
+                            &preset,
+                        ),
                     actions: default_actions,
                     dismiss_on_select: true,
                     disabled_reason: default_disabled_reason,
@@ -9603,7 +9632,7 @@ impl ChatWidget {
                         is_current: current_review_policy == ApprovalsReviewer::AutoReview
                             && Self::preset_matches_current(
                                 current_approval,
-                                current_sandbox,
+                                &current_sandbox,
                                 &preset,
                             ),
                         actions: Self::approval_preset_actions(
@@ -9624,7 +9653,7 @@ impl ChatWidget {
                     description: base_description,
                     is_current: Self::preset_matches_current(
                         current_approval,
-                        current_sandbox,
+                        &current_sandbox,
                         &preset,
                     ),
                     actions: default_actions,
@@ -9652,6 +9681,80 @@ impl ChatWidget {
             header: Box::new(()),
             ..Default::default()
         });
+    }
+
+    pub(crate) fn open_auto_review_denials_popup(&mut self) {
+        if self.recent_auto_review_denials.is_empty() {
+            self.add_info_message(
+                "No recent auto-review denials in this thread.".to_string(),
+                Some("Denials are recorded after auto-review rejects an action.".to_string()),
+            );
+            return;
+        }
+        let Some(thread_id) = self.thread_id() else {
+            self.add_error_message("That thread is no longer available.".to_string());
+            return;
+        };
+
+        let mut items = vec![SelectionItem {
+            name: "Command".to_string(),
+            description: Some("Rationale".to_string()),
+            is_disabled: true,
+            search_value: Some(String::new()),
+            ..Default::default()
+        }];
+        items.extend(self.recent_auto_review_denials.entries().map(|event| {
+            let id = event.id.clone();
+            let summary = auto_review_denials::action_summary(&event.action);
+            let rationale = event
+                .rationale
+                .as_deref()
+                .unwrap_or("Auto-review did not include a rationale.");
+            SelectionItem {
+                name: summary.clone(),
+                description: Some(rationale.to_string()),
+                selected_description: Some(rationale.to_string()),
+                search_value: Some(format!("{summary} {rationale}")),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::ApproveRecentAutoReviewDenial {
+                        thread_id,
+                        id: id.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            }
+        }));
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Auto-review Denials".to_string()),
+            subtitle: Some("Select a denied action to approve.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            is_searchable: true,
+            col_width_mode: ColumnWidthMode::AutoAllRows,
+            ..Default::default()
+        });
+        self.request_redraw();
+    }
+
+    pub(crate) fn approve_recent_auto_review_denial(&mut self, thread_id: ThreadId, id: String) {
+        let Some(event) = self.recent_auto_review_denials.take(&id) else {
+            self.add_error_message("That auto-review denial is no longer available.".to_string());
+            return;
+        };
+
+        self.app_event_tx.send(AppEvent::SubmitThreadOp {
+            thread_id,
+            op: Op::ApproveGuardianDeniedAction { event },
+        });
+        self.add_info_message(
+            "Approval recorded for one retry of the selected auto-review denial.".to_string(),
+            Some(
+                "The model will see the approval context; the retry still goes through auto-review."
+                    .to_string(),
+            ),
+        );
     }
 
     pub(crate) fn open_experimental_popup(&mut self) {
@@ -9760,7 +9863,10 @@ impl ChatWidget {
             self.config.codex_home.as_path(),
             cwd.as_path(),
             &env_map,
-            self.config.permissions.sandbox_policy.get(),
+            &self
+                .config
+                .permissions
+                .legacy_sandbox_policy(self.config.cwd.as_path()),
             Some(self.config.codex_home.as_path()),
         ) {
             Ok(_) => None,
@@ -9878,7 +9984,14 @@ impl ChatWidget {
         let mode_label = preset
             .as_ref()
             .map(|p| describe_policy(&p.sandbox))
-            .unwrap_or_else(|| describe_policy(self.config.permissions.sandbox_policy.get()));
+            .unwrap_or_else(|| {
+                describe_policy(
+                    &self
+                        .config
+                        .permissions
+                        .legacy_sandbox_policy(self.config.cwd.as_path()),
+                )
+            });
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
@@ -10259,16 +10372,9 @@ impl ChatWidget {
     /// Set the sandbox policy in the widget's config copy.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
-        self.config.permissions.sandbox_policy.set(policy)?;
-        let sandbox_policy = self.config.permissions.sandbox_policy.get();
-        self.config.permissions.file_system_sandbox_policy =
-            codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                sandbox_policy,
-                &self.config.cwd,
-            );
-        self.config.permissions.network_sandbox_policy =
-            codex_protocol::permissions::NetworkSandboxPolicy::from(sandbox_policy);
-        Ok(())
+        self.config
+            .permissions
+            .set_legacy_sandbox_policy(policy, self.config.cwd.as_path())
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -11377,6 +11483,52 @@ impl ChatWidget {
         self.bottom_pane.is_task_running() || self.is_review_mode
     }
 
+    /// Return the markdown body width available to an active stream.
+    ///
+    /// Streaming controllers render only the message body, while history cells add bullets,
+    /// gutters, or plan padding around that body. Callers pass the reserved columns for that
+    /// wrapper so live output uses the same width that finalized cells will use during reflow.
+    fn current_stream_width(&self, reserved_cols: usize) -> Option<usize> {
+        self.last_rendered_width.get().and_then(|width| {
+            if width == 0 {
+                None
+            } else {
+                Some(crate::width::usable_content_width(width, reserved_cols).unwrap_or(1))
+            }
+        })
+    }
+
+    /// Update resize-sensitive chat widget state after the terminal width changes.
+    ///
+    /// The app calls this even when terminal resize reflow is disabled so live stream wrapping
+    /// remains consistent with the current viewport. Finalized transcript rebuilding stays gated at
+    /// the app layer.
+    pub(crate) fn on_terminal_resize(&mut self, width: u16) {
+        let had_rendered_width = self.last_rendered_width.get().is_some();
+        self.last_rendered_width.set(Some(width as usize));
+        let stream_width = self.current_stream_width(/*reserved_cols*/ 2);
+        let plan_stream_width = self.current_stream_width(/*reserved_cols*/ 4);
+        if let Some(controller) = self.stream_controller.as_mut() {
+            controller.set_width(stream_width);
+        }
+        if let Some(controller) = self.plan_stream_controller.as_mut() {
+            controller.set_width(plan_stream_width);
+        }
+        if !had_rendered_width {
+            self.request_redraw();
+        }
+    }
+
+    /// Whether an agent message stream is active (not a plan stream).
+    pub(crate) fn has_active_agent_stream(&self) -> bool {
+        self.stream_controller.is_some()
+    }
+
+    /// Whether a proposed-plan stream is active.
+    pub(crate) fn has_active_plan_stream(&self) -> bool {
+        self.plan_stream_controller.is_some()
+    }
+
     fn is_plan_streaming_in_tui(&self) -> bool {
         self.plan_stream_controller.is_some()
     }
@@ -11503,6 +11655,7 @@ impl ChatWidget {
         T: Into<AppCommand>,
     {
         let op: AppCommand = op.into();
+        self.prepare_local_op_submission(&op);
         if op.is_review() && !self.bottom_pane.is_task_running() {
             self.bottom_pane.set_task_running(/*running*/ true);
         }
@@ -11519,6 +11672,20 @@ impl ChatWidget {
             }
         }
         true
+    }
+
+    pub(crate) fn prepare_local_op_submission(&mut self, op: &AppCommand) {
+        if matches!(op.view(), crate::app_command::AppCommandView::Interrupt)
+            && self.agent_turn_running
+        {
+            if let Some(controller) = self.stream_controller.as_mut() {
+                controller.clear_queue();
+            }
+            if let Some(controller) = self.plan_stream_controller.as_mut() {
+                controller.clear_queue();
+            }
+            self.request_redraw();
+        }
     }
 
     #[cfg(test)]
@@ -11652,6 +11819,7 @@ impl ChatWidget {
         self.config.config_layer_stack = config.config_layer_stack.clone();
         self.config.realtime = config.realtime.clone();
         self.config.memories = config.memories.clone();
+        self.config.terminal_resize_reflow = config.terminal_resize_reflow;
     }
 
     pub(crate) fn open_review_popup(&mut self) {

@@ -8,13 +8,13 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::task::JoinHandle;
 
-use crate::sandbox_tags::sandbox_tag;
+use crate::sandbox_tags::permission_profile_sandbox_tag;
 use codex_git_utils::get_git_remote_urls_assume_git_repo;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::get_has_changes;
 use codex_git_utils::get_head_commit_hash;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SessionSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -163,11 +163,19 @@ impl TurnMetadataState {
         session_source: &SessionSource,
         turn_id: String,
         cwd: AbsolutePathBuf,
-        sandbox_policy: &SandboxPolicy,
+        permission_profile: &PermissionProfile,
         windows_sandbox_level: WindowsSandboxLevel,
+        enforce_managed_network: bool,
     ) -> Self {
         let repo_root = get_git_repo_root(&cwd).map(|root| root.to_string_lossy().into_owned());
-        let sandbox = Some(sandbox_tag(sandbox_policy, windows_sandbox_level).to_string());
+        let sandbox = Some(
+            permission_profile_sandbox_tag(
+                permission_profile,
+                windows_sandbox_level,
+                enforce_managed_network,
+            )
+            .to_string(),
+        );
         let base_metadata = build_turn_metadata_bag(
             Some(session_id),
             session_source.thread_source_name(),

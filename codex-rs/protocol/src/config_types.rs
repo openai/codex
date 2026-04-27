@@ -8,11 +8,13 @@ use schemars::schema::SchemaObject;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::time::Duration;
 use strum_macros::Display;
 use strum_macros::EnumIter;
 use ts_rs::TS;
+use wildmatch::WildMatchPattern;
 
 use crate::openai_models::ReasoningEffort;
 
@@ -102,6 +104,65 @@ impl JsonSchema for ApprovalsReviewer {
             &["user", "auto_review", "guardian_subagent"],
             "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
         )
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellEnvironmentPolicyInherit {
+    /// "Core" environment variables for the platform. On UNIX, this would
+    /// include HOME, LOGNAME, PATH, SHELL, and USER, among others.
+    Core,
+
+    /// Inherits the full environment from the parent process.
+    #[default]
+    All,
+
+    /// Do not inherit any environment variables from the parent process.
+    None,
+}
+
+pub type EnvironmentVariablePattern = WildMatchPattern<'*', '?'>;
+
+/// Deriving the `env` based on this policy works as follows:
+/// 1. Create an initial map based on the `inherit` policy.
+/// 2. If `ignore_default_excludes` is false, filter the map using the default
+///    exclude pattern(s), which are: `"*KEY*"`, `"*SECRET*"`, and `"*TOKEN*"`.
+/// 3. If `exclude` is not empty, filter the map using the provided patterns.
+/// 4. Insert any entries from `r#set` into the map.
+/// 5. If non-empty, filter the map using the `include_only` patterns.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShellEnvironmentPolicy {
+    /// Starting point when building the environment.
+    pub inherit: ShellEnvironmentPolicyInherit,
+
+    /// True to skip the check to exclude default environment variables that
+    /// contain "KEY", "SECRET", or "TOKEN" in their name. Defaults to true.
+    pub ignore_default_excludes: bool,
+
+    /// Environment variable names to exclude from the environment.
+    pub exclude: Vec<EnvironmentVariablePattern>,
+
+    /// (key, value) pairs to insert in the environment.
+    pub r#set: HashMap<String, String>,
+
+    /// Environment variable names to retain in the environment.
+    pub include_only: Vec<EnvironmentVariablePattern>,
+
+    /// If true, the shell profile will be used to run the command.
+    pub use_profile: bool,
+}
+
+impl Default for ShellEnvironmentPolicy {
+    fn default() -> Self {
+        Self {
+            inherit: ShellEnvironmentPolicyInherit::All,
+            ignore_default_excludes: true,
+            exclude: Vec::new(),
+            r#set: HashMap::new(),
+            include_only: Vec::new(),
+            use_profile: false,
+        }
     }
 }
 

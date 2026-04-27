@@ -1,4 +1,4 @@
-use crate::fs_api::invalid_request;
+use crate::error_code::invalid_request;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::FsChangedNotification;

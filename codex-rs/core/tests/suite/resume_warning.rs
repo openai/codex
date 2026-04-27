@@ -32,7 +32,7 @@ fn resume_history(
         current_date: None,
         timezone: None,
         approval_policy: config.permissions.approval_policy.value(),
-        sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+        sandbox_policy: config.legacy_sandbox_policy(),
         permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,

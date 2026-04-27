@@ -383,6 +383,16 @@ fn validate_glob_scan_max_depth(max_depth: Option<usize>) -> io::Result<Option<u
 }
 
 fn contains_glob_chars(path: &str) -> bool {
+    contains_glob_chars_for_platform(path, cfg!(windows))
+}
+
+fn contains_glob_chars_for_platform(path: &str, is_windows: bool) -> bool {
+    let normalized_windows_path = if is_windows {
+        normalize_windows_device_path(path)
+    } else {
+        None
+    };
+    let path = normalized_windows_path.as_deref().unwrap_or(path);
     path.chars().any(|ch| matches!(ch, '*' | '?' | '[' | ']'))
 }
 

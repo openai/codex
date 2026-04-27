@@ -5,7 +5,13 @@ codex_rust_crate(
     crate_name = "codex_app_server",
     integration_test_timeout = "long",
     test_shard_counts = {
-        "app-server-all-test": 8,
+        # Note app-server-all-test has a large number of integration tests, so
+        # even a single shard can be quite slow. When there is a legitimate
+        # test failure in a shard, it will still get run 3x in total, which
+        # can cause us to exhaust our CI timeout if the shard happens to run
+        # long. Using a higher shard count for app-server-all-test should help
+        # mitigate this risk.
+        "app-server-all-test": 16,
         "app-server-unit-tests": 8,
     },
     test_tags = ["no-sandbox"],

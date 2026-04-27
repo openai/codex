@@ -17,6 +17,7 @@ use crate::shell::ShellType;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
+use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::runtimes::shell::zsh_fork_backend;
 use crate::tools::sandboxing::Approvable;
@@ -29,6 +30,7 @@ use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::NoopSpawnLifecycle;
@@ -203,9 +205,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         req: &UnifiedExecRequest,
         ctx: &ToolCtx,
     ) -> Option<NetworkApprovalSpec> {
-        req.network.as_ref()?;
+        let network =
+            managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions)?;
         Some(NetworkApprovalSpec {
-            network: req.network.clone(),
+            network: Some(network.clone()),
             mode: NetworkApprovalMode::Deferred,
             trigger: GuardianNetworkAccessTrigger {
                 call_id: ctx.call_id.clone(),
@@ -229,6 +232,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
     ) -> Result<UnifiedExecProcess, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
+        let managed_network =
+            managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions);
+        let mut env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
+        if let Some(network) = managed_network {
+            network.apply_to_env(&mut env);
+        }
         let environment_is_remote = ctx
             .turn
             .environment
@@ -242,7 +251,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 session_shell.as_ref(),
                 &req.cwd,
                 &req.explicit_env_overrides,
-                &req.env,
+                &env,
             )
         };
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell) {
@@ -251,10 +260,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             command
         };
 
-        let mut env = req.env.clone();
-        if let Some(network) = req.network.as_ref() {
-            network.apply_to_env(&mut env);
-        }
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
             let command =
                 build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
@@ -264,7 +269,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 capture_policy: ExecCapturePolicy::ShellTool,
             };
             let mut exec_env = attempt
-                .env_for(command, options, req.network.as_ref())
+                .env_for(command, options, managed_network)
                 .map_err(|err| ToolError::Codex(err.into()))?;
             exec_env.exec_server_env_config = req.exec_server_env_config.clone();
             match zsh_fork_backend::maybe_prepare_unified_exec(
@@ -322,7 +327,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             capture_policy: ExecCapturePolicy::ShellTool,
         };
         let mut exec_env = attempt
-            .env_for(command, options, req.network.as_ref())
+            .env_for(command, options, managed_network)
             .map_err(|err| ToolError::Codex(err.into()))?;
         exec_env.exec_server_env_config = req.exec_server_env_config.clone();
         let Some(environment) = ctx.turn.environment.as_ref() else {

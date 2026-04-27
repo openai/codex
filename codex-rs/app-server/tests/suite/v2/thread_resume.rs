@@ -65,6 +65,7 @@ use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_state::StateRuntime;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -83,7 +84,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::analytics::assert_basic_thread_initialized_event;
-use super::analytics::enable_analytics_capture;
+use super::analytics::mount_analytics_capture;
 use super::analytics::thread_initialized_event;
 use super::analytics::wait_for_analytics_payload;
 
@@ -93,6 +94,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const INTERNAL_ERROR_CODE: i64 = -32603;
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
+
+fn normalized_existing_path(path: impl AsRef<Path>) -> Result<PathBuf> {
+    Ok(AbsolutePathBuf::from_absolute_path(path.as_ref().canonicalize()?)?.into_path_buf())
+}
 
 async fn wait_for_responses_request_count(
     server: &wiremock::MockServer,
@@ -180,10 +185,7 @@ async fn thread_goal_get_rejects_unmaterialized_thread() -> Result<()> {
     let config = std::fs::read_to_string(&config_path)?;
     std::fs::write(
         &config_path,
-        config.replace(
-            "general_analytics = true\n",
-            "general_analytics = true\ngoals = true\n",
-        ),
+        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
     )?;
 
     let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
@@ -233,13 +235,8 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml_with_chatgpt_base_url(
-        codex_home.path(),
-        &server.uri(),
-        &server.uri(),
-        /*general_analytics_enabled*/ true,
-    )?;
-    enable_analytics_capture(&server, codex_home.path()).await?;
+    create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let conversation_id = create_fake_rollout_with_text_elements(
         codex_home.path(),
@@ -395,10 +392,7 @@ async fn thread_resume_emits_active_goal_update_before_continuation() -> Result<
     let config = std::fs::read_to_string(&config_path)?;
     std::fs::write(
         &config_path,
-        config.replace(
-            "general_analytics = true\n",
-            "general_analytics = true\ngoals = true\n",
-        ),
+        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
     )?;
 
     let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
@@ -502,10 +496,7 @@ async fn thread_goal_set_preserves_budget_limited_same_objective() -> Result<()>
     let config = std::fs::read_to_string(&config_path)?;
     std::fs::write(
         &config_path,
-        config.replace(
-            "general_analytics = true\n",
-            "general_analytics = true\ngoals = true\n",
-        ),
+        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
     )?;
 
     let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
@@ -603,10 +594,7 @@ async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
     let config = std::fs::read_to_string(&config_path)?;
     std::fs::write(
         &config_path,
-        config.replace(
-            "general_analytics = true\n",
-            "general_analytics = true\ngoals = true\n",
-        ),
+        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
     )?;
 
     let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
@@ -1655,7 +1643,6 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
                 content: vec![ContentItem::InputText {
                     text: "history override".to_string(),
                 }],
-                end_turn: None,
                 phase: None,
             }]),
             ..Default::default()
@@ -2410,7 +2397,6 @@ async fn thread_resume_surfaces_cloud_requirements_load_errors() -> Result<()> {
         codex_home.path(),
         &model_server.uri(),
         &chatgpt_base_url,
-        /*general_analytics_enabled*/ false,
     )?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -2537,7 +2523,12 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(resumed.id, thread.id);
-    assert_eq!(resumed.path, thread.path);
+    let resumed_path = resumed.path.as_ref().expect("resumed thread path");
+    let original_path = thread.path.as_ref().expect("original thread path");
+    assert_eq!(
+        normalized_existing_path(resumed_path)?,
+        normalized_existing_path(original_path)?
+    );
     assert_eq!(resumed.status, ThreadStatus::Idle);
 
     Ok(())
@@ -2577,9 +2568,12 @@ async fn thread_resume_can_load_source_by_external_path() -> Result<()> {
     let ThreadResumeResponse {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    let expected_thread_path = std::fs::canonicalize(&thread_path)?;
     assert_eq!(resumed.id, thread_id);
-    assert_eq!(resumed.path, Some(expected_thread_path));
+    let resumed_path = resumed.path.as_ref().expect("resumed thread path");
+    assert_eq!(
+        normalized_existing_path(resumed_path)?,
+        normalized_existing_path(&thread_path)?
+    );
     assert_eq!(resumed.preview, "external path history");
     assert_eq!(resumed.status, ThreadStatus::Idle);
 
@@ -2603,7 +2597,6 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
         content: vec![ContentItem::InputText {
             text: history_text.to_string(),
         }],
-        end_turn: None,
         phase: None,
     }];
 
@@ -2848,7 +2841,6 @@ model_provider = "mock_provider"
 
 [features]
 personality = true
-general_analytics = true
 
 [model_providers.mock_provider]
 name = "Mock provider for test"
@@ -2879,7 +2871,6 @@ model_provider = "mock_provider"
 
 [features]
 personality = true
-general_analytics = true
 
 [model_providers.mock_provider]
 name = "Mock provider for test"
@@ -2896,13 +2887,7 @@ fn create_config_toml_with_chatgpt_base_url(
     codex_home: &std::path::Path,
     server_uri: &str,
     chatgpt_base_url: &str,
-    general_analytics_enabled: bool,
 ) -> std::io::Result<()> {
-    let general_analytics_toml = if general_analytics_enabled {
-        "\ngeneral_analytics = true".to_string()
-    } else {
-        "\ngeneral_analytics = false".to_string()
-    };
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
@@ -2917,7 +2902,6 @@ model_provider = "mock_provider"
 
 [features]
 personality = true
-{general_analytics_toml}
 
 [model_providers.mock_provider]
 name = "Mock provider for test"
