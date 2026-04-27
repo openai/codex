@@ -1282,7 +1282,7 @@ async fn run_exec_server_command(
             .map_err(anyhow::Error::msg)?;
         let config = Config::load_with_cli_overrides(cli_overrides).await?;
         let auth_manager =
-            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
+            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
         let mut remote_config = codex_exec_server::RemoteExecutorConfig::new(base_url);
         remote_config.environment_id = cmd.environment_id;
         if let Some(name) = cmd.name {

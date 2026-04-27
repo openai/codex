@@ -212,7 +212,7 @@ async fn cloud_environment_chatgpt_auth(
                     "cloud environments require ChatGPT authentication".to_string(),
                 ));
             }
-            auth_manager.reload();
+            auth_manager.reload().await;
             reloaded = true;
             continue;
         };
@@ -223,7 +223,7 @@ async fn cloud_environment_chatgpt_auth(
             ));
         }
         if auth.get_account_id().is_none() && !reloaded {
-            auth_manager.reload();
+            auth_manager.reload().await;
             reloaded = true;
             continue;
         }
@@ -361,8 +361,9 @@ mod tests {
     #[tokio::test]
     async fn register_executor_posts_with_chatgpt_auth_headers() {
         let server = MockServer::start().await;
-        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         let registration_id = Uuid::from_u128(1);
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         let request = RemoteExecutorConfig::new(server.uri())
             .registration_request(&auth, registration_id)
             .expect("registration request");
