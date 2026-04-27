@@ -1156,6 +1156,24 @@ fn list_item_after_code_block_keeps_blank_separator() {
 }
 
 #[test]
+fn outer_list_item_after_nested_code_block_keeps_blank_separator() {
+    let md = "1. First:\n   - Nested:\n\n     ```rust\n     fn first() {}\n     ```\n\n2. Second:\n";
+    let text = render_markdown_text(md);
+    let lines = plain_lines(&text);
+    assert_eq!(
+        lines,
+        vec![
+            "1. First:",
+            "    - Nested:",
+            "",
+            "      fn first() {}",
+            "",
+            "2. Second:",
+        ]
+    );
+}
+
+#[test]
 fn list_item_after_simple_item_stays_compact() {
     let md = "1. First\n\n2. Second\n";
     let text = render_markdown_text(md);

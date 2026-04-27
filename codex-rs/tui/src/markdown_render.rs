@@ -544,7 +544,7 @@ where
     }
 
     fn start_codeblock(&mut self, lang: Option<String>, indent: Option<Span<'static>>) {
-        if let Some(item_contains_code_block) = self.list_item_contains_code_block.last_mut() {
+        for item_contains_code_block in &mut self.list_item_contains_code_block {
             *item_contains_code_block = true;
         }
         self.flush_current_line();
