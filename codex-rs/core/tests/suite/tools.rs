@@ -14,10 +14,12 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -550,7 +552,9 @@ async fn shell_enforces_glob_deny_read_policy() -> Result<()> {
     let mut builder = test_codex()
         .with_model("gpt-5.4")
         .with_config(move |config| {
-            config.permissions.sandbox_policy = Constrained::allow_any(read_only_policy_for_config);
+            config
+                .set_legacy_sandbox_policy(read_only_policy_for_config)
+                .expect("set sandbox policy");
             let mut file_system_sandbox_policy = FileSystemSandboxPolicy::default();
             file_system_sandbox_policy
                 .entries
@@ -560,7 +564,11 @@ async fn shell_enforces_glob_deny_read_policy() -> Result<()> {
                     },
                     access: FileSystemAccessMode::None,
                 });
-            config.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
+            config.permissions.permission_profile =
+                Constrained::allow_any(PermissionProfile::from_runtime_permissions(
+                    &file_system_sandbox_policy,
+                    NetworkSandboxPolicy::Restricted,
+                ));
         });
     let fixture = builder.build(&server).await?;
 
@@ -783,9 +791,7 @@ async fn shell_timeout_handles_background_grandchild_stdout() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
         config
-            .permissions
-            .sandbox_policy
-            .set(SandboxPolicy::DangerFullAccess)
+            .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess)
             .expect("set sandbox policy");
     });
     let test = builder.build(&server).await?;
@@ -879,9 +885,7 @@ async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|cfg| {
-        cfg.permissions
-            .sandbox_policy
-            .set(SandboxPolicy::DangerFullAccess)
+        cfg.set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess)
             .expect("set sandbox policy");
     });
     let test = builder.build(&server).await?;

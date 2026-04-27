@@ -3,8 +3,13 @@ use std::sync::Arc;
 
 use crate::session::tests::make_session_and_context;
 use crate::tools::context::ToolPayload;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
+use pretty_assertions::assert_eq;
+use serde_json::json;
 
 use super::ToolCall;
 use super::ToolRouter;
@@ -132,4 +137,87 @@ async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> 
     assert!(!router.tool_supports_parallel(&different_server_call));
 
     Ok(())
+}
+
+#[tokio::test]
+async fn model_visible_specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    let hidden_tool = "hidden_dynamic_tool";
+    let visible_tool = "visible_dynamic_tool";
+    let dynamic_tools = vec![
+        DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
+            name: hidden_tool.to_string(),
+            description: "Hidden until discovered.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+            defer_loading: true,
+        },
+        DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
+            name: visible_tool.to_string(),
+            description: "Visible immediately.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+            defer_loading: false,
+        },
+    ];
+
+    let router = ToolRouter::from_config(
+        &turn.tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: None,
+            mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
+            discoverable_tools: None,
+            dynamic_tools: &dynamic_tools,
+        },
+    );
+
+    assert!(
+        router
+            .find_spec(&ToolName::namespaced("codex_app", hidden_tool))
+            .is_some()
+    );
+    assert_eq!(
+        namespace_function_names(&router.specs(), "codex_app"),
+        vec![hidden_tool.to_string(), visible_tool.to_string()]
+    );
+    assert_eq!(
+        namespace_function_names(&router.model_visible_specs(), "codex_app"),
+        vec![visible_tool.to_string()]
+    );
+
+    Ok(())
+}
+
+fn namespace_function_names(specs: &[ToolSpec], namespace_name: &str) -> Vec<String> {
+    specs
+        .iter()
+        .find_map(|spec| match spec {
+            ToolSpec::Namespace(namespace) if namespace.name == namespace_name => Some(
+                namespace
+                    .tools
+                    .iter()
+                    .map(|tool| match tool {
+                        ResponsesApiNamespaceTool::Function(tool) => tool.name.clone(),
+                    })
+                    .collect(),
+            ),
+            ToolSpec::Function(_)
+            | ToolSpec::Freeform(_)
+            | ToolSpec::ToolSearch { .. }
+            | ToolSpec::LocalShell {}
+            | ToolSpec::ImageGeneration { .. }
+            | ToolSpec::WebSearch { .. }
+            | ToolSpec::Namespace(_) => None,
+        })
+        .unwrap_or_default()
 }

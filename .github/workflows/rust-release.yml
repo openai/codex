@@ -651,11 +651,59 @@ jobs:
             prefix="${NPM_TAG}-"
           fi
 
+          root_tarball="dist/npm/codex-npm-${VERSION}.tgz"
+          sdk_tarball="dist/npm/codex-sdk-npm-${VERSION}.tgz"
+          # Keep this list in sync with CODEX_PLATFORM_PACKAGES in
+          # codex-cli/scripts/build_npm_package.py. The root wrapper advances
+          # @openai/codex@latest as soon as it publishes, so every platform
+          # package it aliases must already exist in the registry first.
+          platform_tarballs=(
+            "dist/npm/codex-npm-linux-x64-${VERSION}.tgz"
+            "dist/npm/codex-npm-linux-arm64-${VERSION}.tgz"
+            "dist/npm/codex-npm-darwin-x64-${VERSION}.tgz"
+            "dist/npm/codex-npm-darwin-arm64-${VERSION}.tgz"
+            "dist/npm/codex-npm-win32-x64-${VERSION}.tgz"
+            "dist/npm/codex-npm-win32-arm64-${VERSION}.tgz"
+          )
+
+          for required_tarball in "${platform_tarballs[@]}" "${root_tarball}"; do
+            if [[ ! -f "${required_tarball}" ]]; then
+              echo "Missing npm tarball: ${required_tarball}"
+              exit 1
+            fi
+          done
+
           shopt -s nullglob
-          tarballs=(dist/npm/*-"${VERSION}".tgz)
-          if [[ ${#tarballs[@]} -eq 0 ]]; then
-            echo "No npm tarballs found in dist/npm for version ${VERSION}"
-            exit 1
+          other_tarballs=()
+          for tarball in dist/npm/*-"${VERSION}".tgz; do
+            if [[ "${tarball}" == "${root_tarball}" || "${tarball}" == "${sdk_tarball}" ]]; then
+              continue
+            fi
+
+            is_platform_tarball=false
+            for platform_tarball in "${platform_tarballs[@]}"; do
+              if [[ "${tarball}" == "${platform_tarball}" ]]; then
+                is_platform_tarball=true
+                break
+              fi
+            done
+            if [[ "${is_platform_tarball}" == true ]]; then
+              continue
+            fi
+
+            other_tarballs+=("${tarball}")
+          done
+
+          # Publish the platform packages before the root CLI wrapper. The root
+          # wrapper advances @openai/codex@latest, so it should only publish
+          # after the optional dependency versions it references exist.
+          tarballs=(
+            "${platform_tarballs[@]}"
+            "${other_tarballs[@]}"
+            "${root_tarball}"
+          )
+          if [[ -f "${sdk_tarball}" ]]; then
+            tarballs+=("${sdk_tarball}")
           fi
 
           for tarball in "${tarballs[@]}"; do

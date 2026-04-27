@@ -5,13 +5,13 @@ use crate::context::is_memory_excluded_contextual_user_fragment;
 use crate::memories::metrics;
 use crate::memories::phase_one;
 use crate::memories::phase_one::PRUNE_BATCH_SIZE;
-use crate::memories::prompts::build_stage_one_input_message;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::policy::should_persist_response_item_for_memories;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use codex_api::ResponseEvent;
 use codex_config::types::MemoriesConfig;
+use codex_memories_write::build_stage_one_input_message;
 use codex_otel::SessionTelemetry;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::ServiceTier;
@@ -332,7 +332,6 @@ mod job {
                         &rollout_contents,
                     )?,
                 }],
-                end_turn: None,
                 phase: None,
             }],
             tools: Vec::new(),
@@ -491,7 +490,6 @@ mod job {
             id,
             role,
             content,
-            end_turn,
             phase,
         } = item
         else {
@@ -519,7 +517,6 @@ mod job {
             id: id.clone(),
             role: role.clone(),
             content,
-            end_turn: *end_turn,
             phase: phase.clone(),
         })
     }

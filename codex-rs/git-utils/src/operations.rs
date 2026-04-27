@@ -56,6 +56,19 @@ pub(crate) fn resolve_repository_root(path: &Path) -> Result<PathBuf, GitTooling
     Ok(PathBuf::from(root))
 }
 
+pub(crate) fn run_git_for_status<I, S>(
+    dir: &Path,
+    args: I,
+    env: Option<&[(OsString, OsString)]>,
+) -> Result<(), GitToolingError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    run_git(dir, args, env)?;
+    Ok(())
+}
+
 pub(crate) fn run_git_for_stdout<I, S>(
     dir: &Path,
     args: I,

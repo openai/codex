@@ -17,7 +17,7 @@ use codex_connectors::DirectoryListResponse;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::models::PermissionProfile;
 use codex_tools::DiscoverableTool;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
@@ -25,11 +25,11 @@ use serde::de::DeserializeOwned;
 use tracing::warn;
 
 use crate::config::Config;
-use crate::config_loader::AppsRequirementsToml;
 use crate::mcp::McpManager;
 use crate::plugins::PluginsManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
 use crate::session::INITIAL_SUBMIT_ID;
+use codex_config::AppsRequirementsToml;
 use codex_config::types::AppToolApproval;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::ToolSuggestDiscoverableType;
@@ -144,7 +144,7 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
     config: &Config,
 ) -> Option<Vec<AppInfo>> {
     let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
     let auth = auth_manager.auth().await;
     if !config
         .features
@@ -216,7 +216,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     environment_manager: &EnvironmentManager,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
     let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
     let auth = auth_manager.auth().await;
     if !config
         .features
@@ -274,7 +274,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         &config.permissions.approval_policy,
         INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
-        SandboxPolicy::new_read_only_policy(),
+        PermissionProfile::default(),
         McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf()),
         config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
@@ -434,7 +434,7 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
         Some(auth)
     } else {
         let auth_manager =
-            AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
+            AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
         loaded_auth = auth_manager.auth().await;
         loaded_auth.as_ref()
     };

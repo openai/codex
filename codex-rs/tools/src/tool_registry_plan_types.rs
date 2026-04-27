@@ -18,6 +18,7 @@ pub enum ToolHandlerKind {
     CodeModeWait,
     DynamicTool,
     FollowupTaskV2,
+    Goal,
     ListAgentsV2,
     ListDir,
     Mcp,

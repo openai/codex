@@ -96,6 +96,7 @@ use codex_protocol::protocol::SkillMetadata as CoreSkillMetadata;
 use codex_protocol::protocol::SkillScope as CoreSkillScope;
 use codex_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
+use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
@@ -1433,7 +1434,7 @@ v2_enum_from_core!(
 pub enum FileSystemSpecialPath {
     Root,
     Minimal,
-    CurrentWorkingDirectory,
+    #[serde(alias = "current_working_directory")]
     ProjectRoots {
         subpath: Option<PathBuf>,
     },
@@ -1450,7 +1451,6 @@ impl From<CoreFileSystemSpecialPath> for FileSystemSpecialPath {
         match value {
             CoreFileSystemSpecialPath::Root => Self::Root,
             CoreFileSystemSpecialPath::Minimal => Self::Minimal,
-            CoreFileSystemSpecialPath::CurrentWorkingDirectory => Self::CurrentWorkingDirectory,
             CoreFileSystemSpecialPath::ProjectRoots { subpath } => Self::ProjectRoots { subpath },
             CoreFileSystemSpecialPath::Tmpdir => Self::Tmpdir,
             CoreFileSystemSpecialPath::SlashTmp => Self::SlashTmp,
@@ -1464,7 +1464,6 @@ impl From<FileSystemSpecialPath> for CoreFileSystemSpecialPath {
         match value {
             FileSystemSpecialPath::Root => Self::Root,
             FileSystemSpecialPath::Minimal => Self::Minimal,
-            FileSystemSpecialPath::CurrentWorkingDirectory => Self::CurrentWorkingDirectory,
             FileSystemSpecialPath::ProjectRoots { subpath } => Self::ProjectRoots { subpath },
             FileSystemSpecialPath::Tmpdir => Self::Tmpdir,
             FileSystemSpecialPath::SlashTmp => Self::SlashTmp,
@@ -3746,6 +3745,103 @@ pub struct ThreadUnarchiveParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadSetNameResponse {}
+
+v2_enum_from_core! {
+    pub enum ThreadGoalStatus from CoreThreadGoalStatus {
+        Active,
+        Paused,
+        BudgetLimited,
+        Complete,
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadGoal {
+    pub thread_id: String,
+    pub objective: String,
+    pub status: ThreadGoalStatus,
+    #[ts(type = "number | null")]
+    pub token_budget: Option<i64>,
+    #[ts(type = "number")]
+    pub tokens_used: i64,
+    #[ts(type = "number")]
+    pub time_used_seconds: i64,
+    #[ts(type = "number")]
+    pub created_at: i64,
+    #[ts(type = "number")]
+    pub updated_at: i64,
+}
+
+impl From<codex_protocol::protocol::ThreadGoal> for ThreadGoal {
+    fn from(value: codex_protocol::protocol::ThreadGoal) -> Self {
+        Self {
+            thread_id: value.thread_id.to_string(),
+            objective: value.objective,
+            status: value.status.into(),
+            token_budget: value.token_budget,
+            tokens_used: value.tokens_used,
+            time_used_seconds: value.time_used_seconds,
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadGoalSetParams {
+    pub thread_id: String,
+    #[ts(optional = nullable)]
+    pub objective: Option<String>,
+    #[ts(optional = nullable)]
+    pub status: Option<ThreadGoalStatus>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable, type = "number | null")]
+    pub token_budget: Option<Option<i64>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadGoalSetResponse {
+    pub goal: ThreadGoal,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadGoalGetParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadGoalGetResponse {
+    pub goal: Option<ThreadGoal>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadGoalClearParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadGoalClearResponse {
+    pub cleared: bool,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -6273,6 +6369,22 @@ pub struct ThreadNameUpdatedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadGoalUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub goal: ThreadGoal,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadGoalClearedNotification {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct TurnStartedNotification {
     pub thread_id: String,
     pub turn: Turn,
@@ -7995,6 +8107,26 @@ mod tests {
             "globScanMaxDepth": 0,
         }))
         .expect_err("zero glob scan depth should fail deserialization");
+    }
+
+    #[test]
+    fn legacy_current_working_directory_special_path_deserializes_as_project_roots() {
+        let special_path = serde_json::from_value::<FileSystemSpecialPath>(json!({
+            "kind": "current_working_directory",
+        }))
+        .expect("legacy cwd special path should deserialize");
+
+        assert_eq!(
+            special_path,
+            FileSystemSpecialPath::ProjectRoots { subpath: None }
+        );
+        assert_eq!(
+            serde_json::to_value(&special_path).expect("serialize special path"),
+            json!({
+                "kind": "project_roots",
+                "subpath": null,
+            })
+        );
     }
 
     #[test]

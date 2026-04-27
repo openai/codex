@@ -24,7 +24,7 @@ use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-use super::analytics::enable_analytics_capture;
+use super::analytics::mount_analytics_capture;
 use super::analytics::wait_for_analytics_event;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -41,7 +41,7 @@ async fn turn_steer_requires_active_turn() -> Result<()> {
         &server.uri(),
         &server.uri(),
     )?;
-    enable_analytics_capture(&server, &codex_home).await?;
+    mount_analytics_capture(&server, &codex_home).await?;
 
     let mut mcp = McpProcess::new_without_managed_config(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -125,7 +125,7 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
         &server.uri(),
         &server.uri(),
     )?;
-    enable_analytics_capture(&server, &codex_home).await?;
+    mount_analytics_capture(&server, &codex_home).await?;
 
     let mut mcp = McpProcess::new_without_managed_config(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -234,7 +234,7 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
         &server.uri(),
         &server.uri(),
     )?;
-    enable_analytics_capture(&server, &codex_home).await?;
+    mount_analytics_capture(&server, &codex_home).await?;
 
     let mut mcp = McpProcess::new_without_managed_config(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;

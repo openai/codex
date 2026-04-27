@@ -117,9 +117,7 @@ pub(crate) fn file_system_policy_has_cwd_dependent_entries(
         .any(|entry| match &entry.path {
             FileSystemPath::GlobPattern { pattern } => !Path::new(pattern).is_absolute(),
             FileSystemPath::Special {
-                value:
-                    FileSystemSpecialPath::CurrentWorkingDirectory
-                    | FileSystemSpecialPath::ProjectRoots { .. },
+                value: FileSystemSpecialPath::ProjectRoots { .. },
             } => true,
             FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => false,
         })

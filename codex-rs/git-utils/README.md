@@ -2,7 +2,8 @@
 
 Helpers for interacting with git, including patch application. The crate also
 exposes a lightweight baseline API for internal directories that use git only
-as a resettable diff mechanism:
+as a resettable diff mechanism: `ensure_git_baseline_repository` preserves a
+usable `root/.git` baseline or creates one when it is missing or unusable,
 `reset_git_repository` replaces `root/.git` with a fresh one-commit baseline,
 and `diff_since_latest_init` returns structured file changes plus a unified
 diff from that baseline to the current directory contents.

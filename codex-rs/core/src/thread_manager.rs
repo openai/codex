@@ -1044,6 +1044,7 @@ impl ThreadManagerState {
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
+        let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         let environment =
             selected_primary_environment(self.environment_manager.as_ref(), &environments)?;
         let watch_registration = match environment.as_ref() {
@@ -1089,8 +1090,15 @@ impl ThreadManagerState {
             thread_store,
         })
         .await?;
-        self.finalize_thread_spawn(codex, thread_id, watch_registration)
-            .await
+        let new_thread = self
+            .finalize_thread_spawn(codex, thread_id, watch_registration)
+            .await?;
+        if is_resumed_thread
+            && let Err(err) = new_thread.thread.apply_goal_resume_runtime_effects().await
+        {
+            warn!("failed to apply goal resume runtime effects: {err}");
+        }
+        Ok(new_thread)
     }
 
     async fn finalize_thread_spawn(

@@ -272,8 +272,9 @@ async fn effective_patch_permissions(
         session.granted_session_permissions().await.as_ref(),
         session.granted_turn_permissions().await.as_ref(),
     );
+    let base_file_system_sandbox_policy = turn.file_system_sandbox_policy();
     let file_system_sandbox_policy = effective_file_system_sandbox_policy(
-        &turn.file_system_sandbox_policy,
+        &base_file_system_sandbox_policy,
         granted_permissions.as_ref(),
     );
     let effective_additional_permissions = apply_granted_turn_permissions(

@@ -1,6 +1,6 @@
 use super::AgentRoleConfig;
-use crate::config_loader::ConfigLayerStack;
-use crate::config_loader::ConfigLayerStackOrdering;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigLayerStackOrdering;
 use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
 use codex_config::config_toml::ConfigToml;

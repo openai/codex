@@ -26,7 +26,7 @@ const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
 
 async fn apps_enabled(config: &Config) -> bool {
     let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
     let auth = auth_manager.auth().await;
     config
         .features
@@ -35,7 +35,7 @@ async fn apps_enabled(config: &Config) -> bool {
 
 async fn connector_auth(config: &Config) -> anyhow::Result<CodexAuth> {
     let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
     let auth = auth_manager
         .auth()
         .await

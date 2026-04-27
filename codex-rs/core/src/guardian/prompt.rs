@@ -14,6 +14,7 @@ use codex_utils_output_truncation::approx_bytes_for_tokens;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count;
 
+use super::AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX;
 use super::GUARDIAN_MAX_MESSAGE_ENTRY_TOKENS;
 use super::GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS;
 use super::GUARDIAN_MAX_TOOL_ENTRY_TOKENS;
@@ -33,6 +34,7 @@ pub(crate) struct GuardianTranscriptEntry {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum GuardianTranscriptEntryKind {
+    Developer,
     User,
     Assistant,
     Tool(String),
@@ -41,6 +43,7 @@ pub(crate) enum GuardianTranscriptEntryKind {
 impl GuardianTranscriptEntryKind {
     fn role(&self) -> &str {
         match self {
+            Self::Developer => "developer",
             Self::User => "user",
             Self::Assistant => "assistant",
             Self::Tool(role) => role.as_str(),
@@ -360,6 +363,18 @@ pub(crate) fn collect_guardian_transcript_entries(
                 } else {
                     content_entry(GuardianTranscriptEntryKind::User, content)
                 }
+            }
+            ResponseItem::Message { role, content, .. } if role == "developer" => {
+                content_items_to_text(content).and_then(|text| {
+                    // Preserve only the explicit auto-review approval marker for
+                    // Guardian context; other developer messages are intentionally
+                    // excluded from the review transcript.
+                    text.starts_with(AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX)
+                        .then_some(GuardianTranscriptEntry {
+                            kind: GuardianTranscriptEntryKind::Developer,
+                            text,
+                        })
+                })
             }
             ResponseItem::Message { role, content, .. } if role == "assistant" => {
                 content_entry(GuardianTranscriptEntryKind::Assistant, content)

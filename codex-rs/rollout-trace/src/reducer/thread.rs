@@ -187,6 +187,12 @@ impl TraceReducer {
             &codex_turn_id,
             &status,
         )?;
+        self.close_running_inference_calls_for_turn_end(
+            seq,
+            wall_time_unix_ms,
+            &codex_turn_id,
+            &status,
+        );
         Ok(())
     }
 

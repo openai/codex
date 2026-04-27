@@ -80,7 +80,7 @@ impl FileSystemAccessMode {
 pub enum FileSystemSpecialPath {
     Root,
     Minimal,
-    CurrentWorkingDirectory,
+    #[serde(alias = "current_working_directory")]
     ProjectRoots {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -414,9 +414,9 @@ impl FileSystemSandboxPolicy {
 
     /// Converts a legacy sandbox policy into a cwd-independent filesystem policy.
     ///
-    /// `WorkspaceWrite` uses symbolic entries for cwd-scoped access so callers
-    /// can preserve the active cwd binding until the policy is actually
-    /// resolved for a turn or command.
+    /// `WorkspaceWrite` uses symbolic project-root entries so callers can keep
+    /// the profile independent of the concrete root until it is resolved for a
+    /// turn or command.
     pub fn from_legacy_sandbox_policy(sandbox_policy: &SandboxPolicy) -> Self {
         let mut file_system_policy = Self::from(sandbox_policy);
         let SandboxPolicy::WorkspaceWrite {
@@ -571,6 +571,28 @@ impl FileSystemSandboxPolicy {
         self.resolve_access_with_cwd(path, cwd).can_write()
     }
 
+    /// Replaces symbolic `:project_roots` entries with absolute paths resolved
+    /// against `cwd`.
+    ///
+    /// Use this when a durable permission profile must survive a cwd-only
+    /// update without rebinding its project-root authority to the new cwd.
+    pub fn materialize_project_roots_with_cwd(mut self, cwd: &Path) -> Self {
+        let cwd = AbsolutePathBuf::from_absolute_path(cwd).ok();
+        for entry in &mut self.entries {
+            let FileSystemPath::Special {
+                value: FileSystemSpecialPath::ProjectRoots { .. },
+            } = &entry.path
+            else {
+                continue;
+            };
+
+            if let Some(path) = resolve_file_system_path(&entry.path, cwd.as_ref()) {
+                entry.path = FileSystemPath::Path { path };
+            }
+        }
+        self
+    }
+
     pub fn with_additional_readable_roots(
         mut self,
         cwd: &Path,
@@ -629,6 +651,12 @@ impl FileSystemSandboxPolicy {
         self.semantic_signature(cwd)
             != FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&legacy_policy, cwd)
                 .semantic_signature(cwd)
+    }
+
+    /// Returns true when two policies resolve to the same filesystem access
+    /// model for `cwd`, ignoring incidental entry ordering.
+    pub fn is_semantically_equivalent_to(&self, other: &Self, cwd: &Path) -> bool {
+        self.semantic_signature(cwd) == other.semantic_signature(cwd)
     }
 
     /// Returns the explicit readable roots resolved against the provided cwd.
@@ -861,11 +889,6 @@ impl FileSystemSandboxPolicy {
                                 }
                             },
                             FileSystemSpecialPath::Minimal => {}
-                            FileSystemSpecialPath::CurrentWorkingDirectory => {
-                                if entry.access.can_write() {
-                                    workspace_root_writable = true;
-                                }
-                            }
                             FileSystemSpecialPath::ProjectRoots { subpath } => {
                                 if subpath.is_none() && entry.access.can_write() {
                                     workspace_root_writable = true;
@@ -949,9 +972,9 @@ impl FileSystemSandboxPolicy {
             has_full_disk_read_access: self.has_full_disk_read_access(),
             has_full_disk_write_access: self.has_full_disk_write_access(),
             include_platform_defaults: self.include_platform_defaults(),
-            readable_roots: self.get_readable_roots_with_cwd(cwd),
-            writable_roots: self.get_writable_roots_with_cwd(cwd),
-            unreadable_roots: self.get_unreadable_roots_with_cwd(cwd),
+            readable_roots: sorted_absolute_paths(self.get_readable_roots_with_cwd(cwd)),
+            writable_roots: sorted_writable_roots(self.get_writable_roots_with_cwd(cwd)),
+            unreadable_roots: sorted_absolute_paths(self.get_unreadable_roots_with_cwd(cwd)),
             unreadable_globs: self.get_unreadable_globs_with_cwd(cwd),
         }
     }
@@ -995,7 +1018,7 @@ impl From<&SandboxPolicy> for FileSystemSandboxPolicy {
 
                 entries.push(FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                     },
                     access: FileSystemAccessMode::Write,
                 });
@@ -1093,20 +1116,8 @@ fn special_paths_share_target(left: &FileSystemSpecialPath, right: &FileSystemSp
     match (left, right) {
         (FileSystemSpecialPath::Root, FileSystemSpecialPath::Root)
         | (FileSystemSpecialPath::Minimal, FileSystemSpecialPath::Minimal)
-        | (
-            FileSystemSpecialPath::CurrentWorkingDirectory,
-            FileSystemSpecialPath::CurrentWorkingDirectory,
-        )
         | (FileSystemSpecialPath::Tmpdir, FileSystemSpecialPath::Tmpdir)
         | (FileSystemSpecialPath::SlashTmp, FileSystemSpecialPath::SlashTmp) => true,
-        (
-            FileSystemSpecialPath::CurrentWorkingDirectory,
-            FileSystemSpecialPath::ProjectRoots { subpath: None },
-        )
-        | (
-            FileSystemSpecialPath::ProjectRoots { subpath: None },
-            FileSystemSpecialPath::CurrentWorkingDirectory,
-        ) => true,
         (
             FileSystemSpecialPath::ProjectRoots { subpath: left },
             FileSystemSpecialPath::ProjectRoots { subpath: right },
@@ -1204,10 +1215,6 @@ fn resolve_file_system_special_path(
         FileSystemSpecialPath::Root
         | FileSystemSpecialPath::Minimal
         | FileSystemSpecialPath::Unknown { .. } => None,
-        FileSystemSpecialPath::CurrentWorkingDirectory => {
-            let cwd = cwd?;
-            Some(cwd.clone())
-        }
         FileSystemSpecialPath::ProjectRoots { subpath } => {
             let cwd = cwd?;
             match subpath.as_ref() {
@@ -1255,6 +1262,20 @@ fn dedup_absolute_paths(
         }
     }
     deduped
+}
+
+fn sorted_absolute_paths(mut paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
+    paths.sort_by(|left, right| left.as_path().cmp(right.as_path()));
+    paths
+}
+
+fn sorted_writable_roots(mut roots: Vec<WritableRoot>) -> Vec<WritableRoot> {
+    for root in &mut roots {
+        root.read_only_subpaths =
+            sorted_absolute_paths(std::mem::take(&mut root.read_only_subpaths));
+    }
+    roots.sort_by(|left, right| left.root.as_path().cmp(right.root.as_path()));
+    roots
 }
 
 fn normalize_effective_absolute_path(path: AbsolutePathBuf) -> AbsolutePathBuf {
@@ -1530,7 +1551,7 @@ mod tests {
 
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Write,
         }]);
@@ -1546,7 +1567,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_workspace_write_projection_preserves_symbolic_cwd() {
+    fn legacy_workspace_write_projection_preserves_symbolic_project_root() {
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
             network_access: false,
@@ -1565,7 +1586,7 @@ mod tests {
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                     },
                     access: FileSystemAccessMode::Write,
                 },
@@ -1591,6 +1612,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn legacy_current_working_directory_special_path_deserializes_as_project_roots()
+    -> serde_json::Result<()> {
+        let value = serde_json::json!({
+            "kind": "current_working_directory",
+        });
+
+        let special_path = serde_json::from_value::<FileSystemSpecialPath>(value)?;
+        assert_eq!(
+            special_path,
+            FileSystemSpecialPath::project_roots(/*subpath*/ None)
+        );
+        assert_eq!(
+            serde_json::to_value(&special_path)?,
+            serde_json::json!({
+                "kind": "project_roots",
+            })
+        );
+        Ok(())
+    }
+
     #[cfg(unix)]
     #[test]
     fn writable_roots_skip_default_dot_codex_when_explicit_user_rule_exists() {
@@ -1604,7 +1646,7 @@ mod tests {
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             },
@@ -1683,7 +1725,7 @@ mod tests {
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                     },
                     access: FileSystemAccessMode::Write,
                 },
@@ -1754,7 +1796,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn current_working_directory_special_path_preserves_symlinked_cwd() {
+    fn project_roots_special_path_preserves_symlinked_root() {
         let cwd = TempDir::new().expect("tempdir");
         let real_root = cwd.path().join("real");
         let link_root = cwd.path().join("link");
@@ -1784,7 +1826,7 @@ mod tests {
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             },
@@ -2074,7 +2116,7 @@ mod tests {
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             },
@@ -2121,7 +2163,7 @@ mod tests {
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             },
@@ -2142,6 +2184,31 @@ mod tests {
         assert!(
             !legacy_workspace_write
                 .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path(),)
+        );
+    }
+
+    #[test]
+    fn legacy_projection_runtime_enforcement_ignores_entry_order() {
+        let cwd = TempDir::new().expect("tempdir");
+        let legacy_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        let legacy_order =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&legacy_policy, cwd.path());
+        let mut reordered_entries = legacy_order.entries.clone();
+        reordered_entries.reverse();
+        let reordered = FileSystemSandboxPolicy::restricted(reordered_entries);
+
+        assert!(
+            legacy_order.is_semantically_equivalent_to(&reordered, cwd.path()),
+            "entry order should not affect filesystem semantics"
+        );
+        assert!(
+            !reordered
+                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path())
         );
     }
 
@@ -2273,7 +2340,7 @@ mod tests {
         let cwd_root = AbsolutePathBuf::from_absolute_path(cwd.path()).expect("absolute cwd");
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Read,
         }]);
@@ -2291,7 +2358,7 @@ mod tests {
         let cwd_root = AbsolutePathBuf::from_absolute_path(cwd.path()).expect("absolute cwd");
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Write,
         }]);
@@ -2311,7 +2378,7 @@ mod tests {
             .expect("resolve extra root");
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Write,
         }]);
@@ -2323,7 +2390,7 @@ mod tests {
             FileSystemSandboxPolicy::restricted(vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                     },
                     access: FileSystemAccessMode::Write,
                 },

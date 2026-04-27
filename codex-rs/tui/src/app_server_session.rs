@@ -43,6 +43,13 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadGoalClearParams;
+use codex_app_server_protocol::ThreadGoalClearResponse;
+use codex_app_server_protocol::ThreadGoalGetParams;
+use codex_app_server_protocol::ThreadGoalGetResponse;
+use codex_app_server_protocol::ThreadGoalSetParams;
+use codex_app_server_protocol::ThreadGoalSetResponse;
+use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadListParams;
@@ -667,6 +674,60 @@ impl AppServerSession {
         Ok(())
     }
 
+    pub(crate) async fn thread_goal_get(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<ThreadGoalGetResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadGoalGet {
+                request_id,
+                params: ThreadGoalGetParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/goal/get failed in TUI")
+    }
+
+    pub(crate) async fn thread_goal_set(
+        &mut self,
+        thread_id: ThreadId,
+        objective: Option<String>,
+        status: Option<ThreadGoalStatus>,
+        token_budget: Option<Option<i64>>,
+    ) -> Result<ThreadGoalSetResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadGoalSet {
+                request_id,
+                params: ThreadGoalSetParams {
+                    thread_id: thread_id.to_string(),
+                    objective,
+                    status,
+                    token_budget,
+                },
+            })
+            .await
+            .wrap_err("thread/goal/set failed in TUI")
+    }
+
+    pub(crate) async fn thread_goal_clear(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<ThreadGoalClearResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadGoalClear {
+                request_id,
+                params: ThreadGoalClearParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/goal/clear failed in TUI")
+    }
+
     pub(crate) async fn logout_account(&mut self) -> Result<()> {
         let request_id = self.next_request_id();
         let _: LogoutAccountResponse = self
@@ -743,7 +804,7 @@ impl AppServerSession {
                 params: ThreadApproveGuardianDeniedActionParams {
                     thread_id: thread_id.to_string(),
                     event: serde_json::to_value(event)
-                        .wrap_err("failed to serialize Guardian denial event")?,
+                        .wrap_err("failed to serialize Auto Review denial event")?,
                 },
             })
             .await
@@ -1082,7 +1143,13 @@ fn thread_start_params_from_config(
     let permission_profile = permission_profile_override_from_config(config, thread_params_mode);
     let sandbox = permission_profile
         .is_none()
-        .then(|| sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()))
+        .then(|| {
+            sandbox_mode_from_policy(
+                config
+                    .permissions
+                    .legacy_sandbox_policy(config.cwd.as_path()),
+            )
+        })
         .flatten();
     ThreadStartParams {
         model: config.model.clone(),
@@ -1109,7 +1176,13 @@ fn thread_resume_params_from_config(
     let permission_profile = permission_profile_override_from_config(&config, thread_params_mode);
     let sandbox = permission_profile
         .is_none()
-        .then(|| sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()))
+        .then(|| {
+            sandbox_mode_from_policy(
+                config
+                    .permissions
+                    .legacy_sandbox_policy(config.cwd.as_path()),
+            )
+        })
         .flatten();
     ThreadResumeParams {
         thread_id: thread_id.to_string(),
@@ -1135,7 +1208,13 @@ fn thread_fork_params_from_config(
     let permission_profile = permission_profile_override_from_config(&config, thread_params_mode);
     let sandbox = permission_profile
         .is_none()
-        .then(|| sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()))
+        .then(|| {
+            sandbox_mode_from_policy(
+                config
+                    .permissions
+                    .legacy_sandbox_policy(config.cwd.as_path()),
+            )
+        })
         .flatten();
     ThreadForkParams {
         thread_id: thread_id.to_string(),
@@ -1461,8 +1540,11 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let config = build_config(&temp_dir).await;
         let thread_id = ThreadId::new();
-        let expected_sandbox =
-            sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone());
+        let expected_sandbox = sandbox_mode_from_policy(
+            config
+                .permissions
+                .legacy_sandbox_policy(config.cwd.as_path()),
+        );
 
         let start = thread_start_params_from_config(
             &config,
@@ -1503,8 +1585,11 @@ mod tests {
         let config = build_config(&temp_dir).await;
         let thread_id = ThreadId::new();
         let remote_cwd = PathBuf::from("repo/on/server");
-        let expected_sandbox =
-            sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone());
+        let expected_sandbox = sandbox_mode_from_policy(
+            config
+                .permissions
+                .legacy_sandbox_policy(config.cwd.as_path()),
+        );
 
         let start = thread_start_params_from_config(
             &config,
@@ -1715,9 +1800,7 @@ mod tests {
             AskForApproval::Never,
             codex_protocol::config_types::ApprovalsReviewer::User,
             SandboxPolicy::new_read_only_policy(),
-            Some(PermissionProfile::from_legacy_sandbox_policy(
-                &SandboxPolicy::new_read_only_policy(),
-            )),
+            Some(PermissionProfile::read_only()),
             test_path_buf("/tmp/project").abs(),
             Vec::new(),
             /*reasoning_effort*/ None,
@@ -1748,9 +1831,7 @@ mod tests {
             AskForApproval::Never,
             codex_protocol::config_types::ApprovalsReviewer::User,
             SandboxPolicy::new_read_only_policy(),
-            Some(PermissionProfile::from_legacy_sandbox_policy(
-                &SandboxPolicy::new_read_only_policy(),
-            )),
+            Some(PermissionProfile::read_only()),
             test_path_buf("/tmp/project").abs(),
             Vec::new(),
             /*reasoning_effort*/ None,

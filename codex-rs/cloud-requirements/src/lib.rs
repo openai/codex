@@ -15,11 +15,11 @@ use chrono::DateTime;
 use chrono::Duration as ChronoDuration;
 use chrono::Utc;
 use codex_backend_client::Client as BackendClient;
+use codex_config::CloudRequirementsLoadError;
+use codex_config::CloudRequirementsLoadErrorCode;
+use codex_config::CloudRequirementsLoader;
+use codex_config::ConfigRequirementsToml;
 use codex_config::types::AuthCredentialsStoreMode;
-use codex_core::config_loader::CloudRequirementsLoadError;
-use codex_core::config_loader::CloudRequirementsLoadErrorCode;
-use codex_core::config_loader::CloudRequirementsLoader;
-use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::util::backoff;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -329,6 +329,11 @@ impl CloudRequirementsService {
         let Some(auth) = self.auth_manager.auth().await else {
             return Ok(None);
         };
+        if matches!(auth, CodexAuth::AgentIdentity(_)) {
+            // AgentIdentity does not carry a human bearer token, and identity-edge
+            // only allowlists task-scoped AgentAssertion calls for the Codex runtime.
+            return Ok(None);
+        }
         let Some(plan_type) = auth.account_plan_type() else {
             return Ok(None);
         };
@@ -722,7 +727,7 @@ pub fn cloud_requirements_loader(
     })
 }
 
-pub fn cloud_requirements_loader_for_storage(
+pub async fn cloud_requirements_loader_for_storage(
     codex_home: PathBuf,
     enable_codex_api_key_env: bool,
     credentials_store_mode: AuthCredentialsStoreMode,
@@ -733,7 +738,8 @@ pub fn cloud_requirements_loader_for_storage(
         enable_codex_api_key_env,
         credentials_store_mode,
         Some(chatgpt_base_url.clone()),
-    );
+    )
+    .await;
     cloud_requirements_loader(auth_manager, chatgpt_base_url, codex_home)
 }
 
@@ -848,7 +854,7 @@ mod tests {
         Ok(())
     }
 
-    fn auth_manager_with_api_key() -> Arc<AuthManager> {
+    async fn auth_manager_with_api_key() -> Arc<AuthManager> {
         let tmp = tempdir().expect("tempdir");
         let auth_json = json!({
             "OPENAI_API_KEY": "sk-test-key",
@@ -856,15 +862,18 @@ mod tests {
             "last_refresh": null,
         });
         write_auth_json(tmp.path(), auth_json).expect("write auth");
-        Arc::new(AuthManager::new(
-            tmp.path().to_path_buf(),
-            /*enable_codex_api_key_env*/ false,
-            AuthCredentialsStoreMode::File,
-            /*chatgpt_base_url*/ None,
-        ))
+        Arc::new(
+            AuthManager::new(
+                tmp.path().to_path_buf(),
+                /*enable_codex_api_key_env*/ false,
+                AuthCredentialsStoreMode::File,
+                /*chatgpt_base_url*/ None,
+            )
+            .await,
+        )
     }
 
-    fn auth_manager_with_plan_and_identity(
+    async fn auth_manager_with_plan_and_identity(
         plan_type: &str,
         chatgpt_user_id: Option<&str>,
         account_id: Option<&str>,
@@ -881,12 +890,15 @@ mod tests {
             ),
         )
         .expect("write auth");
-        Arc::new(AuthManager::new(
-            tmp.path().to_path_buf(),
-            /*enable_codex_api_key_env*/ false,
-            AuthCredentialsStoreMode::File,
-            /*chatgpt_base_url*/ None,
-        ))
+        Arc::new(
+            AuthManager::new(
+                tmp.path().to_path_buf(),
+                /*enable_codex_api_key_env*/ false,
+                AuthCredentialsStoreMode::File,
+                /*chatgpt_base_url*/ None,
+            )
+            .await,
+        )
     }
 
     fn chatgpt_auth_json(
@@ -970,7 +982,7 @@ mod tests {
         manager: Arc<AuthManager>,
     }
 
-    fn managed_auth_context(
+    async fn managed_auth_context(
         plan_type: &str,
         chatgpt_user_id: Option<&str>,
         account_id: Option<&str>,
@@ -990,18 +1002,22 @@ mod tests {
         )
         .expect("write auth");
         ManagedAuthContext {
-            manager: Arc::new(AuthManager::new(
-                home.path().to_path_buf(),
-                /*enable_codex_api_key_env*/ false,
-                AuthCredentialsStoreMode::File,
-                /*chatgpt_base_url*/ None,
-            )),
+            manager: Arc::new(
+                AuthManager::new(
+                    home.path().to_path_buf(),
+                    /*enable_codex_api_key_env*/ false,
+                    AuthCredentialsStoreMode::File,
+                    /*chatgpt_base_url*/ None,
+                )
+                .await,
+            ),
             _home: home,
         }
     }
 
-    fn auth_manager_with_plan(plan_type: &str) -> Arc<AuthManager> {
+    async fn auth_manager_with_plan(plan_type: &str) -> Arc<AuthManager> {
         auth_manager_with_plan_and_identity(plan_type, Some("user-12345"), Some("account-12345"))
+            .await
     }
 
     fn parse_for_fetch(contents: Option<&str>) -> Option<ConfigRequirementsToml> {
@@ -1113,7 +1129,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_cloud_requirements_skips_non_chatgpt_auth() {
-        let auth_manager = auth_manager_with_api_key();
+        let auth_manager = auth_manager_with_api_key().await;
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
             auth_manager,
@@ -1129,7 +1145,7 @@ mod tests {
     async fn fetch_cloud_requirements_skips_non_business_or_enterprise_plan() {
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            auth_manager_with_plan("pro"),
+            auth_manager_with_plan("pro").await,
             Arc::new(StaticFetcher { contents: None }),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
@@ -1142,7 +1158,7 @@ mod tests {
     async fn fetch_cloud_requirements_skips_team_like_usage_based_plan() {
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            auth_manager_with_plan("self_serve_business_usage_based"),
+            auth_manager_with_plan("self_serve_business_usage_based").await,
             Arc::new(StaticFetcher {
                 contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
             }),
@@ -1156,7 +1172,7 @@ mod tests {
     async fn fetch_cloud_requirements_allows_business_plan() {
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            auth_manager_with_plan("business"),
+            auth_manager_with_plan("business").await,
             Arc::new(StaticFetcher {
                 contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
             }),
@@ -1188,7 +1204,7 @@ mod tests {
     async fn fetch_cloud_requirements_allows_business_like_usage_based_plan() {
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            auth_manager_with_plan("enterprise_cbp_usage_based"),
+            auth_manager_with_plan("enterprise_cbp_usage_based").await,
             Arc::new(StaticFetcher {
                 contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
             }),
@@ -1220,7 +1236,7 @@ mod tests {
     async fn fetch_cloud_requirements_allows_hc_plan_as_enterprise() {
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            auth_manager_with_plan("hc"),
+            auth_manager_with_plan("hc").await,
             Arc::new(StaticFetcher {
                 contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
             }),
@@ -1309,10 +1325,10 @@ enabled = false
         assert_eq!(
             result,
             Some(ConfigRequirementsToml {
-                apps: Some(codex_core::config_loader::AppsRequirementsToml {
+                apps: Some(codex_config::AppsRequirementsToml {
                     apps: BTreeMap::from([(
                         "connector_5f3c8c41a1e54ad7a76272c89e2554fa".to_string(),
-                        codex_core::config_loader::AppRequirementToml {
+                        codex_config::AppRequirementToml {
                             enabled: Some(false),
                         },
                     )]),
@@ -1324,7 +1340,7 @@ enabled = false
 
     #[tokio::test(start_paused = true)]
     async fn fetch_cloud_requirements_times_out() {
-        let auth_manager = auth_manager_with_plan("enterprise");
+        let auth_manager = auth_manager_with_plan("enterprise").await;
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
             auth_manager,
@@ -1351,7 +1367,7 @@ enabled = false
         ]));
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            auth_manager_with_plan("business"),
+            auth_manager_with_plan("business").await,
             fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
@@ -1400,12 +1416,15 @@ enabled = false
             ),
         )
         .expect("write initial auth");
-        let auth_manager = Arc::new(AuthManager::new(
-            auth_home.path().to_path_buf(),
-            /*enable_codex_api_key_env*/ false,
-            AuthCredentialsStoreMode::File,
-            /*chatgpt_base_url*/ None,
-        ));
+        let auth_manager = Arc::new(
+            AuthManager::new(
+                auth_home.path().to_path_buf(),
+                /*enable_codex_api_key_env*/ false,
+                AuthCredentialsStoreMode::File,
+                /*chatgpt_base_url*/ None,
+            )
+            .await,
+        );
 
         write_auth_json(
             auth_home.path(),
@@ -1474,12 +1493,15 @@ enabled = false
             ),
         )
         .expect("write initial auth");
-        let auth_manager = Arc::new(AuthManager::new(
-            auth_home.path().to_path_buf(),
-            /*enable_codex_api_key_env*/ false,
-            AuthCredentialsStoreMode::File,
-            /*chatgpt_base_url*/ None,
-        ));
+        let auth_manager = Arc::new(
+            AuthManager::new(
+                auth_home.path().to_path_buf(),
+                /*enable_codex_api_key_env*/ false,
+                AuthCredentialsStoreMode::File,
+                /*chatgpt_base_url*/ None,
+            )
+            .await,
+        );
 
         write_auth_json(
             auth_home.path(),
@@ -1554,7 +1576,8 @@ enabled = false
             Some("account-12345"),
             "stale-access-token",
             "test-refresh-token",
-        );
+        )
+        .await;
         write_auth_json(
             auth._home.path(),
             chatgpt_auth_json(
@@ -1606,12 +1629,15 @@ enabled = false
             ),
         )
         .expect("write auth");
-        let auth_manager = Arc::new(AuthManager::new(
-            auth_home.path().to_path_buf(),
-            /*enable_codex_api_key_env*/ false,
-            AuthCredentialsStoreMode::File,
-            /*chatgpt_base_url*/ None,
-        ));
+        let auth_manager = Arc::new(
+            AuthManager::new(
+                auth_home.path().to_path_buf(),
+                /*enable_codex_api_key_env*/ false,
+                AuthCredentialsStoreMode::File,
+                /*chatgpt_base_url*/ None,
+            )
+            .await,
+        );
 
         let fetcher = Arc::new(UnauthorizedFetcher {
             message:
@@ -1648,7 +1674,7 @@ enabled = false
         ]));
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            auth_manager_with_plan("business"),
+            auth_manager_with_plan("business").await,
             fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
@@ -1673,7 +1699,7 @@ enabled = false
         ))]));
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            auth_manager_with_plan("business"),
+            auth_manager_with_plan("business").await,
             fetcher,
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
@@ -1695,7 +1721,7 @@ enabled = false
     async fn fetch_cloud_requirements_uses_cache_when_valid() {
         let codex_home = tempdir().expect("tempdir");
         let prime_service = CloudRequirementsService::new(
-            auth_manager_with_plan("business"),
+            auth_manager_with_plan("business").await,
             Arc::new(StaticFetcher {
                 contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
             }),
@@ -1706,7 +1732,7 @@ enabled = false
 
         let fetcher = Arc::new(SequenceFetcher::new(vec![Err(request_error())]));
         let service = CloudRequirementsService::new(
-            auth_manager_with_plan("business"),
+            auth_manager_with_plan("business").await,
             fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
@@ -1742,7 +1768,8 @@ enabled = false
                 "business",
                 /*chatgpt_user_id*/ None,
                 Some("account-12345"),
-            ),
+            )
+            .await,
             Arc::new(StaticFetcher {
                 contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
             }),
@@ -1785,7 +1812,7 @@ enabled = false
     async fn fetch_cloud_requirements_does_not_use_cache_when_auth_identity_is_incomplete() {
         let codex_home = tempdir().expect("tempdir");
         let prime_service = CloudRequirementsService::new(
-            auth_manager_with_plan("business"),
+            auth_manager_with_plan("business").await,
             Arc::new(StaticFetcher {
                 contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
             }),
@@ -1802,7 +1829,8 @@ enabled = false
                 "business",
                 /*chatgpt_user_id*/ None,
                 Some("account-12345"),
-            ),
+            )
+            .await,
             fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
@@ -1838,7 +1866,8 @@ enabled = false
                 "business",
                 Some("user-12345"),
                 Some("account-12345"),
-            ),
+            )
+            .await,
             Arc::new(StaticFetcher {
                 contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
             }),
@@ -1855,7 +1884,8 @@ enabled = false
                 "business",
                 Some("user-99999"),
                 Some("account-12345"),
-            ),
+            )
+            .await,
             fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
@@ -1887,7 +1917,7 @@ enabled = false
     async fn fetch_cloud_requirements_ignores_tampered_cache() {
         let codex_home = tempdir().expect("tempdir");
         let prime_service = CloudRequirementsService::new(
-            auth_manager_with_plan("business"),
+            auth_manager_with_plan("business").await,
             Arc::new(StaticFetcher {
                 contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
             }),
@@ -1912,7 +1942,7 @@ enabled = false
             "allowed_approval_policies = [\"never\"]".to_string(),
         ))]));
         let service = CloudRequirementsService::new(
-            auth_manager_with_plan("enterprise"),
+            auth_manager_with_plan("enterprise").await,
             fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
@@ -1970,7 +2000,7 @@ enabled = false
             "allowed_approval_policies = [\"never\"]".to_string(),
         ))]));
         let service = CloudRequirementsService::new(
-            auth_manager_with_plan("enterprise"),
+            auth_manager_with_plan("enterprise").await,
             fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
@@ -2002,7 +2032,7 @@ enabled = false
     async fn fetch_cloud_requirements_writes_signed_cache() {
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            auth_manager_with_plan("business"),
+            auth_manager_with_plan("business").await,
             Arc::new(StaticFetcher {
                 contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
             }),
@@ -2065,7 +2095,7 @@ enabled = false
         let fetcher = Arc::new(SequenceFetcher::new(vec![Ok(None), Err(request_error())]));
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            auth_manager_with_plan("enterprise"),
+            auth_manager_with_plan("enterprise").await,
             fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
@@ -2083,7 +2113,7 @@ enabled = false
         ]));
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            auth_manager_with_plan("enterprise"),
+            auth_manager_with_plan("enterprise").await,
             fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
@@ -2116,7 +2146,7 @@ enabled = false
             )),
         ]));
         let service = CloudRequirementsService::new(
-            auth_manager_with_plan("business"),
+            auth_manager_with_plan("business").await,
             fetcher,
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,

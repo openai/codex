@@ -64,8 +64,9 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     // routes ExecApprovalRequest via the parent.
     let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-        config.permissions.sandbox_policy =
-            Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+        config
+            .set_legacy_sandbox_policy(SandboxPolicy::new_read_only_policy())
+            .expect("set sandbox policy");
     });
     let test = builder.build(&server).await.expect("build test codex");
 
@@ -147,8 +148,9 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         // Use a restricted sandbox so patch approval is required
-        config.permissions.sandbox_policy =
-            Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+        config
+            .set_legacy_sandbox_policy(SandboxPolicy::new_read_only_policy())
+            .expect("set sandbox policy");
         config.include_apply_patch_tool = true;
     });
     let test = builder.build(&server).await.expect("build test codex");

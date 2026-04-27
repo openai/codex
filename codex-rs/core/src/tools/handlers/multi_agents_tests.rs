@@ -18,7 +18,6 @@ use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHa
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 use crate::turn_diff_tracker::TurnDiffTracker;
-use codex_config::types::ShellEnvironmentPolicy;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -26,15 +25,21 @@ use codex_model_provider::create_model_provider;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::FileSystemAccessMode;
+use codex_protocol::protocol::FileSystemPath;
+use codex_protocol::protocol::FileSystemSandboxEntry;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -2072,21 +2077,6 @@ async fn multi_agent_v2_spawn_surfaces_task_name_validation_errors() {
 
 #[tokio::test]
 async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
-    fn pick_allowed_sandbox_policy(
-        constraint: &crate::config::Constrained<SandboxPolicy>,
-        base: SandboxPolicy,
-    ) -> SandboxPolicy {
-        let candidates = [
-            SandboxPolicy::DangerFullAccess,
-            SandboxPolicy::new_workspace_write_policy(),
-            SandboxPolicy::new_read_only_policy(),
-        ];
-        candidates
-            .into_iter()
-            .find(|candidate| *candidate != base && constraint.can_set(candidate).is_ok())
-            .unwrap_or(base)
-    }
-
     #[derive(Debug, Deserialize)]
     struct SpawnAgentResult {
         agent_id: String,
@@ -2096,25 +2086,31 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
-    let expected_sandbox = pick_allowed_sandbox_policy(
-        &turn.config.permissions.sandbox_policy,
-        turn.config.permissions.sandbox_policy.get().clone(),
-    );
-    let expected_file_system_sandbox_policy =
+    let expected_sandbox = turn.config.legacy_sandbox_policy();
+    let mut expected_file_system_sandbox_policy =
         FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&expected_sandbox, &turn.cwd);
+    expected_file_system_sandbox_policy
+        .entries
+        .push(FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: "**/.env".to_string(),
+            },
+            access: FileSystemAccessMode::None,
+        });
     let expected_network_sandbox_policy = NetworkSandboxPolicy::from(&expected_sandbox);
+    let expected_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        SandboxEnforcement::from_legacy_sandbox_policy(&expected_sandbox),
+        &expected_file_system_sandbox_policy,
+        expected_network_sandbox_policy,
+    );
     turn.approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy should be set");
-    turn.sandbox_policy
-        .set(expected_sandbox.clone())
-        .expect("sandbox policy should be set");
-    turn.file_system_sandbox_policy = expected_file_system_sandbox_policy.clone();
-    turn.network_sandbox_policy = expected_network_sandbox_policy;
+    turn.permission_profile = expected_permission_profile.clone();
     assert_ne!(
-        expected_sandbox,
-        turn.config.permissions.sandbox_policy.get().clone(),
-        "test requires a runtime sandbox override that differs from base config"
+        expected_permission_profile,
+        turn.config.permissions.permission_profile(),
+        "test requires a runtime profile override that differs from base config"
     );
 
     let invocation = invocation(
@@ -2149,19 +2145,21 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         .await;
     assert_eq!(snapshot.sandbox_policy, expected_sandbox);
     assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
+    assert_eq!(snapshot.permission_profile, expected_permission_profile);
     let child_thread = manager
         .get_thread(agent_id)
         .await
         .expect("spawned agent thread should exist");
     let child_turn = child_thread.codex.session.new_default_turn().await;
     assert_eq!(
-        child_turn.file_system_sandbox_policy,
+        child_turn.file_system_sandbox_policy(),
         expected_file_system_sandbox_policy
     );
     assert_eq!(
-        child_turn.network_sandbox_policy,
+        child_turn.network_sandbox_policy(),
         expected_network_sandbox_policy
     );
+    assert_eq!(child_turn.permission_profile(), expected_permission_profile);
 }
 
 #[tokio::test]
@@ -2505,7 +2503,6 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
                 content: vec![ContentItem::InputText {
                     text: "materialized".to_string(),
                 }],
-                end_turn: None,
                 phase: None,
             })]),
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
@@ -3588,8 +3585,9 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
 #[tokio::test]
 async fn build_agent_spawn_config_uses_turn_context_values() {
     fn pick_allowed_sandbox_policy(
-        constraint: &crate::config::Constrained<SandboxPolicy>,
+        constraint: &crate::config::Constrained<PermissionProfile>,
         base: SandboxPolicy,
+        cwd: &std::path::Path,
     ) -> SandboxPolicy {
         let candidates = [
             SandboxPolicy::new_read_only_policy(),
@@ -3598,7 +3596,21 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         ];
         candidates
             .into_iter()
-            .find(|candidate| *candidate != base && constraint.can_set(candidate).is_ok())
+            .find(|candidate| {
+                if *candidate == base {
+                    return false;
+                }
+                let file_system_sandbox_policy =
+                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(candidate, cwd);
+                let network_sandbox_policy = NetworkSandboxPolicy::from(candidate);
+                let permission_profile =
+                    PermissionProfile::from_runtime_permissions_with_enforcement(
+                        SandboxEnforcement::from_legacy_sandbox_policy(candidate),
+                        &file_system_sandbox_policy,
+                        network_sandbox_policy,
+                    );
+                constraint.can_set(&permission_profile).is_ok()
+            })
             .unwrap_or(base)
     }
 
@@ -3616,17 +3628,19 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     turn.cwd = temp_dir.abs();
     turn.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
     let sandbox_policy = pick_allowed_sandbox_policy(
-        &turn.config.permissions.sandbox_policy,
-        turn.config.permissions.sandbox_policy.get().clone(),
+        &turn.config.permissions.permission_profile,
+        turn.config.legacy_sandbox_policy(),
+        turn.cwd.as_path(),
     );
     let file_system_sandbox_policy =
         FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, &turn.cwd);
     let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-    turn.sandbox_policy
-        .set(sandbox_policy)
-        .expect("sandbox policy set");
-    turn.file_system_sandbox_policy = file_system_sandbox_policy.clone();
-    turn.network_sandbox_policy = network_sandbox_policy;
+    let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
+    );
+    turn.permission_profile = permission_profile.clone();
     turn.approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
@@ -3650,11 +3664,8 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         .expect("approval policy set");
     expected
         .permissions
-        .sandbox_policy
-        .set(turn.sandbox_policy.get().clone())
-        .expect("sandbox policy set");
-    expected.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
-    expected.permissions.network_sandbox_policy = network_sandbox_policy;
+        .set_permission_profile(permission_profile)
+        .expect("permission profile set");
     assert_eq!(config, expected);
 }
 
@@ -3704,8 +3715,7 @@ async fn build_agent_resume_config_clears_base_instructions() {
         .expect("approval policy set");
     expected
         .permissions
-        .sandbox_policy
-        .set(turn.sandbox_policy.get().clone())
-        .expect("sandbox policy set");
+        .set_permission_profile(turn.permission_profile())
+        .expect("permission profile set");
     assert_eq!(config, expected);
 }

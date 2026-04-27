@@ -400,6 +400,9 @@
             "enable_fanout": {
               "type": "boolean"
             },
+            "enable_mcp_apps": {
+              "type": "boolean"
+            },
             "enable_request_compression": {
               "type": "boolean"
             },
@@ -421,7 +424,7 @@
             "fast_mode": {
               "type": "boolean"
             },
-            "general_analytics": {
+            "goals": {
               "type": "boolean"
             },
             "guardian_approval": {
@@ -521,6 +524,9 @@
               "type": "boolean"
             },
             "telepathy": {
+              "type": "boolean"
+            },
+            "terminal_resize_reflow": {
               "type": "boolean"
             },
             "tool_call_mcp_elicitation": {
@@ -1303,6 +1309,11 @@
         },
         "hide_spawn_agent_metadata": {
           "type": "boolean"
+        },
+        "max_concurrent_threads_per_session": {
+          "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
         },
         "usage_hint_enabled": {
           "type": "boolean"
@@ -2249,9 +2260,16 @@
           },
           "type": "array"
         },
+        "terminal_resize_reflow_max_rows": {
+          "default": null,
+          "description": "Trim terminal resize-reflow replay to the most recent rendered terminal rows when the transcript exceeds this cap. Omit to use Codex's terminal-specific default. Set to `0` to keep all rendered rows.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "terminal_title": {
           "default": null,
-          "description": "Ordered list of terminal title item identifiers.\n\nWhen set, the TUI renders the selected items into the terminal window/tab title. When unset, the TUI defaults to: `spinner` and `project`.",
+          "description": "Ordered list of terminal title item identifiers.\n\nWhen set, the TUI renders the selected items into the terminal window/tab title. When unset, the TUI defaults to: `activity` and `project`. The `activity` item spins while working and shows an action-required message when blocked on the user.",
           "items": {
             "type": "string"
           },
@@ -2592,6 +2610,9 @@
         "enable_fanout": {
           "type": "boolean"
         },
+        "enable_mcp_apps": {
+          "type": "boolean"
+        },
         "enable_request_compression": {
           "type": "boolean"
         },
@@ -2613,7 +2634,7 @@
         "fast_mode": {
           "type": "boolean"
         },
-        "general_analytics": {
+        "goals": {
           "type": "boolean"
         },
         "guardian_approval": {
@@ -2713,6 +2734,9 @@
           "type": "boolean"
         },
         "telepathy": {
+          "type": "boolean"
+        },
+        "terminal_resize_reflow": {
           "type": "boolean"
         },
         "tool_call_mcp_elicitation": {

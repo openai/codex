@@ -126,7 +126,7 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         requirement_lines.push(requirement_line(
             "allowed_sandbox_modes",
             value,
-            requirements.sandbox_policy.source.as_ref(),
+            requirements.permission_profile.source.as_ref(),
         ));
     }
 
@@ -531,8 +531,8 @@ mod tests {
     use codex_config::WebSearchModeRequirement;
     use codex_protocol::config_types::ApprovalsReviewer;
     use codex_protocol::config_types::WebSearchMode;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::protocol::AskForApproval;
-    use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use ratatui::text::Line;
     use std::collections::BTreeMap;
@@ -622,8 +622,8 @@ mod tests {
                 Constrained::allow_any(ApprovalsReviewer::AutoReview),
                 Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ),
-            sandbox_policy: ConstrainedWithSource::new(
-                Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            permission_profile: ConstrainedWithSource::new(
+                Constrained::allow_any(PermissionProfile::read_only()),
                 Some(RequirementSource::SystemRequirementsToml {
                     file: requirements_file.clone(),
                 }),
