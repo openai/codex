@@ -663,7 +663,7 @@ fn spawn_agent_tool_description_v2(
     let concurrency_guidance = max_concurrent_threads_per_session
         .map(|limit| {
             format!(
-                "This session is configured with `max_concurrent_threads_per_session = {limit}` for concurrently open agent threads, including the root thread."
+                "This session is configured with `max_concurrent_threads_per_session = {limit}` for concurrently open agent threads."
             )
         })
         .unwrap_or_default();
