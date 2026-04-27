@@ -1233,7 +1233,8 @@ impl ModelClientSession {
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
-                    inference_trace_attempt.record_failed(&unauthorized_transport, &[]);
+                    inference_trace_attempt
+                        .record_failed(&unauthorized_transport, /*output_items*/ &[]);
                     pending_retry = PendingUnauthorizedRetry::from_recovery(
                         handle_unauthorized(
                             unauthorized_transport,
@@ -1246,7 +1247,7 @@ impl ModelClientSession {
                 }
                 Err(err) => {
                     let err = map_api_error(err);
-                    inference_trace_attempt.record_failed(&err, &[]);
+                    inference_trace_attempt.record_failed(&err, /*output_items*/ &[]);
                     return Err(err);
                 }
             }
@@ -1373,7 +1374,7 @@ impl ModelClientSession {
                 .await
                 .map_err(|err| {
                     let err = map_api_error(err);
-                    inference_trace_attempt.record_failed(&err, &[]);
+                    inference_trace_attempt.record_failed(&err, /*output_items*/ &[]);
                     err
                 })?;
             let (stream, last_request_rx) = map_response_stream(

@@ -207,7 +207,12 @@ impl InferenceTraceAttempt {
         let partial_response_payload = if output_items.is_empty() {
             None
         } else {
-            write_response_payload_best_effort(attempt, None, None, output_items)
+            write_response_payload_best_effort(
+                attempt,
+                /*response_id*/ None,
+                /*token_usage*/ None,
+                output_items,
+            )
         };
         append_with_context_best_effort(
             &attempt.context,
@@ -231,7 +236,12 @@ impl InferenceTraceAttempt {
         let partial_response_payload = if output_items.is_empty() {
             None
         } else {
-            write_response_payload_best_effort(attempt, None, None, output_items)
+            write_response_payload_best_effort(
+                attempt,
+                /*response_id*/ None,
+                /*token_usage*/ None,
+                output_items,
+            )
         };
         append_with_context_best_effort(
             &attempt.context,
