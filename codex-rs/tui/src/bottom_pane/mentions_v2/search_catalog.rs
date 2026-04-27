@@ -1,4 +1,3 @@
-use codex_app_server_protocol::AppInfo;
 use codex_core_skills::model::SkillMetadata;
 use codex_plugin::PluginCapabilitySummary;
 
@@ -12,8 +11,6 @@ use super::candidate::Selection;
 pub(crate) fn build_search_catalog(
     skills: Option<&[SkillMetadata]>,
     plugins: Option<&[PluginCapabilitySummary]>,
-    connectors_enabled: bool,
-    connectors: Option<&[AppInfo]>,
 ) -> Vec<Candidate> {
     let mut candidates = Vec::new();
     if let Some(skills) = skills {
@@ -22,15 +19,6 @@ pub(crate) fn build_search_catalog(
 
     if let Some(plugins) = plugins {
         candidates.extend(plugins.iter().map(plugin_candidate));
-    }
-
-    if connectors_enabled && let Some(connectors) = connectors {
-        candidates.extend(
-            connectors
-                .iter()
-                .filter(|connector| connector.is_accessible && connector.is_enabled)
-                .map(connector_candidate),
-        );
     }
 
     candidates
@@ -82,24 +70,6 @@ fn plugin_candidate(plugin: &PluginCapabilitySummary) -> Candidate {
     }
 }
 
-fn connector_candidate(connector: &AppInfo) -> Candidate {
-    let display_name = codex_connectors::metadata::connector_display_label(connector);
-    let description = connector_description(connector).unwrap_or_default();
-    let slug = codex_connectors::metadata::connector_mention_slug(connector);
-    let search_terms = vec![display_name.clone(), connector.id.clone(), slug.clone()];
-    let connector_id = connector.id.as_str();
-    Candidate {
-        display_name,
-        description: Some(description),
-        search_terms,
-        mention_type: MentionType::App,
-        selection: Selection::Tool {
-            insert_text: format!("${slug}"),
-            path: Some(format!("app://{connector_id}")),
-        },
-    }
-}
-
 fn plugin_description(plugin: &PluginCapabilitySummary) -> Option<String> {
     let capability_labels = plugin_capability_labels(plugin);
     plugin.description.clone().or_else(|| {
@@ -138,13 +108,4 @@ fn plugin_capability_labels(plugin: &PluginCapabilitySummary) -> Vec<String> {
 fn optional_skill_description(skill: &SkillMetadata) -> Option<String> {
     let description = skill_description(skill).trim();
     (!description.is_empty()).then(|| description.to_string())
-}
-
-fn connector_description(connector: &AppInfo) -> Option<String> {
-    connector
-        .description
-        .as_deref()
-        .map(str::trim)
-        .filter(|description| !description.is_empty())
-        .map(str::to_string)
 }

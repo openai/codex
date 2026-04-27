@@ -4158,10 +4158,6 @@ impl ChatComposer {
         let candidates = super::mentions_v2::build_search_catalog(
             self.skills.as_deref(),
             self.plugins.as_deref(),
-            self.connectors_enabled,
-            self.connectors_snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.connectors.as_slice()),
         );
 
         match &mut self.active_popup {

@@ -62,9 +62,8 @@ fn best_tool_match(candidate: &Candidate, filter: &str) -> Option<(Option<Vec<us
 fn sort_rows(rows: &mut [SearchResult], filter: &str) {
     let type_order = |mention_type: MentionType| match mention_type {
         MentionType::Plugin => 0,
-        MentionType::App => 1,
-        MentionType::Skill => 2,
-        MentionType::File | MentionType::Directory => 3,
+        MentionType::Skill => 1,
+        MentionType::File | MentionType::Directory => 2,
     };
 
     rows.sort_by(|a, b| {

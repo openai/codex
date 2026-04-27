@@ -19,7 +19,6 @@ pub(crate) enum Selection {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum MentionType {
     Plugin,
-    App,
     Skill,
     File,
     Directory,
@@ -32,7 +31,7 @@ impl MentionType {
 
     pub(super) fn span(self, base_style: Style) -> Span<'static> {
         let style = match self {
-            Self::Plugin | Self::App => base_style.magenta(),
+            Self::Plugin => base_style.magenta(),
             Self::Skill => base_style.dim(),
             Self::File => base_style.cyan(),
             Self::Directory => base_style,
@@ -43,7 +42,6 @@ impl MentionType {
     fn label(self) -> &'static str {
         match self {
             Self::Plugin => "Plugin",
-            Self::App => "App",
             Self::Skill => "Skill",
             Self::File => "File",
             Self::Directory => "Dir",
