@@ -8,6 +8,7 @@ use crate::SandboxModeRequirement;
 use codex_exec_server::LOCAL_FS;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
 use tempfile::tempdir;
 use toml::Value as TomlValue;
 
@@ -32,7 +33,9 @@ async fn skips_hostname_lookup_without_remote_sandbox_config() -> anyhow::Result
         LoaderOverrides::default(),
         cloud_requirements,
         &NoopThreadConfigLoader,
-        HostNameResolver::panicking_for_tests(),
+        HostNameResolver {
+            resolver: Arc::new(|| panic!("hostname should not be resolved")),
+        },
     )
     .await?;
 

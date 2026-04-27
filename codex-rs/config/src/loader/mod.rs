@@ -83,13 +83,6 @@ impl HostNameResolver {
     fn resolve(&self) -> Option<String> {
         (self.resolver)()
     }
-
-    #[cfg(test)]
-    pub(crate) fn panicking_for_tests() -> Self {
-        Self {
-            resolver: Arc::new(|| panic!("hostname should not be resolved")),
-        }
-    }
 }
 
 impl Default for HostNameResolver {
