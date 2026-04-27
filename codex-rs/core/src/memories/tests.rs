@@ -1128,9 +1128,10 @@ mod phase2 {
     }
 
     #[tokio::test]
-    async fn dispatch_with_clean_workspace_preserves_selected_phase2_baseline() {
+    async fn dispatch_with_clean_workspace_rebuilds_selected_phase2_baseline() {
         let harness = DispatchHarness::new().await;
-        let thread_id = harness.seed_stage1_output(Utc::now().timestamp()).await;
+        let source_updated_at = (Utc::now() - ChronoDuration::days(1)).timestamp();
+        let thread_id = harness.seed_stage1_output(source_updated_at).await;
         let root = memory_root(&harness.config.codex_home);
         let selected = harness
             .state_db
@@ -1151,6 +1152,13 @@ mod phase2 {
         phase2::run(&harness.session, Arc::clone(&harness.config)).await;
 
         pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
+        let pruned = harness
+            .state_db
+            .prune_stage1_outputs_for_retention(/*max_unused_days*/ 0, /*limit*/ 10)
+            .await
+            .expect("prune stage1 outputs after clean phase2");
+        pretty_assertions::assert_eq!(pruned, 0);
+
         let selected = harness
             .state_db
             .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 30)
