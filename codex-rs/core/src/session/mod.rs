@@ -303,6 +303,7 @@ use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_git_utils::get_git_repo_root;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::with_codex_apps_mcp;
+use codex_model_provider::ProviderCapabilities;
 use codex_otel::SessionTelemetry;
 use codex_otel::THREAD_STARTED_METRIC;
 use codex_otel::TelemetryAuthMode;
@@ -352,6 +353,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_tools::ToolCapabilityBounds;
 use codex_tools::ToolsConfig;
 use codex_tools::ToolsConfigParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -370,6 +372,16 @@ pub struct Codex {
     // Shared future for the background submission loop completion so multiple
     // callers can wait for shutdown.
     pub(crate) session_loop_termination: SessionLoopTermination,
+}
+
+fn tool_capability_bounds(capabilities: ProviderCapabilities) -> ToolCapabilityBounds {
+    ToolCapabilityBounds {
+        tool_search: capabilities.tool_search,
+        tool_suggest: capabilities.tool_suggest,
+        image_generation: capabilities.image_generation,
+        web_search: capabilities.web_search,
+        js_repl: capabilities.js_repl,
+    }
 }
 
 pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
@@ -2600,7 +2612,10 @@ impl Session {
                     .push(PersonalitySpecInstructions::new(personality_message).render());
             }
         }
-        if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
+        if turn_context.provider.capabilities().app_connectors
+            && turn_context.config.include_apps_instructions
+            && turn_context.apps_enabled()
+        {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             let accessible_and_enabled_connectors =
                 connectors::list_accessible_and_enabled_connectors_from_manager(

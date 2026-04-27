@@ -5520,9 +5520,7 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        let mcp_config = config
-            .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
-            .await;
+        let mcp_config = self.thread_manager.mcp_manager().mcp_config(&config).await;
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
         let runtime_environment = match environment_manager.default_environment() {
@@ -5695,9 +5693,7 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        let mcp_config = config
-            .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
-            .await;
+        let mcp_config = self.thread_manager.mcp_manager().mcp_config(&config).await;
         let auth = self.auth_manager.auth().await;
         let runtime_environment = {
             let environment_manager = self.thread_manager.environment_manager();

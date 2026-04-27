@@ -116,6 +116,27 @@ pub struct ToolsConfig {
     pub agent_type_description: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolCapabilityBounds {
+    pub tool_search: bool,
+    pub tool_suggest: bool,
+    pub image_generation: bool,
+    pub web_search: bool,
+    pub js_repl: bool,
+}
+
+impl Default for ToolCapabilityBounds {
+    fn default() -> Self {
+        Self {
+            tool_search: true,
+            tool_suggest: true,
+            image_generation: true,
+            web_search: true,
+            js_repl: true,
+        }
+    }
+}
+
 pub struct ToolsConfigParams<'a> {
     pub model_info: &'a ModelInfo,
     pub available_models: &'a [ModelPreset],
