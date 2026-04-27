@@ -366,6 +366,9 @@ pub(crate) fn collect_guardian_transcript_entries(
             }
             ResponseItem::Message { role, content, .. } if role == "developer" => {
                 content_items_to_text(content).and_then(|text| {
+                    // Preserve only the explicit auto-review approval marker for
+                    // Guardian context; other developer messages are intentionally
+                    // excluded from the review transcript.
                     text.starts_with(AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX)
                         .then_some(GuardianTranscriptEntry {
                             kind: GuardianTranscriptEntryKind::Developer,

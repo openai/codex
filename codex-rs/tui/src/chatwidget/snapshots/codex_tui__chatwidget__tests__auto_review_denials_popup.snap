@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests/guardian.rs
 expression: popup
 ---
   Auto-review Denials
-  Select one denied action to approve for one retry.
+  Select a denied action to approve.
 
 
   Command                                                        Rationale

@@ -9722,7 +9722,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Auto-review Denials".to_string()),
-            subtitle: Some("Select one denied action to approve for one retry.".to_string()),
+            subtitle: Some("Select a denied action to approve.".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             is_searchable: true,

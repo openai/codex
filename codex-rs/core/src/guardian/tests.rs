@@ -586,7 +586,6 @@ fn collect_guardian_transcript_entries_keeps_manual_approval_developer_message()
             content: vec![ContentItem::InputText {
                 text: "ordinary developer context".to_string(),
             }],
-            end_turn: None,
             phase: None,
         },
         ResponseItem::Message {
@@ -595,7 +594,6 @@ fn collect_guardian_transcript_entries_keeps_manual_approval_developer_message()
             content: vec![ContentItem::InputText {
                 text: approval_text.clone(),
             }],
-            end_turn: None,
             phase: None,
         },
     ];

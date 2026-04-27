@@ -248,6 +248,7 @@ mod tests {
         assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
     }
 
+    #[test]
     fn goal_command_is_available_during_task() {
         assert!(SlashCommand::Goal.available_during_task());
     }
