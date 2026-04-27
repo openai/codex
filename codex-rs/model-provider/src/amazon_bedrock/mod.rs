@@ -21,6 +21,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use crate::provider::ModelProvider;
 use crate::provider::ProviderAccountResult;
 use crate::provider::ProviderAccountState;
+use crate::provider::ProviderCapabilities;
 use auth::resolve_provider_auth;
 use auth::resolve_region;
 pub(crate) use catalog::static_model_catalog;
@@ -53,6 +54,19 @@ impl AmazonBedrockModelProvider {
 impl ModelProvider for AmazonBedrockModelProvider {
     fn info(&self) -> &ModelProviderInfo {
         &self.info
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            apps: false,
+            plugins: false,
+            mcp_servers: false,
+            tool_search: false,
+            tool_suggest: false,
+            image_generation: false,
+            web_search: false,
+            apps_instructions: false,
+        }
     }
 
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
@@ -114,6 +128,27 @@ mod tests {
         assert_eq!(
             api_provider.base_url,
             "https://bedrock-mantle.eu-central-1.api.aws/v1"
+        );
+    }
+
+    #[test]
+    fn capabilities_disable_unsupported_launch_features() {
+        let provider = AmazonBedrockModelProvider::new(
+            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
+        );
+
+        assert_eq!(
+            provider.capabilities(),
+            ProviderCapabilities {
+                apps: false,
+                plugins: false,
+                mcp_servers: false,
+                tool_search: false,
+                tool_suggest: false,
+                image_generation: false,
+                web_search: false,
+                apps_instructions: false,
+            }
         );
     }
 }

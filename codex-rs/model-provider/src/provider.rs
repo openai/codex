@@ -19,6 +19,38 @@ use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 use crate::models_endpoint::OpenAiModelsEndpoint;
 
+/// Optional provider-backed features that Codex may expose at runtime.
+///
+/// These capabilities are a provider-owned upper bound. Callers can disable
+/// more functionality through normal config, but should not expose a feature
+/// that the active provider marks unsupported here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderCapabilities {
+    pub apps: bool,
+    pub plugins: bool,
+    pub mcp_servers: bool,
+    pub tool_search: bool,
+    pub tool_suggest: bool,
+    pub image_generation: bool,
+    pub web_search: bool,
+    pub apps_instructions: bool,
+}
+
+impl Default for ProviderCapabilities {
+    fn default() -> Self {
+        Self {
+            apps: true,
+            plugins: true,
+            mcp_servers: true,
+            tool_search: true,
+            tool_suggest: true,
+            image_generation: true,
+            web_search: true,
+            apps_instructions: true,
+        }
+    }
+}
+
 /// Current app-visible account state for a model provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountState {
@@ -58,6 +90,11 @@ pub type ProviderAccountResult = std::result::Result<ProviderAccountState, Provi
 pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the configured provider metadata.
     fn info(&self) -> &ModelProviderInfo;
+
+    /// Returns the provider-owned capability upper bounds.
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities::default()
+    }
 
     /// Returns the provider-scoped auth manager, when this provider uses one.
     ///
@@ -293,6 +330,16 @@ mod tests {
             "experimental_supported_tools": [],
         }))
         .expect("valid model")
+    }
+
+    #[test]
+    fn configured_provider_uses_default_capabilities() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(provider.capabilities(), ProviderCapabilities::default());
     }
 
     #[test]
