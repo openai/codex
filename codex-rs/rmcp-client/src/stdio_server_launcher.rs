@@ -380,9 +380,13 @@ impl StdioServerProcessHandle {
                 Ok(())
             }
             StdioServerProcessKind::Local(None) => Ok(()),
-            StdioServerProcessKind::Executor(process) => {
-                process.terminate().await.map_err(io::Error::other)
-            }
+            StdioServerProcessKind::Executor(process) => match process.terminate().await {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    self.inner.terminated.store(false, Ordering::Release);
+                    Err(io::Error::other(error))
+                }
+            },
         }
     }
 }
