@@ -664,10 +664,6 @@ async fn track_turn_resolved_config_analytics(
     turn_context: &TurnContext,
     input: &[UserInput],
 ) {
-    if !sess.enabled(Feature::GeneralAnalytics) {
-        return;
-    }
-
     let thread_config = {
         let state = sess.state.lock().await;
         state.session_configuration.thread_config_snapshot()

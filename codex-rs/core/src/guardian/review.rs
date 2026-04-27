@@ -6,7 +6,6 @@ use codex_analytics::GuardianReviewDecision;
 use codex_analytics::GuardianReviewFailureReason;
 use codex_analytics::GuardianReviewTerminalStatus;
 use codex_analytics::GuardianReviewTrackContext;
-use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -161,13 +160,10 @@ pub(crate) fn is_guardian_reviewer_source(
 
 fn track_guardian_review(
     session: &Session,
-    turn: &TurnContext,
+    _turn: &TurnContext,
     tracking: &GuardianReviewTrackContext,
     result: GuardianReviewAnalyticsResult,
 ) {
-    if !turn.config.features.enabled(Feature::GeneralAnalytics) {
-        return;
-    }
     session
         .services
         .analytics_events_client
