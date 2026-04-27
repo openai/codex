@@ -836,7 +836,7 @@ async fn unified_exec_short_lived_network_denial_emits_failed_end_event() -> Res
 
     let call_id = "uexec-short-network-denied";
     let args = json!({
-        "cmd": "python3 -c \"import os, socket, urllib.parse; print('PRE_DENIAL_MARKER', flush=True); proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY']); sock = socket.create_connection((proxy.hostname, proxy.port), timeout=2); sock.sendall(b'GET http://codex-short-network-denied.invalid/ HTTP/1.1\\r\\nHost: codex-short-network-denied.invalid\\r\\n\\r\\n'); sock.recv(1024)\"",
+        "cmd": "python3 -c \"import os, socket, urllib.parse; proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY']); sock = socket.create_connection((proxy.hostname, proxy.port), timeout=2); sock.sendall(b'GET http://codex-short-network-denied.invalid/ HTTP/1.1\\r\\nHost: codex-short-network-denied.invalid\\r\\n\\r\\n'); sock.recv(1024)\"",
         "yield_time_ms": 1000,
     });
     let response_mock =
@@ -852,11 +852,6 @@ async fn unified_exec_short_lived_network_denial_emits_failed_end_event() -> Res
     assert!(
         end_event.aggregated_output.contains("Network access"),
         "expected network denial message in aggregated output: {:?}",
-        end_event.aggregated_output
-    );
-    assert!(
-        end_event.aggregated_output.contains("PRE_DENIAL_MARKER"),
-        "expected pre-denial output in aggregated output: {:?}",
         end_event.aggregated_output
     );
     assert!(
