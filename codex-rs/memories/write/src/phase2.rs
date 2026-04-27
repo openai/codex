@@ -24,8 +24,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::warn;
-
 const MODEL: &str = "gpt-5.4";
 const REASONING_EFFORT: codex_protocol::openai_models::ReasoningEffort =
     codex_protocol::openai_models::ReasoningEffort::Medium;
@@ -291,6 +289,7 @@ mod job {
 
 mod agent {
     use super::*;
+    use tracing::warn;
 
     pub(super) fn get_config(config: &Config) -> Option<Config> {
         let root = memory_root(&config.codex_home);

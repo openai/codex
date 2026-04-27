@@ -541,7 +541,6 @@ struct ListenerTaskContext {
     outgoing: Arc<OutgoingMessageSender>,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     analytics_events_client: AnalyticsEventsClient,
-    general_analytics_enabled: bool,
     thread_watch_manager: ThreadWatchManager,
     fallback_model_provider: String,
     codex_home: PathBuf,
@@ -728,14 +727,12 @@ impl CodexMessageProcessor {
         error: &JSONRPCErrorError,
         error_type: Option<AnalyticsJsonRpcError>,
     ) {
-        if self.config.features.enabled(Feature::GeneralAnalytics) {
-            self.analytics_events_client.track_error_response(
-                request_id.connection_id.0,
-                request_id.request_id.clone(),
-                error.clone(),
-                error_type,
-            );
-        }
+        self.analytics_events_client.track_error_response(
+            request_id.connection_id.0,
+            request_id.request_id.clone(),
+            error.clone(),
+            error_type,
+        );
     }
 
     async fn load_thread(
@@ -1367,31 +1364,16 @@ impl CodexMessageProcessor {
     }
 
     async fn login_api_key_v2(&self, request_id: ConnectionRequestId, params: LoginApiKeyParams) {
-        match self.login_api_key_common(&params).await {
-            Ok(()) => {
-                let response = codex_app_server_protocol::LoginAccountResponse::ApiKey {};
-                self.outgoing.send_response(request_id, response).await;
+        let result = self
+            .login_api_key_common(&params)
+            .await
+            .map(|()| LoginAccountResponse::ApiKey {});
+        let logged_in = result.is_ok();
+        self.outgoing.send_result(request_id, result).await;
 
-                let payload_login_completed = AccountLoginCompletedNotification {
-                    login_id: None,
-                    success: true,
-                    error: None,
-                };
-                self.outgoing
-                    .send_server_notification(ServerNotification::AccountLoginCompleted(
-                        payload_login_completed,
-                    ))
-                    .await;
-
-                self.outgoing
-                    .send_server_notification(ServerNotification::AccountUpdated(
-                        self.current_account_updated_notification(),
-                    ))
-                    .await;
-            }
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-            }
+        if logged_in {
+            self.send_login_success_notifications(/*login_id*/ None)
+                .await;
         }
     }
 
@@ -1454,202 +1436,143 @@ impl CodexMessageProcessor {
     }
 
     async fn login_chatgpt_v2(&self, request_id: ConnectionRequestId) {
-        match self.login_chatgpt_common().await {
-            Ok(opts) => match run_login_server(opts) {
-                Ok(server) => {
-                    let login_id = Uuid::new_v4();
-                    let shutdown_handle = server.cancel_handle();
+        let result = self.login_chatgpt_response().await;
+        self.outgoing.send_result(request_id, result).await;
+    }
 
-                    // Replace active login if present.
-                    {
-                        let mut guard = self.active_login.lock().await;
-                        if let Some(existing) = guard.take() {
-                            drop(existing);
-                        }
-                        *guard = Some(ActiveLogin::Browser {
-                            shutdown_handle: shutdown_handle.clone(),
-                            login_id,
-                        });
-                    }
+    async fn login_chatgpt_response(&self) -> Result<LoginAccountResponse, JSONRPCErrorError> {
+        let opts = self.login_chatgpt_common().await?;
+        let server = run_login_server(opts)
+            .map_err(|err| internal_error(format!("failed to start login server: {err}")))?;
+        let login_id = Uuid::new_v4();
+        let shutdown_handle = server.cancel_handle();
 
-                    // Spawn background task to monitor completion.
-                    let outgoing_clone = self.outgoing.clone();
-                    let active_login = self.active_login.clone();
-                    let auth_manager = self.auth_manager.clone();
-                    let config_manager = self.config_manager.clone();
-                    let chatgpt_base_url = self.config.chatgpt_base_url.clone();
-                    let auth_url = server.auth_url.clone();
-                    tokio::spawn(async move {
-                        let (success, error_msg) = match tokio::time::timeout(
-                            LOGIN_CHATGPT_TIMEOUT,
-                            server.block_until_done(),
-                        )
-                        .await
-                        {
-                            Ok(Ok(())) => (true, None),
-                            Ok(Err(err)) => (false, Some(format!("Login server error: {err}"))),
-                            Err(_elapsed) => {
-                                shutdown_handle.shutdown();
-                                (false, Some("Login timed out".to_string()))
-                            }
-                        };
-
-                        let payload_v2 = AccountLoginCompletedNotification {
-                            login_id: Some(login_id.to_string()),
-                            success,
-                            error: error_msg,
-                        };
-                        outgoing_clone
-                            .send_server_notification(ServerNotification::AccountLoginCompleted(
-                                payload_v2,
-                            ))
-                            .await;
-
-                        if success {
-                            auth_manager.reload().await;
-                            config_manager.replace_cloud_requirements_loader(
-                                auth_manager.clone(),
-                                chatgpt_base_url,
-                            );
-                            config_manager
-                                .sync_default_client_residency_requirement()
-                                .await;
-
-                            // Notify clients with the actual current auth mode.
-                            let auth = auth_manager.auth_cached();
-                            let payload_v2 = AccountUpdatedNotification {
-                                auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
-                                plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
-                            };
-                            outgoing_clone
-                                .send_server_notification(ServerNotification::AccountUpdated(
-                                    payload_v2,
-                                ))
-                                .await;
-                        }
-
-                        // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
-                        let mut guard = active_login.lock().await;
-                        if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
-                            *guard = None;
-                        }
-                    });
-
-                    let response = codex_app_server_protocol::LoginAccountResponse::Chatgpt {
-                        login_id: login_id.to_string(),
-                        auth_url,
-                    };
-                    self.outgoing.send_response(request_id, response).await;
-                }
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!("failed to start login server: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                }
-            },
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
+        // Replace active login if present.
+        {
+            let mut guard = self.active_login.lock().await;
+            if let Some(existing) = guard.take() {
+                drop(existing);
             }
+            *guard = Some(ActiveLogin::Browser {
+                shutdown_handle: shutdown_handle.clone(),
+                login_id,
+            });
         }
+
+        let outgoing_clone = self.outgoing.clone();
+        let active_login = self.active_login.clone();
+        let auth_manager = self.auth_manager.clone();
+        let config_manager = self.config_manager.clone();
+        let chatgpt_base_url = self.config.chatgpt_base_url.clone();
+        let auth_url = server.auth_url.clone();
+        tokio::spawn(async move {
+            let (success, error_msg) = match tokio::time::timeout(
+                LOGIN_CHATGPT_TIMEOUT,
+                server.block_until_done(),
+            )
+            .await
+            {
+                Ok(Ok(())) => (true, None),
+                Ok(Err(err)) => (false, Some(format!("Login server error: {err}"))),
+                Err(_elapsed) => {
+                    shutdown_handle.shutdown();
+                    (false, Some("Login timed out".to_string()))
+                }
+            };
+
+            Self::send_chatgpt_login_completion_notifications(
+                &outgoing_clone,
+                auth_manager,
+                config_manager,
+                chatgpt_base_url,
+                login_id,
+                success,
+                error_msg,
+            )
+            .await;
+
+            // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
+            let mut guard = active_login.lock().await;
+            if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
+                *guard = None;
+            }
+        });
+
+        Ok(LoginAccountResponse::Chatgpt {
+            login_id: login_id.to_string(),
+            auth_url,
+        })
     }
 
     async fn login_chatgpt_device_code_v2(&self, request_id: ConnectionRequestId) {
-        match self.login_chatgpt_common().await {
-            Ok(opts) => match request_device_code(&opts).await {
-                Ok(device_code) => {
-                    let login_id = Uuid::new_v4();
-                    let cancel = CancellationToken::new();
+        let result = self.login_chatgpt_device_code_response().await;
+        self.outgoing.send_result(request_id, result).await;
+    }
 
-                    {
-                        let mut guard = self.active_login.lock().await;
-                        if let Some(existing) = guard.take() {
-                            drop(existing);
-                        }
-                        *guard = Some(ActiveLogin::DeviceCode {
-                            cancel: cancel.clone(),
-                            login_id,
-                        });
-                    }
+    async fn login_chatgpt_device_code_response(
+        &self,
+    ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
+        let opts = self.login_chatgpt_common().await?;
+        let device_code = request_device_code(&opts)
+            .await
+            .map_err(Self::login_chatgpt_device_code_start_error)?;
+        let login_id = Uuid::new_v4();
+        let cancel = CancellationToken::new();
 
-                    let verification_url = device_code.verification_url.clone();
-                    let user_code = device_code.user_code.clone();
-                    let response =
-                        codex_app_server_protocol::LoginAccountResponse::ChatgptDeviceCode {
-                            login_id: login_id.to_string(),
-                            verification_url,
-                            user_code,
-                        };
-                    self.outgoing.send_response(request_id, response).await;
-
-                    let outgoing_clone = self.outgoing.clone();
-                    let active_login = self.active_login.clone();
-                    let auth_manager = self.auth_manager.clone();
-                    let config_manager = self.config_manager.clone();
-                    let chatgpt_base_url = self.config.chatgpt_base_url.clone();
-                    tokio::spawn(async move {
-                        let (success, error_msg) = tokio::select! {
-                            _ = cancel.cancelled() => {
-                                (false, Some("Login was not completed".to_string()))
-                            }
-                            r = complete_device_code_login(opts, device_code) => {
-                                match r {
-                                    Ok(()) => (true, None),
-                                    Err(err) => (false, Some(err.to_string())),
-                                }
-                            }
-                        };
-
-                        let payload_v2 = AccountLoginCompletedNotification {
-                            login_id: Some(login_id.to_string()),
-                            success,
-                            error: error_msg,
-                        };
-                        outgoing_clone
-                            .send_server_notification(ServerNotification::AccountLoginCompleted(
-                                payload_v2,
-                            ))
-                            .await;
-
-                        if success {
-                            auth_manager.reload().await;
-                            config_manager.replace_cloud_requirements_loader(
-                                auth_manager.clone(),
-                                chatgpt_base_url,
-                            );
-                            config_manager
-                                .sync_default_client_residency_requirement()
-                                .await;
-
-                            let auth = auth_manager.auth_cached();
-                            let payload_v2 = AccountUpdatedNotification {
-                                auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
-                                plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
-                            };
-                            outgoing_clone
-                                .send_server_notification(ServerNotification::AccountUpdated(
-                                    payload_v2,
-                                ))
-                                .await;
-                        }
-
-                        let mut guard = active_login.lock().await;
-                        if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
-                            *guard = None;
-                        }
-                    });
-                }
-                Err(err) => {
-                    let error = Self::login_chatgpt_device_code_start_error(err);
-                    self.outgoing.send_error(request_id, error).await;
-                }
-            },
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
+        {
+            let mut guard = self.active_login.lock().await;
+            if let Some(existing) = guard.take() {
+                drop(existing);
             }
+            *guard = Some(ActiveLogin::DeviceCode {
+                cancel: cancel.clone(),
+                login_id,
+            });
         }
+
+        let verification_url = device_code.verification_url.clone();
+        let user_code = device_code.user_code.clone();
+
+        let outgoing_clone = self.outgoing.clone();
+        let active_login = self.active_login.clone();
+        let auth_manager = self.auth_manager.clone();
+        let config_manager = self.config_manager.clone();
+        let chatgpt_base_url = self.config.chatgpt_base_url.clone();
+        tokio::spawn(async move {
+            let (success, error_msg) = tokio::select! {
+                _ = cancel.cancelled() => {
+                    (false, Some("Login was not completed".to_string()))
+                }
+                r = complete_device_code_login(opts, device_code) => {
+                    match r {
+                        Ok(()) => (true, None),
+                        Err(err) => (false, Some(err.to_string())),
+                    }
+                }
+            };
+
+            Self::send_chatgpt_login_completion_notifications(
+                &outgoing_clone,
+                auth_manager,
+                config_manager,
+                chatgpt_base_url,
+                login_id,
+                success,
+                error_msg,
+            )
+            .await;
+
+            let mut guard = active_login.lock().await;
+            if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
+                *guard = None;
+            }
+        });
+
+        Ok(LoginAccountResponse::ChatgptDeviceCode {
+            login_id: login_id.to_string(),
+            verification_url,
+            user_code,
+        })
     }
 
     async fn cancel_login_chatgpt_common(
@@ -1672,25 +1595,22 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: CancelLoginAccountParams,
     ) {
+        let result = self.cancel_login_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn cancel_login_response(
+        &self,
+        params: CancelLoginAccountParams,
+    ) -> Result<CancelLoginAccountResponse, JSONRPCErrorError> {
         let login_id = params.login_id;
-        match Uuid::parse_str(&login_id) {
-            Ok(uuid) => {
-                let status = match self.cancel_login_chatgpt_common(uuid).await {
-                    Ok(()) => CancelLoginAccountStatus::Canceled,
-                    Err(CancelLoginError::NotFound) => CancelLoginAccountStatus::NotFound,
-                };
-                let response = CancelLoginAccountResponse { status };
-                self.outgoing.send_response(request_id, response).await;
-            }
-            Err(_) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid login id: {login_id}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-            }
-        }
+        let uuid = Uuid::parse_str(&login_id)
+            .map_err(|_| invalid_request(format!("invalid login id: {login_id}")))?;
+        let status = match self.cancel_login_chatgpt_common(uuid).await {
+            Ok(()) => CancelLoginAccountStatus::Canceled,
+            Err(CancelLoginError::NotFound) => CancelLoginAccountStatus::NotFound,
+        };
+        Ok(CancelLoginAccountResponse { status })
     }
 
     async fn login_chatgpt_auth_tokens(
@@ -1700,18 +1620,31 @@ impl CodexMessageProcessor {
         chatgpt_account_id: String,
         chatgpt_plan_type: Option<String>,
     ) {
+        let result = self
+            .login_chatgpt_auth_tokens_response(access_token, chatgpt_account_id, chatgpt_plan_type)
+            .await;
+        let logged_in = result.is_ok();
+        self.outgoing.send_result(request_id, result).await;
+
+        if logged_in {
+            self.send_login_success_notifications(/*login_id*/ None)
+                .await;
+        }
+    }
+
+    async fn login_chatgpt_auth_tokens_response(
+        &self,
+        access_token: String,
+        chatgpt_account_id: String,
+        chatgpt_plan_type: Option<String>,
+    ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
         if matches!(
             self.config.forced_login_method,
             Some(ForcedLoginMethod::Api)
         ) {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: "External ChatGPT auth is disabled. Use API key login instead."
-                    .to_string(),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
+            return Err(invalid_request(
+                "External ChatGPT auth is disabled. Use API key login instead.",
+            ));
         }
 
         // Cancel any active login attempt to avoid persisting managed auth state.
@@ -1725,31 +1658,18 @@ impl CodexMessageProcessor {
         if let Some(expected_workspace) = self.config.forced_chatgpt_workspace_id.as_deref()
             && chatgpt_account_id != expected_workspace
         {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!(
-                    "External auth must use workspace {expected_workspace}, but received {chatgpt_account_id:?}."
-                ),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
+            return Err(invalid_request(format!(
+                "External auth must use workspace {expected_workspace}, but received {chatgpt_account_id:?}."
+            )));
         }
 
-        if let Err(err) = login_with_chatgpt_auth_tokens(
+        login_with_chatgpt_auth_tokens(
             &self.config.codex_home,
             &access_token,
             &chatgpt_account_id,
             chatgpt_plan_type.as_deref(),
-        ) {
-            let error = JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to set external auth: {err}"),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
-        }
+        )
+        .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
         self.auth_manager.reload().await;
         self.config_manager.replace_cloud_requirements_loader(
             self.auth_manager.clone(),
@@ -1759,12 +1679,12 @@ impl CodexMessageProcessor {
             .sync_default_client_residency_requirement()
             .await;
 
-        self.outgoing
-            .send_response(request_id, LoginAccountResponse::ChatgptAuthTokens {})
-            .await;
+        Ok(LoginAccountResponse::ChatgptAuthTokens {})
+    }
 
+    async fn send_login_success_notifications(&self, login_id: Option<Uuid>) {
         let payload_login_completed = AccountLoginCompletedNotification {
-            login_id: None,
+            login_id: login_id.map(|id| id.to_string()),
             success: true,
             error: None,
         };
@@ -1779,6 +1699,43 @@ impl CodexMessageProcessor {
                 self.current_account_updated_notification(),
             ))
             .await;
+    }
+
+    async fn send_chatgpt_login_completion_notifications(
+        outgoing: &OutgoingMessageSender,
+        auth_manager: Arc<AuthManager>,
+        config_manager: ConfigManager,
+        chatgpt_base_url: String,
+        login_id: Uuid,
+        success: bool,
+        error_msg: Option<String>,
+    ) {
+        let payload_v2 = AccountLoginCompletedNotification {
+            login_id: Some(login_id.to_string()),
+            success,
+            error: error_msg,
+        };
+        outgoing
+            .send_server_notification(ServerNotification::AccountLoginCompleted(payload_v2))
+            .await;
+
+        if success {
+            auth_manager.reload().await;
+            config_manager
+                .replace_cloud_requirements_loader(auth_manager.clone(), chatgpt_base_url);
+            config_manager
+                .sync_default_client_residency_requirement()
+                .await;
+
+            let auth = auth_manager.auth_cached();
+            let payload_v2 = AccountUpdatedNotification {
+                auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
+                plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
+                .await;
+        }
     }
 
     async fn logout_common(&self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
@@ -1810,23 +1767,24 @@ impl CodexMessageProcessor {
     }
 
     async fn logout_v2(&self, request_id: ConnectionRequestId) {
-        match self.logout_common().await {
-            Ok(current_auth_method) => {
-                self.outgoing
-                    .send_response(request_id, LogoutAccountResponse {})
-                    .await;
-
-                let payload_v2 = AccountUpdatedNotification {
-                    auth_mode: current_auth_method,
+        let result = self.logout_common().await;
+        let account_updated =
+            result
+                .as_ref()
+                .ok()
+                .cloned()
+                .map(|auth_mode| AccountUpdatedNotification {
+                    auth_mode,
                     plan_type: None,
-                };
-                self.outgoing
-                    .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
-                    .await;
-            }
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-            }
+                });
+        self.outgoing
+            .send_result(request_id, result.map(|_| LogoutAccountResponse {}))
+            .await;
+
+        if let Some(payload) = account_updated {
+            self.outgoing
+                .send_server_notification(ServerNotification::AccountUpdated(payload))
+                .await;
         }
     }
 
@@ -1909,6 +1867,14 @@ impl CodexMessageProcessor {
     }
 
     async fn get_account(&self, request_id: ConnectionRequestId, params: GetAccountParams) {
+        let result = self.get_account_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn get_account_response(
+        &self,
+        params: GetAccountParams,
+    ) -> Result<GetAccountResponse, JSONRPCErrorError> {
         let do_refresh = params.refresh_token;
 
         self.refresh_token_if_requested(do_refresh).await;
@@ -1920,43 +1886,35 @@ impl CodexMessageProcessor {
         let account_state = match provider.account_state() {
             Ok(account_state) => account_state,
             Err(ProviderAccountError::MissingChatgptAccountDetails) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: "email and plan type are required for chatgpt authentication"
-                        .to_string(),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
+                return Err(invalid_request(
+                    "email and plan type are required for chatgpt authentication",
+                ));
             }
         };
         let account = account_state.account.map(Account::from);
 
-        let response = GetAccountResponse {
+        Ok(GetAccountResponse {
             account,
             requires_openai_auth: account_state.requires_openai_auth,
-        };
-        self.outgoing.send_response(request_id, response).await;
+        })
     }
 
     async fn get_account_rate_limits(&self, request_id: ConnectionRequestId) {
-        match self.fetch_account_rate_limits().await {
-            Ok((rate_limits, rate_limits_by_limit_id)) => {
-                let response = GetAccountRateLimitsResponse {
-                    rate_limits: rate_limits.into(),
-                    rate_limits_by_limit_id: Some(
-                        rate_limits_by_limit_id
-                            .into_iter()
-                            .map(|(limit_id, snapshot)| (limit_id, snapshot.into()))
-                            .collect(),
-                    ),
-                };
-                self.outgoing.send_response(request_id, response).await;
-            }
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-            }
-        }
+        let result =
+            self.fetch_account_rate_limits()
+                .await
+                .map(
+                    |(rate_limits, rate_limits_by_limit_id)| GetAccountRateLimitsResponse {
+                        rate_limits: rate_limits.into(),
+                        rate_limits_by_limit_id: Some(
+                            rate_limits_by_limit_id
+                                .into_iter()
+                                .map(|(limit_id, snapshot)| (limit_id, snapshot.into()))
+                                .collect(),
+                        ),
+                    },
+                );
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn send_add_credits_nudge_email(
@@ -1964,16 +1922,11 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: SendAddCreditsNudgeEmailParams,
     ) {
-        match self.send_add_credits_nudge_email_inner(params).await {
-            Ok(status) => {
-                self.outgoing
-                    .send_response(request_id, SendAddCreditsNudgeEmailResponse { status })
-                    .await;
-            }
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-            }
-        }
+        let result = self
+            .send_add_credits_nudge_email_inner(params)
+            .await
+            .map(|status| SendAddCreditsNudgeEmailResponse { status });
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn send_add_credits_nudge_email_inner(
@@ -2101,18 +2054,24 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: CommandExecParams,
     ) {
+        let result = self
+            .exec_one_off_command_inner(request_id.clone(), params)
+            .await
+            .map(|()| None::<serde_json::Value>);
+        self.send_optional_result(request_id, result).await;
+    }
+
+    async fn exec_one_off_command_inner(
+        &self,
+        request_id: ConnectionRequestId,
+        params: CommandExecParams,
+    ) -> Result<(), JSONRPCErrorError> {
         tracing::debug!("ExecOneOffCommand params: {params:?}");
 
         let request = request_id.clone();
 
         if params.command.is_empty() {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: "command must not be empty".to_string(),
-                data: None,
-            };
-            self.outgoing.send_error(request, error).await;
-            return;
+            return Err(invalid_request("command must not be empty"));
         }
 
         let CommandExecParams {
@@ -2132,43 +2091,25 @@ impl CodexMessageProcessor {
             permission_profile,
         } = params;
         if sandbox_policy.is_some() && permission_profile.is_some() {
-            self.send_invalid_request_error(
-                request_id,
-                "`permissionProfile` cannot be combined with `sandboxPolicy`".to_string(),
-            )
-            .await;
-            return;
+            return Err(invalid_request(
+                "`permissionProfile` cannot be combined with `sandboxPolicy`",
+            ));
         }
 
         if size.is_some() && !tty {
-            let error = JSONRPCErrorError {
-                code: INVALID_PARAMS_ERROR_CODE,
-                message: "command/exec size requires tty: true".to_string(),
-                data: None,
-            };
-            self.outgoing.send_error(request, error).await;
-            return;
+            return Err(invalid_params("command/exec size requires tty: true"));
         }
 
         if disable_output_cap && output_bytes_cap.is_some() {
-            let error = JSONRPCErrorError {
-                code: INVALID_PARAMS_ERROR_CODE,
-                message: "command/exec cannot set both outputBytesCap and disableOutputCap"
-                    .to_string(),
-                data: None,
-            };
-            self.outgoing.send_error(request, error).await;
-            return;
+            return Err(invalid_params(
+                "command/exec cannot set both outputBytesCap and disableOutputCap",
+            ));
         }
 
         if disable_timeout && timeout_ms.is_some() {
-            let error = JSONRPCErrorError {
-                code: INVALID_PARAMS_ERROR_CODE,
-                message: "command/exec cannot set both timeoutMs and disableTimeout".to_string(),
-                data: None,
-            };
-            self.outgoing.send_error(request, error).await;
-            return;
+            return Err(invalid_params(
+                "command/exec cannot set both timeoutMs and disableTimeout",
+            ));
         }
 
         let cwd = cwd.map_or_else(|| self.config.cwd.clone(), |cwd| self.config.cwd.join(cwd));
@@ -2192,15 +2133,9 @@ impl CodexMessageProcessor {
             Some(timeout_ms) => match u64::try_from(timeout_ms) {
                 Ok(timeout_ms) => Some(timeout_ms),
                 Err(_) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_PARAMS_ERROR_CODE,
-                        message: format!(
-                            "command/exec timeoutMs must be non-negative, got {timeout_ms}"
-                        ),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request, error).await;
-                    return;
+                    return Err(invalid_params(format!(
+                        "command/exec timeoutMs must be non-negative, got {timeout_ms}"
+                    )));
                 }
             },
             None => None,
@@ -2220,13 +2155,9 @@ impl CodexMessageProcessor {
             {
                 Ok(started) => Some(started),
                 Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!("failed to start managed network proxy: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request, error).await;
-                    return;
+                    return Err(internal_error(format!(
+                        "failed to start managed network proxy: {err}"
+                    )));
                 }
             },
             None => None,
@@ -2291,68 +2222,33 @@ impl CodexMessageProcessor {
                     &file_system_sandbox_policy,
                     network_sandbox_policy,
                 );
-            match self
-                .config
+            self.config
                 .permissions
                 .permission_profile
                 .can_set(&effective_permission_profile)
-            {
-                Ok(()) => effective_permission_profile,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid permission profile: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request, error).await;
-                    return;
-                }
-            }
+                .map_err(|err| invalid_request(format!("invalid permission profile: {err}")))?;
+            effective_permission_profile
         } else if let Some(policy) = sandbox_policy.map(|policy| policy.to_core()) {
-            match self
-                .config
+            self.config
                 .permissions
                 .can_set_legacy_sandbox_policy(&policy, &sandbox_cwd)
-            {
-                Ok(()) => {
-                    let file_system_sandbox_policy =
-                        codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&policy, &sandbox_cwd);
-                    let network_sandbox_policy =
-                        codex_protocol::permissions::NetworkSandboxPolicy::from(&policy);
-                    let permission_profile =
-                        codex_protocol::models::PermissionProfile::from_runtime_permissions_with_enforcement(
-                        codex_protocol::models::SandboxEnforcement::from_legacy_sandbox_policy(
-                            &policy,
-                        ),
-                        &file_system_sandbox_policy,
-                        network_sandbox_policy,
-                    );
-                    if let Err(err) = self
-                        .config
-                        .permissions
-                        .permission_profile
-                        .can_set(&permission_profile)
-                    {
-                        let error = JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!("invalid sandbox policy: {err}"),
-                            data: None,
-                        };
-                        self.outgoing.send_error(request, error).await;
-                        return;
-                    }
-                    permission_profile
-                }
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid sandbox policy: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request, error).await;
-                    return;
-                }
-            }
+                .map_err(|err| invalid_request(format!("invalid sandbox policy: {err}")))?;
+            let file_system_sandbox_policy =
+                codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&policy, &sandbox_cwd);
+            let network_sandbox_policy =
+                codex_protocol::permissions::NetworkSandboxPolicy::from(&policy);
+            let permission_profile =
+                codex_protocol::models::PermissionProfile::from_runtime_permissions_with_enforcement(
+                    codex_protocol::models::SandboxEnforcement::from_legacy_sandbox_policy(&policy),
+                    &file_system_sandbox_policy,
+                    network_sandbox_policy,
+                );
+            self.config
+                .permissions
+                .permission_profile
+                .can_set(&permission_profile)
+                .map_err(|err| invalid_request(format!("invalid sandbox policy: {err}")))?;
+            permission_profile
         } else {
             self.config.permissions.permission_profile()
         };
@@ -2364,49 +2260,32 @@ impl CodexMessageProcessor {
         let use_legacy_landlock = self.config.features.use_legacy_landlock();
         let size = match size.map(crate::command_exec::terminal_size_from_protocol) {
             Some(Ok(size)) => Some(size),
-            Some(Err(error)) => {
-                self.outgoing.send_error(request, error).await;
-                return;
-            }
+            Some(Err(error)) => return Err(error),
             None => None,
         };
 
-        match codex_core::exec::build_exec_request(
+        let exec_request = codex_core::exec::build_exec_request(
             exec_params,
             &effective_permission_profile,
             &sandbox_cwd,
             &codex_linux_sandbox_exe,
             use_legacy_landlock,
-        ) {
-            Ok(exec_request) => {
-                if let Err(error) = self
-                    .command_exec_manager
-                    .start(StartCommandExecParams {
-                        outgoing,
-                        request_id: request_for_task,
-                        process_id,
-                        exec_request,
-                        started_network_proxy: started_network_proxy_for_task,
-                        tty,
-                        stream_stdin,
-                        stream_stdout_stderr,
-                        output_bytes_cap,
-                        size,
-                    })
-                    .await
-                {
-                    self.outgoing.send_error(request, error).await;
-                }
-            }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("exec failed: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request, error).await;
-            }
-        }
+        )
+        .map_err(|err| internal_error(format!("exec failed: {err}")))?;
+        self.command_exec_manager
+            .start(StartCommandExecParams {
+                outgoing,
+                request_id: request_for_task,
+                process_id,
+                exec_request,
+                started_network_proxy: started_network_proxy_for_task,
+                tty,
+                stream_stdin,
+                stream_stdout_stderr,
+                output_bytes_cap,
+                size,
+            })
+            .await
     }
 
     fn preserve_configured_deny_read_restrictions(
@@ -2422,14 +2301,11 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: CommandExecWriteParams,
     ) {
-        match self
+        let result = self
             .command_exec_manager
             .write(request_id.clone(), params)
-            .await
-        {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
+            .await;
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn command_exec_resize(
@@ -2437,14 +2313,11 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: CommandExecResizeParams,
     ) {
-        match self
+        let result = self
             .command_exec_manager
             .resize(request_id.clone(), params)
-            .await
-        {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
+            .await;
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn command_exec_terminate(
@@ -2452,14 +2325,11 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: CommandExecTerminateParams,
     ) {
-        match self
+        let result = self
             .command_exec_manager
             .terminate(request_id.clone(), params)
-            .await
-        {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
+            .await;
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn thread_start(
@@ -2539,7 +2409,6 @@ impl CodexMessageProcessor {
             outgoing: Arc::clone(&self.outgoing),
             pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
             analytics_events_client: self.analytics_events_client.clone(),
-            general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
             thread_watch_manager: self.thread_watch_manager.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
@@ -2888,17 +2757,15 @@ impl CodexMessageProcessor {
                     permission_profile,
                     reasoning_effort: config_snapshot.reasoning_effort,
                 };
-                if listener_task_context.general_analytics_enabled {
-                    listener_task_context
-                        .analytics_events_client
-                        .track_response(
-                            request_id.connection_id.0,
-                            ClientResponse::ThreadStart {
-                                request_id: request_id.request_id.clone(),
-                                response: response.clone(),
-                            },
-                        );
-                }
+                listener_task_context
+                    .analytics_events_client
+                    .track_response(
+                        request_id.connection_id.0,
+                        ClientResponse::ThreadStart {
+                            request_id: request_id.request_id.clone(),
+                            response: response.clone(),
+                        },
+                    );
 
                 listener_task_context
                     .outgoing
@@ -4713,15 +4580,13 @@ impl CodexMessageProcessor {
                     permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
                 };
-                if self.config.features.enabled(Feature::GeneralAnalytics) {
-                    self.analytics_events_client.track_response(
-                        request_id.connection_id.0,
-                        ClientResponse::ThreadResume {
-                            request_id: request_id.request_id.clone(),
-                            response: response.clone(),
-                        },
-                    );
-                }
+                self.analytics_events_client.track_response(
+                    request_id.connection_id.0,
+                    ClientResponse::ThreadResume {
+                        request_id: request_id.request_id.clone(),
+                        response: response.clone(),
+                    },
+                );
 
                 let connection_id = request_id.connection_id;
                 let token_usage_thread = include_turns.then(|| response.thread.clone());
@@ -5453,15 +5318,13 @@ impl CodexMessageProcessor {
             permission_profile,
             reasoning_effort: session_configured.reasoning_effort,
         };
-        if self.config.features.enabled(Feature::GeneralAnalytics) {
-            self.analytics_events_client.track_response(
-                request_id.connection_id.0,
-                ClientResponse::ThreadFork {
-                    request_id: request_id.request_id.clone(),
-                    response: response.clone(),
-                },
-            );
-        }
+        self.analytics_events_client.track_response(
+            request_id.connection_id.0,
+            ClientResponse::ThreadFork {
+                request_id: request_id.request_id.clone(),
+                response: response.clone(),
+            },
+        );
 
         let connection_id = request_id.connection_id;
         let token_usage_thread = include_turns.then(|| response.thread.clone());
@@ -6345,6 +6208,22 @@ impl CodexMessageProcessor {
         });
     }
 
+    async fn send_optional_result<T>(
+        &self,
+        request_id: ConnectionRequestId,
+        result: Result<Option<T>, JSONRPCErrorError>,
+    ) where
+        T: serde::Serialize,
+    {
+        match result {
+            Ok(Some(response)) => self.outgoing.send_response(request_id, response).await,
+            Ok(None) => {}
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
     async fn send_invalid_request_error(&self, request_id: ConnectionRequestId, message: String) {
         let error = JSONRPCErrorError {
             code: INVALID_REQUEST_ERROR_CODE,
@@ -7179,15 +7058,13 @@ impl CodexMessageProcessor {
                 };
 
                 let response = TurnStartResponse { turn };
-                if self.config.features.enabled(Feature::GeneralAnalytics) {
-                    self.analytics_events_client.track_response(
-                        request_id.connection_id.0,
-                        ClientResponse::TurnStart {
-                            request_id: request_id.request_id.clone(),
-                            response: response.clone(),
-                        },
-                    );
-                }
+                self.analytics_events_client.track_response(
+                    request_id.connection_id.0,
+                    ClientResponse::TurnStart {
+                        request_id: request_id.request_id.clone(),
+                        response: response.clone(),
+                    },
+                );
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
@@ -7313,15 +7190,13 @@ impl CodexMessageProcessor {
         {
             Ok(turn_id) => {
                 let response = TurnSteerResponse { turn_id };
-                if self.config.features.enabled(Feature::GeneralAnalytics) {
-                    self.analytics_events_client.track_response(
-                        request_id.connection_id.0,
-                        ClientResponse::TurnSteer {
-                            request_id: request_id.request_id.clone(),
-                            response: response.clone(),
-                        },
-                    );
-                }
+                self.analytics_events_client.track_response(
+                    request_id.connection_id.0,
+                    ClientResponse::TurnSteer {
+                        request_id: request_id.request_id.clone(),
+                        response: response.clone(),
+                    },
+                );
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
@@ -7955,7 +7830,6 @@ impl CodexMessageProcessor {
                 outgoing: Arc::clone(&self.outgoing),
                 pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
                 analytics_events_client: self.analytics_events_client.clone(),
-                general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.to_path_buf(),
@@ -8074,7 +7948,6 @@ impl CodexMessageProcessor {
                 outgoing: Arc::clone(&self.outgoing),
                 pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
                 analytics_events_client: self.analytics_events_client.clone(),
-                general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.to_path_buf(),
@@ -8124,7 +7997,6 @@ impl CodexMessageProcessor {
             thread_state_manager,
             pending_thread_unloads,
             analytics_events_client: _,
-            general_analytics_enabled: _,
             thread_watch_manager,
             fallback_model_provider,
             codex_home,
@@ -8200,9 +8072,7 @@ impl CodexMessageProcessor {
                             conversation_id,
                             conversation.clone(),
                             thread_manager.clone(),
-                            listener_task_context
-                                .general_analytics_enabled
-                                .then(|| listener_task_context.analytics_events_client.clone()),
+                            Some(listener_task_context.analytics_events_client.clone()),
                             thread_outgoing,
                             thread_state.clone(),
                             thread_watch_manager.clone(),
