@@ -1249,6 +1249,7 @@ pub(super) async fn submission_loop(
         manager.begin_shutdown()
     };
     mcp_shutdown.await;
+    // Also drain cached guardian state on this implicit shutdown path.
     sess.guardian_review_session.shutdown().await;
     debug!("Agent loop exited");
 }
