@@ -141,7 +141,8 @@ pub async fn run_main(
             arg0_paths,
             Arc::new(config),
             environment_manager,
-        );
+        )
+        .await;
         async move {
             while let Some(msg) = incoming_rx.recv().await {
                 match msg {

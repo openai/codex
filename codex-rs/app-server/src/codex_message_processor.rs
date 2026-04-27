@@ -1353,7 +1353,7 @@ impl CodexMessageProcessor {
             self.config.cli_auth_credentials_store_mode,
         ) {
             Ok(()) => {
-                self.auth_manager.reload();
+                self.auth_manager.reload().await;
                 Ok(())
             }
             Err(err) => Err(JSONRPCErrorError {
@@ -1504,7 +1504,7 @@ impl CodexMessageProcessor {
                             .await;
 
                         if success {
-                            auth_manager.reload();
+                            auth_manager.reload().await;
                             config_manager.replace_cloud_requirements_loader(
                                 auth_manager.clone(),
                                 chatgpt_base_url,
@@ -1612,7 +1612,7 @@ impl CodexMessageProcessor {
                             .await;
 
                         if success {
-                            auth_manager.reload();
+                            auth_manager.reload().await;
                             config_manager.replace_cloud_requirements_loader(
                                 auth_manager.clone(),
                                 chatgpt_base_url,
@@ -1748,7 +1748,7 @@ impl CodexMessageProcessor {
             self.outgoing.send_error(request_id, error).await;
             return;
         }
-        self.auth_manager.reload();
+        self.auth_manager.reload().await;
         self.config_manager.replace_cloud_requirements_loader(
             self.auth_manager.clone(),
             self.config.chatgpt_base_url.clone(),
