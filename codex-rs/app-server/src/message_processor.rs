@@ -666,14 +666,12 @@ impl MessageProcessor {
                     }
                 }
             }
-            if self.config.features.enabled(Feature::GeneralAnalytics) {
-                self.analytics_events_client.track_initialize(
-                    connection_id.0,
-                    analytics_initialize_params,
-                    originator,
-                    self.rpc_transport,
-                );
-            }
+            self.analytics_events_client.track_initialize(
+                connection_id.0,
+                analytics_initialize_params,
+                originator,
+                self.rpc_transport,
+            );
             set_default_client_residency_requirement(self.config.enforce_residency.value());
             if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
                 *suffix = Some(user_agent_suffix);
@@ -750,7 +748,8 @@ impl MessageProcessor {
         let request = QueuedInitializedRequest::new(
             rpc_gate,
             async move {
-                let result = processor
+                let processor_for_request = Arc::clone(&processor);
+                let result = processor_for_request
                     .handle_initialized_client_request(
                         connection_request_id,
                         codex_request,

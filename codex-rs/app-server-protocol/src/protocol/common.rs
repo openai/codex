@@ -1397,6 +1397,7 @@ mod tests {
                 env: None,
                 size: None,
                 sandbox_policy: None,
+                permission_profile: None,
             },
         };
         assert_eq!(
@@ -1437,9 +1438,9 @@ mod tests {
         let plugin_install = ClientRequest::PluginInstall {
             request_id: request_id(),
             params: v2::PluginInstallParams {
-                marketplace_path: absolute_path("/tmp/marketplace"),
+                marketplace_path: Some(absolute_path("/tmp/marketplace")),
+                remote_marketplace_name: None,
                 plugin_name: "plugin-a".to_string(),
-                force_remote_sync: false,
             },
         };
         assert_eq!(
@@ -1451,7 +1452,6 @@ mod tests {
             request_id: request_id(),
             params: v2::PluginUninstallParams {
                 plugin_id: "plugin-a".to_string(),
-                force_remote_sync: false,
             },
         };
         assert_eq!(
@@ -1615,6 +1615,7 @@ mod tests {
                 env: None,
                 size: None,
                 sandbox_policy: None,
+                permission_profile: None,
             },
         };
         assert_eq!(command_exec.serialization_scope(), None);
