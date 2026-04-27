@@ -90,3 +90,59 @@ fn cancelled_turn_closes_running_inference_call() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn late_cancelled_inference_preserves_turn_end_status() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = create_started_writer(&temp)?;
+    start_turn(&writer, "turn-1")?;
+
+    let request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({
+            "input": [message("user", "interrupt")]
+        }),
+    )?;
+    append_inference_start(&writer, "inference-1", "turn-1", request)?;
+    let turn_end = writer.append(RawTraceEventPayload::CodexTurnEnded {
+        codex_turn_id: "turn-1".to_string(),
+        status: ExecutionStatus::Failed,
+    })?;
+
+    let partial_response = writer.write_json_payload(
+        RawPayloadKind::InferenceResponse,
+        &json!({
+            "response_id": null,
+            "token_usage": null,
+            "output_items": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "late partial"}]
+            }]
+        }),
+    )?;
+    writer.append(RawTraceEventPayload::InferenceCancelled {
+        inference_call_id: "inference-1".to_string(),
+        reason: "stream mapper noticed cancellation after turn end".to_string(),
+        partial_response_payload: Some(partial_response.clone()),
+    })?;
+
+    let rollout = replay_bundle(temp.path())?;
+    let inference = &rollout.inference_calls["inference-1"];
+    assert_eq!(inference.execution.status, ExecutionStatus::Failed);
+    assert_eq!(inference.execution.ended_seq, Some(turn_end.seq));
+    assert_eq!(
+        inference.raw_response_payload_id,
+        Some(partial_response.raw_payload_id),
+    );
+    assert_eq!(inference.response_item_ids.len(), 1);
+    let response_item_id = &inference.response_item_ids[0];
+    assert_eq!(
+        rollout.conversation_items[response_item_id].body.parts,
+        vec![crate::model::ConversationPart::Text {
+            text: "late partial".to_string(),
+        }],
+    );
+
+    Ok(())
+}

@@ -159,11 +159,18 @@ impl TraceReducer {
         let Some(inference) = self.rollout.inference_calls.get_mut(&inference_call_id) else {
             bail!("inference call {inference_call_id} disappeared during response reduction");
         };
-        inference.execution.ended_at_unix_ms = Some(wall_time_unix_ms);
-        inference.execution.ended_seq = Some(seq);
-        inference.execution.status = status;
-        inference.upstream_request_id = response_id;
-        inference.raw_response_payload_id = response_payload.map(|payload| payload.raw_payload_id);
+        // Turn-end cleanup can close a stream before the async mapper observes
+        // cancellation. Preserve that terminal status while still retaining any
+        // late partial response evidence from the mapper.
+        if inference.execution.status == ExecutionStatus::Running {
+            inference.execution.ended_at_unix_ms = Some(wall_time_unix_ms);
+            inference.execution.ended_seq = Some(seq);
+            inference.execution.status = status;
+            inference.upstream_request_id = response_id;
+        }
+        if let Some(response_payload) = response_payload {
+            inference.raw_response_payload_id = Some(response_payload.raw_payload_id);
+        }
         if let Some(response_item_ids) = response_item_ids {
             inference.response_item_ids = response_item_ids;
         }
