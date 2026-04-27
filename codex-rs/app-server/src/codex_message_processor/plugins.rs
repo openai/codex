@@ -349,7 +349,7 @@ impl CodexMessageProcessor {
         };
 
         let result = plugins_manager
-            .install_plugin(request)
+            .install_plugin(&config, request)
             .await
             .map_err(Self::plugin_install_error)?;
         let config = match self.load_latest_config(config_cwd).await {
@@ -610,6 +610,7 @@ impl CodexMessageProcessor {
             | MarketplaceError::InvalidMarketplaceFile { .. }
             | MarketplaceError::PluginNotFound { .. }
             | MarketplaceError::PluginNotAvailable { .. }
+            | MarketplaceError::BlockedByRequirements { .. }
             | MarketplaceError::PluginsDisabled
             | MarketplaceError::InvalidPlugin(_) => invalid_request(err.to_string()),
             MarketplaceError::Io { .. } => internal_error(format!("failed to {action}: {err}")),

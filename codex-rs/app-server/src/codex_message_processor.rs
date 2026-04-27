@@ -6900,8 +6900,21 @@ impl CodexMessageProcessor {
     }
 
     async fn marketplace_add(&self, request_id: ConnectionRequestId, params: MarketplaceAddParams) {
+        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(config) => config,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
         let result = add_marketplace_to_codex_home(
             self.config.codex_home.to_path_buf(),
+            config
+                .config_layer_stack
+                .requirements()
+                .strict_known_marketplaces
+                .as_ref()
+                .map(|requirements| requirements.value.clone()),
             MarketplaceAddRequest {
                 source: params.source,
                 ref_name: params.ref_name,

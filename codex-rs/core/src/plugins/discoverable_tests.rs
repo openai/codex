@@ -211,14 +211,18 @@ async fn list_tool_suggest_discoverable_plugins_omits_installed_curated_plugins(
     write_curated_plugin_sha(codex_home.path());
     write_plugins_feature_config(codex_home.path());
 
+    let config = load_plugins_config(codex_home.path()).await;
     PluginsManager::new(codex_home.path().to_path_buf())
-        .install_plugin(PluginInstallRequest {
-            plugin_name: "slack".to_string(),
-            marketplace_path: AbsolutePathBuf::try_from(
-                curated_root.join(".agents/plugins/marketplace.json"),
-            )
-            .expect("marketplace path"),
-        })
+        .install_plugin(
+            &config,
+            PluginInstallRequest {
+                plugin_name: "slack".to_string(),
+                marketplace_path: AbsolutePathBuf::try_from(
+                    curated_root.join(".agents/plugins/marketplace.json"),
+                )
+                .expect("marketplace path"),
+            },
+        )
         .await
         .expect("plugin should install");
 

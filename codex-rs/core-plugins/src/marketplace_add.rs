@@ -1,5 +1,7 @@
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::installed_marketplaces::marketplace_install_root;
+use codex_config::StrictKnownMarketplaceToml;
+use codex_config::types::MarketplaceSourceType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs;
 use std::path::Path;
@@ -49,11 +51,18 @@ pub enum MarketplaceAddError {
 
 pub async fn add_marketplace(
     codex_home: PathBuf,
+    strict_known_marketplaces: Option<Vec<StrictKnownMarketplaceToml>>,
     request: MarketplaceAddRequest,
 ) -> Result<MarketplaceAddOutcome, MarketplaceAddError> {
-    tokio::task::spawn_blocking(move || add_marketplace_sync(codex_home.as_path(), request))
-        .await
-        .map_err(|err| MarketplaceAddError::Internal(format!("failed to add marketplace: {err}")))?
+    tokio::task::spawn_blocking(move || {
+        add_marketplace_sync(
+            codex_home.as_path(),
+            strict_known_marketplaces.as_deref(),
+            request,
+        )
+    })
+    .await
+    .map_err(|err| MarketplaceAddError::Internal(format!("failed to add marketplace: {err}")))?
 }
 
 pub fn is_local_marketplace_source(
@@ -68,13 +77,20 @@ pub fn is_local_marketplace_source(
 
 fn add_marketplace_sync(
     codex_home: &Path,
+    strict_known_marketplaces: Option<&[StrictKnownMarketplaceToml]>,
     request: MarketplaceAddRequest,
 ) -> Result<MarketplaceAddOutcome, MarketplaceAddError> {
-    add_marketplace_sync_with_cloner(codex_home, request, clone_git_source)
+    add_marketplace_sync_with_cloner(
+        codex_home,
+        strict_known_marketplaces,
+        request,
+        clone_git_source,
+    )
 }
 
 fn add_marketplace_sync_with_cloner<F>(
     codex_home: &Path,
+    strict_known_marketplaces: Option<&[StrictKnownMarketplaceToml]>,
     request: MarketplaceAddRequest,
     clone_source: F,
 ) -> Result<MarketplaceAddOutcome, MarketplaceAddError>
@@ -92,6 +108,7 @@ where
             "--sparse is only supported for git marketplace sources".to_string(),
         ));
     }
+    ensure_source_allowed(strict_known_marketplaces, &source, &sparse_paths)?;
 
     let install_root = marketplace_install_root(codex_home);
     fs::create_dir_all(&install_root).map_err(|err| {
@@ -213,6 +230,38 @@ where
     })
 }
 
+fn ensure_source_allowed(
+    strict_known_marketplaces: Option<&[StrictKnownMarketplaceToml]>,
+    source: &MarketplaceSource,
+    sparse_paths: &[String],
+) -> Result<(), MarketplaceAddError> {
+    let Some(allowlist) = strict_known_marketplaces else {
+        return Ok(());
+    };
+    let source_value;
+    let (source_type, ref_name) = match source {
+        MarketplaceSource::Git { url, ref_name } => {
+            source_value = url.clone();
+            (MarketplaceSourceType::Git, ref_name.as_deref())
+        }
+        MarketplaceSource::Local { path } => {
+            source_value = path.display().to_string();
+            (MarketplaceSourceType::Local, None)
+        }
+    };
+    if allowlist
+        .iter()
+        .any(|allowed| allowed.matches_source(source_type, &source_value, ref_name, sparse_paths))
+    {
+        return Ok(());
+    }
+
+    Err(MarketplaceAddError::InvalidRequest(format!(
+        "marketplace source `{}` is blocked by strict_known_marketplaces requirements",
+        source.display()
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,6 +277,7 @@ mod tests {
 
         let result = add_marketplace_sync_with_cloner(
             codex_home.path(),
+            /*strict_known_marketplaces*/ None,
             MarketplaceAddRequest {
                 source: "https://github.com/owner/repo.git".to_string(),
                 ref_name: None,
@@ -265,6 +315,7 @@ mod tests {
 
         let result = add_marketplace_sync_with_cloner(
             codex_home.path(),
+            /*strict_known_marketplaces*/ None,
             MarketplaceAddRequest {
                 source: source_root.path().display().to_string(),
                 ref_name: None,
@@ -309,6 +360,7 @@ mod tests {
 
         let err = add_marketplace_sync_with_cloner(
             codex_home.path(),
+            /*strict_known_marketplaces*/ None,
             MarketplaceAddRequest {
                 source: source_root.path().display().to_string(),
                 ref_name: None,
@@ -345,21 +397,63 @@ mod tests {
             ref_name: None,
             sparse_paths: Vec::new(),
         };
-        let first_result = add_marketplace_sync_with_cloner(codex_home.path(), request.clone(), {
+        let first_result = add_marketplace_sync_with_cloner(
+            codex_home.path(),
+            /*strict_known_marketplaces*/ None,
+            request.clone(),
             |_url, _ref_name, _sparse_paths, _destination| {
                 panic!("git cloner should not be called for local marketplace sources")
-            }
-        })?;
-        let second_result = add_marketplace_sync_with_cloner(codex_home.path(), request, {
+            },
+        )?;
+        let second_result = add_marketplace_sync_with_cloner(
+            codex_home.path(),
+            /*strict_known_marketplaces*/ None,
+            request,
             |_url, _ref_name, _sparse_paths, _destination| {
                 panic!("git cloner should not be called for local marketplace sources")
-            }
-        })?;
+            },
+        )?;
 
         assert!(!first_result.already_added);
         assert!(second_result.already_added);
         assert_eq!(second_result.installed_root, first_result.installed_root);
 
+        Ok(())
+    }
+
+    #[test]
+    fn add_marketplace_sync_rejects_git_source_blocked_by_requirements_before_clone() -> Result<()>
+    {
+        let codex_home = TempDir::new()?;
+        let err = add_marketplace_sync_with_cloner(
+            codex_home.path(),
+            Some(&[StrictKnownMarketplaceToml {
+                source_type: MarketplaceSourceType::Git,
+                source: "https://github.com/acme/approved.git".to_string(),
+                ref_name: Some("main".to_string()),
+                sparse_paths: Some(vec!["plugins".to_string()]),
+            }]),
+            MarketplaceAddRequest {
+                source: "https://github.com/owner/repo.git".to_string(),
+                ref_name: Some("main".to_string()),
+                sparse_paths: vec!["plugins".to_string()],
+            },
+            |_url, _ref_name, _sparse_paths, _destination| {
+                panic!("git cloner should not be called for blocked marketplace sources")
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "marketplace source `https://github.com/owner/repo.git#main` is blocked by strict_known_marketplaces requirements"
+        );
+        assert!(
+            !codex_home
+                .path()
+                .join(codex_config::CONFIG_TOML_FILE)
+                .exists()
+        );
         Ok(())
     }
 

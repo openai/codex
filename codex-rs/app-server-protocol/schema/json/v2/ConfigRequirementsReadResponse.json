@@ -266,6 +266,13 @@
       ],
       "type": "object"
     },
+    "MarketplaceSourceType": {
+      "enum": [
+        "git",
+        "local"
+      ],
+      "type": "string"
+    },
     "NetworkDomainPermission": {
       "enum": [
         "allow",
@@ -401,6 +408,36 @@
         "danger-full-access"
       ],
       "type": "string"
+    },
+    "StrictKnownMarketplaceRequirement": {
+      "properties": {
+        "refName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "sourceType": {
+          "$ref": "#/definitions/MarketplaceSourceType"
+        },
+        "sparsePaths": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "source",
+        "sourceType"
+      ],
+      "type": "object"
     },
     "WebSearchMode": {
       "enum": [

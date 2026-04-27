@@ -3,6 +3,7 @@ use anyhow::Result;
 use anyhow::bail;
 use clap::Parser;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::plugins::PluginMarketplaceUpgradeOutcome;
 use codex_core::plugins::PluginsManager;
@@ -89,8 +90,19 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
     } = args;
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .build()
+        .await
+        .context("failed to load config")?;
     let outcome = add_marketplace(
         codex_home.to_path_buf(),
+        config
+            .config_layer_stack
+            .requirements()
+            .strict_known_marketplaces
+            .as_ref()
+            .map(|requirements| requirements.value.clone()),
         MarketplaceAddRequest {
             source,
             ref_name,

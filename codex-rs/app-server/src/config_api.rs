@@ -286,11 +286,35 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         feature_requirements: requirements
             .feature_requirements
             .map(|requirements| requirements.entries),
+        strict_known_marketplaces: requirements.strict_known_marketplaces.map(|marketplaces| {
+            marketplaces
+                .into_iter()
+                .map(map_strict_known_marketplace_to_api)
+                .collect()
+        }),
         hooks: requirements.hooks.map(map_hooks_requirements_to_api),
         enforce_residency: requirements
             .enforce_residency
             .map(map_residency_requirement_to_api),
         network: requirements.network.map(map_network_requirements_to_api),
+    }
+}
+
+fn map_strict_known_marketplace_to_api(
+    marketplace: codex_config::StrictKnownMarketplaceToml,
+) -> codex_app_server_protocol::StrictKnownMarketplaceRequirement {
+    codex_app_server_protocol::StrictKnownMarketplaceRequirement {
+        source_type: match marketplace.source_type {
+            codex_config::types::MarketplaceSourceType::Git => {
+                codex_app_server_protocol::MarketplaceSourceType::Git
+            }
+            codex_config::types::MarketplaceSourceType::Local => {
+                codex_app_server_protocol::MarketplaceSourceType::Local
+            }
+        },
+        source: marketplace.source,
+        ref_name: marketplace.ref_name,
+        sparse_paths: marketplace.sparse_paths,
     }
 }
 
@@ -524,6 +548,12 @@ mod tests {
                     ("personality".to_string(), true),
                 ]),
             }),
+            strict_known_marketplaces: Some(vec![codex_config::StrictKnownMarketplaceToml {
+                source_type: codex_config::types::MarketplaceSourceType::Git,
+                source: "https://github.com/acme/plugins.git".to_string(),
+                ref_name: Some("main".to_string()),
+                sparse_paths: Some(vec!["plugins".to_string()]),
+            }]),
             hooks: Some(ManagedHooksRequirementsToml {
                 managed_dir: Some(PathBuf::from("/enterprise/hooks")),
                 windows_managed_dir: Some(PathBuf::from(r"C:\enterprise\hooks")),
@@ -607,6 +637,17 @@ mod tests {
             ])),
         );
         assert_eq!(
+            mapped.strict_known_marketplaces,
+            Some(vec![
+                codex_app_server_protocol::StrictKnownMarketplaceRequirement {
+                    source_type: codex_app_server_protocol::MarketplaceSourceType::Git,
+                    source: "https://github.com/acme/plugins.git".to_string(),
+                    ref_name: Some("main".to_string()),
+                    sparse_paths: Some(vec!["plugins".to_string()]),
+                }
+            ]),
+        );
+        assert_eq!(
             mapped.hooks,
             Some(ManagedHooksRequirements {
                 managed_dir: Some(PathBuf::from("/enterprise/hooks")),
@@ -667,6 +708,7 @@ mod tests {
             allowed_web_search_modes: None,
             guardian_policy_config: None,
             feature_requirements: None,
+            strict_known_marketplaces: None,
             hooks: None,
             mcp_servers: None,
             apps: None,
@@ -727,6 +769,7 @@ mod tests {
             allowed_web_search_modes: Some(Vec::new()),
             guardian_policy_config: None,
             feature_requirements: None,
+            strict_known_marketplaces: None,
             hooks: None,
             mcp_servers: None,
             apps: None,

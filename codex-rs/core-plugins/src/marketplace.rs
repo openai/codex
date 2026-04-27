@@ -154,6 +154,11 @@ pub enum MarketplaceError {
         marketplace_name: String,
     },
 
+    #[error(
+        "marketplace `{marketplace_name}` is blocked by strict_known_marketplaces requirements"
+    )]
+    BlockedByRequirements { marketplace_name: String },
+
     #[error("plugins feature is disabled")]
     PluginsDisabled,
 

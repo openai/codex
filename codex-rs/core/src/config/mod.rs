@@ -1705,6 +1705,7 @@ impl Config {
             web_search_mode: mut constrained_web_search_mode,
             feature_requirements,
             managed_hooks: _,
+            strict_known_marketplaces: _,
             mcp_servers,
             exec_policy: _,
             enforce_residency,

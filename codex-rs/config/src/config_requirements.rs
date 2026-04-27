@@ -18,6 +18,7 @@ use super::requirements_exec_policy::RequirementsExecPolicyToml;
 use crate::Constrained;
 use crate::ConstraintError;
 use crate::ManagedHooksRequirementsToml;
+use crate::types::MarketplaceSourceType;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequirementSource {
@@ -88,6 +89,7 @@ pub struct ConfigRequirements {
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub managed_hooks: Option<ConstrainedWithSource<ManagedHooksRequirementsToml>>,
+    pub strict_known_marketplaces: Option<Sourced<Vec<StrictKnownMarketplaceToml>>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
@@ -120,6 +122,7 @@ impl Default for ConfigRequirements {
             ),
             feature_requirements: None,
             managed_hooks: None,
+            strict_known_marketplaces: None,
             mcp_servers: None,
             exec_policy: None,
             enforce_residency: ConstrainedWithSource::new(
@@ -578,6 +581,31 @@ pub struct FeatureRequirementsToml {
     pub entries: BTreeMap<String, bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct StrictKnownMarketplaceToml {
+    pub source_type: MarketplaceSourceType,
+    pub source: String,
+    #[serde(default, rename = "ref")]
+    pub ref_name: Option<String>,
+    #[serde(default)]
+    pub sparse_paths: Option<Vec<String>>,
+}
+
+impl StrictKnownMarketplaceToml {
+    pub fn matches_source(
+        &self,
+        source_type: MarketplaceSourceType,
+        source: &str,
+        ref_name: Option<&str>,
+        sparse_paths: &[String],
+    ) -> bool {
+        self.source_type == source_type
+            && self.source == source
+            && self.ref_name.as_deref() == ref_name
+            && self.sparse_paths.as_deref().unwrap_or_default() == sparse_paths
+    }
+}
+
 impl FeatureRequirementsToml {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
@@ -631,6 +659,7 @@ pub struct ConfigRequirementsToml {
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
+    pub strict_known_marketplaces: Option<Vec<StrictKnownMarketplaceToml>>,
     pub hooks: Option<ManagedHooksRequirementsToml>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
     pub apps: Option<AppsRequirementsToml>,
@@ -677,6 +706,7 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
+    pub strict_known_marketplaces: Option<Sourced<Vec<StrictKnownMarketplaceToml>>>,
     pub hooks: Option<Sourced<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub apps: Option<Sourced<AppsRequirementsToml>>,
@@ -712,6 +742,7 @@ impl ConfigRequirementsWithSources {
             remote_sandbox_config: _,
             allowed_web_search_modes: _,
             feature_requirements: _,
+            strict_known_marketplaces: _,
             hooks: _,
             mcp_servers: _,
             apps: _,
@@ -740,6 +771,7 @@ impl ConfigRequirementsWithSources {
                 allowed_sandbox_modes,
                 allowed_web_search_modes,
                 feature_requirements,
+                strict_known_marketplaces,
                 hooks,
                 mcp_servers,
                 rules,
@@ -766,6 +798,7 @@ impl ConfigRequirementsWithSources {
             allowed_sandbox_modes,
             allowed_web_search_modes,
             feature_requirements,
+            strict_known_marketplaces,
             hooks,
             mcp_servers,
             apps,
@@ -782,6 +815,7 @@ impl ConfigRequirementsWithSources {
             remote_sandbox_config: None,
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
+            strict_known_marketplaces: strict_known_marketplaces.map(|sourced| sourced.value),
             hooks: hooks.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
             apps: apps.map(|sourced| sourced.value),
@@ -867,6 +901,7 @@ impl ConfigRequirementsToml {
                 .feature_requirements
                 .as_ref()
                 .is_none_or(FeatureRequirementsToml::is_empty)
+            && self.strict_known_marketplaces.is_none()
             && self
                 .hooks
                 .as_ref()
@@ -897,6 +932,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_sandbox_modes,
             allowed_web_search_modes,
             feature_requirements,
+            strict_known_marketplaces,
             hooks,
             mcp_servers,
             apps: _apps,
@@ -1132,6 +1168,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             web_search_mode,
             feature_requirements,
             managed_hooks,
+            strict_known_marketplaces,
             mcp_servers,
             exec_policy,
             enforce_residency,
@@ -1202,6 +1239,7 @@ mod tests {
             remote_sandbox_config: _,
             allowed_web_search_modes,
             feature_requirements,
+            strict_known_marketplaces,
             hooks,
             mcp_servers,
             apps,
@@ -1221,6 +1259,8 @@ mod tests {
             allowed_web_search_modes: allowed_web_search_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feature_requirements: feature_requirements
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            strict_known_marketplaces: strict_known_marketplaces
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             hooks: hooks.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -1267,6 +1307,7 @@ mod tests {
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
             feature_requirements: Some(feature_requirements.clone()),
+            strict_known_marketplaces: None,
             hooks: None,
             mcp_servers: None,
             apps: None,
@@ -1299,6 +1340,7 @@ mod tests {
                     feature_requirements,
                     enforce_source.clone(),
                 )),
+                strict_known_marketplaces: None,
                 hooks: None,
                 mcp_servers: None,
                 apps: None,
@@ -1337,6 +1379,7 @@ mod tests {
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
+                strict_known_marketplaces: None,
                 hooks: None,
                 mcp_servers: None,
                 apps: None,
@@ -1383,6 +1426,7 @@ mod tests {
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
+                strict_known_marketplaces: None,
                 hooks: None,
                 mcp_servers: None,
                 apps: None,
@@ -2307,6 +2351,71 @@ allowed_approvals_reviewers = ["user"]
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn deserialize_strict_known_marketplaces() -> Result<()> {
+        let toml_str = r#"
+            [[strict_known_marketplaces]]
+            source_type = "git"
+            source = "https://github.com/acme/plugins.git"
+            ref = "main"
+            sparse_paths = [".agents", "plugins"]
+
+            [[strict_known_marketplaces]]
+            source_type = "local"
+            source = "/opt/acme/plugins"
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+
+        assert_eq!(
+            config.strict_known_marketplaces,
+            Some(vec![
+                StrictKnownMarketplaceToml {
+                    source_type: MarketplaceSourceType::Git,
+                    source: "https://github.com/acme/plugins.git".to_string(),
+                    ref_name: Some("main".to_string()),
+                    sparse_paths: Some(vec![".agents".to_string(), "plugins".to_string()]),
+                },
+                StrictKnownMarketplaceToml {
+                    source_type: MarketplaceSourceType::Local,
+                    source: "/opt/acme/plugins".to_string(),
+                    ref_name: None,
+                    sparse_paths: None,
+                },
+            ])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn strict_known_marketplace_matches_exact_git_metadata() {
+        let marketplace = StrictKnownMarketplaceToml {
+            source_type: MarketplaceSourceType::Git,
+            source: "https://github.com/acme/plugins.git".to_string(),
+            ref_name: Some("main".to_string()),
+            sparse_paths: Some(vec!["plugins".to_string()]),
+        };
+
+        assert!(marketplace.matches_source(
+            MarketplaceSourceType::Git,
+            "https://github.com/acme/plugins.git",
+            Some("main"),
+            &["plugins".to_string()],
+        ));
+        assert!(!marketplace.matches_source(
+            MarketplaceSourceType::Git,
+            "https://github.com/acme/plugins.git",
+            Some("v2"),
+            &["plugins".to_string()],
+        ));
+        assert!(!marketplace.matches_source(
+            MarketplaceSourceType::Git,
+            "https://github.com/acme/plugins.git",
+            Some("main"),
+            &[],
+        ));
     }
 
     #[test]

@@ -688,6 +688,7 @@ mod tests {
             feature_requirements: Some(FeatureRequirementsToml {
                 entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
             }),
+            strict_known_marketplaces: None,
             hooks: None,
             mcp_servers: Some(BTreeMap::from([(
                 "docs".to_string(),
@@ -894,6 +895,7 @@ approval_policy = "never"
             allowed_web_search_modes: Some(Vec::new()),
             guardian_policy_config: None,
             feature_requirements: None,
+            strict_known_marketplaces: None,
             hooks: None,
             mcp_servers: None,
             apps: None,

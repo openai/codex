@@ -458,7 +458,22 @@ impl ExternalAgentConfigService {
                 ref_name: import_source.ref_name,
                 sparse_paths: Vec::new(),
             };
-            let add_marketplace_outcome = add_marketplace(self.codex_home.clone(), request).await;
+            let config = ConfigBuilder::default()
+                .codex_home(self.codex_home.clone())
+                .fallback_cwd(Some(self.codex_home.clone()))
+                .build()
+                .await?;
+            let add_marketplace_outcome = add_marketplace(
+                self.codex_home.clone(),
+                config
+                    .config_layer_stack
+                    .requirements()
+                    .strict_known_marketplaces
+                    .as_ref()
+                    .map(|requirements| requirements.value.clone()),
+                request,
+            )
+            .await;
             let marketplace_path = match add_marketplace_outcome {
                 Ok(add_marketplace_outcome) => {
                     let Some(marketplace_path) = find_marketplace_manifest_path(
@@ -479,12 +494,20 @@ impl ExternalAgentConfigService {
                     continue;
                 }
             };
+            let config = ConfigBuilder::default()
+                .codex_home(self.codex_home.clone())
+                .fallback_cwd(Some(self.codex_home.clone()))
+                .build()
+                .await?;
             for plugin_name in plugin_names {
                 match plugins_manager
-                    .install_plugin(PluginInstallRequest {
-                        plugin_name: plugin_name.clone(),
-                        marketplace_path: marketplace_path.clone(),
-                    })
+                    .install_plugin(
+                        &config,
+                        PluginInstallRequest {
+                            plugin_name: plugin_name.clone(),
+                            marketplace_path: marketplace_path.clone(),
+                        },
+                    )
                     .await
                 {
                     Ok(_) => outcome
