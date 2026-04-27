@@ -59,6 +59,7 @@ use rmcp::model::FormElicitationCapability;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::ProtocolVersion;
+use rmcp::model::Tool as RmcpTool;
 use tokio_util::sync::CancellationToken;
 
 /// MCP server capability indicating that Codex should include [`SandboxState`]
@@ -70,6 +71,8 @@ pub(crate) const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str =
     "codex.mcp.tools.fetch_uncached.duration_ms";
 pub(crate) const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
+
+const CONNECTOR_META_PREFIX: &str = "connector";
 
 #[derive(Clone)]
 pub(crate) struct ManagedClient {
@@ -320,19 +323,23 @@ pub(crate) async fn list_tools_for_client_uncached(
         .tools
         .into_iter()
         .map(|tool| {
+            let mut tool_def = tool.tool;
+            let (connector_id, connector_name, connector_description) =
+                sanitize_tool_connector_metadata(
+                    server_name,
+                    &mut tool_def,
+                    tool.connector_id,
+                    tool.connector_name,
+                    tool.connector_description,
+                );
             let callable_name = normalize_codex_apps_callable_name(
                 server_name,
-                &tool.tool.name,
-                tool.connector_id.as_deref(),
-                tool.connector_name.as_deref(),
+                &tool_def.name,
+                connector_id.as_deref(),
+                connector_name.as_deref(),
             );
-            let callable_namespace = normalize_codex_apps_callable_namespace(
-                server_name,
-                tool.connector_name.as_deref(),
-            );
-            let connector_name = tool.connector_name;
-            let connector_description = tool.connector_description;
-            let mut tool_def = tool.tool;
+            let callable_namespace =
+                normalize_codex_apps_callable_namespace(server_name, connector_name.as_deref());
             if let Some(title) = tool_def.title.as_deref() {
                 let normalized_title =
                     normalize_codex_apps_tool_title(server_name, connector_name.as_deref(), title);
@@ -346,7 +353,7 @@ pub(crate) async fn list_tools_for_client_uncached(
                 callable_namespace,
                 server_instructions: server_instructions.map(str::to_string),
                 tool: tool_def,
-                connector_id: tool.connector_id,
+                connector_id,
                 connector_name,
                 plugin_display_names: Vec::new(),
                 connector_description,
@@ -357,6 +364,130 @@ pub(crate) async fn list_tools_for_client_uncached(
         return Ok(filter_disallowed_codex_apps_tools(tools));
     }
     Ok(tools)
+}
+
+fn sanitize_tool_connector_metadata(
+    server_name: &str,
+    tool: &mut RmcpTool,
+    connector_id: Option<String>,
+    connector_name: Option<String>,
+    connector_description: Option<String>,
+) -> (Option<String>, Option<String>, Option<String>) {
+    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        return (connector_id, connector_name, connector_description);
+    }
+
+    strip_untrusted_connector_meta(tool);
+    (None, None, None)
+}
+
+fn strip_untrusted_connector_meta(tool: &mut RmcpTool) {
+    if let Some(meta) = tool.meta.as_mut() {
+        meta.retain(|key, _| !is_connector_meta_key(key));
+    }
+}
+
+fn is_connector_meta_key(key: &str) -> bool {
+    key.get(..CONNECTOR_META_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(CONNECTOR_META_PREFIX))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmcp::model::JsonObject;
+    use rmcp::model::Meta;
+
+    fn tool_with_connector_meta() -> RmcpTool {
+        RmcpTool {
+            name: "capture_file_upload".to_string().into(),
+            title: None,
+            description: Some("test tool".to_string().into()),
+            input_schema: Arc::new(JsonObject::default()),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: Some(Meta(
+                serde_json::json!({
+                    "connector_id": "connector_gmail",
+                    "connector_name": "Gmail",
+                    "connector_display_name": "Gmail",
+                    "connector_description": "Mail connector",
+                    "connectorDescription": "Mail connector",
+                    "connectorFutureField": "future connector metadata",
+                    "CONNECTOR_UPPERCASE": "uppercase connector metadata",
+                    "openai/fileParams": ["file"],
+                    "custom": "kept"
+                })
+                .as_object()
+                .expect("object")
+                .clone(),
+            )),
+        }
+    }
+
+    #[test]
+    fn custom_mcp_connector_metadata_is_stripped() {
+        let mut tool = tool_with_connector_meta();
+
+        let (connector_id, connector_name, connector_description) =
+            sanitize_tool_connector_metadata(
+                "minimaltest",
+                &mut tool,
+                Some("connector_gmail".to_string()),
+                Some("Gmail".to_string()),
+                Some("Mail connector".to_string()),
+            );
+
+        assert_eq!(connector_id, None);
+        assert_eq!(connector_name, None);
+        assert_eq!(connector_description, None);
+
+        let meta = tool.meta.as_ref().expect("meta");
+        for key in meta.0.keys() {
+            assert!(
+                !is_connector_meta_key(key),
+                "{key} should be stripped from custom MCP metadata"
+            );
+        }
+        assert!(meta.0.contains_key("openai/fileParams"));
+        assert_eq!(
+            meta.0.get("custom").and_then(|value| value.as_str()),
+            Some("kept")
+        );
+    }
+
+    #[test]
+    fn codex_apps_connector_metadata_is_preserved() {
+        let mut tool = tool_with_connector_meta();
+
+        let (connector_id, connector_name, connector_description) =
+            sanitize_tool_connector_metadata(
+                CODEX_APPS_MCP_SERVER_NAME,
+                &mut tool,
+                Some("connector_gmail".to_string()),
+                Some("Gmail".to_string()),
+                Some("Mail connector".to_string()),
+            );
+
+        assert_eq!(connector_id.as_deref(), Some("connector_gmail"));
+        assert_eq!(connector_name.as_deref(), Some("Gmail"));
+        assert_eq!(connector_description.as_deref(), Some("Mail connector"));
+
+        let meta = tool.meta.as_ref().expect("meta");
+        for key in [
+            "connector_id",
+            "connector_name",
+            "connector_display_name",
+            "connector_description",
+            "connectorDescription",
+            "connectorFutureField",
+            "CONNECTOR_UPPERCASE",
+        ] {
+            assert!(meta.0.contains_key(key), "{key} should be preserved");
+        }
+    }
 }
 
 fn resolve_bearer_token(
