@@ -19,6 +19,7 @@ use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
@@ -397,7 +398,39 @@ impl AgentControl {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
         }
-        forked_rollout_items.retain(keep_forked_rollout_item);
+        // MultiAgentV2 root/subagent usage hints are injected as standalone developer
+        // messages at thread start. When forking history, drop hints from the parent
+        // so the child gets a fresh hint that matches its own session source/config.
+        let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
+            if let Some(parent_thread) = parent_thread.as_ref() {
+                parent_thread
+                    .codex
+                    .configured_multi_agent_v2_usage_hint_texts()
+                    .await
+            } else if config.features.enabled(Feature::MultiAgentV2) {
+                [
+                    config.multi_agent_v2.root_agent_usage_hint_text.clone(),
+                    config.multi_agent_v2.subagent_usage_hint_text.clone(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
+            } else {
+                Vec::new()
+            };
+        forked_rollout_items.retain(|item| {
+            if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = item
+                && role == "developer"
+                && let [ContentItem::InputText { text }] = content.as_slice()
+                && multi_agent_v2_usage_hint_texts_to_filter
+                    .iter()
+                    .any(|usage_hint_text| usage_hint_text == text)
+            {
+                return false;
+            }
+
+            keep_forked_rollout_item(item)
+        });
 
         state
             .fork_thread_with_source(

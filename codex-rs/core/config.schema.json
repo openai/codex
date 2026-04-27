@@ -1315,6 +1315,12 @@
           "minimum": 1.0,
           "type": "integer"
         },
+        "root_agent_usage_hint_text": {
+          "type": "string"
+        },
+        "subagent_usage_hint_text": {
+          "type": "string"
+        },
         "usage_hint_enabled": {
           "type": "boolean"
         },

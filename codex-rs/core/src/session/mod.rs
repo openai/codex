@@ -185,6 +185,7 @@ use codex_protocol::exec_output::StreamOutput;
 
 mod handlers;
 mod mcp;
+mod multi_agents;
 mod review;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
@@ -766,6 +767,22 @@ impl Codex {
     pub(crate) async fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         let state = self.session.state.lock().await;
         state.session_configuration.thread_config_snapshot()
+    }
+
+    pub(crate) async fn configured_multi_agent_v2_usage_hint_texts(&self) -> Vec<String> {
+        let state = self.session.state.lock().await;
+        let config = &state.session_configuration.original_config_do_not_use;
+        if !config.features.enabled(Feature::MultiAgentV2) {
+            return Vec::new();
+        }
+
+        [
+            config.multi_agent_v2.root_agent_usage_hint_text.clone(),
+            config.multi_agent_v2.subagent_usage_hint_text.clone(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
@@ -2659,11 +2676,22 @@ impl Session {
             );
         }
 
-        let mut items = Vec::with_capacity(3);
+        let multi_agent_v2_usage_hint_text =
+            multi_agents::usage_hint_text(turn_context, &session_source);
+
+        let mut items = Vec::with_capacity(4);
         if let Some(developer_message) =
             crate::context_manager::updates::build_developer_update_item(developer_sections)
         {
             items.push(developer_message);
+        }
+        if let Some(usage_hint_text) = multi_agent_v2_usage_hint_text
+            && let Some(usage_hint_message) =
+                crate::context_manager::updates::build_developer_update_item(vec![
+                    usage_hint_text.to_string(),
+                ])
+        {
+            items.push(usage_hint_message);
         }
         if let Some(contextual_user_message) =
             crate::context_manager::updates::build_contextual_user_message(contextual_user_sections)
