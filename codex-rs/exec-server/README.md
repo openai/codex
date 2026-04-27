@@ -22,9 +22,9 @@ the wire.
 The CLI entrypoint supports:
 
 - `ws://IP:PORT` (default)
-- `--cloud --cloud-base-url URL [--cloud-environment-id ID] [--cloud-name NAME]`
+- `--remote --cloud-base-url URL [--cloud-environment-id ID] [--cloud-name NAME]`
 
-Cloud mode registers the local exec-server with the cloud environments service,
+Remote mode registers the local exec-server with the cloud environments service,
 then reconnects to the service-provided rendezvous websocket as the executor.
 It requires ChatGPT auth, and `CODEX_CLOUD_ENVIRONMENTS_BASE_URL` can be used
 instead of `--cloud-base-url`.

@@ -454,9 +454,9 @@ struct ExecServerCommand {
     )]
     listen: String,
 
-    /// Register this exec-server as a cloud executor instead of listening locally.
-    #[arg(long = "cloud", default_value_t = false)]
-    cloud: bool,
+    /// Register this exec-server as a remote executor instead of listening locally.
+    #[arg(long = "remote", default_value_t = false)]
+    remote: bool,
 
     /// Cloud environments service base URL.
     #[arg(long = "cloud-base-url", value_name = "URL")]
@@ -1281,7 +1281,7 @@ async fn run_exec_server_command(
         codex_self_exe,
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
-    if cmd.cloud {
+    if cmd.remote {
         let cloud_base_url = cmd
             .cloud_base_url
             .or_else(|| {
@@ -1289,7 +1289,7 @@ async fn run_exec_server_command(
             })
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "--cloud-base-url or CODEX_CLOUD_ENVIRONMENTS_BASE_URL is required in cloud mode"
+                    "--cloud-base-url or CODEX_CLOUD_ENVIRONMENTS_BASE_URL is required in remote mode"
                 )
             })?;
         let cli_overrides = root_config_overrides
