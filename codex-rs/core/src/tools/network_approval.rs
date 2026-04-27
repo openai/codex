@@ -7,6 +7,8 @@ use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::denied_network_policy_message;
+use crate::security_events::SandboxViolationAuditContext;
+use crate::security_events::record_sandbox_violation_audit;
 use crate::session::session::Session;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolError;
@@ -27,6 +29,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::WarningEvent;
+use codex_sandboxing::SandboxViolationEvent;
 use codex_sandboxing::record_network_sandbox_violation;
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -758,11 +761,18 @@ impl NetworkApprovalService {
 
 pub(crate) fn build_blocked_request_observer(
     network_approval: Arc<NetworkApprovalService>,
+    sandbox_violation_context: SandboxViolationAuditContext,
 ) -> Arc<dyn BlockedRequestObserver> {
     Arc::new(move |blocked: BlockedRequest| {
         let network_approval = Arc::clone(&network_approval);
+        let sandbox_violation_context = sandbox_violation_context.clone();
         async move {
-            record_network_sandbox_violation(&blocked);
+            let violation = record_network_sandbox_violation(&blocked);
+            record_sandbox_violation_audit(
+                Some(&sandbox_violation_context),
+                &SandboxViolationEvent::Network(violation),
+            )
+            .await;
             network_approval.record_blocked_request(blocked).await;
         }
     })

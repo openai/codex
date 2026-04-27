@@ -12,6 +12,10 @@ use crate::LogQuery;
 use crate::LogRow;
 use crate::MEMORIES_DB_FILENAME;
 use crate::STATE_DB_FILENAME;
+use crate::STATE_DB_VERSION;
+use crate::SecurityEvent;
+use crate::SecurityEventCreateParams;
+use crate::SecurityEventQuery;
 use crate::SortKey;
 use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
@@ -66,6 +70,7 @@ mod logs;
 mod memories;
 mod recovery;
 mod remote_control;
+mod security_events;
 #[cfg(test)]
 mod test_support;
 mod threads;

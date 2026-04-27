@@ -3,7 +3,6 @@
 //! Assumes `apply_patch` verification/approval happened upstream. Reuses the
 //! selected turn environment filesystem for both local and remote turns, with
 //! sandboxing enforced by the explicit filesystem sandbox context.
-use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::session::turn_context::TurnEnvironment;
@@ -242,7 +241,7 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
         &mut self,
         req: &ApplyPatchRequest,
         attempt: &SandboxAttempt<'_>,
-        _ctx: &ToolCtx,
+        ctx: &ToolCtx,
     ) -> Result<ApplyPatchRuntimeOutput, ToolError> {
         let started_at = Instant::now();
         let fs = req.turn_environment.environment.get_filesystem();
@@ -276,7 +275,13 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
             timed_out: false,
         };
         if failed && is_likely_sandbox_denied(attempt.sandbox, &output) {
-            record_filesystem_sandbox_violation(attempt.sandbox, &output);
+            if let Some(violation) = record_filesystem_sandbox_violation(attempt.sandbox, &output) {
+                crate::security_events::record_sandbox_violation_audit(
+                    Some(&crate::security_events::SandboxViolationAuditContext::from_tool_ctx(ctx)),
+                    &codex_sandboxing::SandboxViolationEvent::FileSystem(violation),
+                )
+                .await;
+            }
             return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                 output: Box::new(output),
                 network_policy_decision: None,
