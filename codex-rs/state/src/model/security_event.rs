@@ -7,22 +7,22 @@ use sqlx::sqlite::SqliteRow;
 pub enum SecurityEventKind {
     /// Sandbox enforcement observed and blocked an attempted action.
     SandboxViolation,
-    /// A reviewer assessed a proposed action.
-    GuardianAssessment,
+    /// Automated review made a decision about a proposed action.
+    AutoReviewDecision,
 }
 
 impl SecurityEventKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::SandboxViolation => "sandbox_violation",
-            Self::GuardianAssessment => "guardian_assessment",
+            Self::AutoReviewDecision => "auto_review_decision",
         }
     }
 
     pub fn from_db_value(value: &str) -> Option<Self> {
         match value {
             "sandbox_violation" => Some(Self::SandboxViolation),
-            "guardian_assessment" => Some(Self::GuardianAssessment),
+            "auto_review_decision" => Some(Self::AutoReviewDecision),
             _ => None,
         }
     }
