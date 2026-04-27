@@ -27,7 +27,6 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_rollout::state_db;
@@ -149,16 +148,8 @@ impl AgentControl {
         }
     }
 
-    /// Create a control-plane handle over the same thread manager with an independent live-agent
-    /// registry.
-    pub(crate) fn detached_registry(&self) -> Self {
-        Self {
-            manager: self.manager.clone(),
-            ..Default::default()
-        }
-    }
-
     /// Spawn a new agent thread and submit the initial prompt.
+    #[cfg(test)]
     pub(crate) async fn spawn_agent(
         &self,
         config: crate::config::Config,
@@ -797,16 +788,6 @@ impl AgentControl {
         let state = self.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
         Ok(thread.subscribe_status())
-    }
-
-    pub(crate) async fn get_total_token_usage(&self, agent_id: ThreadId) -> Option<TokenUsage> {
-        let Ok(state) = self.upgrade() else {
-            return None;
-        };
-        let Ok(thread) = state.get_thread(agent_id).await else {
-            return None;
-        };
-        thread.total_token_usage().await
     }
 
     pub(crate) async fn format_environment_context_subagents(

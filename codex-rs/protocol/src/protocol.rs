@@ -761,9 +761,6 @@ pub enum Op {
     /// Drop all persisted memory artifacts and memory-tracking DB rows.
     DropMemories,
 
-    /// Trigger a single pass of the startup memory pipeline.
-    UpdateMemories,
-
     /// Set a user-facing thread name in the persisted rollout metadata.
     /// This is a local-only operation handled by codex-core; it does not
     /// involve the model.
@@ -904,7 +901,6 @@ impl Op {
             Self::ListSkills { .. } => "list_skills",
             Self::Compact => "compact",
             Self::DropMemories => "drop_memories",
-            Self::UpdateMemories => "update_memories",
             Self::SetThreadName { .. } => "set_thread_name",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::Undo => "undo",
@@ -2637,9 +2633,17 @@ pub enum SessionSource {
     Exec,
     Mcp,
     Custom(String),
+    Internal(InternalSessionSource),
     SubAgent(SubAgentSource),
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum InternalSessionSource {
+    MemoryConsolidation,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
@@ -2670,6 +2674,7 @@ impl fmt::Display for SessionSource {
             SessionSource::Exec => f.write_str("exec"),
             SessionSource::Mcp => f.write_str("mcp"),
             SessionSource::Custom(source) => f.write_str(source),
+            SessionSource::Internal(source) => write!(f, "internal_{source}"),
             SessionSource::SubAgent(sub_source) => write!(f, "subagent_{sub_source}"),
             SessionSource::Unknown => f.write_str("unknown"),
         }
@@ -2698,18 +2703,27 @@ impl SessionSource {
     pub fn thread_source_name(&self) -> Option<&'static str> {
         match self {
             SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
+            SessionSource::Internal(_) => Some("internal"),
             SessionSource::SubAgent(_) => Some("subagent"),
             SessionSource::Mcp | SessionSource::Custom(_) | SessionSource::Unknown => None,
         }
+    }
+
+    pub fn is_internal(&self) -> bool {
+        matches!(self, SessionSource::Internal(_))
+    }
+
+    pub fn is_non_root_agent(&self) -> bool {
+        matches!(
+            self,
+            SessionSource::Internal(_) | SessionSource::SubAgent(_)
+        )
     }
 
     pub fn get_nickname(&self) -> Option<String> {
         match self {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_nickname, .. }) => {
                 agent_nickname.clone()
-            }
-            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
-                Some("Morpheus".to_string())
             }
             _ => None,
         }
@@ -2720,9 +2734,6 @@ impl SessionSource {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_role, .. }) => {
                 agent_role.clone()
             }
-            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
-                Some("memory builder".to_string())
-            }
             _ => None,
         }
     }
@@ -2731,9 +2742,6 @@ impl SessionSource {
         match self {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. }) => {
                 agent_path.clone()
-            }
-            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
-                Some(AgentPath::morpheus())
             }
             _ => None,
         }
@@ -2747,7 +2755,7 @@ impl SessionSource {
             | SessionSource::Exec
             | SessionSource::Mcp
             | SessionSource::Unknown => Some(Product::Codex),
-            SessionSource::SubAgent(_) => None,
+            SessionSource::Internal(_) | SessionSource::SubAgent(_) => None,
         }
     }
 
@@ -2773,6 +2781,14 @@ impl fmt::Display for SubAgentSource {
                 write!(f, "thread_spawn_{parent_thread_id}_d{depth}")
             }
             SubAgentSource::Other(other) => f.write_str(other),
+        }
+    }
+}
+
+impl fmt::Display for InternalSessionSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InternalSessionSource::MemoryConsolidation => f.write_str("memory_consolidation"),
         }
     }
 }
@@ -4043,6 +4059,10 @@ mod tests {
             (SessionSource::VSCode, Some("user")),
             (SessionSource::Exec, Some("user")),
             (
+                SessionSource::Internal(InternalSessionSource::MemoryConsolidation),
+                Some("internal"),
+            ),
+            (
                 SessionSource::SubAgent(SubAgentSource::Review),
                 Some("subagent"),
             ),
@@ -4082,6 +4102,11 @@ mod tests {
     fn session_source_restriction_product_does_not_guess_subagent_products() {
         assert_eq!(
             SessionSource::SubAgent(SubAgentSource::Review).restriction_product(),
+            None
+        );
+        assert_eq!(
+            SessionSource::Internal(InternalSessionSource::MemoryConsolidation)
+                .restriction_product(),
             None
         );
     }

@@ -271,7 +271,6 @@ use crate::context::UserInstructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
 use crate::mcp::McpManager;
-use crate::memories;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
 use crate::rollout::map_session_init_error;
@@ -518,9 +517,10 @@ impl Codex {
         };
 
         let config = Arc::new(config);
-        let refresh_strategy = match session_source {
-            SessionSource::SubAgent(_) => codex_models_manager::manager::RefreshStrategy::Offline,
-            _ => codex_models_manager::manager::RefreshStrategy::OnlineIfUncached,
+        let refresh_strategy = if session_source.is_non_root_agent() {
+            codex_models_manager::manager::RefreshStrategy::Offline
+        } else {
+            codex_models_manager::manager::RefreshStrategy::OnlineIfUncached
         };
         if config.model.is_none()
             || !matches!(
@@ -1130,10 +1130,10 @@ impl Session {
         let turn_context = self.new_default_turn().await;
         let is_subagent = {
             let state = self.state.lock().await;
-            matches!(
-                state.session_configuration.session_source,
-                SessionSource::SubAgent(_)
-            )
+            state
+                .session_configuration
+                .session_source
+                .is_non_root_agent()
         };
         let has_prior_user_turns = initial_history_has_prior_user_turns(&conversation_history);
         {

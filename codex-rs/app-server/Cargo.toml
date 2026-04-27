@@ -48,6 +48,7 @@ codex-backend-client = { workspace = true }
 codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-login = { workspace = true }
+codex-memories-write = { workspace = true }
 codex-mcp = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-models-manager = { workspace = true }
@@ -56,8 +57,10 @@ codex-app-server-protocol = { workspace = true }
 codex-feedback = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-rollout = { workspace = true }
+codex-rollout-trace = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
+codex-terminal-detection = { workspace = true }
 codex-thread-store = { workspace = true }
 codex-tools = { workspace = true }
 codex-uds = { workspace = true }

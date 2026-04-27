@@ -1,29 +1,20 @@
-use crate::Prompt;
-use crate::RolloutRecorder;
-use crate::config::Config;
-use crate::context::is_memory_excluded_contextual_user_fragment;
-use crate::memories::metrics;
-use crate::memories::phase_one;
-use crate::memories::phase_one::PRUNE_BATCH_SIZE;
-use crate::rollout::INTERACTIVE_SESSION_SOURCES;
-use crate::rollout::policy::should_persist_response_item_for_memories;
-use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
-use codex_api::ResponseEvent;
+use crate::STAGE_ONE_PROMPT;
+use crate::build_stage_one_input_message;
+use crate::runtime::MemoryStartupContext;
+use crate::runtime::StageOneRequestContext;
 use codex_config::types::MemoriesConfig;
-use codex_memories_write::build_stage_one_input_message;
-use codex_otel::SessionTelemetry;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::ServiceTier;
+use codex_core::Prompt;
+use codex_core::RolloutRecorder;
+use codex_core::config::Config;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TokenUsage;
-use codex_rollout_trace::InferenceTraceContext;
+use codex_rollout::INTERACTIVE_SESSION_SOURCES;
+use codex_rollout::should_persist_response_item_for_memories;
 use codex_secrets::redact_secrets;
 use futures::StreamExt;
 use serde::Deserialize;
@@ -34,15 +25,17 @@ use std::sync::Arc;
 use tracing::info;
 use tracing::warn;
 
-#[derive(Clone, Debug)]
-pub(in crate::memories) struct RequestContext {
-    pub(in crate::memories) model_info: ModelInfo,
-    pub(in crate::memories) session_telemetry: SessionTelemetry,
-    pub(in crate::memories) reasoning_effort: Option<ReasoningEffortConfig>,
-    pub(in crate::memories) reasoning_summary: ReasoningSummaryConfig,
-    pub(in crate::memories) service_tier: Option<ServiceTier>,
-    pub(in crate::memories) turn_metadata_header: Option<String>,
-}
+const MODEL: &str = "gpt-5.4-mini";
+const REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
+const CONCURRENCY_LIMIT: usize = 8;
+const JOB_LEASE_SECONDS: i64 = 3_600;
+const JOB_RETRY_DELAY_SECONDS: i64 = 3_600;
+const THREAD_SCAN_LIMIT: usize = 5_000;
+const PRUNE_BATCH_SIZE: usize = 200;
+const MEMORY_PHASE_ONE_JOBS: &str = "codex.memory.phase1";
+const MEMORY_PHASE_ONE_E2E_MS: &str = "codex.memory.phase1.e2e_ms";
+const MEMORY_PHASE_ONE_OUTPUT: &str = "codex.memory.phase1.output";
+const MEMORY_PHASE_ONE_TOKEN_USAGE: &str = "codex.memory.phase1.token_usage";
 
 struct JobResult {
     outcome: JobOutcome,
@@ -84,35 +77,36 @@ struct StageOneOutput {
 /// 2) build one stage-1 request context
 /// 3) run stage-1 extraction jobs in parallel
 /// 4) emit metrics and logs
-pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
-    let _phase_one_e2e_timer = session
-        .services
-        .session_telemetry
-        .start_timer(metrics::MEMORY_PHASE_ONE_E2E_MS, &[])
-        .ok();
+pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
+    let stage_one_context = build_request_context(context.as_ref(), config.as_ref()).await;
+    let _phase_one_e2e_timer = stage_one_context.start_timer(MEMORY_PHASE_ONE_E2E_MS);
 
     // 1. Claim startup job.
-    let Some(claimed_candidates) = claim_startup_jobs(session, &config.memories).await else {
+    let Some(claimed_candidates) = claim_startup_jobs(context.as_ref(), &config.memories).await
+    else {
         return;
     };
     if claimed_candidates.is_empty() {
-        session.services.session_telemetry.counter(
-            metrics::MEMORY_PHASE_ONE_JOBS,
+        stage_one_context.counter(
+            MEMORY_PHASE_ONE_JOBS,
             /*inc*/ 1,
             &[("status", "skipped_no_candidates")],
         );
         return;
     }
 
-    // 2. Build request.
-    let stage_one_context = build_request_context(session, config).await;
-
     // 3. Run the parallel sampling.
-    let outcomes = run_jobs(session, claimed_candidates, stage_one_context).await;
+    let outcomes = run_jobs(
+        context,
+        config,
+        claimed_candidates,
+        stage_one_context.clone(),
+    )
+    .await;
 
     // 4. Metrics and logs.
     let counts = aggregate_stats(outcomes);
-    emit_metrics(session, &counts);
+    emit_metrics(&stage_one_context, &counts);
     info!(
         "memory stage-1 extraction complete: {} job(s) claimed, {} succeeded ({} with output, {} no output), {} failed",
         counts.claimed,
@@ -124,8 +118,8 @@ pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
 }
 
 /// Prune old un-used "dead" raw memories.
-pub(in crate::memories) async fn prune(session: &Arc<Session>, config: &Config) {
-    if let Some(db) = session.services.state_db.as_deref() {
+pub async fn prune(context: &MemoryStartupContext, config: &Config) {
+    if let Some(db) = context.state_db() {
         let max_unused_days = config.memories.max_unused_days;
         match db
             .prune_stage1_outputs_for_retention(max_unused_days, PRUNE_BATCH_SIZE)
@@ -161,28 +155,11 @@ pub fn output_schema() -> Value {
     })
 }
 
-impl RequestContext {
-    pub(in crate::memories) fn from_turn_context(
-        turn_context: &TurnContext,
-        turn_metadata_header: Option<String>,
-        model_info: ModelInfo,
-    ) -> Self {
-        Self {
-            model_info,
-            turn_metadata_header,
-            session_telemetry: turn_context.session_telemetry.clone(),
-            reasoning_effort: Some(phase_one::REASONING_EFFORT),
-            reasoning_summary: turn_context.reasoning_summary,
-            service_tier: turn_context.config.service_tier,
-        }
-    }
-}
-
 async fn claim_startup_jobs(
-    session: &Arc<Session>,
+    context: &MemoryStartupContext,
     memories_config: &MemoriesConfig,
 ) -> Option<Vec<codex_state::Stage1JobClaim>> {
-    let Some(state_db) = session.services.state_db.as_deref() else {
+    let Some(state_db) = context.state_db() else {
         // This should not happen.
         warn!("state db unavailable while claiming phase-1 startup jobs; skipping");
         return None;
@@ -195,14 +172,14 @@ async fn claim_startup_jobs(
 
     match state_db
         .claim_stage1_jobs_for_startup(
-            session.conversation_id,
+            context.thread_id(),
             codex_state::Stage1StartupClaimParams {
-                scan_limit: phase_one::THREAD_SCAN_LIMIT,
+                scan_limit: THREAD_SCAN_LIMIT,
                 max_claimed: memories_config.max_rollouts_per_startup,
                 max_age_days: memories_config.max_rollout_age_days,
                 min_rollout_idle_hours: memories_config.min_rollout_idle_hours,
                 allowed_sources: allowed_sources.as_slice(),
-                lease_seconds: phase_one::JOB_LEASE_SECONDS,
+                lease_seconds: JOB_LEASE_SECONDS,
             },
         )
         .await
@@ -210,47 +187,41 @@ async fn claim_startup_jobs(
         Ok(claims) => Some(claims),
         Err(err) => {
             warn!("state db claim_stage1_jobs_for_startup failed during memories startup: {err}");
-            session.services.session_telemetry.counter(
-                metrics::MEMORY_PHASE_ONE_JOBS,
-                /*inc*/ 1,
-                &[("status", "failed_claim")],
-            );
             None
         }
     }
 }
 
-async fn build_request_context(session: &Arc<Session>, config: &Config) -> RequestContext {
+async fn build_request_context(
+    context: &MemoryStartupContext,
+    config: &Config,
+) -> StageOneRequestContext {
     let model_name = config
         .memories
         .extract_model
         .clone()
-        .unwrap_or(phase_one::MODEL.to_string());
-    let model = session
-        .services
-        .models_manager
-        .get_model_info(&model_name, &config.to_models_manager_config())
-        .await;
-    let turn_context = session.new_default_turn().await;
-    RequestContext::from_turn_context(
-        turn_context.as_ref(),
-        turn_context.turn_metadata_state.current_header_value(),
-        model,
-    )
+        .unwrap_or(MODEL.to_string());
+    context
+        .stage_one_request_context(config, &model_name, REASONING_EFFORT)
+        .await
 }
 
 async fn run_jobs(
-    session: &Arc<Session>,
+    context: Arc<MemoryStartupContext>,
+    config: Arc<Config>,
     claimed_candidates: Vec<codex_state::Stage1JobClaim>,
-    stage_one_context: RequestContext,
+    stage_one_context: StageOneRequestContext,
 ) -> Vec<JobResult> {
     futures::stream::iter(claimed_candidates.into_iter())
         .map(|claim| {
-            let session = Arc::clone(session);
+            let context = Arc::clone(&context);
+            let config = Arc::clone(&config);
             let stage_one_context = stage_one_context.clone();
-            async move { job::run(session.as_ref(), claim, &stage_one_context).await }
+            async move {
+                job::run(context.as_ref(), config.as_ref(), claim, &stage_one_context).await
+            }
         })
-        .buffer_unordered(phase_one::CONCURRENCY_LIMIT)
+        .buffer_unordered(CONCURRENCY_LIMIT)
         .collect::<Vec<_>>()
         .await
 }
@@ -258,16 +229,18 @@ async fn run_jobs(
 mod job {
     use super::*;
 
-    pub(in crate::memories) async fn run(
-        session: &Session,
+    pub(crate) async fn run(
+        context: &MemoryStartupContext,
+        config: &Config,
         claim: codex_state::Stage1JobClaim,
-        stage_one_context: &RequestContext,
+        stage_one_context: &StageOneRequestContext,
     ) -> JobResult {
-        let thread = claim.thread;
+        let claimed_thread = claim.thread;
         let (stage_one_output, token_usage) = match sample(
-            session,
-            &thread.rollout_path,
-            &thread.cwd,
+            context,
+            config,
+            &claimed_thread.rollout_path,
+            &claimed_thread.cwd,
             stage_one_context,
         )
         .await
@@ -275,8 +248,8 @@ mod job {
             Ok(output) => output,
             Err(reason) => {
                 result::failed(
-                    session,
-                    thread.id,
+                    context,
+                    claimed_thread.id,
                     &claim.ownership_token,
                     &reason.to_string(),
                 )
@@ -290,17 +263,18 @@ mod job {
 
         if stage_one_output.raw_memory.is_empty() || stage_one_output.rollout_summary.is_empty() {
             return JobResult {
-                outcome: result::no_output(session, thread.id, &claim.ownership_token).await,
+                outcome: result::no_output(context, claimed_thread.id, &claim.ownership_token)
+                    .await,
                 token_usage,
             };
         }
 
         JobResult {
             outcome: result::success(
-                session,
-                thread.id,
+                context,
+                claimed_thread.id,
                 &claim.ownership_token,
-                thread.updated_at.timestamp(),
+                claimed_thread.updated_at.timestamp(),
                 &stage_one_output.raw_memory,
                 &stage_one_output.rollout_summary,
                 stage_one_output.rollout_slug.as_deref(),
@@ -312,76 +286,38 @@ mod job {
 
     /// Extract the rollout and perform the actual sampling.
     async fn sample(
-        session: &Session,
+        context: &MemoryStartupContext,
+        config: &Config,
         rollout_path: &Path,
         rollout_cwd: &Path,
-        stage_one_context: &RequestContext,
+        stage_one_context: &StageOneRequestContext,
     ) -> anyhow::Result<(StageOneOutput, Option<TokenUsage>)> {
         let (rollout_items, _, _) = RolloutRecorder::load_rollout_items(rollout_path).await?;
         let rollout_contents = serialize_filtered_rollout_response_items(&rollout_items)?;
 
-        let prompt = Prompt {
-            input: vec![ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: build_stage_one_input_message(
-                        &stage_one_context.model_info,
-                        rollout_path,
-                        rollout_cwd,
-                        &rollout_contents,
-                    )?,
-                }],
-                phase: None,
+        let mut prompt = Prompt::default();
+        prompt.input = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: build_stage_one_input_message(
+                    &stage_one_context.model_info,
+                    rollout_path,
+                    rollout_cwd,
+                    &rollout_contents,
+                )?,
             }],
-            tools: Vec::new(),
-            parallel_tool_calls: false,
-            base_instructions: BaseInstructions {
-                text: phase_one::PROMPT.to_string(),
-            },
-            personality: None,
-            output_schema: Some(output_schema()),
-            output_schema_strict: true,
+            phase: None,
+        }];
+        prompt.base_instructions = BaseInstructions {
+            text: STAGE_ONE_PROMPT.to_string(),
         };
+        prompt.output_schema = Some(output_schema());
+        prompt.output_schema_strict = true;
 
-        let mut client_session = session.services.model_client.new_session();
-        let mut stream = client_session
-            .stream(
-                &prompt,
-                &stage_one_context.model_info,
-                &stage_one_context.session_telemetry,
-                stage_one_context.reasoning_effort,
-                stage_one_context.reasoning_summary,
-                stage_one_context.service_tier,
-                stage_one_context.turn_metadata_header.as_deref(),
-                &InferenceTraceContext::disabled(),
-            )
+        let (result, token_usage) = context
+            .stream_stage_one_prompt(config, &prompt, stage_one_context)
             .await?;
-
-        // TODO(jif) we should have a shared helper somewhere for this.
-        // Unwrap the stream.
-        let mut result = String::new();
-        let mut token_usage = None;
-        while let Some(message) = stream.next().await.transpose()? {
-            match message {
-                ResponseEvent::OutputTextDelta(delta) => result.push_str(&delta),
-                ResponseEvent::OutputItemDone(item) => {
-                    if result.is_empty()
-                        && let ResponseItem::Message { content, .. } = item
-                        && let Some(text) = crate::compact::content_items_to_text(&content)
-                    {
-                        result.push_str(&text);
-                    }
-                }
-                ResponseEvent::Completed {
-                    token_usage: usage, ..
-                } => {
-                    token_usage = usage;
-                    break;
-                }
-                _ => {}
-            }
-        }
 
         let mut output: StageOneOutput = serde_json::from_str(&result)?;
         output.raw_memory = redact_secrets(output.raw_memory);
@@ -394,31 +330,31 @@ mod job {
     mod result {
         use super::*;
 
-        pub(in crate::memories) async fn failed(
-            session: &Session,
+        pub(crate) async fn failed(
+            context: &MemoryStartupContext,
             thread_id: codex_protocol::ThreadId,
             ownership_token: &str,
             reason: &str,
         ) {
             tracing::warn!("Phase 1 job failed for thread {thread_id}: {reason}");
-            if let Some(state_db) = session.services.state_db.as_deref() {
+            if let Some(state_db) = context.state_db() {
                 let _ = state_db
                     .mark_stage1_job_failed(
                         thread_id,
                         ownership_token,
                         reason,
-                        phase_one::JOB_RETRY_DELAY_SECONDS,
+                        JOB_RETRY_DELAY_SECONDS,
                     )
                     .await;
             }
         }
 
-        pub(in crate::memories) async fn no_output(
-            session: &Session,
+        pub(crate) async fn no_output(
+            context: &MemoryStartupContext,
             thread_id: codex_protocol::ThreadId,
             ownership_token: &str,
         ) -> JobOutcome {
-            let Some(state_db) = session.services.state_db.as_deref() else {
+            let Some(state_db) = context.state_db() else {
                 return JobOutcome::Failed;
             };
 
@@ -433,8 +369,8 @@ mod job {
             }
         }
 
-        pub(in crate::memories) async fn success(
-            session: &Session,
+        pub(crate) async fn success(
+            context: &MemoryStartupContext,
             thread_id: codex_protocol::ThreadId,
             ownership_token: &str,
             source_updated_at: i64,
@@ -442,7 +378,7 @@ mod job {
             rollout_summary: &str,
             rollout_slug: Option<&str>,
         ) -> JobOutcome {
-            let Some(state_db) = session.services.state_db.as_deref() else {
+            let Some(state_db) = context.state_db() else {
                 return JobOutcome::Failed;
             };
 
@@ -520,6 +456,64 @@ mod job {
             phase: phase.clone(),
         })
     }
+
+    fn is_memory_excluded_contextual_user_fragment(content_item: &ContentItem) -> bool {
+        let ContentItem::InputText { text } = content_item else {
+            return false;
+        };
+
+        matches_marked_fragment(text, "# AGENTS.md instructions for ", "</INSTRUCTIONS>")
+            || matches_marked_fragment(text, "<skill>", "</skill>")
+    }
+
+    fn matches_marked_fragment(text: &str, start_marker: &str, end_marker: &str) -> bool {
+        let trimmed = text.trim_start();
+        let starts_with_marker = trimmed
+            .get(..start_marker.len())
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(start_marker));
+        let trimmed = trimmed.trim_end();
+        let ends_with_marker = trimmed
+            .get(trimmed.len().saturating_sub(end_marker.len())..)
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(end_marker));
+        starts_with_marker && ends_with_marker
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn classifies_memory_excluded_fragments() {
+            let cases = [
+                (
+                    "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>",
+                    true,
+                ),
+                (
+                    "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+                    true,
+                ),
+                (
+                    "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>",
+                    false,
+                ),
+                (
+                    "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
+                    false,
+                ),
+            ];
+
+            for (text, expected) in cases {
+                assert_eq!(
+                    is_memory_excluded_contextual_user_fragment(&ContentItem::InputText {
+                        text: text.to_string(),
+                    }),
+                    expected,
+                    "{text}",
+                );
+            }
+        }
+    }
 }
 
 fn aggregate_stats(outcomes: Vec<JobResult>) -> Stats {
@@ -552,69 +546,65 @@ fn aggregate_stats(outcomes: Vec<JobResult>) -> Stats {
     }
 }
 
-fn emit_metrics(session: &Session, counts: &Stats) {
+fn emit_metrics(context: &StageOneRequestContext, counts: &Stats) {
     if counts.claimed > 0 {
-        session.services.session_telemetry.counter(
-            metrics::MEMORY_PHASE_ONE_JOBS,
+        context.counter(
+            MEMORY_PHASE_ONE_JOBS,
             counts.claimed as i64,
             &[("status", "claimed")],
         );
     }
     if counts.succeeded_with_output > 0 {
-        session.services.session_telemetry.counter(
-            metrics::MEMORY_PHASE_ONE_JOBS,
+        context.counter(
+            MEMORY_PHASE_ONE_JOBS,
             counts.succeeded_with_output as i64,
             &[("status", "succeeded")],
         );
-        session.services.session_telemetry.counter(
-            metrics::MEMORY_PHASE_ONE_OUTPUT,
+        context.counter(
+            MEMORY_PHASE_ONE_OUTPUT,
             counts.succeeded_with_output as i64,
             &[],
         );
     }
     if counts.succeeded_no_output > 0 {
-        session.services.session_telemetry.counter(
-            metrics::MEMORY_PHASE_ONE_JOBS,
+        context.counter(
+            MEMORY_PHASE_ONE_JOBS,
             counts.succeeded_no_output as i64,
             &[("status", "succeeded_no_output")],
         );
     }
     if counts.failed > 0 {
-        session.services.session_telemetry.counter(
-            metrics::MEMORY_PHASE_ONE_JOBS,
+        context.counter(
+            MEMORY_PHASE_ONE_JOBS,
             counts.failed as i64,
             &[("status", "failed")],
         );
     }
     if let Some(token_usage) = counts.total_token_usage.as_ref() {
-        session.services.session_telemetry.histogram(
-            metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
+        context.histogram(
+            MEMORY_PHASE_ONE_TOKEN_USAGE,
             token_usage.total_tokens.max(0),
             &[("token_type", "total")],
         );
-        session.services.session_telemetry.histogram(
-            metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
+        context.histogram(
+            MEMORY_PHASE_ONE_TOKEN_USAGE,
             token_usage.input_tokens.max(0),
             &[("token_type", "input")],
         );
-        session.services.session_telemetry.histogram(
-            metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
+        context.histogram(
+            MEMORY_PHASE_ONE_TOKEN_USAGE,
             token_usage.cached_input(),
             &[("token_type", "cached_input")],
         );
-        session.services.session_telemetry.histogram(
-            metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
+        context.histogram(
+            MEMORY_PHASE_ONE_TOKEN_USAGE,
             token_usage.output_tokens.max(0),
             &[("token_type", "output")],
         );
-        session.services.session_telemetry.histogram(
-            metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
+        context.histogram(
+            MEMORY_PHASE_ONE_TOKEN_USAGE,
             token_usage.reasoning_output_tokens.max(0),
             &[("token_type", "reasoning_output")],
         );
     }
 }
-
-#[cfg(test)]
-#[path = "phase1_tests.rs"]
-mod tests;

@@ -670,61 +670,12 @@ pub async fn compact(sess: &Arc<Session>, sub_id: String) {
     .await;
 }
 
-pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
-    let mut errors = Vec::new();
-
-    if let Some(state_db) = sess.services.state_db.as_deref() {
-        if let Err(err) = state_db.clear_memory_data().await {
-            errors.push(format!("failed clearing memory rows from state db: {err}"));
-        }
-    } else {
-        errors.push("state db unavailable; memory rows were not cleared".to_string());
-    }
-
-    if let Err(err) = codex_memories_write::clear_memory_roots_contents(&config.codex_home).await {
-        errors.push(format!(
-            "failed clearing memory directories under {}: {err}",
-            config.codex_home.display()
-        ));
-    }
-
-    if errors.is_empty() {
-        let memory_root = codex_memories_write::memory_root(&config.codex_home);
-        sess.send_event_raw(Event {
-            id: sub_id,
-            msg: EventMsg::Warning(WarningEvent {
-                message: format!(
-                    "Dropped memories at {} and cleared memory rows from state db.",
-                    memory_root.display()
-                ),
-            }),
-        })
-        .await;
-        return;
-    }
-
+pub async fn drop_memories(sess: &Arc<Session>, _config: &Arc<Config>, sub_id: String) {
     sess.send_event_raw(Event {
         id: sub_id,
         msg: EventMsg::Error(ErrorEvent {
-            message: format!("Memory drop completed with errors: {}", errors.join("; ")),
+            message: "Memory reset is handled by app-server.".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
-        }),
-    })
-    .await;
-}
-
-pub async fn update_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
-    let session_source = {
-        let state = sess.state.lock().await;
-        state.session_configuration.session_source.clone()
-    };
-
-    crate::memories::start_memories_startup_task(sess, Arc::clone(config), &session_source);
-
-    sess.send_event_raw(Event {
-        id: sub_id.clone(),
-        msg: EventMsg::Warning(WarningEvent {
-            message: "Memory update triggered.".to_string(),
         }),
     })
     .await;
@@ -1180,10 +1131,6 @@ pub(super) async fn submission_loop(
                 }
                 Op::DropMemories => {
                     drop_memories(&sess, &config, sub.id.clone()).await;
-                    false
-                }
-                Op::UpdateMemories => {
-                    update_memories(&sess, &config, sub.id.clone()).await;
                     false
                 }
                 Op::ThreadRollback { num_turns } => {

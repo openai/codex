@@ -240,11 +240,10 @@ use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
-use codex_core::StartThreadWithToolsOptions;
+use codex_core::StartThreadOptions;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
-use codex_core::clear_memory_roots_contents;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
@@ -314,6 +313,7 @@ use codex_mcp::discover_supported_scopes;
 use codex_mcp::effective_mcp_servers;
 use codex_mcp::read_mcp_resource as read_mcp_resource_without_thread;
 use codex_mcp::resolve_oauth_scopes;
+use codex_memories_write::clear_memory_roots_contents;
 use codex_model_provider::ProviderAccountError;
 use codex_model_provider::create_model_provider;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -534,6 +534,7 @@ pub(crate) enum ApiVersion {
 
 #[derive(Clone)]
 struct ListenerTaskContext {
+    auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     thread_state_manager: ThreadStateManager,
     outgoing: Arc<OutgoingMessageSender>,
@@ -2531,6 +2532,7 @@ impl CodexMessageProcessor {
         );
         typesafe_overrides.ephemeral = ephemeral;
         let listener_task_context = ListenerTaskContext {
+            auth_manager: Arc::clone(&self.auth_manager),
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
@@ -2760,10 +2762,11 @@ impl CodexMessageProcessor {
                 .collect()
         };
         let core_dynamic_tool_count = core_dynamic_tools.len();
+        let memory_config = Arc::new(config.clone());
 
         match listener_task_context
             .thread_manager
-            .start_thread_with_tools_and_service_name(StartThreadWithToolsOptions {
+            .start_thread_with_options(StartThreadOptions {
                 config,
                 initial_history: match session_start_source
                     .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
@@ -2771,6 +2774,7 @@ impl CodexMessageProcessor {
                     codex_app_server_protocol::ThreadStartSource::Startup => InitialHistory::New,
                     codex_app_server_protocol::ThreadStartSource::Clear => InitialHistory::Cleared,
                 },
+                session_source: None,
                 dynamic_tools: core_dynamic_tools,
                 persist_extended_history,
                 metrics_service_name: service_name,
@@ -2812,6 +2816,14 @@ impl CodexMessageProcessor {
                         otel.name = "app_server.thread_start.config_snapshot",
                     ))
                     .await;
+                codex_memories_write::start_memories_startup_task(
+                    Arc::clone(&listener_task_context.thread_manager),
+                    Arc::clone(&listener_task_context.auth_manager),
+                    thread_id,
+                    Arc::clone(&thread),
+                    Arc::clone(&memory_config),
+                    &config_snapshot.session_source,
+                );
                 let mut thread = build_thread_from_snapshot(
                     thread_id,
                     &config_snapshot,
@@ -4046,13 +4058,13 @@ impl CodexMessageProcessor {
         params: ThreadLoadedListParams,
     ) {
         let ThreadLoadedListParams { cursor, limit } = params;
-        let mut data = self
+        let mut data: Vec<String> = self
             .thread_manager
             .list_thread_ids()
             .await
             .into_iter()
             .map(|thread_id| thread_id.to_string())
-            .collect::<Vec<_>>();
+            .collect();
 
         if data.is_empty() {
             let response = ThreadLoadedListResponse {
@@ -4601,6 +4613,7 @@ impl CodexMessageProcessor {
 
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let response_history = thread_history.clone();
+        let memory_config = Arc::new(config.clone());
 
         match self
             .thread_manager
@@ -4674,9 +4687,17 @@ impl CodexMessageProcessor {
                     thread_status,
                     /*has_live_in_progress_turn*/ false,
                 );
-                let permission_profile = thread_response_permission_profile(
-                    codex_thread.config_snapshot().await.permission_profile,
+                let config_snapshot = codex_thread.config_snapshot().await;
+                codex_memories_write::start_memories_startup_task(
+                    Arc::clone(&self.thread_manager),
+                    Arc::clone(&self.auth_manager),
+                    thread_id,
+                    Arc::clone(&codex_thread),
+                    Arc::clone(&memory_config),
+                    &config_snapshot.session_source,
                 );
+                let permission_profile =
+                    thread_response_permission_profile(config_snapshot.permission_profile);
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -5279,6 +5300,7 @@ impl CodexMessageProcessor {
         let fallback_model_provider = config.model_provider_id.clone();
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let fork_thread_store = configured_thread_store(&config);
+        let memory_config = Arc::new(config.clone());
 
         let NewThread {
             thread_id,
@@ -5405,9 +5427,17 @@ impl CodexMessageProcessor {
                 .await,
             /*has_in_progress_turn*/ false,
         );
-        let permission_profile = thread_response_permission_profile(
-            forked_thread.config_snapshot().await.permission_profile,
+        let fork_config_snapshot = forked_thread.config_snapshot().await;
+        codex_memories_write::start_memories_startup_task(
+            Arc::clone(&self.thread_manager),
+            Arc::clone(&self.auth_manager),
+            thread_id,
+            Arc::clone(&forked_thread),
+            memory_config,
+            &fork_config_snapshot.session_source,
         );
+        let permission_profile =
+            thread_response_permission_profile(fork_config_snapshot.permission_profile);
 
         let response = ThreadForkResponse {
             thread: thread.clone(),
@@ -8030,6 +8060,7 @@ impl CodexMessageProcessor {
     ) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
         Self::ensure_conversation_listener_task(
             ListenerTaskContext {
+                auth_manager: Arc::clone(&self.auth_manager),
                 thread_manager: Arc::clone(&self.thread_manager),
                 thread_state_manager: self.thread_state_manager.clone(),
                 outgoing: Arc::clone(&self.outgoing),
@@ -8148,6 +8179,7 @@ impl CodexMessageProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         Self::ensure_listener_task_running_task(
             ListenerTaskContext {
+                auth_manager: Arc::clone(&self.auth_manager),
                 thread_manager: Arc::clone(&self.thread_manager),
                 thread_state_manager: self.thread_state_manager.clone(),
                 outgoing: Arc::clone(&self.outgoing),
@@ -8197,6 +8229,7 @@ impl CodexMessageProcessor {
             thread_state.set_listener(cancel_tx, &conversation)
         };
         let ListenerTaskContext {
+            auth_manager: _,
             outgoing,
             thread_manager,
             thread_state_manager,

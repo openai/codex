@@ -426,10 +426,7 @@ impl Session {
             session_init.ephemeral = config.ephemeral,
         ));
 
-        let is_subagent = matches!(
-            session_configuration.session_source,
-            SessionSource::SubAgent(_)
-        );
+        let is_subagent = session_configuration.session_source.is_non_root_agent();
         let history_meta_fut = async {
             if is_subagent {
                 (0, 0)
@@ -991,12 +988,6 @@ impl Session {
                 let mut state = sess.state.lock().await;
                 state.set_pending_session_start_source(Some(session_start_source));
             }
-
-            memories::start_memories_startup_task(
-                &sess,
-                Arc::clone(&config),
-                &session_configuration.session_source,
-            );
 
             Ok(sess)
         }

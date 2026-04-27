@@ -322,6 +322,7 @@ pub fn build_abom(session_source: SessionSource) -> AgentBillOfMaterials {
             | SessionSource::Exec
             | SessionSource::Mcp
             | SessionSource::Custom(_)
+            | SessionSource::Internal(_)
             | SessionSource::SubAgent(_)
             | SessionSource::Unknown => "codex-cli".to_string(),
         },

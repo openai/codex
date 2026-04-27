@@ -106,6 +106,7 @@ impl ThreadMetadataState {
             | SessionSource::Exec
             | SessionSource::Mcp
             | SessionSource::Custom(_)
+            | SessionSource::Internal(_)
             | SessionSource::Unknown => (None, None),
         };
         Self {

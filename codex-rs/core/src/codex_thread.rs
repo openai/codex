@@ -27,7 +27,6 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
-use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
@@ -102,6 +101,11 @@ impl CodexThread {
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
         self.codex.shutdown_and_wait().await
+    }
+
+    /// Wait until the underlying session loop has terminated.
+    pub async fn wait_until_terminated(&self) {
+        self.codex.session_loop_termination.clone().await;
     }
 
     pub async fn apply_goal_resume_runtime_effects(&self) -> anyhow::Result<()> {
@@ -255,10 +259,6 @@ impl CodexThread {
 
     pub(crate) fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {
         self.codex.agent_status.clone()
-    }
-
-    pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {
-        self.codex.session.total_token_usage().await
     }
 
     /// Returns the complete token usage snapshot currently cached for this thread.
