@@ -256,6 +256,7 @@ fn create_filesystem_args(
         writable_roots.push(WritableRoot {
             root: AbsolutePathBuf::from_absolute_path("/")?,
             read_only_subpaths: Vec::new(),
+            preserved_path_names: Vec::new(),
         });
     }
     let mut unreadable_roots = file_system_sandbox_policy
