@@ -10,7 +10,8 @@
 //!
 //! Backtrack operates as a small state machine:
 //! - The first `Esc` in the main view "primes" the feature and captures a base thread id.
-//! - A subsequent `Esc` opens the transcript overlay (`Ctrl+T`) and highlights a user message.
+//! - A subsequent `Esc` opens the transcript overlay (`Ctrl+T`) and highlights a user message when
+//!   there is a rewind target.
 //! - `Enter` requests a rollback from core and records a `pending_rollback` guard.
 //! - On `EventMsg::ThreadRolledBack`, we either finish an in-flight backtrack request or queue a
 //!   rollback trim so it runs in event order with transcript inserts.
@@ -43,6 +44,8 @@ use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+
+const NO_PREVIOUS_MESSAGE_TO_EDIT: &str = "No previous message to edit.";
 
 /// Aggregates all backtrack-related state used by the App.
 #[derive(Default)]
@@ -266,11 +269,21 @@ impl App {
         self.backtrack.primed = true;
         self.backtrack.nth_user_message = usize::MAX;
         self.backtrack.base_id = self.chat_widget.thread_id();
-        self.chat_widget.show_esc_backtrack_hint();
+        if has_backtrack_target(&self.transcript_cells) {
+            self.chat_widget.show_esc_backtrack_hint();
+        }
     }
 
     /// Open overlay and begin backtrack preview flow (first step + highlight).
     fn open_backtrack_preview(&mut self, tui: &mut tui::Tui) {
+        if !has_backtrack_target(&self.transcript_cells) {
+            self.reset_backtrack_state();
+            self.chat_widget
+                .add_info_message(NO_PREVIOUS_MESSAGE_TO_EDIT.to_string(), /*hint*/ None);
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
         self.open_transcript_overlay(tui);
         self.backtrack.overlay_preview_active = true;
         // Composer is hidden by overlay; clear its hint.
@@ -280,6 +293,14 @@ impl App {
 
     /// When overlay is already open, begin preview mode and select latest user message.
     fn begin_overlay_backtrack_preview(&mut self, tui: &mut tui::Tui) {
+        if !has_backtrack_target(&self.transcript_cells) {
+            self.close_transcript_overlay(tui);
+            self.chat_widget
+                .add_info_message(NO_PREVIOUS_MESSAGE_TO_EDIT.to_string(), /*hint*/ None);
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
         self.backtrack.primed = true;
         self.backtrack.base_id = self.chat_widget.thread_id();
         self.backtrack.overlay_preview_active = true;
@@ -613,6 +634,10 @@ pub(crate) fn user_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) ->
     user_positions_iter(cells).count()
 }
 
+fn has_backtrack_target(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> bool {
+    user_count(cells) > 0
+}
+
 fn nth_user_position(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
     nth: usize,
@@ -674,8 +699,21 @@ mod tests {
     use super::*;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
+    use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
     use std::sync::Arc;
+
+    fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
 
     #[test]
     fn trim_transcript_for_first_user_drops_user_and_newer_cells() {
@@ -884,5 +922,41 @@ mod tests {
         ];
 
         assert_eq!(agent_group_count(&cells), 2);
+    }
+
+    #[test]
+    fn backtrack_target_requires_user_message() {
+        let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("assistant")],
+                /*is_first_line*/ true,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(crate::history_cell::new_info_event(
+                "Context compacted".to_string(),
+                /*hint*/ None,
+            )) as Arc<dyn HistoryCell>,
+        ];
+
+        assert!(!has_backtrack_target(&cells));
+
+        cells.push(Arc::new(UserHistoryCell {
+            message: "hello".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>);
+
+        assert!(has_backtrack_target(&cells));
+    }
+
+    #[test]
+    fn backtrack_unavailable_info_message_snapshot() {
+        let cell = crate::history_cell::new_info_event(
+            NO_PREVIOUS_MESSAGE_TO_EDIT.to_string(),
+            /*hint*/ None,
+        );
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+
+        insta::assert_snapshot!(rendered);
     }
 }

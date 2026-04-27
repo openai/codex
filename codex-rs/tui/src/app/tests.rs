@@ -30,6 +30,9 @@ use codex_app_server_protocol::AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_app_server_protocol::FileChangeRequestApprovalParams;
+use codex_app_server_protocol::FileUpdateChange;
+use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
@@ -38,6 +41,7 @@ use codex_app_server_protocol::NetworkApprovalProtocol as AppServerNetworkApprov
 use codex_app_server_protocol::NetworkPolicyAmendment as AppServerNetworkPolicyAmendment;
 use codex_app_server_protocol::NetworkPolicyRuleAction as AppServerNetworkPolicyRuleAction;
 use codex_app_server_protocol::NonSteerableTurnKind as AppServerNonSteerableTurnKind;
+use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::PermissionsRequestApprovalParams;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerNotification;
@@ -70,6 +74,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::NetworkApprovalProtocol;
 use codex_protocol::protocol::RolloutItem;
@@ -2520,6 +2525,75 @@ async fn inactive_thread_exec_approval_splits_shell_wrapped_command() {
             script.to_string(),
         ]
     );
+}
+
+#[tokio::test]
+async fn inactive_thread_file_change_approval_recovers_buffered_changes() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    app.enqueue_thread_notification(
+        thread_id,
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-approval".to_string(),
+            item: ThreadItem::FileChange {
+                id: "patch-approval".to_string(),
+                changes: vec![FileUpdateChange {
+                    path: "README.md".to_string(),
+                    kind: PatchChangeKind::Add,
+                    diff: "hello\n".to_string(),
+                }],
+                status: codex_app_server_protocol::PatchApplyStatus::InProgress,
+            },
+        }),
+    )
+    .await
+    .expect("enqueue file change item");
+
+    let request = ServerRequest::FileChangeRequestApproval {
+        request_id: AppServerRequestId::Integer(9),
+        params: FileChangeRequestApprovalParams {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-approval".to_string(),
+            item_id: "patch-approval".to_string(),
+            reason: Some("command failed; retry without sandbox?".to_string()),
+            grant_root: None,
+        },
+    };
+
+    let request = app
+        .interactive_request_for_thread_request(thread_id, &request)
+        .await
+        .expect("expected file change approval request");
+
+    let ThreadInteractiveRequest::Approval(ApprovalRequest::ApplyPatch {
+        changes, reason, ..
+    }) = &request
+    else {
+        panic!("expected apply-patch approval request");
+    };
+    assert_eq!(
+        changes,
+        &HashMap::from([(
+            PathBuf::from("README.md"),
+            FileChange::Add {
+                content: "hello\n".to_string(),
+            },
+        )])
+    );
+    assert_eq!(
+        reason,
+        &Some("command failed; retry without sandbox?".to_string())
+    );
+
+    app.push_thread_interactive_request(request);
+    let cell = match app_event_rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected patch preview history cell, saw {other:?}"),
+    };
+    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+    assert!(rendered.contains("• Added README.md (+1 -0)"));
+    assert!(rendered.contains("1 +hello"));
 }
 
 #[tokio::test]

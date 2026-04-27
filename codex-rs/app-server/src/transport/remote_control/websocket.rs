@@ -706,7 +706,7 @@ pub(crate) async fn load_remote_control_auth(
                     "remote control requires ChatGPT authentication",
                 ));
             }
-            auth_manager.reload();
+            auth_manager.reload().await;
             reloaded = true;
             continue;
         };
@@ -714,7 +714,7 @@ pub(crate) async fn load_remote_control_auth(
             break auth;
         }
         if auth.get_account_id().is_none() && !reloaded {
-            auth_manager.reload();
+            auth_manager.reload().await;
             reloaded = true;
             continue;
         }
@@ -1090,7 +1090,8 @@ mod tests {
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
-        );
+        )
+        .await;
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut enrollment = Some(RemoteControlEnrollment {
             account_id: "account_id".to_string(),
@@ -1172,7 +1173,8 @@ mod tests {
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
-        );
+        )
+        .await;
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut enrollment = None;
         save_auth(
