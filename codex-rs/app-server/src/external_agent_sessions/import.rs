@@ -51,7 +51,11 @@ fn rollout_items_from_messages(messages: &[ConversationMessage]) -> Vec<RolloutI
         match message.role {
             MessageRole::User => {
                 if let Some((turn_id, last_agent_message)) = current_turn.take() {
-                    items.push(turn_complete_item(turn_id, last_agent_message, None));
+                    items.push(turn_complete_item(
+                        turn_id,
+                        last_agent_message,
+                        /*completed_at*/ None,
+                    ));
                 }
                 user_turn_count += 1;
                 let turn_id = format!("external-import-turn-{user_turn_count}");

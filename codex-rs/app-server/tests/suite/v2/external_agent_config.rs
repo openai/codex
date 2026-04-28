@@ -532,11 +532,11 @@ async fn external_agent_config_import_compacts_huge_session_before_first_follow_
         vec![
             responses::sse(vec![
                 responses::ev_assistant_message("m1", "LOCAL_SUMMARY"),
-                responses::ev_completed_with_tokens("r1", 120),
+                responses::ev_completed_with_tokens("r1", /*total_tokens*/ 120),
             ]),
             responses::sse(vec![
                 responses::ev_assistant_message("m2", "follow-up answer"),
-                responses::ev_completed_with_tokens("r2", 80),
+                responses::ev_completed_with_tokens("r2", /*total_tokens*/ 80),
             ]),
         ],
     )
@@ -547,7 +547,7 @@ async fn external_agent_config_import_compacts_huge_session_before_first_follow_
         codex_home.path(),
         &server.uri(),
         &BTreeMap::default(),
-        200,
+        /*auto_compact_limit*/ 200,
         /*requires_openai_auth*/ None,
         "mock_provider",
         "Summarize the conversation.",
