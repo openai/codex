@@ -9,7 +9,6 @@ use codex_core_plugins::marketplace::find_marketplace_manifest_path;
 use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
 use codex_core_plugins::marketplace_add::add_marketplace;
 use codex_core_plugins::marketplace_add::is_local_marketplace_source;
-use codex_external_agent_migration::build_hooks_feature_config;
 use codex_external_agent_migration::build_mcp_config_from_external;
 use codex_external_agent_migration::count_missing_commands;
 use codex_external_agent_migration::count_missing_subagents;
@@ -819,12 +818,11 @@ impl ExternalAgentConfigService {
     }
 
     fn import_hooks(&self, cwd: Option<&Path>) -> io::Result<()> {
-        let (source_external_agent_dir, target_hooks, target_config) =
+        let (source_external_agent_dir, target_hooks) =
             if let Some(repo_root) = find_repo_root(cwd)? {
                 (
                     repo_root.join(EXTERNAL_AGENT_DIR),
                     repo_root.join(".codex").join("hooks.json"),
-                    repo_root.join(".codex").join("config.toml"),
                 )
             } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
                 return Ok(());
@@ -832,34 +830,10 @@ impl ExternalAgentConfigService {
                 (
                     self.external_agent_home.clone(),
                     self.codex_home.join("hooks.json"),
-                    self.codex_home.join("config.toml"),
                 )
             };
 
-        let wrote_active_hooks = import_hooks(&source_external_agent_dir, &target_hooks)?;
-        if !wrote_active_hooks {
-            return Ok(());
-        }
-        let migrated = build_hooks_feature_config();
-        let Some(target_parent) = target_config.parent() else {
-            return Err(invalid_data_error("config target path has no parent"));
-        };
-        fs::create_dir_all(target_parent)?;
-        if !target_config.exists() {
-            write_toml_file(&target_config, &migrated)?;
-            return Ok(());
-        }
-
-        let existing_raw = fs::read_to_string(&target_config)?;
-        let mut existing = if existing_raw.trim().is_empty() {
-            TomlValue::Table(Default::default())
-        } else {
-            toml::from_str::<TomlValue>(&existing_raw)
-                .map_err(|err| invalid_data_error(format!("invalid existing config.toml: {err}")))?
-        };
-        if merge_missing_toml_values(&mut existing, &migrated)? {
-            write_toml_file(&target_config, &existing)?;
-        }
+        import_hooks(&source_external_agent_dir, &target_hooks)?;
         Ok(())
     }
 

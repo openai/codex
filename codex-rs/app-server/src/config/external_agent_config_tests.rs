@@ -422,7 +422,7 @@ async fn import_repo_migrates_mcp_hooks_commands_and_subagents() {
             .join(".claude")
             .join("agents")
             .join("researcher.md"),
-        "---\nname: researcher\ndescription: Research role\nmodel: claude-sonnet-4-5\npermissionMode: acceptEdits\nskills: [deep-research]\ntools: Bash, Read\ndisallowedTools: WebFetch\neffort: high\n---\nResearch with Claude Code carefully.\n",
+        "---\nname: researcher\ndescription: Research role\npermissionMode: acceptEdits\nskills: [deep-research]\ntools: Bash, Read\ndisallowedTools: WebFetch\neffort: high\n---\nResearch with Claude Code carefully.\n",
     )
     .expect("write subagent");
 
@@ -476,9 +476,6 @@ env_vars = ["DOCS_TOKEN"]
 
 [mcp_servers.docs.env]
 STATIC = "yes"
-
-[features]
-codex_hooks = true
 "#,
     )
     .expect("parse expected config");
@@ -555,8 +552,7 @@ codex_hooks = true
         r#"
 name = "researcher"
 description = "Research role"
-model = "gpt-5.4-mini"
-model_reasoning_effort = "xhigh"
+model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 Research with Codex carefully."""
@@ -937,6 +933,57 @@ async fn detect_repo_prefers_non_empty_external_agent_agents_source() {
             cwd: Some(repo_root),
             details: None,
         }]
+    );
+}
+
+#[tokio::test]
+async fn import_repo_hooks_preserves_disabled_codex_hooks_feature() {
+    let root = TempDir::new().expect("create tempdir");
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(".claude")).expect("create external agent dir");
+    fs::create_dir_all(repo_root.join(".codex")).expect("create codex dir");
+    fs::write(
+        repo_root.join(".claude").join("settings.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"command":"echo done"}]}]}}"#,
+    )
+    .expect("write hooks");
+    fs::write(
+        repo_root.join(".codex").join("config.toml"),
+        "[features]\ncodex_hooks = false\n",
+    )
+    .expect("write config");
+
+    service_for_paths(root.path().join(".claude"), root.path().join(".codex"))
+        .import(vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Hooks,
+            description: String::new(),
+            cwd: Some(repo_root.clone()),
+            details: None,
+        }])
+        .await
+        .expect("import");
+
+    assert_eq!(
+        fs::read_to_string(repo_root.join(".codex").join("config.toml")).expect("read config"),
+        "[features]\ncodex_hooks = false\n"
+    );
+    let hooks: JsonValue = serde_json::from_str(
+        &fs::read_to_string(repo_root.join(".codex").join("hooks.json")).expect("read hooks"),
+    )
+    .expect("parse hooks");
+    assert_eq!(
+        hooks,
+        serde_json::json!({
+            "hooks": {
+                "Stop": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": "echo done"
+                    }]
+                }]
+            }
+        })
     );
 }
 

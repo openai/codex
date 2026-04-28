@@ -1,5 +1,7 @@
 //! Migration helpers for importing external-agent configuration into Codex.
 
+use codex_hooks::HOOK_EVENT_NAMES;
+use codex_hooks::HOOK_EVENT_NAMES_WITH_MATCHERS;
 use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
 use std::collections::BTreeMap;
@@ -10,20 +12,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 
-const CODEX_HOOK_EVENTS: [&str; 6] = [
-    "PreToolUse",
-    "PermissionRequest",
-    "PostToolUse",
-    "SessionStart",
-    "UserPromptSubmit",
-    "Stop",
-];
-const CODEX_HOOK_MATCHER_EVENTS: [&str; 4] = [
-    "PreToolUse",
-    "PermissionRequest",
-    "PostToolUse",
-    "SessionStart",
-];
+const SOURCE_EXTERNAL_AGENT_NAME: &str = "claude";
+const EXTERNAL_AGENT_MCP_CONFIG_FILE: &str = ".mcp.json";
+const EXTERNAL_AGENT_HOOKS_SUBDIR: &str = "hooks";
+const EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR: &str = "external-agent-hooks";
 const COMMAND_SKILL_PREFIX: &str = "source-command";
 const MAX_SKILL_NAME_LEN: usize = 64;
 const MAX_SKILL_DESCRIPTION_LEN: usize = 1024;
@@ -45,20 +37,8 @@ enum FrontmatterValue {
 struct AgentMetadata {
     name: String,
     description: String,
-    model: Option<String>,
     permission_mode: Option<String>,
     effort: Option<String>,
-}
-
-#[derive(Debug, Default)]
-struct HookMigration {
-    hooks_payload: serde_json::Map<String, JsonValue>,
-}
-
-impl HookMigration {
-    fn has_active_hooks(&self) -> bool {
-        !self.hooks_payload.is_empty()
-    }
 }
 
 pub fn build_mcp_config_from_external(
@@ -108,7 +88,7 @@ pub fn hooks_migration_description(
     target_hooks: &Path,
 ) -> io::Result<Option<String>> {
     let migration = hook_migration(source_external_agent_dir, target_hooks.parent())?;
-    if !migration.has_active_hooks() {
+    if migration.is_empty() {
         return Ok(None);
     }
 
@@ -119,34 +99,22 @@ pub fn hooks_migration_description(
     )))
 }
 
-pub fn build_hooks_feature_config() -> TomlValue {
-    let mut features = toml::map::Map::new();
-    features.insert("codex_hooks".to_string(), TomlValue::Boolean(true));
-
-    let mut root = toml::map::Map::new();
-    root.insert("features".to_string(), TomlValue::Table(features));
-    TomlValue::Table(root)
-}
-
 pub fn import_hooks(source_external_agent_dir: &Path, target_hooks: &Path) -> io::Result<bool> {
     let Some(parent) = target_hooks.parent() else {
         return Err(invalid_data_error("hooks target path has no parent"));
     };
     let migration = hook_migration(source_external_agent_dir, Some(parent))?;
-    if !migration.has_active_hooks() {
+    if migration.is_empty() {
         return Ok(false);
     }
 
     fs::create_dir_all(parent)?;
 
     let mut wrote_active_hooks = false;
-    if !migration.hooks_payload.is_empty() && is_missing_or_empty_text_file(target_hooks)? {
+    if is_missing_or_empty_text_file(target_hooks)? {
         copy_hook_scripts(source_external_agent_dir, parent)?;
         let mut payload = serde_json::Map::new();
-        payload.insert(
-            "hooks".to_string(),
-            JsonValue::Object(migration.hooks_payload),
-        );
+        payload.insert("hooks".to_string(), JsonValue::Object(migration));
         let rendered = serde_json::to_string_pretty(&JsonValue::Object(payload))
             .map_err(|err| invalid_data_error(format!("failed to serialize hooks.json: {err}")))?;
         fs::write(target_hooks, format!("{rendered}\n"))?;
@@ -236,8 +204,12 @@ fn read_external_mcp_servers(
     external_agent_home: Option<&Path>,
 ) -> io::Result<BTreeMap<String, JsonValue>> {
     let mut servers = BTreeMap::new();
-    for relative_path in [".mcp.json", ".claude.json"] {
-        let source_file = source_root.join(relative_path);
+    let project_config_file = external_agent_project_config_file();
+    for relative_path in [
+        EXTERNAL_AGENT_MCP_CONFIG_FILE.to_string(),
+        project_config_file.clone(),
+    ] {
+        let source_file = source_root.join(&relative_path);
         if !source_file.is_file() {
             continue;
         }
@@ -245,7 +217,7 @@ fn read_external_mcp_servers(
         let parsed: JsonValue = serde_json::from_str(&raw)
             .map_err(|err| invalid_data_error(format!("invalid MCP config: {err}")))?;
         append_mcp_servers_from_value(&parsed, &mut servers);
-        if relative_path == ".claude.json"
+        if relative_path == project_config_file
             && let Some(projects) = parsed.get("projects").and_then(JsonValue::as_object)
         {
             for (project_path, project_config) in projects {
@@ -258,8 +230,8 @@ fn read_external_mcp_servers(
     if let Some(external_agent_root) = external_agent_home.and_then(Path::parent)
         && external_agent_root != source_root
     {
-        append_claude_json_project_mcp_servers(
-            &external_agent_root.join(".claude.json"),
+        append_external_agent_project_mcp_servers(
+            &external_agent_root.join(external_agent_project_config_file()),
             source_root,
             &mut servers,
         )?;
@@ -268,7 +240,7 @@ fn read_external_mcp_servers(
     Ok(servers)
 }
 
-fn append_claude_json_project_mcp_servers(
+fn append_external_agent_project_mcp_servers(
     source_file: &Path,
     source_root: &Path,
     servers: &mut BTreeMap<String, JsonValue>,
@@ -482,7 +454,7 @@ fn contains_env_placeholder(value: &str) -> bool {
 fn hook_migration(
     source_external_agent_dir: &Path,
     target_config_dir: Option<&Path>,
-) -> io::Result<HookMigration> {
+) -> io::Result<serde_json::Map<String, JsonValue>> {
     let mut settings_files = Vec::new();
     let mut disable_all_hooks = None;
     for settings_name in ["settings.json", "settings.local.json"] {
@@ -500,10 +472,10 @@ fn hook_migration(
     }
 
     if disable_all_hooks.unwrap_or(false) {
-        return Ok(HookMigration::default());
+        return Ok(serde_json::Map::new());
     }
 
-    let mut migration = HookMigration::default();
+    let mut migration = serde_json::Map::new();
     for settings in settings_files {
         append_convertible_hook_groups(&settings, &mut migration, target_config_dir);
     }
@@ -513,14 +485,14 @@ fn hook_migration(
 
 fn append_convertible_hook_groups(
     settings: &JsonValue,
-    migration: &mut HookMigration,
+    hooks_payload: &mut serde_json::Map<String, JsonValue>,
     target_config_dir: Option<&Path>,
 ) {
     let Some(hooks_config) = settings.get("hooks").and_then(JsonValue::as_object) else {
         return;
     };
 
-    for event_name in CODEX_HOOK_EVENTS {
+    for event_name in HOOK_EVENT_NAMES {
         let Some(groups) = hooks_config.get(event_name).and_then(JsonValue::as_array) else {
             continue;
         };
@@ -616,7 +588,7 @@ fn append_convertible_hook_groups(
             }
 
             let mut group_payload = serde_json::Map::new();
-            if CODEX_HOOK_MATCHER_EVENTS.contains(&event_name)
+            if HOOK_EVENT_NAMES_WITH_MATCHERS.contains(&event_name)
                 && let Some(matcher) = group_object.get("matcher").and_then(JsonValue::as_str)
             {
                 group_payload.insert(
@@ -625,8 +597,7 @@ fn append_convertible_hook_groups(
                 );
             }
             group_payload.insert("hooks".to_string(), JsonValue::Array(hook_commands));
-            if let Some(groups) = migration
-                .hooks_payload
+            if let Some(groups) = hooks_payload
                 .entry(event_name.to_string())
                 .or_insert_with(|| JsonValue::Array(Vec::new()))
                 .as_array_mut()
@@ -641,12 +612,27 @@ fn rewrite_hook_command(command: &str, target_config_dir: Option<&Path>) -> Stri
     let Some(target_config_dir) = target_config_dir else {
         return command.to_string();
     };
-    let hook_dir = shell_quote_path_prefix(&target_config_dir.join("hooks"));
+    let hook_dir =
+        shell_quote_path_prefix(&target_config_dir.join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR));
+    let project_dir_env_var = external_agent_project_dir_env_var();
+    let source_hooks_path = format!(
+        "{}/{EXTERNAL_AGENT_HOOKS_SUBDIR}/",
+        external_agent_config_dir()
+    );
     command
-        .replace("\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/", &hook_dir)
-        .replace("${CLAUDE_PROJECT_DIR}/.claude/hooks/", &hook_dir)
-        .replace("$CLAUDE_PROJECT_DIR/.claude/hooks/", &hook_dir)
-        .replace(".claude/hooks/", &hook_dir)
+        .replace(
+            &format!("\"${project_dir_env_var}\"/{source_hooks_path}"),
+            &hook_dir,
+        )
+        .replace(
+            &format!("${{{project_dir_env_var}}}/{source_hooks_path}"),
+            &hook_dir,
+        )
+        .replace(
+            &format!("${project_dir_env_var}/{source_hooks_path}"),
+            &hook_dir,
+        )
+        .replace(&source_hooks_path, &hook_dir)
 }
 
 fn shell_quote_path_prefix(path: &Path) -> String {
@@ -658,11 +644,11 @@ fn shell_single_quote(value: &str) -> String {
 }
 
 fn copy_hook_scripts(source_external_agent_dir: &Path, target_config_dir: &Path) -> io::Result<()> {
-    let source_hooks = source_external_agent_dir.join("hooks");
+    let source_hooks = source_external_agent_dir.join(EXTERNAL_AGENT_HOOKS_SUBDIR);
     if !source_hooks.is_dir() {
         return Ok(());
     }
-    let target_hooks = target_config_dir.join("hooks");
+    let target_hooks = target_config_dir.join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR);
     copy_dir_recursive_skip_existing(&source_hooks, &target_hooks)
 }
 
@@ -862,7 +848,6 @@ fn agent_metadata(document: &ParsedDocument) -> Option<AgentMetadata> {
     Some(AgentMetadata {
         name,
         description,
-        model: frontmatter_string(&document.frontmatter, "model"),
         permission_mode: frontmatter_string(&document.frontmatter, "permissionMode"),
         effort: frontmatter_string(&document.frontmatter, "effort"),
     })
@@ -875,14 +860,8 @@ fn render_agent_toml(body: &str, metadata: &AgentMetadata) -> io::Result<String>
         "description".to_string(),
         TomlValue::String(rewrite_external_agent_terms(&metadata.description)),
     );
-    if let Some(model) = metadata.model.as_ref() {
-        document.insert(
-            "model".to_string(),
-            TomlValue::String(map_model_name(model)),
-        );
-    }
     if let Some(effort) = metadata.effort.as_ref()
-        && let Some(effort) = map_model_effort(metadata.model.as_deref(), effort)
+        && let Some(effort) = map_agent_reasoning_effort(effort)
     {
         document.insert(
             "model_reasoning_effort".to_string(),
@@ -892,7 +871,7 @@ fn render_agent_toml(body: &str, metadata: &AgentMetadata) -> io::Result<String>
     if let Some(sandbox_mode) = metadata
         .permission_mode
         .as_deref()
-        .and_then(map_permission_mode)
+        .and_then(map_agent_permission_mode)
     {
         document.insert(
             "sandbox_mode".to_string(),
@@ -1008,27 +987,9 @@ fn frontmatter_string(
         .map(ToOwned::to_owned)
 }
 
-fn map_model_name(model: &str) -> String {
-    if model.starts_with("claude-opus") {
-        "gpt-5.4".to_string()
-    } else if model.starts_with("claude-sonnet") || model.starts_with("claude-haiku") {
-        "gpt-5.4-mini".to_string()
-    } else {
-        rewrite_external_agent_terms(model)
-    }
-}
-
-fn map_model_effort(model: Option<&str>, effort: &str) -> Option<String> {
-    let mapped = match (model, effort) {
-        (Some(model), "max")
-            if model.starts_with("claude-opus")
-                || model.starts_with("claude-sonnet")
-                || model.starts_with("claude-haiku") =>
-        {
-            "xhigh".to_string()
-        }
-        (Some(model), "medium") if model.starts_with("claude-sonnet") => "high".to_string(),
-        (Some(model), "high") if model.starts_with("claude-sonnet") => "xhigh".to_string(),
+fn map_agent_reasoning_effort(effort: &str) -> Option<String> {
+    let mapped = match effort {
+        "max" => "xhigh".to_string(),
         _ => effort.to_string(),
     };
     matches!(
@@ -1038,7 +999,7 @@ fn map_model_effort(model: Option<&str>, effort: &str) -> Option<String> {
     .then_some(mapped)
 }
 
-fn map_permission_mode(permission_mode: &str) -> Option<&'static str> {
+fn map_agent_permission_mode(permission_mode: &str) -> Option<&'static str> {
     match permission_mode {
         "acceptEdits" => Some("workspace-write"),
         "readOnly" => Some("read-only"),
@@ -1116,15 +1077,13 @@ fn is_missing_or_empty_text_file(path: &Path) -> io::Result<bool> {
 }
 
 fn rewrite_external_agent_terms(content: &str) -> String {
-    let mut rewritten = replace_case_insensitive_with_boundaries(content, "claude.md", "AGENTS.md");
-    for from in [
-        "claude code",
-        "claude-code",
-        "claude_code",
-        "claudecode",
-        "claude",
-    ] {
-        rewritten = replace_case_insensitive_with_boundaries(&rewritten, from, "Codex");
+    let mut rewritten = replace_case_insensitive_with_boundaries(
+        content,
+        &external_agent_doc_file_name(),
+        "AGENTS.md",
+    );
+    for from in external_agent_term_variants() {
+        rewritten = replace_case_insensitive_with_boundaries(&rewritten, &from, "Codex");
     }
     rewritten
 }
@@ -1176,43 +1135,63 @@ fn invalid_data_error(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
+fn external_agent_config_dir() -> String {
+    format!(".{SOURCE_EXTERNAL_AGENT_NAME}")
+}
+
+fn external_agent_project_config_file() -> String {
+    format!(".{SOURCE_EXTERNAL_AGENT_NAME}.json")
+}
+
+fn external_agent_project_dir_env_var() -> String {
+    format!(
+        "{}_PROJECT_DIR",
+        SOURCE_EXTERNAL_AGENT_NAME.to_ascii_uppercase()
+    )
+}
+
+fn external_agent_doc_file_name() -> String {
+    format!("{SOURCE_EXTERNAL_AGENT_NAME}.md")
+}
+
+fn external_agent_term_variants() -> [String; 5] {
+    [
+        format!("{SOURCE_EXTERNAL_AGENT_NAME} code"),
+        format!("{SOURCE_EXTERNAL_AGENT_NAME}-code"),
+        format!("{SOURCE_EXTERNAL_AGENT_NAME}_code"),
+        format!("{SOURCE_EXTERNAL_AGENT_NAME}code"),
+        SOURCE_EXTERNAL_AGENT_NAME.to_string(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    fn merge_missing_toml_values_for_test(
-        existing: &mut TomlValue,
-        incoming: &TomlValue,
-    ) -> io::Result<bool> {
-        match (existing, incoming) {
-            (TomlValue::Table(existing_table), TomlValue::Table(incoming_table)) => {
-                let mut changed = false;
-                for (key, incoming_value) in incoming_table {
-                    match existing_table.get_mut(key) {
-                        Some(existing_value) => {
-                            if matches!(
-                                (&*existing_value, incoming_value),
-                                (TomlValue::Table(_), TomlValue::Table(_))
-                            ) && merge_missing_toml_values_for_test(
-                                existing_value,
-                                incoming_value,
-                            )? {
-                                changed = true;
-                            }
-                        }
-                        None => {
-                            existing_table.insert(key.clone(), incoming_value.clone());
-                            changed = true;
-                        }
-                    }
-                }
-                Ok(changed)
-            }
-            _ => Err(invalid_data_error(
-                "expected TOML table while merging migrated config values",
-            )),
-        }
+    fn source_path(relative_path: &str) -> PathBuf {
+        Path::new("/repo")
+            .join(external_agent_config_dir())
+            .join(relative_path)
+    }
+
+    fn source_hook_command(script_name: &str) -> String {
+        format!(
+            "python3 {}/{EXTERNAL_AGENT_HOOKS_SUBDIR}/{script_name}",
+            external_agent_config_dir()
+        )
+    }
+
+    fn source_hook_command_with_project_dir(script_name: &str) -> String {
+        format!(
+            "python3 \"${}\"/{}/{EXTERNAL_AGENT_HOOKS_SUBDIR}/{script_name}",
+            external_agent_project_dir_env_var(),
+            external_agent_config_dir()
+        )
+    }
+
+    fn migrated_hook_command(script_name: &str) -> String {
+        format!("python3 '/repo/.codex/{EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR}'/{script_name}")
     }
 
     #[test]
@@ -1279,14 +1258,14 @@ bearer_token_env_var = "VAULT_TOKEN"
     }
 
     #[test]
-    fn mcp_migration_reads_matching_project_entries_from_repo_claude_json() {
+    fn mcp_migration_reads_matching_project_entries_from_repo_external_project_config() {
         let root = tempfile::TempDir::new().expect("tempdir");
         let project = root.path().join("repo");
         fs::create_dir_all(&project).expect("create repo");
         let other = root.path().join("other");
         fs::create_dir_all(&other).expect("create other");
         fs::write(
-            project.join(".claude.json"),
+            project.join(external_agent_project_config_file()),
             serde_json::json!({
                 "mcpServers": {
                     "top": {"command": "top-server"}
@@ -1306,7 +1285,7 @@ bearer_token_env_var = "VAULT_TOKEN"
             })
             .to_string(),
         )
-        .expect("write claude json");
+        .expect("write external agent project config");
 
         assert_eq!(
             build_mcp_config_from_external(
@@ -1327,14 +1306,14 @@ command = "top-server"
     }
 
     #[test]
-    fn mcp_migration_reads_matching_project_entries_from_home_claude_json() {
+    fn mcp_migration_reads_matching_project_entries_from_home_external_project_config() {
         let root = tempfile::TempDir::new().expect("tempdir");
         let project = root.path().join("repo");
         fs::create_dir_all(&project).expect("create repo");
-        let external_agent_home = root.path().join(".claude");
+        let external_agent_home = root.path().join(external_agent_config_dir());
         fs::create_dir_all(&external_agent_home).expect("create external agent home");
         fs::write(
-            root.path().join(".claude.json"),
+            root.path().join(external_agent_project_config_file()),
             serde_json::json!({
                 "projects": {
                     project.display().to_string(): {
@@ -1346,7 +1325,7 @@ command = "top-server"
             })
             .to_string(),
         )
-        .expect("write claude json");
+        .expect("write external agent project config");
 
         assert_eq!(
             build_mcp_config_from_external(
@@ -1403,32 +1382,30 @@ command = "enabled-server"
 
     #[test]
     fn command_skill_names_include_nested_paths() {
-        let root = Path::new("/repo/.claude/commands");
-        let file = Path::new("/repo/.claude/commands/pr/review.md");
+        let root = source_path("commands");
+        let file = source_path("commands/pr/review.md");
 
-        assert_eq!(command_skill_name(root, file), "source-command-pr-review");
+        assert_eq!(command_skill_name(&root, &file), "source-command-pr-review");
     }
 
     #[test]
     fn command_skill_names_must_fit_codex_skill_loader_limit() {
-        let root = Path::new("/repo/.claude/commands");
-        let file = Path::new(
-            "/repo/.claude/commands/this/is/a/deeply/nested/command/with/a/very/long/name.md",
-        );
+        let root = source_path("commands");
+        let file = source_path("commands/this/is/a/deeply/nested/command/with/a/very/long/name.md");
         let document = parse_document_content("---\ndescription: Review PR\n---\nReview\n");
 
-        assert!(command_skill_name_if_supported(root, file, &document).is_none());
+        assert!(command_skill_name_if_supported(&root, &file, &document).is_none());
     }
 
     #[test]
     fn commands_with_provider_runtime_expansion_are_skipped() {
-        let root = Path::new("/repo/.claude/commands");
-        let file = Path::new("/repo/.claude/commands/deploy.md");
+        let root = source_path("commands");
+        let file = source_path("commands/deploy.md");
         let document = parse_document_content(
             "---\ndescription: Deploy\n---\nDeploy $ARGUMENTS from @release.yaml\n",
         );
 
-        assert!(command_skill_name_if_supported(root, file, &document).is_none());
+        assert!(command_skill_name_if_supported(&root, &file, &document).is_none());
     }
 
     #[test]
@@ -1454,18 +1431,6 @@ command = "enabled-server"
     }
 
     #[test]
-    fn hook_feature_merges_into_existing_config() {
-        let mut existing: TomlValue = toml::from_str("[features]\nother = true\n").unwrap();
-        let incoming = build_hooks_feature_config();
-
-        assert!(merge_missing_toml_values_for_test(&mut existing, &incoming).unwrap());
-        assert_eq!(
-            existing,
-            toml::from_str("[features]\nother = true\ncodex_hooks = true\n").unwrap()
-        );
-    }
-
-    #[test]
     fn subagent_accepts_yaml_block_lists_by_ignoring_unsupported_fields() {
         let document = parse_document_content(
             "---\nname: cloud-incident\ndescription: Debug incidents\nskills:\n  - runbook-reader\ntools:\n  - Read\n  - Bash\ndisallowedTools:\n  - Write\n---\nInvestigate carefully.\n",
@@ -1486,12 +1451,35 @@ command = "enabled-server"
     }
 
     #[test]
+    fn subagent_preserves_default_model_when_source_model_is_present() {
+        let document = parse_document_content(
+            "---\nname: reviewer\ndescription: Review code\nmodel: source-opus\neffort: max\n---\nReview carefully.\n",
+        );
+        let metadata = agent_metadata(&document).expect("metadata");
+        let rendered: TomlValue =
+            toml::from_str(&render_agent_toml(&document.body, &metadata).expect("render agent"))
+                .expect("parse rendered agent");
+        let expected: TomlValue = toml::from_str(
+            r#"
+name = "reviewer"
+description = "Review code"
+model_reasoning_effort = "xhigh"
+developer_instructions = """
+Review carefully."""
+"#,
+        )
+        .expect("parse expected agent");
+
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
     fn subagent_target_preserves_dotted_file_stem() {
         let target_agents = Path::new("/repo/.codex/agents");
-        let source_file = Path::new("/repo/.claude/agents/security.audit.md");
+        let source_file = source_path("agents/security.audit.md");
 
         assert_eq!(
-            subagent_target_file(source_file, target_agents),
+            subagent_target_file(&source_file, target_agents),
             Some(PathBuf::from("/repo/.codex/agents/security.audit.toml"))
         );
     }
@@ -1531,7 +1519,7 @@ command = "enabled-server"
                     "if": "tool_input.command contains 'rm'",
                     "hooks": [{
                         "type": "command",
-                        "command": "python3 .claude/hooks/policy_gate.py"
+                        "command": source_hook_command("policy_gate.py")
                     }]
                 }, {
                     "matcher": "Edit",
@@ -1539,7 +1527,7 @@ command = "enabled-server"
                         {
                             "type": "command",
                             "if": "Bash(rm *)",
-                            "command": "python3 .claude/hooks/policy_gate.py"
+                            "command": source_hook_command("policy_gate.py")
                         },
                         {
                             "type": "http",
@@ -1551,7 +1539,7 @@ command = "enabled-server"
                     "matcher": "Bash",
                     "hooks": [{
                         "type": "command",
-                        "command": "python3 .claude/hooks/approve.py"
+                        "command": source_hook_command("approve.py")
                     }]
                 }],
                 "SubagentStart": [{
@@ -1560,17 +1548,17 @@ command = "enabled-server"
                 }]
             }
         });
-        let mut migration = HookMigration::default();
+        let mut migration = serde_json::Map::new();
         append_convertible_hook_groups(&settings, &mut migration, Some(Path::new("/repo/.codex")));
 
         assert_eq!(
-            migration.hooks_payload,
+            migration,
             serde_json::json!({
                 "PermissionRequest": [{
                     "matcher": "Bash",
                     "hooks": [{
                         "type": "command",
-                        "command": "python3 '/repo/.codex/hooks'/approve.py"
+                        "command": migrated_hook_command("approve.py")
                     }]
                 }]
             })
@@ -1598,9 +1586,7 @@ command = "enabled-server"
         .expect("write settings");
 
         assert_eq!(
-            hook_migration(root.path(), /*target_config_dir*/ None)
-                .unwrap()
-                .hooks_payload,
+            hook_migration(root.path(), /*target_config_dir*/ None).unwrap(),
             serde_json::Map::new()
         );
     }
@@ -1636,9 +1622,7 @@ command = "enabled-server"
         .expect("write local settings");
 
         assert_eq!(
-            hook_migration(root.path(), /*target_config_dir*/ None)
-                .unwrap()
-                .hooks_payload,
+            hook_migration(root.path(), /*target_config_dir*/ None).unwrap(),
             serde_json::json!({
                 "SessionStart": [{
                     "matcher": "project",
@@ -1664,17 +1648,17 @@ command = "enabled-server"
     fn hook_command_paths_rewrite_to_target_hook_dir() {
         assert_eq!(
             rewrite_hook_command(
-                "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/check.py",
+                &source_hook_command_with_project_dir("check.py"),
                 Some(Path::new("/repo/.codex")),
             ),
-            "python3 '/repo/.codex/hooks'/check.py"
+            migrated_hook_command("check.py")
         );
         assert_eq!(
             rewrite_hook_command(
-                "python3 .claude/hooks/check.py",
+                &source_hook_command("check.py"),
                 Some(Path::new("/repo/.codex")),
             ),
-            "python3 '/repo/.codex/hooks'/check.py"
+            migrated_hook_command("check.py")
         );
     }
 
@@ -1692,11 +1676,11 @@ command = "enabled-server"
                 }]
             }
         });
-        let mut migration = HookMigration::default();
+        let mut migration = serde_json::Map::new();
         append_convertible_hook_groups(&settings, &mut migration, /*target_config_dir*/ None);
 
         assert_eq!(
-            migration.hooks_payload,
+            migration,
             serde_json::json!({
                 "SessionStart": [{
                     "matcher": "startup",
