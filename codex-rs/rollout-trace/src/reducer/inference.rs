@@ -208,7 +208,12 @@ impl TraceReducer {
                 inference.execution.ended_at_unix_ms = Some(wall_time_unix_ms);
                 inference.execution.ended_seq = Some(seq);
                 inference.execution.status = status;
-                inference.upstream_request_id = upstream_request_id;
+            }
+            // Turn-end cleanup can mark an inference terminal before the stream
+            // mapper records its late partial payload. Keep the server request
+            // id from that late payload even when the status is already closed.
+            if let Some(upstream_request_id) = upstream_request_id {
+                inference.upstream_request_id = Some(upstream_request_id);
             }
             if let Some(response_payload) = response_payload {
                 inference.raw_response_payload_id = Some(response_payload.raw_payload_id);
