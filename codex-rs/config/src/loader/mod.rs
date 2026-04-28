@@ -47,6 +47,21 @@ const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
 #[cfg(windows)]
 const DEFAULT_PROGRAM_DATA_DIR_WINDOWS: &str = r"C:\ProgramData";
 
+// Project-local config comes from repository contents, so it should not get to
+// choose where a user's credentials are sent or which local commands are run.
+// These settings are still supported from user, system, managed, and runtime
+// config layers.
+const PROJECT_LOCAL_CONFIG_DENYLIST: &[&str] = &[
+    "openai_base_url",
+    "chatgpt_base_url",
+    "model_provider",
+    "model_providers",
+    "notify",
+    "profile",
+    "profiles",
+    "experimental_realtime_ws_base_url",
+];
+
 async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> Option<ConfigError> {
     typed_first_layer_config_error_from_entries::<ConfigToml>(layers, CONFIG_TOML_FILE).await
 }
@@ -696,16 +711,51 @@ fn project_layer_entry(
     dot_codex_folder: &AbsolutePathBuf,
     config: TomlValue,
     disabled_reason: Option<String>,
+    warnings: Vec<String>,
 ) -> ConfigLayerEntry {
     let source = ConfigLayerSource::Project {
         dot_codex_folder: dot_codex_folder.clone(),
     };
 
-    if let Some(reason) = disabled_reason {
+    let entry = if let Some(reason) = disabled_reason {
         ConfigLayerEntry::new_disabled(source, config, reason)
     } else {
         ConfigLayerEntry::new(source, config)
+    };
+    entry.with_warnings(warnings)
+}
+
+fn sanitize_project_config(config: TomlValue) -> (TomlValue, Vec<String>) {
+    let mut config = config;
+    let Some(table) = config.as_table_mut() else {
+        return (config, Vec::new());
+    };
+
+    let mut ignored_keys = Vec::new();
+    for key in PROJECT_LOCAL_CONFIG_DENYLIST {
+        if table.remove(*key).is_some() {
+            ignored_keys.push((*key).to_string());
+        }
     }
+
+    (config, ignored_keys)
+}
+
+fn project_ignored_config_keys_warning(
+    dot_codex_folder: &AbsolutePathBuf,
+    ignored_keys: &[String],
+) -> String {
+    let config_path = dot_codex_folder.join(CONFIG_TOML_FILE);
+    let ignored_keys = ignored_keys.join(", ");
+    format!(
+        concat!(
+            "Ignored unsupported project-local config keys in {}: {}. ",
+            "If you want these settings to apply, manually set them in your ",
+            "user-level config.toml."
+        ),
+        config_path.display(),
+        ignored_keys
+    )
 }
 
 async fn project_trust_context(
@@ -958,13 +1008,24 @@ async fn load_project_layers(
                             &dot_codex_abs,
                             TomlValue::Table(toml::map::Map::new()),
                             disabled_reason.clone(),
+                            Vec::new(),
                         ));
                         continue;
                     }
                 };
+                let (config, ignored_project_config_keys) = sanitize_project_config(config);
                 let config =
                     resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
-                let entry = project_layer_entry(&dot_codex_abs, config, disabled_reason.clone());
+                let warnings = if ignored_project_config_keys.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![project_ignored_config_keys_warning(
+                        &dot_codex_abs,
+                        &ignored_project_config_keys,
+                    )]
+                };
+                let entry =
+                    project_layer_entry(&dot_codex_abs, config, disabled_reason.clone(), warnings);
                 layers.push(entry);
             }
             Err(err) => {
@@ -976,6 +1037,7 @@ async fn load_project_layers(
                         &dot_codex_abs,
                         TomlValue::Table(toml::map::Map::new()),
                         disabled_reason,
+                        Vec::new(),
                     ));
                 } else {
                     let config_file_display = config_file.as_path().display();

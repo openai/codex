@@ -3127,7 +3127,7 @@ fn web_search_mode_for_turn_falls_back_when_live_is_disallowed() -> anyhow::Resu
 }
 
 #[tokio::test]
-async fn project_profile_overrides_user_profile() -> std::io::Result<()> {
+async fn project_profiles_are_ignored() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let workspace = TempDir::new()?;
     let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
@@ -3154,6 +3154,9 @@ trust_level = "trusted"
         project_config_dir.join(CONFIG_TOML_FILE),
         r#"
 profile = "project"
+
+[profiles.project]
+model = "gpt-project-local"
 "#,
     )?;
 
@@ -3166,8 +3169,19 @@ profile = "project"
         .build()
         .await?;
 
-    assert_eq!(config.active_profile.as_deref(), Some("project"));
-    assert_eq!(config.model.as_deref(), Some("gpt-project"));
+    assert_eq!(config.active_profile.as_deref(), Some("global"));
+    assert_eq!(config.model.as_deref(), Some("gpt-global"));
+    assert!(
+        config.startup_warnings.iter().any(|warning| {
+            warning.contains("profile")
+                && warning.contains("profiles")
+                && warning.contains(
+                    "If you want these settings to apply, manually set them in your user-level config.toml."
+                )
+        }),
+        "expected warning for ignored project-local profile keys: {:?}",
+        config.startup_warnings
+    );
 
     Ok(())
 }

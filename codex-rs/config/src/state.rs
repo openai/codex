@@ -66,6 +66,7 @@ pub struct ConfigLayerEntry {
     pub raw_toml: Option<String>,
     pub version: String,
     pub disabled_reason: Option<String>,
+    pub warnings: Vec<String>,
 }
 
 impl ConfigLayerEntry {
@@ -77,6 +78,7 @@ impl ConfigLayerEntry {
             raw_toml: None,
             version,
             disabled_reason: None,
+            warnings: Vec::new(),
         }
     }
 
@@ -88,6 +90,7 @@ impl ConfigLayerEntry {
             raw_toml: Some(raw_toml),
             version,
             disabled_reason: None,
+            warnings: Vec::new(),
         }
     }
 
@@ -103,7 +106,13 @@ impl ConfigLayerEntry {
             raw_toml: None,
             version,
             disabled_reason: Some(disabled_reason.into()),
+            warnings: Vec::new(),
         }
+    }
+
+    pub(crate) fn with_warnings(mut self, warnings: Vec<String>) -> Self {
+        self.warnings = warnings;
+        self
     }
 
     pub fn is_disabled(&self) -> bool {
@@ -198,6 +207,16 @@ impl ConfigLayerStack {
 
     pub fn ignore_user_and_project_exec_policy_rules(&self) -> bool {
         self.ignore_user_and_project_exec_policy_rules
+    }
+
+    pub fn startup_warnings(&self) -> Vec<String> {
+        self.get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ false,
+        )
+        .into_iter()
+        .flat_map(|layer| layer.warnings.iter().cloned())
+        .collect()
     }
 
     /// Returns the raw user config layer, if any.
