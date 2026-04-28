@@ -20,6 +20,8 @@ use async_channel::unbounded;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
+use codex_config::types::AppToolApproval;
+use codex_config::types::ApprovalsReviewer;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_plugin::PluginCapabilitySummary;
@@ -67,7 +69,17 @@ pub fn qualified_mcp_tool_name_prefix(server_name: &str) -> String {
 pub fn mcp_permission_prompt_is_auto_approved(
     approval_policy: AskForApproval,
     permission_profile: &PermissionProfile,
+    context: McpPermissionPromptAutoApproveContext,
 ) -> bool {
+    if matches!(
+        approval_policy,
+        AskForApproval::OnRequest | AskForApproval::Granular(_)
+    ) && context.approvals_reviewer == Some(ApprovalsReviewer::AutoReview)
+        && context.tool_approval_mode == Some(AppToolApproval::Approve)
+    {
+        return true;
+    }
+
     if approval_policy != AskForApproval::Never {
         return false;
     }
@@ -78,6 +90,12 @@ pub fn mcp_permission_prompt_is_auto_approved(
             file_system.to_sandbox_policy().has_full_disk_write_access()
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct McpPermissionPromptAutoApproveContext {
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    pub tool_approval_mode: Option<AppToolApproval>,
 }
 
 /// MCP runtime settings derived from `codex_core::config::Config`.
