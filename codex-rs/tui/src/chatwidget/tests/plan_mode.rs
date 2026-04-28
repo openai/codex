@@ -45,7 +45,9 @@ async fn plan_mode_nudge_hides_while_task_or_modal_is_active() {
     chat.pre_draw_tick();
     assert!(!chat.bottom_pane.plan_mode_nudge_visible());
 
-    chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
+    chat.on_task_complete(
+        /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
+    );
     chat.show_selection_view(SelectionViewParams {
         items: vec![SelectionItem {
             name: "Keep planning".to_string(),
