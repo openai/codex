@@ -230,17 +230,22 @@ fn guardian_snapshot_options() -> ContextSnapshotOptions {
 }
 
 fn normalize_guardian_snapshot_paths(text: String) -> String {
-    let platform_path = test_path_buf("/repo/codex-rs/core").display().to_string();
-    if platform_path == "/repo/codex-rs/core" {
-        return text;
-    }
+    let mut text = text;
+    for canonical_path in ["/repo/codex-rs/core", "/repo"] {
+        let platform_path = test_path_buf(canonical_path).display().to_string();
+        if platform_path == canonical_path {
+            continue;
+        }
 
-    let escaped_platform_path = serde_json::to_string(&platform_path)
-        .expect("test path should serialize")
-        .trim_matches('"')
-        .to_string();
-    text.replace(&escaped_platform_path, "/repo/codex-rs/core")
-        .replace(&platform_path, "/repo/codex-rs/core")
+        let escaped_platform_path = serde_json::to_string(&platform_path)
+            .expect("test path should serialize")
+            .trim_matches('"')
+            .to_string();
+        text = text
+            .replace(&escaped_platform_path, canonical_path)
+            .replace(&platform_path, canonical_path);
+    }
+    text
 }
 
 fn guardian_prompt_text(items: &[codex_protocol::user_input::UserInput]) -> String {
