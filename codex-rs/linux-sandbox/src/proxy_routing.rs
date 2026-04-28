@@ -616,16 +616,7 @@ fn set_parent_death_signal() -> io::Result<()> {
 
 fn harden_bridge_process() -> io::Result<()> {
     set_parent_death_signal()?;
-    disable_process_dumping()
-}
-
-fn disable_process_dumping() -> io::Result<()> {
-    let res = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
-    if res != 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+    codex_process_hardening::disable_process_dumping()
 }
 
 fn proxy_bidirectional(mut tcp_stream: TcpStream, mut unix_stream: UnixStream) -> io::Result<()> {

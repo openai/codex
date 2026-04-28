@@ -44,12 +44,8 @@ const SET_RLIMIT_CORE_FAILED_EXIT_CODE: i32 = 7;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) fn pre_main_hardening_linux() {
     // Disable ptrace attach / mark process non-dumpable.
-    let ret_code = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
-    if ret_code != 0 {
-        eprintln!(
-            "ERROR: prctl(PR_SET_DUMPABLE, 0) failed: {}",
-            std::io::Error::last_os_error()
-        );
+    if let Err(err) = disable_process_dumping() {
+        eprintln!("ERROR: prctl(PR_SET_DUMPABLE, 0) failed: {}", err);
         std::process::exit(PRCTL_FAILED_EXIT_CODE);
     }
 
@@ -59,6 +55,17 @@ pub(crate) fn pre_main_hardening_linux() {
     // Official Codex releases are MUSL-linked, which means that variables such
     // as LD_PRELOAD are ignored anyway, but just to be sure, clear them here.
     remove_env_vars_with_prefix(b"LD_");
+}
+
+/// Mark the current Linux process non-dumpable so same-user processes cannot attach with ptrace.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub fn disable_process_dumping() -> std::io::Result<()> {
+    let ret_code = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+    if ret_code == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 #[cfg(any(target_os = "freebsd", target_os = "openbsd"))]
