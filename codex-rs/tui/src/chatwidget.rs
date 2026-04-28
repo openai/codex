@@ -1002,13 +1002,12 @@ pub(crate) struct ChatWidget {
     // Whether the next streamed assistant content should be preceded by a final message separator.
     //
     // This is set whenever we insert a visible history cell that conceptually belongs to a turn.
-    // The separator itself is only rendered if the turn recorded "work" activity (see
-    // `had_work_activity`).
+    // The separator itself is only rendered if the turn recorded "work" activity.
     needs_final_message_separator: bool,
     // Whether the current turn performed "work" (exec commands, MCP tool calls, patch applications).
     //
     // This gates rendering of the "Worked for …" separator so purely conversational turns don't
-    // show an empty divider. It is reset when the separator is emitted.
+    // show an empty divider.
     had_work_activity: bool,
     // Whether the current turn emitted a plan update.
     saw_plan_update_this_turn: bool,
@@ -1022,11 +1021,6 @@ pub(crate) struct ChatWidget {
     plan_delta_buffer: String,
     // True while a plan item is streaming.
     plan_item_active: bool,
-    // Status-indicator elapsed seconds captured at the last emitted final-message separator.
-    //
-    // This lets the separator show per-chunk work time (since the previous separator) rather than
-    // the total task-running time reported by the status indicator.
-    last_separator_elapsed_secs: Option<u64>,
     // Runtime metrics accumulated across delta snapshots for the active turn.
     turn_runtime_metrics: RuntimeMetricsSummary,
     last_rendered_width: std::cell::Cell<Option<usize>>,
@@ -2727,6 +2721,7 @@ impl ChatWidget {
         self.saw_copy_source_this_turn = false;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
+        self.had_work_activity = false;
         self.latest_proposed_plan_markdown = None;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
@@ -2752,7 +2747,12 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+    fn on_task_complete(
+        &mut self,
+        last_agent_message: Option<String>,
+        duration_ms: Option<i64>,
+        from_replay: bool,
+    ) {
         self.submit_pending_steers_after_interrupt = false;
         // Use `last_agent_message` from the turn-complete notification as the copy
         // source only when no earlier item-level event (AgentMessageItem, plan
@@ -2797,13 +2797,18 @@ impl ChatWidget {
             self.collect_runtime_metrics_delta();
             let runtime_metrics =
                 (!self.turn_runtime_metrics.is_empty()).then_some(self.turn_runtime_metrics);
-            let show_work_separator = self.needs_final_message_separator && self.had_work_activity;
+            let show_work_separator = self.had_work_activity
+                && (self.needs_final_message_separator || runtime_metrics.is_some());
             if show_work_separator || runtime_metrics.is_some() {
                 let elapsed_seconds = if show_work_separator {
-                    self.bottom_pane
-                        .status_widget()
-                        .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
-                        .map(|current| self.worked_elapsed_from(current))
+                    duration_ms
+                        .and_then(|duration_ms| u64::try_from(duration_ms).ok())
+                        .map(|duration_ms| duration_ms / 1_000)
+                        .or_else(|| {
+                            self.bottom_pane
+                                .status_widget()
+                                .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
+                        })
                 } else {
                     None
                 };
@@ -5034,17 +5039,10 @@ impl ChatWidget {
             // If the previous turn inserted non-stream history (exec output, patch status, MCP
             // calls), render a separator before starting the next streamed assistant message.
             if self.needs_final_message_separator && self.had_work_activity {
-                let elapsed_seconds = self
-                    .bottom_pane
-                    .status_widget()
-                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
-                    .map(|current| self.worked_elapsed_from(current));
                 self.add_to_history(history_cell::FinalMessageSeparator::new(
-                    elapsed_seconds,
-                    /*runtime_metrics*/ None,
+                    /*elapsed_seconds*/ None, /*runtime_metrics*/ None,
                 ));
                 self.needs_final_message_separator = false;
-                self.had_work_activity = false;
             } else if self.needs_final_message_separator {
                 // Reset the flag even if we don't show separator (no work was done)
                 self.needs_final_message_separator = false;
@@ -5061,17 +5059,6 @@ impl ChatWidget {
             self.run_catch_up_commit_tick();
         }
         self.request_redraw();
-    }
-
-    fn worked_elapsed_from(&mut self, current_elapsed: u64) -> u64 {
-        let baseline = match self.last_separator_elapsed_secs {
-            Some(last) if current_elapsed < last => 0,
-            Some(last) => last,
-            None => 0,
-        };
-        let elapsed = current_elapsed.saturating_sub(baseline);
-        self.last_separator_elapsed_secs = Some(current_elapsed);
-        elapsed
     }
 
     /// Finalizes an exec call while preserving the active exec cell grouping contract.
@@ -5631,7 +5618,6 @@ impl ChatWidget {
             last_plan_progress: None,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
-            last_separator_elapsed_secs: None,
             turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -7295,7 +7281,11 @@ impl ChatWidget {
         match notification.turn.status {
             TurnStatus::Completed => {
                 self.last_non_retry_error = None;
-                self.on_task_complete(/*last_agent_message*/ None, replay_kind.is_some())
+                self.on_task_complete(
+                    /*last_agent_message*/ None,
+                    notification.turn.duration_ms,
+                    replay_kind.is_some(),
+                )
             }
             TurnStatus::Interrupted => {
                 self.last_non_retry_error = None;
@@ -7646,9 +7636,11 @@ impl ChatWidget {
                 }
             }
             EventMsg::TurnComplete(TurnCompleteEvent {
-                last_agent_message, ..
+                last_agent_message,
+                duration_ms,
+                ..
             }) => {
-                self.on_task_complete(last_agent_message, from_replay);
+                self.on_task_complete(last_agent_message, duration_ms, from_replay);
             }
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);

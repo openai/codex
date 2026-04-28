@@ -2865,6 +2865,7 @@ dependencies = [
  "codex-terminal-detection",
  "codex-utils-template",
  "core_test_support",
+ "jsonwebtoken",
  "keyring",
  "once_cell",
  "os_info",

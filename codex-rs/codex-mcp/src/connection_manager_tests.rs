@@ -662,6 +662,7 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
             startup_snapshot: Some(startup_tools),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
         },
     );
 
@@ -690,6 +691,7 @@ async fn resolve_tool_info_accepts_canonical_namespaced_tool_names() {
             startup_snapshot: Some(startup_tools),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
         },
     );
 
@@ -726,6 +728,7 @@ async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot(
             startup_snapshot: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
         },
     );
 
@@ -750,6 +753,7 @@ async fn list_all_tools_does_not_block_when_startup_snapshot_cache_hit_is_empty(
             startup_snapshot: Some(Vec::new()),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
         },
     );
 
@@ -784,6 +788,7 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
             startup_snapshot: Some(startup_tools),
             startup_complete,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
         },
     );
 
