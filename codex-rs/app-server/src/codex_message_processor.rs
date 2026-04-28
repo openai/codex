@@ -7736,7 +7736,7 @@ impl CodexMessageProcessor {
                 if seen_attachment_paths.insert(rollout_path.clone()) {
                     attachment_paths.push(FeedbackAttachmentPath {
                         path: rollout_path,
-                        filename: None,
+                        attachment_filename_override: None,
                     });
                 }
             }
@@ -7748,7 +7748,9 @@ impl CodexMessageProcessor {
             {
                 attachment_paths.push(FeedbackAttachmentPath {
                     path: guardian_rollout_path,
-                    filename: Some(auto_review_rollout_filename(conversation_id)),
+                    attachment_filename_override: Some(auto_review_rollout_filename(
+                        conversation_id,
+                    )),
                 });
             }
         }
@@ -7757,7 +7759,7 @@ impl CodexMessageProcessor {
                 if seen_attachment_paths.insert(extra_log_file.clone()) {
                     attachment_paths.push(FeedbackAttachmentPath {
                         path: extra_log_file,
-                        filename: None,
+                        attachment_filename_override: None,
                     });
                 }
             }

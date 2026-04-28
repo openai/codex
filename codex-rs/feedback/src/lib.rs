@@ -340,7 +340,7 @@ pub struct FeedbackSnapshot {
 
 pub struct FeedbackAttachmentPath {
     pub path: PathBuf,
-    pub filename: Option<String>,
+    pub attachment_filename_override: Option<String>,
 }
 
 pub struct FeedbackUploadOptions<'a> {
@@ -543,13 +543,16 @@ impl FeedbackSnapshot {
                     continue;
                 }
             };
-            let filename = attachment_path.filename.clone().unwrap_or_else(|| {
-                attachment_path
-                    .path
-                    .file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "extra-log.log".to_string())
-            });
+            let filename = attachment_path
+                .attachment_filename_override
+                .clone()
+                .unwrap_or_else(|| {
+                    attachment_path
+                        .path
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "extra-log.log".to_string())
+                });
             attachments.push(Attachment {
                 buffer: data,
                 filename,
@@ -686,7 +689,7 @@ mod tests {
         let extra_path = std::env::temp_dir().join(&extra_filename);
         let extra_attachment_path = FeedbackAttachmentPath {
             path: extra_path.clone(),
-            filename: None,
+            attachment_filename_override: None,
         };
         fs::write(&extra_path, "rollout").expect("extra attachment should be written");
 
