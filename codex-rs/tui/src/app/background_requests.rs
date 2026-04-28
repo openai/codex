@@ -536,9 +536,11 @@ pub(super) async fn fetch_plugin_detail(
 
 pub(super) async fn fetch_marketplace_add(
     request_handle: AppServerRequestHandle,
-    _cwd: PathBuf,
+    cwd: PathBuf,
     source: String,
 ) -> Result<MarketplaceAddResponse> {
+    let cwd = AbsolutePathBuf::try_from(cwd).wrap_err("marketplace/add cwd must be absolute")?;
+    let source = marketplace_add_source_for_request(cwd.as_path(), source);
     let request_id = RequestId::String(format!("marketplace-add-{}", Uuid::new_v4()));
     request_handle
         .request_typed(ClientRequest::MarketplaceAdd {
@@ -551,6 +553,33 @@ pub(super) async fn fetch_marketplace_add(
         })
         .await
         .wrap_err("marketplace/add failed in TUI")
+}
+
+fn marketplace_add_source_for_request(cwd: &std::path::Path, source: String) -> String {
+    let (base_source, suffix) = if let Some((base, ref_name)) = source.rsplit_once('#') {
+        (base, Some(format!("#{ref_name}")))
+    } else if let Some((base, ref_name)) = source.rsplit_once('@') {
+        (base, Some(format!("@{ref_name}")))
+    } else {
+        (source.as_str(), None)
+    };
+
+    if matches!(base_source, "." | "..")
+        || base_source.starts_with("./")
+        || base_source.starts_with("../")
+        || base_source.starts_with(".\\")
+        || base_source.starts_with("..\\")
+    {
+        let mut resolved = AbsolutePathBuf::resolve_path_against_base(base_source, cwd)
+            .to_string_lossy()
+            .into_owned();
+        if let Some(suffix) = suffix {
+            resolved.push_str(&suffix);
+        }
+        return resolved;
+    }
+
+    source
 }
 
 pub(super) async fn fetch_plugin_install(
@@ -692,6 +721,31 @@ mod tests {
 
     fn test_absolute_path(path: &str) -> AbsolutePathBuf {
         AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
+    }
+
+    #[test]
+    fn marketplace_add_source_for_request_resolves_relative_local_paths() {
+        let cwd = if cfg!(windows) {
+            PathBuf::from(r"C:\workspace\project")
+        } else {
+            PathBuf::from("/workspace/project")
+        };
+
+        let resolved = marketplace_add_source_for_request(&cwd, "./marketplace".to_string());
+        assert!(std::path::Path::new(&resolved).is_absolute());
+        assert_eq!(resolved, cwd.join("marketplace").display().to_string());
+        assert_eq!(
+            marketplace_add_source_for_request(&cwd, "./marketplace#main".to_string()),
+            format!("{}#main", cwd.join("marketplace").display())
+        );
+        assert_eq!(
+            marketplace_add_source_for_request(&cwd, "owner/repo".to_string()),
+            "owner/repo"
+        );
+        assert_eq!(
+            marketplace_add_source_for_request(&cwd, "~/marketplace".to_string()),
+            "~/marketplace"
+        );
     }
 
     #[test]
