@@ -138,6 +138,7 @@ impl MemoryStartupContext {
         model_name: &str,
         reasoning_effort: ReasoningEffort,
     ) -> StageOneRequestContext {
+        let config_snapshot = self.thread.config_snapshot().await;
         let model_info = self
             .thread_manager
             .get_models_manager()
@@ -158,7 +159,7 @@ impl MemoryStartupContext {
                 .with_model(model_name, model_name),
             reasoning_effort: Some(reasoning_effort),
             reasoning_summary,
-            service_tier: config.service_tier,
+            service_tier: config_snapshot.service_tier,
         }
     }
 

@@ -1,10 +1,10 @@
 use crate::start_memories_startup_task;
-use codex_core::test_support::auth_manager_from_auth;
 use codex_features::Feature;
 use codex_git_utils::diff_since_latest_init;
 use codex_git_utils::reset_git_repository;
-use codex_login::CodexAuth;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ServiceTier;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
@@ -19,6 +19,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -234,22 +235,69 @@ async fn memories_startup_phase2_prunes_old_extension_resources_without_stage1_i
     Ok(())
 }
 
+#[tokio::test]
+async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let test = build_test_codex(&server, home).await?;
+    assert_eq!(test.config.service_tier, None);
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox_policy: None,
+            permission_profile: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: Some(Some(ServiceTier::Fast)),
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let config_snapshot = wait_for_service_tier(&test, Some(ServiceTier::Fast)).await?;
+    assert_eq!(config_snapshot.service_tier, Some(ServiceTier::Fast));
+
+    let context = crate::runtime::MemoryStartupContext::new(
+        Arc::clone(&test.thread_manager),
+        test.thread_manager.auth_manager(),
+        test.session_configured.session_id,
+        Arc::clone(&test.codex),
+        &test.config,
+        config_snapshot.session_source.clone(),
+    );
+    let request_context = context
+        .stage_one_request_context(
+            &test.config,
+            test.config.model.as_deref().unwrap_or("gpt-5.4-mini"),
+            ReasoningEffort::Low,
+        )
+        .await;
+    assert_eq!(request_context.service_tier, Some(ServiceTier::Fast));
+
+    shutdown_test_codex(&test).await?;
+    Ok(())
+}
+
 async fn build_test_codex(
     server: &wiremock::MockServer,
     home: Arc<TempDir>,
 ) -> anyhow::Result<TestCodex> {
-    let mut builder = test_codex().with_home(home).with_config(|config| {
-        config
-            .features
-            .enable(Feature::Sqlite)
-            .expect("test config should allow feature update");
-        config
-            .features
-            .enable(Feature::MemoryTool)
-            .expect("test config should allow feature update");
-        config.memories.max_raw_memories_for_consolidation = 1;
-    });
-    builder.build(server).await
+    test_codex()
+        .with_home(home)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Sqlite)
+                .expect("test config should allow feature update");
+            config.memories.max_raw_memories_for_consolidation = 1;
+        })
+        .build(server)
+        .await
 }
 
 async fn init_state_db(home: &Arc<TempDir>) -> anyhow::Result<Arc<codex_state::StateRuntime>> {
@@ -261,12 +309,17 @@ async fn init_state_db(home: &Arc<TempDir>) -> anyhow::Result<Arc<codex_state::S
 
 async fn trigger_memories_startup(test: &TestCodex) {
     let config_snapshot = test.codex.config_snapshot().await;
+    let mut config = test.config.clone();
+    config
+        .features
+        .enable(Feature::MemoryTool)
+        .expect("test config should allow feature update");
     start_memories_startup_task(
         Arc::clone(&test.thread_manager),
-        auth_manager_from_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        test.thread_manager.auth_manager(),
         test.session_configured.session_id,
         Arc::clone(&test.codex),
-        Arc::new(test.config.clone()),
+        Arc::new(config),
         &config_snapshot.session_source,
     );
 }
@@ -334,6 +387,25 @@ async fn wait_for_request(mock: &ResponseMock, expected_count: usize) -> Vec<Res
         assert!(
             Instant::now() < deadline,
             "timed out waiting for {expected_count} phase2 requests"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn wait_for_service_tier(
+    test: &TestCodex,
+    expected_service_tier: Option<ServiceTier>,
+) -> anyhow::Result<codex_core::ThreadConfigSnapshot> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let config_snapshot = test.codex.config_snapshot().await;
+        if config_snapshot.service_tier == expected_service_tier {
+            return Ok(config_snapshot);
+        }
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "timed out waiting for service_tier to become {expected_service_tier:?}, current={:?}",
+            config_snapshot.service_tier
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
