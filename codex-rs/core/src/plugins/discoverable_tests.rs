@@ -240,8 +240,10 @@ async fn list_tool_suggest_discoverable_plugins_omits_disabled_tool_suggestions(
         r#"[features]
 plugins = true
 
-[plugins."slack@openai-curated"]
-disable_tool_suggest = true
+[tool_suggest]
+disabled_tools = [
+  { type = "plugin", id = "slack@openai-curated" }
+]
 "#,
     );
 

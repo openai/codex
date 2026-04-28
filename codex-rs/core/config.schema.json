@@ -118,11 +118,6 @@
           "description": "Whether tools with `destructive_hint = true` are allowed for this app.",
           "type": "boolean"
         },
-        "disable_tool_suggest": {
-          "default": false,
-          "description": "When `true`, Codex does not suggest this app through `tool_suggest`.",
-          "type": "boolean"
-        },
         "enabled": {
           "default": true,
           "description": "When `false`, Codex does not surface this app.",
@@ -1728,10 +1723,6 @@
     "PluginConfig": {
       "additionalProperties": false,
       "properties": {
-        "disable_tool_suggest": {
-          "default": false,
-          "type": "boolean"
-        },
         "enabled": {
           "default": true,
           "type": "boolean"
@@ -2169,6 +2160,13 @@
     "ToolSuggestConfig": {
       "additionalProperties": false,
       "properties": {
+        "disabled_tools": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ToolSuggestDisabledTool"
+          },
+          "type": "array"
+        },
         "discoverables": {
           "default": [],
           "items": {
@@ -2177,6 +2175,22 @@
           "type": "array"
         }
       },
+      "type": "object"
+    },
+    "ToolSuggestDisabledTool": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/definitions/ToolSuggestDiscoverableType"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
       "type": "object"
     },
     "ToolSuggestDiscoverable": {

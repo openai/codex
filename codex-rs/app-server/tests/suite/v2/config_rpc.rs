@@ -295,7 +295,6 @@ default_tools_approval_mode = "prompt"
                 "app1".to_string(),
                 AppConfig {
                     enabled: false,
-                    disable_tool_suggest: false,
                     destructive_enabled: Some(false),
                     open_world_enabled: None,
                     default_tools_approval_mode: Some(AppToolApproval::Prompt),

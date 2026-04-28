@@ -1,12 +1,10 @@
 use anyhow::Context;
-use serde::Deserialize;
 use std::collections::HashSet;
 use tracing::warn;
 
 use super::PluginCapabilitySummary;
 use super::PluginsManager;
 use crate::config::Config;
-use codex_config::types::PluginConfig;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::OPENAI_BUNDLED_MARKETPLACE_NAME;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
@@ -45,6 +43,13 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
         .filter(|discoverable| discoverable.kind == ToolSuggestDiscoverableType::Plugin)
         .map(|discoverable| discoverable.id.as_str())
         .collect::<HashSet<_>>();
+    let disabled_plugin_ids = config
+        .tool_suggest
+        .disabled_tools
+        .iter()
+        .filter(|disabled_tool| disabled_tool.kind == ToolSuggestDiscoverableType::Plugin)
+        .map(|disabled_tool| disabled_tool.id.as_str())
+        .collect::<HashSet<_>>();
     let marketplaces = plugins_manager
         .list_marketplaces_for_config(config, &[])
         .context("failed to list plugin marketplaces for tool suggestions")?
@@ -58,7 +63,7 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
 
         for plugin in marketplace.plugins {
             if plugin.installed
-                || plugin_tool_suggest_disabled(config, plugin.id.as_str())
+                || disabled_plugin_ids.contains(plugin.id.as_str())
                 || (!TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST.contains(&plugin.id.as_str())
                     && !configured_plugin_ids.contains(plugin.id.as_str()))
             {
@@ -98,20 +103,6 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
             .then_with(|| left.id.cmp(&right.id))
     });
     Ok(discoverable_plugins)
-}
-
-fn plugin_tool_suggest_disabled(config: &Config, plugin_id: &str) -> bool {
-    config
-        .config_layer_stack
-        .effective_config()
-        .as_table()
-        .and_then(|table| table.get("plugins"))
-        .cloned()
-        .and_then(|value| {
-            std::collections::HashMap::<String, PluginConfig>::deserialize(value).ok()
-        })
-        .and_then(|plugins| plugins.get(plugin_id).cloned())
-        .is_some_and(|plugin| plugin.disable_tool_suggest)
 }
 
 #[cfg(test)]

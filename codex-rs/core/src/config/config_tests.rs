@@ -46,6 +46,7 @@ use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SkillsConfig;
+use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
 use codex_config::types::TuiKeymap;
@@ -7738,6 +7739,7 @@ discoverables = [
                     id: "   ".to_string(),
                 },
             ],
+            disabled_tools: Vec::new(),
         })
     );
 
@@ -7761,6 +7763,56 @@ discoverables = [
                     kind: ToolSuggestDiscoverableType::Plugin,
                     id: "plugin_alpha@openai-curated".to_string(),
                 },
+            ],
+            disabled_tools: Vec::new(),
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_suggest_disabled_tools_load_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tool_suggest]
+disabled_tools = [
+  { type = "connector", id = " connector_calendar " },
+  { type = "connector", id = "connector_calendar" },
+  { type = "connector", id = "   " },
+  { type = "plugin", id = "slack@openai-curated" }
+]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.tool_suggest,
+        Some(ToolSuggestConfig {
+            discoverables: Vec::new(),
+            disabled_tools: vec![
+                ToolSuggestDisabledTool::connector(" connector_calendar "),
+                ToolSuggestDisabledTool::connector("connector_calendar"),
+                ToolSuggestDisabledTool::connector("   "),
+                ToolSuggestDisabledTool::plugin("slack@openai-curated"),
+            ],
+        })
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.tool_suggest,
+        ToolSuggestConfig {
+            discoverables: Vec::new(),
+            disabled_tools: vec![
+                ToolSuggestDisabledTool::connector("connector_calendar"),
+                ToolSuggestDisabledTool::plugin("slack@openai-curated"),
             ],
         }
     );

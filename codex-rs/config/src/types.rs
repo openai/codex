@@ -186,11 +186,45 @@ pub struct ToolSuggestDiscoverable {
     pub id: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ToolSuggestDisabledTool {
+    #[serde(rename = "type")]
+    pub kind: ToolSuggestDiscoverableType,
+    pub id: String,
+}
+
+impl ToolSuggestDisabledTool {
+    pub fn plugin(id: impl Into<String>) -> Self {
+        Self {
+            kind: ToolSuggestDiscoverableType::Plugin,
+            id: id.into(),
+        }
+    }
+
+    pub fn connector(id: impl Into<String>) -> Self {
+        Self {
+            kind: ToolSuggestDiscoverableType::Connector,
+            id: id.into(),
+        }
+    }
+
+    pub fn normalized(&self) -> Option<Self> {
+        let id = self.id.trim();
+        (!id.is_empty()).then(|| Self {
+            kind: self.kind,
+            id: id.to_string(),
+        })
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ToolSuggestConfig {
     #[serde(default)]
     pub discoverables: Vec<ToolSuggestDiscoverable>,
+    #[serde(default)]
+    pub disabled_tools: Vec<ToolSuggestDisabledTool>,
 }
 
 /// Memories settings loaded from config.toml.
@@ -356,10 +390,6 @@ pub struct AppConfig {
     /// When `false`, Codex does not surface this app.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-
-    /// When `true`, Codex does not suggest this app through `tool_suggest`.
-    #[serde(default)]
-    pub disable_tool_suggest: bool,
 
     /// Whether tools with `destructive_hint = true` are allowed for this app.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -687,8 +717,6 @@ pub use crate::skills_config::SkillsConfig;
 pub struct PluginConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    #[serde(default)]
-    pub disable_tool_suggest: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]

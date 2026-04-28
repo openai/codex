@@ -46,6 +46,7 @@ use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
 use codex_config::types::ToolSuggestConfig;
+use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
@@ -95,6 +96,7 @@ use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
@@ -1415,8 +1417,20 @@ fn resolve_tool_suggest_config(config_toml: &ConfigToml) -> ToolSuggestConfig {
             }
         })
         .collect();
+    let mut seen_disabled_tools = HashSet::new();
+    let disabled_tools = config_toml
+        .tool_suggest
+        .as_ref()
+        .into_iter()
+        .flat_map(|tool_suggest| tool_suggest.disabled_tools.iter())
+        .filter_map(ToolSuggestDisabledTool::normalized)
+        .filter(|disabled_tool| seen_disabled_tools.insert(disabled_tool.clone()))
+        .collect();
 
-    ToolSuggestConfig { discoverables }
+    ToolSuggestConfig {
+        discoverables,
+        disabled_tools,
+    }
 }
 
 fn thread_store_config(

@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use codex_app_server_protocol::AppInfo;
+use codex_config::types::ToolSuggestDisabledTool;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
@@ -18,7 +19,6 @@ use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use codex_tools::verified_connector_suggestion_completed;
 use rmcp::model::RequestId;
 use serde_json::Value;
-use toml_edit::value;
 use tracing::warn;
 
 use crate::config::edit::ConfigEdit;
@@ -209,24 +209,19 @@ async fn persist_tool_suggest_disable(
     tool: &DiscoverableTool,
 ) -> anyhow::Result<()> {
     ConfigEditsBuilder::new(codex_home)
-        .with_edits([tool_suggest_disable_edit(tool)])
+        .with_edits([ConfigEdit::AddToolSuggestDisabledTool(
+            disabled_tool_suggestion(tool),
+        )])
         .apply()
         .await
 }
 
-fn tool_suggest_disable_edit(tool: &DiscoverableTool) -> ConfigEdit {
-    let (root, tool_id) = match tool {
-        DiscoverableTool::Connector(connector) => ("apps", connector.id.as_str()),
-        DiscoverableTool::Plugin(plugin) => ("plugins", plugin.id.as_str()),
-    };
-
-    ConfigEdit::SetPath {
-        segments: vec![
-            root.to_string(),
-            tool_id.to_string(),
-            "disable_tool_suggest".to_string(),
-        ],
-        value: value(true),
+fn disabled_tool_suggestion(tool: &DiscoverableTool) -> ToolSuggestDisabledTool {
+    match tool {
+        DiscoverableTool::Connector(connector) => {
+            ToolSuggestDisabledTool::connector(connector.id.as_str())
+        }
+        DiscoverableTool::Plugin(plugin) => ToolSuggestDisabledTool::plugin(plugin.id.as_str()),
     }
 }
 

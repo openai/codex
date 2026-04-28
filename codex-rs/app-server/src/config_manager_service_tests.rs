@@ -154,7 +154,6 @@ async fn write_value_supports_nested_app_paths() -> Result<()> {
                 "app1".to_string(),
                 AppConfig {
                     enabled: false,
-                    disable_tool_suggest: false,
                     destructive_enabled: None,
                     open_world_enabled: None,
                     default_tools_approval_mode: Some(AppToolApproval::Prompt),

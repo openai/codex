@@ -51,11 +51,11 @@ and are labeled as connected; others are marked as can be installed.
 Codex stores "never show again" choices for tool suggestions in `config.toml`:
 
 ```toml
-[plugins."slack@openai-curated"]
-disable_tool_suggest = true
-
-[apps.connector_google_calendar]
-disable_tool_suggest = true
+[tool_suggest]
+disabled_tools = [
+  { type = "plugin", id = "slack@openai-curated" },
+  { type = "connector", id = "connector_google_calendar" },
+]
 ```
 
 ## Notify

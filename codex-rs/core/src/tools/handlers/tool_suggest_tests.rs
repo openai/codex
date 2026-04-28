@@ -7,9 +7,10 @@ use crate::plugins::test_support::write_openai_curated_marketplace;
 use crate::plugins::test_support::write_plugins_feature_config;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
-use codex_config::types::AppConfig;
-use codex_config::types::AppsConfigToml;
-use codex_config::types::PluginConfig;
+use codex_config::types::ToolSuggestConfig;
+use codex_config::types::ToolSuggestDisabledTool;
+use codex_config::types::ToolSuggestDiscoverable;
+use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
 use codex_rmcp_client::ElicitationResponse;
 use codex_tools::DiscoverablePluginInfo;
@@ -18,7 +19,6 @@ use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use rmcp::model::ElicitationAction;
 use serde_json::json;
-use std::collections::HashMap;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -102,21 +102,10 @@ async fn persist_tool_suggest_disable_writes_connector_config() {
         std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).expect("read config");
     let parsed: ConfigToml = toml::from_str(&contents).expect("parse config");
     assert_eq!(
-        parsed.apps,
-        Some(AppsConfigToml {
-            default: None,
-            apps: HashMap::from([(
-                "connector_calendar".to_string(),
-                AppConfig {
-                    enabled: true,
-                    disable_tool_suggest: true,
-                    destructive_enabled: None,
-                    open_world_enabled: None,
-                    default_tools_approval_mode: None,
-                    default_tools_enabled: None,
-                    tools: None,
-                },
-            )]),
+        parsed.tool_suggest,
+        Some(ToolSuggestConfig {
+            discoverables: Vec::new(),
+            disabled_tools: vec![ToolSuggestDisabledTool::connector("connector_calendar")],
         })
     );
 }
@@ -141,14 +130,64 @@ async fn persist_tool_suggest_disable_writes_plugin_config() {
         std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).expect("read config");
     let parsed: ConfigToml = toml::from_str(&contents).expect("parse config");
     assert_eq!(
-        parsed.plugins,
-        HashMap::from([(
-            "slack@openai-curated".to_string(),
-            PluginConfig {
-                enabled: true,
-                disable_tool_suggest: true,
-            },
-        )])
+        parsed.tool_suggest,
+        Some(ToolSuggestConfig {
+            discoverables: Vec::new(),
+            disabled_tools: vec![ToolSuggestDisabledTool::plugin("slack@openai-curated")],
+        })
+    );
+}
+
+#[tokio::test]
+async fn persist_tool_suggest_disable_dedupes_existing_disabled_tools() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let tool = connector_tool("connector_calendar", "Google Calendar");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[tool_suggest]
+discoverables = [
+  { type = "plugin", id = "sample@openai-curated" }
+]
+
+[[tool_suggest.disabled_tools]]
+type = "connector"
+id = " connector_calendar "
+
+[[tool_suggest.disabled_tools]]
+type = "connector"
+id = "connector_calendar"
+
+[[tool_suggest.disabled_tools]]
+type = "connector"
+id = "   "
+
+[[tool_suggest.disabled_tools]]
+type = "plugin"
+id = "slack@openai-curated"
+"#,
+    )
+    .expect("write config");
+
+    persist_tool_suggest_disable(&codex_home.path().abs(), &tool)
+        .await
+        .expect("persist connector disable");
+
+    let contents =
+        std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).expect("read config");
+    let parsed: ConfigToml = toml::from_str(&contents).expect("parse config");
+    assert_eq!(
+        parsed.tool_suggest,
+        Some(ToolSuggestConfig {
+            discoverables: vec![ToolSuggestDiscoverable {
+                kind: ToolSuggestDiscoverableType::Plugin,
+                id: "sample@openai-curated".to_string(),
+            }],
+            disabled_tools: vec![
+                ToolSuggestDisabledTool::connector("connector_calendar"),
+                ToolSuggestDisabledTool::plugin("slack@openai-curated"),
+            ],
+        })
     );
 }
 
