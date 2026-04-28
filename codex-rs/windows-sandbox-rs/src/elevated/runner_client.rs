@@ -216,6 +216,7 @@ pub(crate) fn spawn_runner_transport(
     cwd: &Path,
     sandbox_creds: &SandboxCreds,
     log_dir: Option<&Path>,
+    spawn_request: SpawnRequest,
 ) -> Result<RunnerTransport> {
     let (pipe_in_name, pipe_out_name) = pipe_pair();
     let h_pipe_in =
@@ -305,20 +306,41 @@ pub(crate) fn spawn_runner_transport(
         return Err(err);
     }
 
+    let mut transport = RunnerTransport {
+        // Once the pipe connect phase succeeds we can transfer the raw HANDLEs into `File`s.
+        // From here on, the `RunnerTransport` owns closing the pipes on every success/error path.
+        pipe_write: unsafe { File::from_raw_handle(h_pipe_in as _) },
+        pipe_read: unsafe { File::from_raw_handle(h_pipe_out as _) },
+    };
+    let startup_result = (|| -> Result<()> {
+        // Keep the runner process HANDLE alive until the *entire* startup handshake finishes.
+        // That way, a later `send_spawn_request` or `spawn_ready` failure can still terminate the
+        // runner instead of leaving a stray `codex-command-runner.exe` behind.
+        transport.send_spawn_request(spawn_request)?;
+        transport.read_spawn_ready()?;
+        Ok(())
+    })();
+    if let Err(err) = startup_result {
+        unsafe {
+            if pi.hProcess != 0 {
+                let _ = TerminateProcess(pi.hProcess, 1);
+                CloseHandle(pi.hProcess);
+            }
+        }
+        drop(transport);
+        return Err(err);
+    }
+
     unsafe {
         if pi.hProcess != 0 {
-            // After the handshake succeeds we no longer need the runner process HANDLE. The
-            // pipes are now the lifetime anchor for the transport.
+            // The runner has now connected both pipes *and* acknowledged the spawn request, so
+            // startup is complete. At that point the transport pipes become the only lifetime
+            // anchor we need to keep the session alive.
             CloseHandle(pi.hProcess);
         }
     }
 
-    let pipe_write = unsafe { File::from_raw_handle(h_pipe_in as _) };
-    let pipe_read = unsafe { File::from_raw_handle(h_pipe_out as _) };
-    Ok(RunnerTransport {
-        pipe_write,
-        pipe_read,
-    })
+    Ok(transport)
 }
 
 fn wait_for_complete_frame(pipe_read: &File, timeout: Duration) -> Result<()> {
