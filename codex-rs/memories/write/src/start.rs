@@ -1,3 +1,5 @@
+use crate::guard;
+use crate::metrics::MEMORY_STARTUP;
 use crate::phase1;
 use crate::phase2;
 use crate::runtime::MemoryStartupContext;
@@ -32,7 +34,7 @@ pub fn start_memories_startup_task(
 
     let context = Arc::new(MemoryStartupContext::new(
         thread_manager,
-        auth_manager,
+        Arc::clone(&auth_manager),
         thread_id,
         thread,
         config.as_ref(),
@@ -45,8 +47,19 @@ pub fn start_memories_startup_task(
     }
 
     tokio::spawn(async move {
-        // Clean memories to make preserve DB size
+        // Clean memories to make preserve DB size. This does not consume tokens so can be
+        // done before the quota check.
         phase1::prune(context.as_ref(), &config).await;
+
+        if !guard::rate_limits_ok(&auth_manager, &config).await {
+            context.counter(
+                MEMORY_STARTUP,
+                /*inc*/ 1,
+                &[("status", "skipped_rate_limit")],
+            );
+            return;
+        }
+
         // Run phase 1.
         phase1::run(Arc::clone(&context), Arc::clone(&config)).await;
         // Run phase 2.

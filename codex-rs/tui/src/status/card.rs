@@ -9,16 +9,16 @@ use chrono::Local;
 use codex_model_provider_info::WireApi;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::NetworkAccess;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_utils_sandbox_summary::summarize_sandbox_policy;
+use codex_utils_sandbox_summary::summarize_permission_profile;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::path::PathBuf;
 use url::Url;
 
@@ -254,10 +254,9 @@ impl StatusHistoryCell {
             ),
             (
                 "sandbox",
-                summarize_sandbox_policy(
-                    &config
-                        .permissions
-                        .legacy_sandbox_policy(config.cwd.as_path()),
+                summarize_permission_profile(
+                    &config.permissions.permission_profile(),
+                    config.cwd.as_path(),
                 ),
             ),
         ];
@@ -281,31 +280,14 @@ impl StatusHistoryCell {
             .find(|(k, _)| *k == "approval")
             .map(|(_, v)| v.clone())
             .unwrap_or_else(|| "<unknown>".to_string());
-        let sandbox_policy = config
-            .permissions
-            .legacy_sandbox_policy(config.cwd.as_path());
-        let sandbox = match &sandbox_policy {
-            SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
-            SandboxPolicy::ReadOnly { .. } => "read-only".to_string(),
-            SandboxPolicy::WorkspaceWrite {
-                network_access: true,
-                ..
-            } => "workspace-write with network access".to_string(),
-            SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
-            SandboxPolicy::ExternalSandbox { network_access } => {
-                if matches!(network_access, NetworkAccess::Enabled) {
-                    "external-sandbox (network access enabled)".to_string()
-                } else {
-                    "external-sandbox".to_string()
-                }
-            }
-        };
+        let permission_profile = config.permissions.permission_profile();
+        let sandbox = status_permission_summary(&permission_profile, config.cwd.as_path());
         let permissions = if config.permissions.approval_policy.value() == AskForApproval::OnRequest
-            && sandbox_policy == SandboxPolicy::new_workspace_write_policy()
+            && permission_profile == PermissionProfile::workspace_write()
         {
             "Default".to_string()
         } else if config.permissions.approval_policy.value() == AskForApproval::Never
-            && sandbox_policy == SandboxPolicy::DangerFullAccess
+            && permission_profile == PermissionProfile::Disabled
         {
             "Full Access".to_string()
         } else {
@@ -551,6 +533,20 @@ impl StatusHistoryCell {
             StatusRateLimitData::Missing => push_label(labels, seen, "Limits"),
         }
     }
+}
+
+fn status_permission_summary(permission_profile: &PermissionProfile, cwd: &Path) -> String {
+    let summary = summarize_permission_profile(permission_profile, cwd);
+    if let Some(details) = summary.strip_prefix("workspace-write") {
+        if details.contains("(network access enabled)") {
+            return "workspace-write with network access".to_string();
+        }
+        return "workspace-write".to_string();
+    }
+    if summary == "custom permissions (network access enabled)" {
+        return "custom permissions with network access".to_string();
+    }
+    summary
 }
 
 impl HistoryCell for StatusHistoryCell {

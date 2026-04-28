@@ -598,7 +598,9 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
     );
     drain_insert_history(&mut rx);
 
-    chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
+    chat.on_task_complete(
+        /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
+    );
     end_exec(&mut chat, begin, "", "", /*exit_code*/ 0);
 
     let cells = drain_insert_history(&mut rx);
@@ -612,7 +614,9 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
 async fn unified_exec_interaction_after_task_complete_is_suppressed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
-    chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
+    chat.on_task_complete(
+        /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
+    );
 
     chat.handle_codex_event(Event {
         id: "call-1".to_string(),
@@ -710,6 +714,56 @@ async fn unified_exec_wait_before_streamed_agent_message_snapshot() {
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert_chatwidget_snapshot!("unified_exec_wait_before_streamed_agent_message", combined);
+}
+
+#[tokio::test]
+async fn final_worked_for_uses_cumulative_turn_duration_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    let exec = begin_exec_with_source(
+        &mut chat,
+        "call-1",
+        "echo preparing",
+        ExecCommandSource::Agent,
+    );
+    end_exec(&mut chat, exec, "preparing\n", "", /*exit_code*/ 0);
+
+    complete_assistant_message(
+        &mut chat,
+        "msg-final",
+        "Final response.",
+        Some(MessagePhase::FinalAnswer),
+    );
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: Some("Final response.".to_string()),
+            completed_at: None,
+            duration_ms: Some(125_000),
+            time_to_first_token_ms: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        combined.contains("Worked for 2m 05s"),
+        "expected final separator to use cumulative turn duration, got:\n{combined}"
+    );
+    assert_chatwidget_snapshot!("final_worked_for_uses_cumulative_turn_duration", combined);
 }
 
 #[tokio::test]

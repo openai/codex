@@ -131,6 +131,8 @@ mod history_cell;
 pub(crate) mod insert_history;
 pub use insert_history::insert_history_lines;
 mod key_hint;
+mod keymap;
+mod keymap_setup;
 mod line_truncation;
 pub(crate) mod live_wrap;
 pub use live_wrap::RowBuilder;
@@ -880,9 +882,8 @@ pub async fn run_main(
 
     if let Some(warning) = add_dir_warning_message(
         &cli.add_dir,
-        &config
-            .permissions
-            .legacy_sandbox_policy(config.cwd.as_path()),
+        &config.permissions.permission_profile(),
+        config.cwd.as_path(),
     ) {
         #[allow(clippy::print_stderr)]
         {
@@ -898,6 +899,7 @@ pub async fn run_main(
             auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
             forced_login_method: config.forced_login_method,
             forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
+            chatgpt_base_url: Some(config.chatgpt_base_url.clone()),
         })
         .await
         {
@@ -1593,7 +1595,7 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
     reason = "TUI should no longer be displayed, so we can write to stderr."
 )]
 fn restore() {
-    if let Err(err) = tui::restore() {
+    if let Err(err) = tui::restore_after_exit() {
         eprintln!(
             "failed to restore terminal. Run `reset` or restart your terminal to recover: {err}"
         );
@@ -1612,7 +1614,7 @@ impl TerminalRestoreGuard {
     #[cfg_attr(debug_assertions, allow(dead_code))]
     fn restore(&mut self) -> color_eyre::Result<()> {
         if self.active {
-            crate::tui::restore()?;
+            crate::tui::restore_after_exit()?;
             self.active = false;
         }
         Ok(())
@@ -2208,6 +2210,10 @@ mod tests {
             .model
             .clone()
             .unwrap_or_else(|| "gpt-5.1".to_string());
+        let permission_profile = config.permissions.permission_profile();
+        let sandbox_policy = permission_profile
+            .to_legacy_sandbox_policy(config.cwd.as_path())
+            .expect("configured permissions must have a legacy compatibility projection");
         TurnContextItem {
             turn_id: None,
             trace_id: None,
@@ -2215,10 +2221,8 @@ mod tests {
             current_date: None,
             timezone: None,
             approval_policy: config.permissions.approval_policy.value(),
-            sandbox_policy: config
-                .permissions
-                .legacy_sandbox_policy(config.cwd.as_path()),
-            permission_profile: None,
+            sandbox_policy,
+            permission_profile: Some(permission_profile),
             network: None,
             file_system_sandbox_policy: None,
             model,

@@ -753,6 +753,14 @@ pub(super) async fn connect_remote_control_websocket(
 )> {
     ensure_rustls_crypto_provider();
 
+    let Some(state_db) = state_db else {
+        *enrollment = None;
+        return Err(io::Error::new(
+            ErrorKind::NotFound,
+            "remote control requires sqlite state db",
+        ));
+    };
+
     let auth = load_remote_control_auth(auth_manager).await?;
     let enrollment_account_id = enrollment.as_ref().map(|enrollment| &enrollment.account_id);
     if enrollment_account_id.is_some_and(|account_id| account_id != &auth.account_id) {
@@ -769,12 +777,12 @@ pub(super) async fn connect_remote_control_websocket(
 
     if enrollment.is_none() {
         *enrollment = load_persisted_remote_control_enrollment(
-            state_db,
+            Some(state_db),
             remote_control_target,
             &auth.account_id,
             app_server_client_name,
         )
-        .await;
+        .await?;
     }
 
     if enrollment.is_none() {
@@ -796,7 +804,7 @@ pub(super) async fn connect_remote_control_websocket(
             Err(err) => return Err(err),
         };
         if let Err(err) = update_persisted_remote_control_enrollment(
-            state_db,
+            Some(state_db),
             remote_control_target,
             &auth.account_id,
             app_server_client_name,
@@ -804,7 +812,9 @@ pub(super) async fn connect_remote_control_websocket(
         )
         .await
         {
-            warn!("failed to persist remote control enrollment in sqlite state db: {err}");
+            return Err(io::Error::other(format!(
+                "failed to persist remote control enrollment in sqlite state db: {err}"
+            )));
         }
         info!(
             "created new remote control enrollment: websocket_url={}, account_id={}, server_id={}, environment_id={}",
@@ -839,7 +849,7 @@ pub(super) async fn connect_remote_control_websocket(
                         enrollment_ref.environment_id
                     );
                     if let Err(clear_err) = update_persisted_remote_control_enrollment(
-                        state_db,
+                        Some(state_db),
                         remote_control_target,
                         &auth.account_id,
                         app_server_client_name,
@@ -1212,6 +1222,36 @@ mod tests {
                 .expect("token should be readable"),
             "fresh-token"
         );
+    }
+
+    #[tokio::test]
+    async fn connect_remote_control_websocket_requires_sqlite_state_db() {
+        let remote_control_target = normalize_remote_control_url("http://127.0.0.1:9/backend-api/")
+            .expect("target should parse");
+        let auth_manager = remote_control_auth_manager();
+        let mut auth_recovery = auth_manager.unauthorized_recovery();
+        let mut enrollment = Some(RemoteControlEnrollment {
+            account_id: "account_id".to_string(),
+            environment_id: "env_test".to_string(),
+            server_id: "srv_e_test".to_string(),
+            server_name: "test-server".to_string(),
+        });
+
+        let err = connect_remote_control_websocket(
+            &remote_control_target,
+            /*state_db*/ None,
+            &auth_manager,
+            &mut auth_recovery,
+            &mut enrollment,
+            /*subscribe_cursor*/ None,
+            /*app_server_client_name*/ None,
+        )
+        .await
+        .expect_err("missing sqlite state db should fail remote control");
+
+        assert_eq!(err.kind(), ErrorKind::NotFound);
+        assert_eq!(err.to_string(), "remote control requires sqlite state db");
+        assert_eq!(enrollment, None);
     }
 
     #[tokio::test]

@@ -41,9 +41,9 @@ use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
 
@@ -105,6 +105,13 @@ pub(crate) enum RateLimitRefreshOrigin {
     /// User-initiated via `/status`; the `request_id` correlates with the
     /// status card that should be updated when the fetch completes.
     StatusCommand { request_id: u64 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum KeymapEditIntent {
+    ReplaceAll,
+    AddAlternate,
+    ReplaceOne { old_key: String },
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -574,8 +581,8 @@ pub(crate) enum AppEvent {
     /// Update the current approval policy in the running app and widget.
     UpdateAskForApprovalPolicy(AskForApproval),
 
-    /// Update the current sandbox policy in the running app and widget.
-    UpdateSandboxPolicy(SandboxPolicy),
+    /// Update the current permission profile in the running app and widget.
+    UpdatePermissionProfile(PermissionProfile),
 
     /// Update the current approvals reviewer in the running app and widget.
     UpdateApprovalsReviewer(ApprovalsReviewer),
@@ -739,6 +746,39 @@ pub(crate) enum AppEvent {
     /// Apply a user-confirmed syntax theme selection.
     SyntaxThemeSelected {
         name: String,
+    },
+
+    /// Open set/remove actions for the selected keymap action.
+    OpenKeymapActionMenu {
+        context: String,
+        action: String,
+    },
+
+    /// Open binding selection before replacing one binding for an action.
+    OpenKeymapReplaceBindingMenu {
+        context: String,
+        action: String,
+    },
+
+    /// Open key capture for the selected keymap action.
+    OpenKeymapCapture {
+        context: String,
+        action: String,
+        intent: KeymapEditIntent,
+    },
+
+    /// Apply a captured key to the selected keymap action.
+    KeymapCaptured {
+        context: String,
+        action: String,
+        key: String,
+        intent: KeymapEditIntent,
+    },
+
+    /// Remove the custom root binding for the selected keymap action.
+    KeymapCleared {
+        context: String,
+        action: String,
     },
 }
 

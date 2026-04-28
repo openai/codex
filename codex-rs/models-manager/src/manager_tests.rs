@@ -228,10 +228,14 @@ c2ln",
     )
     .expect("auth.json should be written");
 
-    CodexAuth::from_auth_storage(codex_home, AuthCredentialsStoreMode::File)
-        .await
-        .expect("auth should load")
-        .expect("auth should be present")
+    CodexAuth::from_auth_storage(
+        codex_home,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("auth should load")
+    .expect("auth should be present")
 }
 
 #[tokio::test]

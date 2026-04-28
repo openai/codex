@@ -9,6 +9,7 @@ use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
 use crate::config_manager::ConfigManager;
+use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::device_key_api::DeviceKeyApi;
 use crate::error_code::invalid_request;
 use crate::external_agent_config_api::ExternalAgentConfigApi;
@@ -18,6 +19,9 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
+use crate::request_serialization::QueuedInitializedRequest;
+use crate::request_serialization::RequestSerializationQueueKey;
+use crate::request_serialization::RequestSerializationQueues;
 use crate::transport::AppServerTransport;
 use crate::transport::ConnectionOrigin;
 use crate::transport::RemoteControlHandle;
@@ -167,11 +171,13 @@ pub(crate) struct MessageProcessor {
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
     rpc_transport: AppServerRpcTransport,
     remote_control_handle: Option<RemoteControlHandle>,
+    request_serialization_queues: RequestSerializationQueues,
 }
 
 #[derive(Debug)]
 pub(crate) struct ConnectionSessionState {
     origin: ConnectionOrigin,
+    pub(crate) rpc_gate: Arc<ConnectionRpcGate>,
     initialized: OnceLock<InitializedConnectionSessionState>,
 }
 
@@ -193,6 +199,7 @@ impl ConnectionSessionState {
     pub(crate) fn new(origin: ConnectionOrigin) -> Self {
         Self {
             origin,
+            rpc_gate: Arc::new(ConnectionRpcGate::new()),
             initialized: OnceLock::new(),
         }
     }
@@ -344,6 +351,7 @@ impl MessageProcessor {
             config_warnings: Arc::new(config_warnings),
             rpc_transport,
             remote_control_handle,
+            request_serialization_queues: RequestSerializationQueues::default(),
         }
     }
 
@@ -540,7 +548,12 @@ impl MessageProcessor {
         self.codex_message_processor.shutdown_threads().await;
     }
 
-    pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_closed(
+        &self,
+        connection_id: ConnectionId,
+        session_state: &ConnectionSessionState,
+    ) {
+        session_state.rpc_gate.shutdown().await;
         self.outgoing.connection_closed(connection_id).await;
         self.fs_watch_manager.connection_closed(connection_id).await;
         self.codex_message_processor
@@ -724,19 +737,46 @@ impl MessageProcessor {
             );
         }
 
+        let serialization_scope = codex_request.serialization_scope();
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
         let device_key_requests_allowed = session.allows_device_key_requests();
-        Arc::clone(self)
-            .handle_initialized_client_request(
-                connection_request_id,
-                codex_request,
-                request_context,
-                app_server_client_name,
-                client_version,
-                device_key_requests_allowed,
-            )
-            .await
+        let error_request_id = connection_request_id.clone();
+        let rpc_gate = Arc::clone(&session.rpc_gate);
+        let processor = Arc::clone(self);
+        let span = request_context.span();
+        let request = QueuedInitializedRequest::new(
+            rpc_gate,
+            async move {
+                let processor_for_request = Arc::clone(&processor);
+                let result = processor_for_request
+                    .handle_initialized_client_request(
+                        connection_request_id,
+                        codex_request,
+                        request_context,
+                        app_server_client_name,
+                        client_version,
+                        device_key_requests_allowed,
+                    )
+                    .await;
+                if let Err(error) = result {
+                    processor.outgoing.send_error(error_request_id, error).await;
+                }
+            }
+            .instrument(span),
+        );
+
+        if let Some(scope) = serialization_scope {
+            let key = RequestSerializationQueueKey::from_scope(connection_id, scope);
+            self.request_serialization_queues
+                .enqueue(key, request)
+                .await;
+        } else {
+            tokio::spawn(async move {
+                request.run().await;
+            });
+        }
+        Ok(())
     }
 
     async fn handle_initialized_client_request(
@@ -1138,10 +1178,20 @@ impl MessageProcessor {
                 ExternalAgentConfigMigrationItemType::Plugins
             )
         });
-
+        let pending_session_imports = self
+            .external_agent_config_api
+            .prepare_pending_session_imports(&params)?;
         let pending_plugin_imports = self.external_agent_config_api.import(params).await?;
         if has_plugin_imports {
             self.handle_config_mutation().await;
+        }
+        for pending_session_import in pending_session_imports {
+            let imported_thread_id = self
+                .codex_message_processor
+                .import_external_agent_session(pending_session_import.session)
+                .await?;
+            self.external_agent_config_api
+                .record_imported_session(&pending_session_import.source_path, imported_thread_id);
         }
         self.outgoing
             .send_response(request_id, ExternalAgentConfigImportResponse {})

@@ -107,6 +107,7 @@ pub struct ToolsConfig {
     pub spawn_agent_usage_hint: bool,
     pub spawn_agent_usage_hint_text: Option<String>,
     pub max_concurrent_threads_per_session: Option<usize>,
+    pub wait_agent_min_timeout_ms: Option<i64>,
     pub default_mode_request_user_input: bool,
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
@@ -226,6 +227,7 @@ impl ToolsConfig {
             spawn_agent_usage_hint: true,
             spawn_agent_usage_hint_text: None,
             max_concurrent_threads_per_session: None,
+            wait_agent_min_timeout_ms: None,
             default_mode_request_user_input: include_default_mode_request_user_input,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
@@ -267,6 +269,14 @@ impl ToolsConfig {
         max_concurrent_threads_per_session: Option<usize>,
     ) -> Self {
         self.max_concurrent_threads_per_session = max_concurrent_threads_per_session;
+        self
+    }
+
+    pub fn with_wait_agent_min_timeout_ms(
+        mut self,
+        wait_agent_min_timeout_ms: Option<i64>,
+    ) -> Self {
+        self.wait_agent_min_timeout_ms = wait_agent_min_timeout_ms;
         self
     }
 

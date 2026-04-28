@@ -38,6 +38,7 @@ codex-core = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-device-key = { workspace = true }
 codex-exec-server = { workspace = true }
+codex-external-agent-sessions = { workspace = true }
 codex-features = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-otel = { workspace = true }

@@ -47,6 +47,7 @@ use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDiscoverable;
+use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
@@ -99,9 +100,12 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::config::permissions::compile_permission_profile;
+use crate::config::permissions::builtin_permission_profile;
+use crate::config::permissions::compile_permission_profile_selection;
+use crate::config::permissions::default_builtin_permission_profile_name;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
-use crate::config::permissions::network_proxy_config_from_profile_network;
+use crate::config::permissions::network_proxy_config_for_profile_selection;
+use crate::config::permissions::validate_user_permission_profile_names;
 use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
@@ -152,6 +156,8 @@ impl Default for GhostSnapshotConfig {
 pub(crate) const AGENTS_MD_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usize = 4;
+pub(crate) const DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
+pub(crate) const MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
@@ -318,6 +324,18 @@ impl Permissions {
     }
 }
 
+// A profile override only inherits the selected profile's proxy/allowlist config
+// when Codex is still responsible for the network policy. `Disabled` means no
+// outer sandbox, so starting the managed proxy would narrow the override.
+fn profile_allows_configured_network_proxy(permission_profile: &PermissionProfile) -> bool {
+    match permission_profile {
+        PermissionProfile::Managed { network, .. } | PermissionProfile::External { network } => {
+            network.is_enabled()
+        }
+        PermissionProfile::Disabled => false,
+    }
+}
+
 /// Configured thread persistence backend.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ThreadStoreConfig {
@@ -467,7 +485,6 @@ pub struct Config {
     /// - `always`: Always use alternate screen (original behavior).
     /// - `never`: Never use alternate screen (inline mode, preserves scrollback).
     pub tui_alternate_screen: AltScreenMode,
-
     /// Ordered list of status line item identifiers for the TUI.
     ///
     /// When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.
@@ -485,6 +502,15 @@ pub struct Config {
 
     /// Terminal resize-reflow tuning knobs.
     pub terminal_resize_reflow: TerminalResizeReflowConfig,
+
+    /// Keybinding overrides for the TUI.
+    ///
+    /// Precedence is:
+    ///
+    /// 1. context table (`tui.keymap.chat`, `tui.keymap.composer`, etc.)
+    /// 2. `tui.keymap.global`
+    /// 3. built-in defaults
+    pub tui_keymap: TuiKeymap,
 
     /// The absolute directory that should be treated as the current working
     /// directory for the session. All relative paths inside the business-logic
@@ -729,6 +755,7 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MultiAgentV2Config {
     pub max_concurrent_threads_per_session: usize,
+    pub min_wait_timeout_ms: i64,
     pub usage_hint_enabled: bool,
     pub usage_hint_text: Option<String>,
     pub root_agent_usage_hint_text: Option<String>,
@@ -741,6 +768,7 @@ impl Default for MultiAgentV2Config {
         Self {
             max_concurrent_threads_per_session:
                 DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION,
+            min_wait_timeout_ms: DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS,
             usage_hint_enabled: true,
             usage_hint_text: None,
             root_agent_usage_hint_text: None,
@@ -1614,6 +1642,10 @@ fn resolve_multi_agent_v2_config(
         .and_then(|config| config.max_concurrent_threads_per_session)
         .or_else(|| base.and_then(|config| config.max_concurrent_threads_per_session))
         .unwrap_or(default.max_concurrent_threads_per_session);
+    let min_wait_timeout_ms = profile
+        .and_then(|config| config.min_wait_timeout_ms)
+        .or_else(|| base.and_then(|config| config.min_wait_timeout_ms))
+        .unwrap_or(default.min_wait_timeout_ms);
     let usage_hint_enabled = profile
         .and_then(|config| config.usage_hint_enabled)
         .or_else(|| base.and_then(|config| config.usage_hint_enabled))
@@ -1640,6 +1672,7 @@ fn resolve_multi_agent_v2_config(
 
     MultiAgentV2Config {
         max_concurrent_threads_per_session,
+        min_wait_timeout_ms,
         usage_hint_enabled,
         usage_hint_text,
         root_agent_usage_hint_text,
@@ -1877,6 +1910,7 @@ impl Config {
             .permissions
             .as_ref()
             .is_some_and(|profiles| !profiles.is_empty());
+        validate_user_permission_profile_names(cfg.permissions.as_ref())?;
         if has_permission_profiles
             && !matches!(
                 permission_config_syntax,
@@ -1907,8 +1941,8 @@ impl Config {
         let profiles_are_active = matches!(
             permission_config_syntax,
             Some(PermissionConfigSyntax::Profiles)
-        ) || (permission_config_syntax.is_none()
-            && has_permission_profiles);
+        ) || permission_config_syntax.is_none();
+        let using_implicit_builtin_profile = permission_config_syntax.is_none();
         let (
             configured_network_proxy_config,
             permission_profile,
@@ -1917,25 +1951,22 @@ impl Config {
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
             let configured_network_proxy_config =
-                if network_sandbox_policy.is_enabled() && profiles_are_active {
-                    let permissions = cfg.permissions.as_ref().ok_or_else(|| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            "default_permissions requires a `[permissions]` table",
-                        )
-                    })?;
-                    let default_permissions = cfg.default_permissions.as_deref().ok_or_else(|| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            "default_permissions requires a named permissions profile",
-                        )
-                    })?;
-                    let profile = resolve_permission_profile(permissions, default_permissions)?;
-
+                if profile_allows_configured_network_proxy(&permission_profile)
+                    && profiles_are_active
+                {
                     // PermissionProfile carries the active network sandbox bit, not the configured
                     // proxy/allowlist policy. Keep that config so active profiles can round-trip
                     // without broadening network behavior.
-                    network_proxy_config_from_profile_network(profile.network.as_ref())
+                    let default_permissions = cfg.default_permissions.as_deref().unwrap_or_else(|| {
+                        default_builtin_permission_profile_name(
+                            &active_project,
+                            windows_sandbox_level,
+                        )
+                    });
+                    network_proxy_config_for_profile_selection(
+                        cfg.permissions.as_ref(),
+                        default_permissions,
+                    )?
                 } else {
                     NetworkProxyConfig::default()
                 };
@@ -1963,32 +1994,31 @@ impl Config {
                 file_system_sandbox_policy,
             )
         } else if profiles_are_active {
-            let permissions = cfg.permissions.as_ref().ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "default_permissions requires a `[permissions]` table",
-                )
-            })?;
-            let default_permissions = cfg.default_permissions.as_deref().ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "default_permissions requires a named permissions profile",
-                )
-            })?;
-            let profile = resolve_permission_profile(permissions, default_permissions)?;
-            let configured_network_proxy_config =
-                network_proxy_config_from_profile_network(profile.network.as_ref());
+            let default_permissions = cfg.default_permissions.as_deref().unwrap_or_else(|| {
+                default_builtin_permission_profile_name(&active_project, windows_sandbox_level)
+            });
+            let configured_network_proxy_config = network_proxy_config_for_profile_selection(
+                cfg.permissions.as_ref(),
+                default_permissions,
+            )?;
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
-                compile_permission_profile(
-                    permissions,
+                compile_permission_profile_selection(
+                    cfg.permissions.as_ref(),
                     default_permissions,
+                    cfg.sandbox_workspace_write.as_ref(),
                     resolved_cwd.as_path(),
                     &mut startup_warnings,
                 )?;
-            let mut permission_profile = PermissionProfile::from_runtime_permissions(
-                &file_system_sandbox_policy,
-                network_sandbox_policy,
-            );
+            let mut permission_profile = if let Some(permission_profile) =
+                builtin_permission_profile(default_permissions, cfg.sandbox_workspace_write.as_ref())
+            {
+                permission_profile
+            } else {
+                PermissionProfile::from_runtime_permissions(
+                    &file_system_sandbox_policy,
+                    network_sandbox_policy,
+                )
+            };
             let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
                 &permission_profile,
                 &file_system_sandbox_policy,
@@ -1996,11 +2026,17 @@ impl Config {
                 resolved_cwd.as_path(),
             );
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
-                file_system_sandbox_policy = file_system_sandbox_policy
-                    .with_additional_writable_roots(
+                file_system_sandbox_policy = if using_implicit_builtin_profile {
+                    file_system_sandbox_policy
+                        .with_additional_legacy_workspace_writable_roots(
+                            &additional_writable_roots,
+                        )
+                } else {
+                    file_system_sandbox_policy.with_additional_writable_roots(
                         resolved_cwd.as_path(),
                         &additional_writable_roots,
-                    );
+                    )
+                };
                 permission_profile = PermissionProfile::from_runtime_permissions(
                     &file_system_sandbox_policy,
                     network_sandbox_policy,
@@ -2157,6 +2193,20 @@ impl Config {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "features.multi_agent_v2.max_concurrent_threads_per_session must be at least 1",
+            ));
+        }
+        if multi_agent_v2.min_wait_timeout_ms <= 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "features.multi_agent_v2.min_wait_timeout_ms must be at least 1",
+            ));
+        }
+        if multi_agent_v2.min_wait_timeout_ms > MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "features.multi_agent_v2.min_wait_timeout_ms must be at most {MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS}"
+                ),
             ));
         }
         let agent_max_threads_from_config = cfg.agents.as_ref().and_then(|agents| agents.max_threads);
@@ -2682,6 +2732,11 @@ impl Config {
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
             terminal_resize_reflow,
+            tui_keymap: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.keymap.clone())
+                .unwrap_or_default(),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);

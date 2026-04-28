@@ -504,7 +504,7 @@ async fn remote_control_start_allows_missing_auth_when_enabled() {
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
-        /*state_db*/ None,
+        Some(remote_control_state_runtime(&codex_home).await),
         auth_manager,
         transport_event_tx,
         shutdown_token.clone(),
@@ -517,6 +517,43 @@ async fn remote_control_start_allows_missing_auth_when_enabled() {
     timeout(Duration::from_millis(100), listener.accept())
         .await
         .expect_err("remote control should wait for auth before connecting");
+
+    shutdown_token.cancel();
+    timeout(Duration::from_secs(1), remote_task)
+        .await
+        .expect("remote control task should stop")
+        .expect("remote control task should join");
+}
+
+#[tokio::test]
+async fn remote_control_start_disables_remote_control_without_state_db() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let (remote_task, remote_handle) = start_remote_control(
+        remote_control_url,
+        /*state_db*/ None,
+        remote_control_auth_manager(),
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
+    )
+    .await
+    .expect("remote control should start disabled without sqlite state db");
+
+    timeout(Duration::from_millis(100), listener.accept())
+        .await
+        .expect_err("remote control should not connect without sqlite state db");
+
+    remote_handle.set_enabled(/*enabled*/ true);
+    timeout(Duration::from_millis(100), listener.accept())
+        .await
+        .expect_err("remote control should remain disabled without sqlite state db");
 
     shutdown_token.cancel();
     timeout(Duration::from_secs(1), remote_task)
@@ -1001,7 +1038,8 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
             "account_id",
             /*app_server_client_name*/ None,
         )
-        .await,
+        .await
+        .expect("persisted enrollment should load"),
         Some(persisted_enrollment)
     );
 
@@ -1231,7 +1269,8 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
             "account_id",
             /*app_server_client_name*/ None,
         )
-        .await,
+        .await
+        .expect("refreshed enrollment should load"),
         Some(refreshed_enrollment)
     );
 
