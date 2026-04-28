@@ -473,6 +473,7 @@ fn app_is_enabled_prefers_per_app_override_over_default() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                disable_tool_suggest: false,
                 destructive_enabled: None,
                 open_world_enabled: None,
                 default_tools_approval_mode: None,
@@ -816,6 +817,7 @@ fn app_tool_policy_allows_per_app_enable_when_default_is_disabled() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                disable_tool_suggest: false,
                 destructive_enabled: None,
                 open_world_enabled: None,
                 default_tools_approval_mode: None,
@@ -852,6 +854,7 @@ fn app_tool_policy_per_tool_enabled_true_overrides_app_level_disable_flags() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                disable_tool_suggest: false,
                 destructive_enabled: Some(false),
                 open_world_enabled: Some(false),
                 default_tools_approval_mode: None,
@@ -894,6 +897,7 @@ fn app_tool_policy_default_tools_enabled_true_overrides_app_level_tool_hints() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                disable_tool_suggest: false,
                 destructive_enabled: Some(false),
                 open_world_enabled: Some(false),
                 default_tools_approval_mode: None,
@@ -928,6 +932,7 @@ fn app_tool_policy_default_tools_enabled_false_overrides_app_level_tool_hints() 
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                disable_tool_suggest: false,
                 destructive_enabled: Some(true),
                 open_world_enabled: Some(true),
                 default_tools_approval_mode: Some(AppToolApproval::Approve),
@@ -964,6 +969,7 @@ fn app_tool_policy_uses_default_tools_approval_mode() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                disable_tool_suggest: false,
                 destructive_enabled: None,
                 open_world_enabled: None,
                 default_tools_approval_mode: Some(AppToolApproval::Prompt),
@@ -1002,6 +1008,7 @@ fn app_tool_policy_matches_prefix_stripped_tool_name_for_tool_config() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                disable_tool_suggest: false,
                 destructive_enabled: Some(false),
                 open_world_enabled: Some(false),
                 default_tools_approval_mode: Some(AppToolApproval::Auto),
@@ -1109,6 +1116,35 @@ discoverables = [
     assert_eq!(
         tool_suggest_connector_ids(&config).await,
         HashSet::from(["connector_2128aebfecb84f64a069897515042a44".to_string()])
+    );
+}
+
+#[tokio::test]
+async fn tool_suggest_connector_ids_exclude_disabled_tool_suggestions() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[tool_suggest]
+discoverables = [
+  { type = "connector", id = "connector_calendar" },
+  { type = "connector", id = "connector_gmail" }
+]
+
+[apps.connector_calendar]
+disable_tool_suggest = true
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+
+    assert_eq!(
+        tool_suggest_connector_ids(&config).await,
+        HashSet::from(["connector_gmail".to_string()])
     );
 }
 

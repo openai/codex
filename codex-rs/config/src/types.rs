@@ -357,6 +357,10 @@ pub struct AppConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 
+    /// When `true`, Codex does not suggest this app through `tool_suggest`.
+    #[serde(default)]
+    pub disable_tool_suggest: bool,
+
     /// Whether tools with `destructive_hint = true` are allowed for this app.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub destructive_enabled: Option<bool>,
@@ -683,6 +687,8 @@ pub use crate::skills_config::SkillsConfig;
 pub struct PluginConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(default)]
+    pub disable_tool_suggest: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]

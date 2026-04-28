@@ -48,6 +48,7 @@ fn build_tool_suggestion_elicitation_request_uses_expected_shape() {
             request: McpServerElicitationRequest::Form {
                 meta: Some(json!(ToolSuggestMeta {
                     codex_approval_kind: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
+                    persist: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE,
                     tool_type: DiscoverableToolType::Connector,
                     suggest_type: DiscoverableToolAction::Install,
                     suggest_reason: "Plan and reference events from your calendar",
@@ -104,6 +105,7 @@ fn build_tool_suggestion_elicitation_request_for_plugin_omits_install_url() {
             request: McpServerElicitationRequest::Form {
                 meta: Some(json!(ToolSuggestMeta {
                     codex_approval_kind: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
+                    persist: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE,
                     tool_type: DiscoverableToolType::Plugin,
                     suggest_type: DiscoverableToolAction::Install,
                     suggest_reason: "Use the sample plugin's skills and MCP server",
@@ -138,6 +140,7 @@ fn build_tool_suggestion_meta_uses_expected_shape() {
         meta,
         ToolSuggestMeta {
             codex_approval_kind: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
+            persist: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE,
             tool_type: DiscoverableToolType::Connector,
             suggest_type: DiscoverableToolAction::Install,
             suggest_reason: "Find and reference emails from your inbox",

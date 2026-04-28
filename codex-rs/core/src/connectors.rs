@@ -419,6 +419,7 @@ async fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
             .filter(|discoverable| discoverable.kind == ToolSuggestDiscoverableType::Connector)
             .map(|discoverable| discoverable.id.clone()),
     );
+    connector_ids.retain(|connector_id| !app_tool_suggest_disabled(config, connector_id));
     connector_ids
 }
 
@@ -646,6 +647,12 @@ fn app_is_enabled(apps_config: &AppsConfigToml, connector_id: Option<&str>) -> b
         .and_then(|connector_id| apps_config.apps.get(connector_id))
         .map(|app| app.enabled)
         .unwrap_or(default_enabled)
+}
+
+fn app_tool_suggest_disabled(config: &Config, connector_id: &str) -> bool {
+    read_user_apps_config(config)
+        .and_then(|apps_config| apps_config.apps.get(connector_id).cloned())
+        .is_some_and(|app| app.disable_tool_suggest)
 }
 
 fn app_tool_policy_from_apps_config(

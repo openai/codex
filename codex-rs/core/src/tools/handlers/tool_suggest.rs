@@ -3,9 +3,12 @@ use std::collections::HashSet;
 use codex_app_server_protocol::AppInfo;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_rmcp_client::ElicitationAction;
+use codex_rmcp_client::ElicitationResponse;
 use codex_tools::DiscoverableTool;
 use codex_tools::DiscoverableToolAction;
 use codex_tools::DiscoverableToolType;
+use codex_tools::TOOL_SUGGEST_PERSIST_ALWAYS_VALUE;
+use codex_tools::TOOL_SUGGEST_PERSIST_KEY;
 use codex_tools::TOOL_SUGGEST_TOOL_NAME;
 use codex_tools::ToolSuggestArgs;
 use codex_tools::ToolSuggestResult;
@@ -14,8 +17,12 @@ use codex_tools::build_tool_suggestion_elicitation_request;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use codex_tools::verified_connector_suggestion_completed;
 use rmcp::model::RequestId;
+use serde_json::Value;
+use toml_edit::value;
 use tracing::warn;
 
+use crate::config::edit::ConfigEdit;
+use crate::config::edit::ConfigEditsBuilder;
 use crate::connectors;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
@@ -123,6 +130,9 @@ impl ToolHandler for ToolSuggestHandler {
         let response = session
             .request_mcp_server_elicitation(turn.as_ref(), request_id, params)
             .await;
+        if let Some(response) = response.as_ref() {
+            maybe_persist_tool_suggest_disable(&session, &turn, &tool, response).await;
+        }
         let user_confirmed = response
             .as_ref()
             .is_some_and(|response| response.action == ElicitationAction::Accept);
@@ -155,6 +165,64 @@ impl ToolHandler for ToolSuggestHandler {
         })?;
 
         Ok(FunctionToolOutput::from_text(content, Some(true)))
+    }
+}
+
+async fn maybe_persist_tool_suggest_disable(
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
+    tool: &DiscoverableTool,
+    response: &ElicitationResponse,
+) {
+    if !tool_suggest_response_persists_always(response) {
+        return;
+    }
+
+    if let Err(err) = persist_tool_suggest_disable(&turn.config.codex_home, tool).await {
+        warn!(
+            error = %err,
+            tool_id = tool.id(),
+            "failed to persist disabled tool suggestion"
+        );
+        return;
+    }
+
+    session.reload_user_config_layer().await;
+}
+
+fn tool_suggest_response_persists_always(response: &ElicitationResponse) -> bool {
+    response
+        .meta
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|meta| meta.get(TOOL_SUGGEST_PERSIST_KEY))
+        .and_then(Value::as_str)
+        == Some(TOOL_SUGGEST_PERSIST_ALWAYS_VALUE)
+}
+
+async fn persist_tool_suggest_disable(
+    codex_home: &codex_utils_absolute_path::AbsolutePathBuf,
+    tool: &DiscoverableTool,
+) -> anyhow::Result<()> {
+    ConfigEditsBuilder::new(codex_home)
+        .with_edits([tool_suggest_disable_edit(tool)])
+        .apply()
+        .await
+}
+
+fn tool_suggest_disable_edit(tool: &DiscoverableTool) -> ConfigEdit {
+    let (root, tool_id) = match tool {
+        DiscoverableTool::Connector(connector) => ("apps", connector.id.as_str()),
+        DiscoverableTool::Plugin(plugin) => ("plugins", plugin.id.as_str()),
+    };
+
+    ConfigEdit::SetPath {
+        segments: vec![
+            root.to_string(),
+            tool_id.to_string(),
+            "disable_tool_suggest".to_string(),
+        ],
+        value: value(true),
     }
 }
 

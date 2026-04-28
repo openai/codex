@@ -5518,6 +5518,10 @@
               "null"
             ]
           },
+          "disable_tool_suggest": {
+            "default": false,
+            "type": "boolean"
+          },
           "enabled": {
             "default": true,
             "type": "boolean"

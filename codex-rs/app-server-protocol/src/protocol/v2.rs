@@ -787,6 +787,8 @@ pub struct AppToolsConfig {
 pub struct AppConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(default)]
+    pub disable_tool_suggest: bool,
     pub destructive_enabled: Option<bool>,
     pub open_world_enabled: Option<bool>,
     pub default_tools_approval_mode: Option<AppToolApproval>,
