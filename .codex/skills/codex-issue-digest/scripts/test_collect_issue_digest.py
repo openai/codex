@@ -51,6 +51,77 @@ def test_normalize_requested_labels_accepts_all_area_phrases():
     )
 
 
+def test_search_issue_numbers_requests_updated_sort(monkeypatch):
+    calls = []
+
+    def fake_gh_json(args):
+        calls.append(args)
+        return {
+            "items": [
+                {"number": 1, "updated_at": "2026-04-25T00:00:00Z"},
+            ]
+        }
+
+    monkeypatch.setattr(collect_issue_digest, "gh_json", fake_gh_json)
+
+    assert collect_issue_digest.search_issue_numbers(["query"], limit=10) == [1]
+    assert "-f" in calls[0]
+    assert "sort=updated" in calls[0]
+    assert "order=desc" in calls[0]
+
+
+def test_search_issue_numbers_applies_limit_per_query(monkeypatch):
+    calls = []
+
+    def fake_gh_json(args):
+        calls.append(args)
+        query = next(
+            value.removeprefix("q=") for value in args if value.startswith("q=")
+        )
+        page = int(
+            next(
+                value.removeprefix("page=")
+                for value in args
+                if value.startswith("page=")
+            )
+        )
+        base = 10_000 if query == "first" else 20_000
+        offset = (page - 1) * 100
+        return {
+            "items": [
+                {
+                    "number": base + offset + idx,
+                    "updated_at": f"2026-04-25T00:{idx:02d}:00Z",
+                }
+                for idx in range(100)
+            ]
+        }
+
+    monkeypatch.setattr(collect_issue_digest, "gh_json", fake_gh_json)
+
+    collect_issue_digest.search_issue_numbers(["first", "second"], limit=150)
+
+    queried_pages = [
+        (
+            next(
+                value.removeprefix("q=") for value in args if value.startswith("q=")
+            ),
+            next(
+                value.removeprefix("page=")
+                for value in args
+                if value.startswith("page=")
+            ),
+        )
+        for args in calls
+    ]
+    assert queried_pages == [
+        ("first", "1"),
+        ("first", "2"),
+        ("second", "1"),
+        ("second", "2"),
+    ]
+
+
 def test_summarize_issue_keeps_new_comments_and_reaction_signals():
     since = collect_issue_digest.parse_timestamp("2026-04-25T00:00:00Z", "--since")
     until = collect_issue_digest.parse_timestamp("2026-04-26T00:00:00Z", "--until")
