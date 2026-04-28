@@ -18,6 +18,7 @@ use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
 use codex_windows_sandbox::ensure_allow_write_aces;
 use codex_windows_sandbox::extract_setup_failure;
 use codex_windows_sandbox::hide_newly_created_users;
+use codex_windows_sandbox::install_wfp_filters;
 use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
@@ -64,6 +65,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 
 const DENY_ACCESS: i32 = 3;
+const DEFAULT_ANALYTICS_ENABLED: bool = false;
 
 mod read_acl_mutex;
 mod sandbox_users;
@@ -88,6 +90,8 @@ struct Payload {
     proxy_ports: Vec<u16>,
     #[serde(default)]
     allow_local_binding: bool,
+    #[serde(default = "default_analytics_enabled")]
+    analytics_enabled: bool,
     real_user: String,
     #[serde(default)]
     mode: SetupMode,
@@ -101,6 +105,10 @@ enum SetupMode {
     #[default]
     Full,
     ReadAclsOnly,
+}
+
+fn default_analytics_enabled() -> bool {
+    DEFAULT_ANALYTICS_ENABLED
 }
 
 fn log_line(log: &mut File, msg: &str) -> Result<()> {
@@ -601,6 +609,14 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                 format!("ensure offline outbound block failed: {err}"),
             )));
         }
+        install_wfp_filters(
+            &payload.codex_home,
+            &payload.offline_username,
+            payload.analytics_enabled,
+            |message| {
+                let _ = log_line(log, message);
+            },
+        );
     }
 
     if payload.read_roots.is_empty() {
@@ -896,4 +912,41 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     }
     log_note("setup binary completed", Some(sbx_dir));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Payload;
+    use super::SETUP_VERSION;
+    use serde_json::json;
+
+    fn payload_json() -> serde_json::Value {
+        json!({
+            "version": SETUP_VERSION,
+            "offline_username": "CodexSandboxOffline",
+            "online_username": "CodexSandboxOnline",
+            "codex_home": "C:\\codex-home",
+            "command_cwd": "C:\\workspace",
+            "read_roots": [],
+            "write_roots": [],
+            "proxy_ports": [],
+            "real_user": "User",
+        })
+    }
+
+    #[test]
+    fn payload_defaults_analytics_disabled() {
+        let payload: Payload = serde_json::from_value(payload_json()).expect("payload");
+
+        assert!(!payload.analytics_enabled);
+    }
+
+    #[test]
+    fn payload_accepts_analytics_enabled() {
+        let mut payload = payload_json();
+        payload["analytics_enabled"] = json!(true);
+        let payload: Payload = serde_json::from_value(payload).expect("payload");
+
+        assert!(payload.analytics_enabled);
+    }
 }

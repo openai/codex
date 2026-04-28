@@ -27,6 +27,8 @@ windows_modules!(
     policy,
     process,
     token,
+    wfp,
+    wfp_setup,
     winutil,
     workspace_acl
 );
@@ -210,6 +212,10 @@ pub use token::create_readonly_token_with_caps_from;
 pub use token::create_workspace_write_token_with_caps_from;
 #[cfg(target_os = "windows")]
 pub use token::get_current_token_for_restriction;
+#[cfg(target_os = "windows")]
+pub use wfp::install_wfp_filters_for_account;
+#[cfg(target_os = "windows")]
+pub use wfp_setup::install_wfp_filters;
 #[cfg(target_os = "windows")]
 pub use windows_impl::CaptureResult;
 #[cfg(target_os = "windows")]
