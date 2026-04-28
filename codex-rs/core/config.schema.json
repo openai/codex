@@ -1114,6 +1114,13 @@
           "format": "int64",
           "type": "integer"
         },
+        "min_rate_limit_remaining_percent": {
+          "description": "Minimum remaining percentage required in Codex rate-limit windows before memory startup runs.",
+          "format": "int64",
+          "maximum": 100.0,
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "min_rollout_idle_hours": {
           "description": "Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.",
           "format": "int64",

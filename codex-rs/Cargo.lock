@@ -2957,6 +2957,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "codex-backend-client",
  "codex-config",
  "codex-core",
  "codex-features",

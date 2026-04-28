@@ -1,3 +1,4 @@
+use crate::guard;
 use crate::phase1;
 use crate::phase2;
 use crate::runtime::MemoryStartupContext;
@@ -10,6 +11,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use std::sync::Arc;
 use tracing::warn;
+
+const MEMORY_STARTUP: &str = "codex.memory.startup";
 
 /// Starts the asynchronous startup memory pipeline for an eligible root session.
 ///
@@ -32,7 +35,7 @@ pub fn start_memories_startup_task(
 
     let context = Arc::new(MemoryStartupContext::new(
         thread_manager,
-        auth_manager,
+        Arc::clone(&auth_manager),
         thread_id,
         thread,
         config.as_ref(),
@@ -45,6 +48,15 @@ pub fn start_memories_startup_task(
     }
 
     tokio::spawn(async move {
+        if !guard::rate_limits_ok(&auth_manager, &config).await {
+            context.counter(
+                MEMORY_STARTUP,
+                /*inc*/ 1,
+                &[("status", "skipped_rate_limit")],
+            );
+            return;
+        }
+
         // Clean memories to make preserve DB size
         phase1::prune(context.as_ref(), &config).await;
         // Run phase 1.

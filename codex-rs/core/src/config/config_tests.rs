@@ -266,6 +266,7 @@ max_unused_days = 21
 max_rollout_age_days = 42
 max_rollouts_per_startup = 9
 min_rollout_idle_hours = 24
+min_rate_limit_remaining_percent = 12
 extract_model = "gpt-5-mini"
 consolidation_model = "gpt-5.2"
 "#;
@@ -281,6 +282,7 @@ consolidation_model = "gpt-5.2"
             max_rollout_age_days: Some(42),
             max_rollouts_per_startup: Some(9),
             min_rollout_idle_hours: Some(24),
+            min_rate_limit_remaining_percent: Some(12),
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5.2".to_string()),
         }),
@@ -305,6 +307,7 @@ consolidation_model = "gpt-5.2"
             max_rollout_age_days: 42,
             max_rollouts_per_startup: 9,
             min_rollout_idle_hours: 24,
+            min_rate_limit_remaining_percent: 12,
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5.2".to_string()),
         }

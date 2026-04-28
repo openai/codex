@@ -6,6 +6,7 @@
 
 mod control;
 mod extensions;
+mod guard;
 mod phase1;
 mod phase2;
 mod prompts;
