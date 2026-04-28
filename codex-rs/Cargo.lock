@@ -2686,7 +2686,9 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-protocol",
  "codex-utils-output-truncation",
+ "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 

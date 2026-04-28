@@ -1,4 +1,4 @@
-use super::now_unix_seconds;
+use crate::now_unix_seconds;
 use codex_protocol::ThreadId;
 use serde::Deserialize;
 use serde::Serialize;
@@ -24,14 +24,14 @@ struct ImportedExternalAgentSessionRecord {
     imported_at: i64,
 }
 
-pub(crate) fn has_current_session_been_imported(
+pub fn has_current_session_been_imported(
     codex_home: &Path,
     source_path: &Path,
 ) -> io::Result<bool> {
     load_import_ledger(codex_home)?.contains_current_source(source_path)
 }
 
-pub(crate) fn record_imported_session(
+pub fn record_imported_session(
     codex_home: &Path,
     source_path: &Path,
     imported_thread_id: ThreadId,

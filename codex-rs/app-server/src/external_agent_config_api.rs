@@ -3,8 +3,6 @@ use crate::config::external_agent_config::ExternalAgentConfigMigrationItem as Co
 use crate::config::external_agent_config::ExternalAgentConfigMigrationItemType as CoreMigrationItemType;
 use crate::config::external_agent_config::ExternalAgentConfigService;
 use crate::config::external_agent_config::PendingPluginImport;
-use crate::config::external_agent_sessions::has_current_session_been_imported;
-use crate::config::external_agent_sessions::record_imported_session;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_params;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
@@ -17,7 +15,9 @@ use codex_app_server_protocol::MigrationDetails;
 use codex_app_server_protocol::PluginsMigration;
 use codex_external_agent_sessions::ExternalAgentSessionMigration as CoreSessionMigration;
 use codex_external_agent_sessions::ImportedExternalAgentSession;
+use codex_external_agent_sessions::has_current_session_been_imported;
 use codex_external_agent_sessions::load_session_for_import;
+use codex_external_agent_sessions::record_imported_session;
 use codex_protocol::ThreadId;
 use std::collections::HashSet;
 use std::path::PathBuf;

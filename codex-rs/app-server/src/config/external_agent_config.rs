@@ -1,4 +1,3 @@
-use crate::config::external_agent_sessions::detect_recent_sessions;
 use codex_config::types::PluginConfig;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -11,6 +10,7 @@ use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
 use codex_core_plugins::marketplace_add::add_marketplace;
 use codex_core_plugins::marketplace_add::is_local_marketplace_source;
 use codex_external_agent_sessions::ExternalAgentSessionMigration;
+use codex_external_agent_sessions::detect_recent_sessions;
 use codex_protocol::protocol::Product;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;

@@ -1,12 +1,17 @@
 //! Parsing and export helpers for external-agent session histories.
 
+mod detect;
 mod export;
+mod ledger;
 mod records;
 
 use codex_protocol::protocol::RolloutItem;
 use std::path::PathBuf;
 
+pub use detect::detect_recent_sessions;
 pub use export::load_session_for_import;
+pub use ledger::has_current_session_been_imported;
+pub use ledger::record_imported_session;
 pub use records::SessionSummary;
 pub use records::summarize_session;
 
@@ -53,4 +58,11 @@ fn truncate(text: &str, max_len: usize) -> String {
         .take(max_len.saturating_sub(3))
         .collect::<String>();
     format!("{prefix}...")
+}
+
+fn now_unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default()
 }

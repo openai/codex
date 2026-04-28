@@ -1,7 +1,7 @@
-use super::ledger::load_import_ledger;
-use super::now_unix_seconds;
-use codex_external_agent_sessions::ExternalAgentSessionMigration;
-use codex_external_agent_sessions::summarize_session;
+use crate::ExternalAgentSessionMigration;
+use crate::ledger::load_import_ledger;
+use crate::now_unix_seconds;
+use crate::summarize_session;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -16,7 +16,7 @@ struct SessionCandidate {
     migration: ExternalAgentSessionMigration,
 }
 
-pub(crate) fn detect_recent_sessions(
+pub fn detect_recent_sessions(
     external_agent_home: &Path,
     codex_home: &Path,
 ) -> io::Result<Vec<ExternalAgentSessionMigration>> {
@@ -90,7 +90,7 @@ fn is_recent_enough(now: i64, latest_timestamp: i64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::external_agent_sessions::ledger::record_imported_session;
+    use crate::ledger::record_imported_session;
     use codex_protocol::ThreadId;
     use serde_json::Value as JsonValue;
     use std::path::Path;
