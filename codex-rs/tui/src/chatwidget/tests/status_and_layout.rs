@@ -960,6 +960,7 @@ async fn idle_commit_ticks_do_not_restore_status_without_commentary_completion()
 #[tokio::test]
 async fn final_answer_completion_restores_status_indicator_for_pending_steer() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
 
     chat.on_task_started();
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
