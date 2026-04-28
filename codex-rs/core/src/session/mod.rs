@@ -168,7 +168,6 @@ use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
-use crate::config::GhostSnapshotConfig;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
@@ -290,10 +289,7 @@ use crate::state::SessionState;
 use crate::stream_events_utils::HandleOutputCtx;
 #[cfg(test)]
 use crate::stream_events_utils::handle_output_item_done;
-use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
-use crate::tasks::SessionTask;
-use crate::tasks::SessionTaskContext;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::network_approval::build_blocked_request_observer;
 use crate::tools::network_approval::build_network_policy_decider;
@@ -359,7 +355,6 @@ use codex_protocol::user_input::UserInput;
 use codex_tools::ToolsConfig;
 use codex_tools::ToolsConfigParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
 #[cfg(test)]
 use codex_utils_stream_parser::ProposedPlanSegment;
@@ -2940,34 +2935,6 @@ impl Session {
         self.send_event(turn_context, event).await;
     }
 
-    async fn maybe_start_ghost_snapshot(
-        self: &Arc<Self>,
-        turn_context: Arc<TurnContext>,
-        cancellation_token: CancellationToken,
-    ) {
-        if !self.enabled(Feature::GhostCommit) {
-            return;
-        }
-        let token = match turn_context.tool_call_gate.subscribe().await {
-            Ok(token) => token,
-            Err(err) => {
-                warn!("failed to subscribe to ghost snapshot readiness: {err}");
-                return;
-            }
-        };
-
-        info!("spawning ghost snapshot task");
-        let task = GhostSnapshotTask::new(token);
-        Arc::new(task)
-            .run(
-                Arc::new(SessionTaskContext::new(self.clone())),
-                turn_context.clone(),
-                Vec::new(),
-                cancellation_token,
-            )
-            .await;
-    }
-
     /// Inject additional user input into the currently active turn.
     ///
     /// Returns the active turn id when accepted.
@@ -3351,7 +3318,7 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
         .collect()
 }
 
-use crate::memories::prompts::build_memory_tool_developer_instructions;
+use codex_memories_read::build_memory_tool_developer_instructions;
 
 #[cfg(test)]
 pub(crate) mod tests;

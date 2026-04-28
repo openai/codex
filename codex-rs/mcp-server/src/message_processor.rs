@@ -49,7 +49,7 @@ pub(crate) struct MessageProcessor {
 impl MessageProcessor {
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
-    pub(crate) fn new(
+    pub(crate) async fn new(
         outgoing: OutgoingMessageSender,
         arg0_paths: Arg0DispatchPaths,
         config: Arc<Config>,
@@ -59,7 +59,8 @@ impl MessageProcessor {
         let auth_manager = AuthManager::shared_from_config(
             config.as_ref(),
             /*enable_codex_api_key_env*/ false,
-        );
+        )
+        .await;
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager,

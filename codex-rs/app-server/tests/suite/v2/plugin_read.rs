@@ -161,7 +161,7 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     )?;
 
     let detail_body = r#"{
-  "id": "plugins~Plugin_linear",
+  "id": "plugins~Plugin_00000000000000000000000000000000",
   "name": "linear",
   "scope": "GLOBAL",
   "installation_policy": "AVAILABLE",
@@ -192,7 +192,7 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     let installed_body = r#"{
   "plugins": [
     {
-      "id": "plugins~Plugin_linear",
+      "id": "plugins~Plugin_00000000000000000000000000000000",
       "name": "linear",
       "scope": "GLOBAL",
       "installation_policy": "AVAILABLE",
@@ -230,7 +230,9 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
 }"#;
 
     Mock::given(method("GET"))
-        .and(path("/backend-api/ps/plugins/plugins~Plugin_linear"))
+        .and(path(
+            "/backend-api/ps/plugins/plugins~Plugin_00000000000000000000000000000000",
+        ))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(ResponseTemplate::new(200).set_body_string(detail_body))
@@ -252,7 +254,7 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
         .send_plugin_read_request(PluginReadParams {
             marketplace_path: None,
             remote_marketplace_name: Some("chatgpt-global".to_string()),
-            plugin_name: "plugins~Plugin_linear".to_string(),
+            plugin_name: "plugins~Plugin_00000000000000000000000000000000".to_string(),
         })
         .await?;
 
@@ -266,7 +268,10 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     assert_eq!(response.plugin.marketplace_name, "chatgpt-global");
     assert_eq!(response.plugin.marketplace_path, None);
     assert_eq!(response.plugin.summary.source, PluginSource::Remote);
-    assert_eq!(response.plugin.summary.id, "plugins~Plugin_linear");
+    assert_eq!(
+        response.plugin.summary.id,
+        "plugins~Plugin_00000000000000000000000000000000"
+    );
     assert_eq!(response.plugin.summary.name, "linear");
     assert_eq!(response.plugin.summary.installed, true);
     assert_eq!(response.plugin.summary.enabled, false);

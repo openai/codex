@@ -105,6 +105,7 @@ axum = { workspace = true, default-features = false, features = [
 core_test_support = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
+flate2 = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
@@ -115,6 +116,7 @@ rmcp = { workspace = true, default-features = false, features = [
     "transport-streamable-http-server",
 ] }
 serial_test = { workspace = true }
+tar = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 wiremock = { workspace = true }

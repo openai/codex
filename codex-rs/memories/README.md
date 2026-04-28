@@ -1,16 +1,28 @@
-# Memories Pipeline (Core)
+# Memories
 
-This module runs a startup memory pipeline for eligible sessions.
+This directory owns reusable memory crates and the memory pipeline documentation.
+
+Runtime orchestration for Phase 1 and Phase 2 still lives in `codex-core` under
+`codex-rs/core/src/memories/`.
+
+## Crates
+
+- `codex-rs/memories/read` (`codex-memories-read`) owns the read path:
+  memory developer-instruction injection, memory citation parsing, and
+  read-usage telemetry classification.
+- `codex-rs/memories/write` (`codex-memories-write`) owns the write path:
+  Phase 1 and Phase 2 prompt rendering, filesystem artifact helpers,
+  workspace diff helpers, and extension resource pruning.
 
 ## Prompt Templates
 
-Memory prompt templates live under `codex-rs/core/templates/memories/`.
+Memory prompt templates live with the crate that uses them:
 
 - The undated template files are the canonical latest versions used at runtime:
-  - `stage_one_system.md`
-  - `stage_one_input.md`
-  - `consolidation.md`
-  - `read_path.md`
+  - `read/templates/memories/read_path.md`
+  - `write/templates/memories/stage_one_system.md`
+  - `write/templates/memories/stage_one_input.md`
+  - `write/templates/memories/consolidation.md`
 - In `codex`, edit those undated template files in place.
 - The dated snapshot-copy workflow is used in the separate `openai/project/agent_memory/write` harness repo, not here.
 
@@ -70,7 +82,8 @@ Phase 2 consolidates the latest stage-1 outputs into the filesystem memory artif
 
 What it does:
 
-- claims a single global phase-2 job (so only one consolidation runs at a time)
+- claims a single global phase-2 lock before touching the memories root (so only one consolidation
+  inspects or mutates the workspace at a time)
 - loads a bounded set of stage-1 outputs from the state DB using phase-2
   selection rules:
   - ignores memories whose `last_usage` falls outside the configured
@@ -82,53 +95,58 @@ What it does:
 - computes a completion watermark from the claimed watermark + newest input timestamps
 - syncs local memory artifacts under the memories root:
   - `raw_memories.md` (merged raw memories, latest first)
-  - `rollout_summaries/` (one summary file per retained rollout)
-- prunes stale rollout summaries that are no longer retained
-- finds old resource files from memory extensions under
-  `memories_extensions/<extension>/resources/` for extension directories that
-  have an `instructions.md`, using the memory module retention window
-- if there are no Phase 1 inputs or old extension resources, marks the job
-  successful and exits
+  - `rollout_summaries/` (one summary file per selected rollout)
+- keeps the memories root itself as a git-baseline directory, initialized under
+  `~/.codex/memories/.git` by `codex-git-utils`
+- prunes stale rollout summaries that are no longer selected
+- prunes memory extension resource files older than the extension retention
+  window, so cleanup appears in the workspace diff
+- writes `phase2_workspace_diff.md` in the memories root with the git-style diff
+  from the previous successful Phase 2 baseline to the current worktree
+- if the memory workspace has no changes after artifact sync/pruning, marks the
+  job successful and exits
 
-If there is input, it then:
+If the memory workspace has changes, it then:
 
 - spawns an internal consolidation sub-agent
-- builds the Phase 2 prompt with a diff of the current Phase 1 input
-  selection versus the last successful Phase 2 selection (`added`,
-  `retained`, `removed`)
-- includes old extension resource paths in the prompt diff
+- builds the Phase 2 prompt with the path to the generated workspace diff
+- points the agent at `phase2_workspace_diff.md` for the detailed diff context
 - runs it with no approvals, no network, and local write access only
 - disables collab for that agent (to prevent recursive delegation)
 - watches the agent status and heartbeats the global job lease while it runs
+- resets the memory git baseline after the agent completes successfully; the
+  generated diff file is removed before this reset so deleted content is not
+  kept in the prompt artifact or unreachable git objects
 - marks the phase-2 job success/failure in the state DB when the agent finishes
-- prunes old extension resource files after the consolidation agent completes
-  and the successful Phase 2 job is recorded
 
-Selection diff behavior:
+Selection and workspace-diff behavior:
 
 - successful Phase 2 runs mark the exact stage-1 snapshots they consumed with
   `selected_for_phase2 = 1` and persist the matching
   `selected_for_phase2_source_updated_at`
 - Phase 1 upserts preserve the previous `selected_for_phase2` baseline until
   the next successful Phase 2 run rewrites it
-- the next Phase 2 run compares the current top-N stage-1 inputs against that
-  prior snapshot selection to label inputs as `added` or `retained`; a
-  refreshed thread stays `added` until Phase 2 successfully selects its newer
-  snapshot
-- rows that were previously selected but still exist outside the current top-N
-  selection are surfaced as `removed`
-- before the agent starts, local `rollout_summaries/` and `raw_memories.md`
-  keep the union of the current selection and the previous successful
-  selection, so removed-thread evidence stays available during forgetting
+- Phase 2 loads only the current top-N selected stage-1 inputs, syncs
+  `rollout_summaries/` and `raw_memories.md` directly to that selection, then
+  lets the git-style workspace diff surface additions, modifications, and
+  deletions against the previous successful memory baseline
+- when the selected input set is empty, stale `rollout_summaries/` files are
+  removed and `raw_memories.md` is rewritten to the empty-input placeholder;
+  consolidated outputs such as `MEMORY.md`, `memory_summary.md`, and `skills/`
+  are left for the agent to update
 
 Watermark behavior:
 
-- The global phase-2 job claim includes an input watermark representing the latest input timestamp known when the job was claimed.
+- The global phase-2 lock does not use DB watermarks as a dirty check; git
+  workspace dirtiness decides whether an agent needs to run.
+- The global phase-2 job row still tracks an input watermark as bookkeeping
+  for the latest DB input timestamp known when the job was claimed.
 - Phase 2 recomputes a `new_watermark` using the max of:
   - the claimed watermark
   - the newest `source_updated_at` timestamp in the stage-1 inputs it actually loaded
 - On success, Phase 2 stores that completion watermark in the DB.
-- This lets later phase-2 runs know whether new stage-1 data arrived since the last successful consolidation (dirty vs not dirty), while also avoiding moving the watermark backwards.
+- This avoids moving the recorded completion watermark backwards, but does not
+  decide whether Phase 2 has work.
 
 In practice, this phase is responsible for refreshing the on-disk memory workspace and producing/updating the higher-level consolidated memory outputs.
 

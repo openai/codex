@@ -110,6 +110,13 @@ pub enum RawTraceEventPayload {
         /// Partial response payload, when stream events arrived before failure.
         partial_response_payload: Option<RawPayloadRef>,
     },
+    InferenceCancelled {
+        inference_call_id: InferenceCallId,
+        /// Why Codex stopped consuming the provider stream before a terminal response event.
+        reason: String,
+        /// Completed output items observed before cancellation, if any.
+        partial_response_payload: Option<RawPayloadRef>,
+    },
     ToolCallStarted {
         tool_call_id: ToolCallId,
         /// Protocol/model call ID when this runtime call came from model output.
@@ -250,6 +257,10 @@ impl RawTraceEventPayload {
                 ..
             } => vec![request_payload],
             RawTraceEventPayload::InferenceFailed {
+                partial_response_payload,
+                ..
+            }
+            | RawTraceEventPayload::InferenceCancelled {
                 partial_response_payload,
                 ..
             }

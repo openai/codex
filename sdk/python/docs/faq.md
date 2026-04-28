@@ -60,22 +60,27 @@ Common causes:
 - incompatible/old app-server
 
 Maintainers stage releases by building the SDK once and the runtime once per
-platform with the same pinned runtime version. Publish `openai-codex-cli-bin` as
-platform wheels only; do not publish an sdist:
+platform with the same pinned runtime version. Publish `openai-codex-cli-bin`
+as platform wheels only; do not publish an sdist:
 
 ```bash
 cd sdk/python
 python scripts/update_sdk_artifacts.py generate-types
 python scripts/update_sdk_artifacts.py \
   stage-sdk \
-  /tmp/codex-python-release/codex-app-server-sdk \
-  --runtime-version 1.2.3
+  /tmp/codex-python-release/openai-codex-app-server-sdk \
+  --codex-version <codex-release-tag-or-pep440-version>
 python scripts/update_sdk_artifacts.py \
   stage-runtime \
   /tmp/codex-python-release/openai-codex-cli-bin \
   /path/to/codex \
-  --runtime-version 1.2.3
+  --codex-version <codex-release-tag-or-pep440-version>
 ```
+
+If you are packaging a binary for a different target than the Python build
+host, pass `--platform-tag ...` to `stage-runtime`. The intended one-off matrix
+is `macosx_11_0_arm64`, `macosx_10_9_x86_64`, `musllinux_1_1_aarch64`,
+`musllinux_1_1_x86_64`, `win_arm64`, and `win_amd64`.
 
 ## Why does a turn "hang"?
 

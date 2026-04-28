@@ -47,13 +47,24 @@ pub struct ThreadConfigSnapshot {
     pub service_tier: Option<ServiceTier>,
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
-    pub sandbox_policy: SandboxPolicy,
     pub permission_profile: PermissionProfile,
     pub cwd: AbsolutePathBuf,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub personality: Option<Personality>,
     pub session_source: SessionSource,
+}
+
+impl ThreadConfigSnapshot {
+    pub fn sandbox_policy(&self) -> SandboxPolicy {
+        let file_system_sandbox_policy = self.permission_profile.file_system_sandbox_policy();
+        codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
+            &self.permission_profile,
+            &file_system_sandbox_policy,
+            self.permission_profile.network_sandbox_policy(),
+            self.cwd.as_path(),
+        )
+    }
 }
 
 /// Turn context overrides that app-server validates before starting a turn.

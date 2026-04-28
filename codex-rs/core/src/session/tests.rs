@@ -1548,17 +1548,12 @@ async fn session_configured_reports_permission_profile_for_external_sandbox() ->
 
     let test = builder.build(&server).await?;
 
-    assert_eq!(
-        test.session_configured.sandbox_policy,
-        expected_sandbox_policy
-    );
     let expected_permission_profile =
         codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
             &expected_sandbox_policy,
         );
     assert_eq!(
-        test.session_configured.permission_profile,
-        Some(expected_permission_profile),
+        test.session_configured.permission_profile, expected_permission_profile,
         "ExternalSandbox is represented explicitly instead of as a lossy root-write profile"
     );
     Ok(())
@@ -2895,7 +2890,7 @@ async fn session_configuration_apply_preserves_profile_file_system_policy_on_cwd
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Write,
         },
@@ -3208,7 +3203,7 @@ async fn session_configuration_apply_preserves_absolute_cwd_write_root_on_cwd_up
         !updated
             .file_system_sandbox_policy()
             .can_write_path_with_cwd(next_cwd.as_path(), updated.cwd.as_path()),
-        "cwd-only update must not reinterpret an absolute old-cwd grant as :cwd"
+        "cwd-only update must not reinterpret an absolute old-cwd grant as :project_roots"
     );
 }
 
@@ -3871,7 +3866,7 @@ async fn request_permissions_response_materializes_session_cwd_grants_before_rec
         file_system: Some(FileSystemPermissions {
             entries: vec![FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             }],
@@ -4495,6 +4490,41 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
     assert_ne!(
         task_context.span().span_context().span_id(),
         dispatch_span_id
+    );
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
+    let (mut session, _turn_context) = make_session_and_context().await;
+    let store = Arc::new(codex_thread_store::InMemoryThreadStore::default());
+    let thread_store: Arc<dyn codex_thread_store::ThreadStore> = store.clone();
+    let live_thread = LiveThread::create(
+        Arc::clone(&thread_store),
+        CreateThreadParams {
+            thread_id: session.conversation_id,
+            forked_from_id: None,
+            source: SessionSource::Exec,
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            event_persistence_mode: ThreadEventPersistenceMode::Limited,
+        },
+    )
+    .await
+    .expect("create thread persistence");
+    session.services.thread_store = thread_store;
+    session.services.live_thread = Some(live_thread);
+    let session = Arc::new(session);
+
+    assert!(handlers::shutdown(&session, "sub-1".to_string()).await);
+
+    assert_eq!(
+        codex_thread_store::InMemoryThreadStoreCalls {
+            create_thread: 1,
+            shutdown_thread: 1,
+            ..Default::default()
+        },
+        store.calls().await
     );
 }
 

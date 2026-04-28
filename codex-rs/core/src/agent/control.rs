@@ -115,7 +115,6 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
             | ResponseItem::ToolSearchOutput { .. }
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
-            | ResponseItem::GhostSnapshot { .. }
             | ResponseItem::Compaction { .. }
             | ResponseItem::Other,
         ) => false,
@@ -263,7 +262,6 @@ impl AgentControl {
                 parent_thread_id, ..
             },
         )) = notification_source.as_ref()
-            && new_thread.thread.enabled(Feature::GeneralAnalytics)
         {
             let client_metadata = match state.get_thread(*parent_thread_id).await {
                 Ok(parent_thread) => {

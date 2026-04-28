@@ -775,7 +775,10 @@ pub enum Op {
     /// model.
     SetThreadMemoryMode { mode: ThreadMemoryMode },
 
-    /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
+    /// Legacy request to undo a turn.
+    ///
+    /// The op is still accepted for compatibility, but ghost snapshots are no
+    /// longer produced so the request reports unavailable.
     Undo,
 
     /// Request Codex to drop the last N user turns from in-memory context.
@@ -3538,7 +3541,7 @@ pub struct SessionNetworkProxyRuntime {
     pub socks_addr: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Serialize, JsonSchema, TS)]
 pub struct SessionConfiguredEvent {
     pub session_id: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3566,16 +3569,8 @@ pub struct SessionConfiguredEvent {
     #[serde(default)]
     pub approvals_reviewer: ApprovalsReviewer,
 
-    /// Legacy sandbox projection for commands executed in the system.
-    ///
-    /// Consumers should prefer `permission_profile` when it is present. This
-    /// field remains available as a compatibility fallback for older emitters
-    /// and sessions that only expose legacy sandbox state.
-    pub sandbox_policy: SandboxPolicy,
-
     /// Canonical effective permissions for commands executed in the session.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permission_profile: PermissionProfile,
 
     /// Working directory that should be treated as the *root* of the
     /// session.
@@ -3604,6 +3599,70 @@ pub struct SessionConfiguredEvent {
     /// Path in which the rollout is stored. Can be `None` for ephemeral threads
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rollout_path: Option<PathBuf>,
+}
+
+impl<'de> Deserialize<'de> for SessionConfiguredEvent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Wire {
+            session_id: ThreadId,
+            forked_from_id: Option<ThreadId>,
+            #[serde(default)]
+            thread_name: Option<String>,
+            model: String,
+            model_provider_id: String,
+            service_tier: Option<ServiceTier>,
+            approval_policy: AskForApproval,
+            #[serde(default)]
+            approvals_reviewer: ApprovalsReviewer,
+            // `SessionConfiguredEvent` is persisted into rollout history. Older
+            // rollouts only have `sandbox_policy`, so accept it on deserialize
+            // and immediately project it into the canonical `permission_profile`.
+            sandbox_policy: Option<SandboxPolicy>,
+            permission_profile: Option<PermissionProfile>,
+            cwd: AbsolutePathBuf,
+            reasoning_effort: Option<ReasoningEffortConfig>,
+            history_log_id: u64,
+            history_entry_count: usize,
+            initial_messages: Option<Vec<EventMsg>>,
+            network_proxy: Option<SessionNetworkProxyRuntime>,
+            rollout_path: Option<PathBuf>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let permission_profile = match (wire.permission_profile, wire.sandbox_policy) {
+            (Some(permission_profile), _) => permission_profile,
+            (None, Some(sandbox_policy)) => PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+                &sandbox_policy,
+                wire.cwd.as_path(),
+            ),
+            (None, None) => {
+                return Err(serde::de::Error::missing_field("permission_profile"));
+            }
+        };
+
+        Ok(Self {
+            session_id: wire.session_id,
+            forked_from_id: wire.forked_from_id,
+            thread_name: wire.thread_name,
+            model: wire.model,
+            model_provider_id: wire.model_provider_id,
+            service_tier: wire.service_tier,
+            approval_policy: wire.approval_policy,
+            approvals_reviewer: wire.approvals_reviewer,
+            permission_profile,
+            cwd: wire.cwd,
+            reasoning_effort: wire.reasoning_effort,
+            history_log_id: wire.history_log_id,
+            history_entry_count: wire.history_entry_count,
+            initial_messages: wire.initial_messages,
+            network_proxy: wire.network_proxy,
+            rollout_path: wire.rollout_path,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -4397,7 +4456,7 @@ mod tests {
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             },
@@ -4459,7 +4518,7 @@ mod tests {
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             },
@@ -5085,6 +5144,7 @@ mod tests {
     fn serialize_event() -> Result<()> {
         let conversation_id = ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
         let rollout_file = NamedTempFile::new()?;
+        let permission_profile = PermissionProfile::read_only();
         let event = Event {
             id: "1234".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -5096,8 +5156,7 @@ mod tests {
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                permission_profile: None,
+                permission_profile: permission_profile.clone(),
                 cwd: test_path_buf("/home/user/project").abs(),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 history_log_id: 0,
@@ -5117,9 +5176,7 @@ mod tests {
                 "model_provider_id": "openai",
                 "approval_policy": "never",
                 "approvals_reviewer": "user",
-                "sandbox_policy": {
-                    "type": "read-only"
-                },
+                "permission_profile": permission_profile,
                 "cwd": test_path_buf("/home/user/project"),
                 "reasoning_effort": "medium",
                 "history_log_id": 0,
@@ -5128,6 +5185,28 @@ mod tests {
             }
         });
         assert_eq!(expected, serde_json::to_value(&event)?);
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_legacy_session_configured_event_uses_sandbox_policy() -> Result<()> {
+        let cwd = test_path_buf("/home/user/project");
+        let value = json!({
+            "session_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+            "model": "codex-mini-latest",
+            "model_provider_id": "openai",
+            "approval_policy": "never",
+            "approvals_reviewer": "user",
+            "sandbox_policy": {
+                "type": "read-only"
+            },
+            "cwd": cwd,
+            "history_log_id": 0,
+            "history_entry_count": 0,
+        });
+
+        let event: SessionConfiguredEvent = serde_json::from_value(value)?;
+        assert_eq!(event.permission_profile, PermissionProfile::read_only());
         Ok(())
     }
 

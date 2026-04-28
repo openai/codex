@@ -605,7 +605,8 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
         "apps tools/call should include turn metadata turn_id: {apps_tool_call:?}"
     );
 
-    let first_request_tools = tool_names(&requests[0].body_json());
+    let first_request_body = requests[0].body_json();
+    let first_request_tools = tool_names(&first_request_body);
     assert!(
         first_request_tools
             .iter()
@@ -823,7 +824,8 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
     let requests = mock.requests();
     assert_eq!(requests.len(), 3);
 
-    let first_request_tools = tool_names(&requests[0].body_json());
+    let first_request_body = requests[0].body_json();
+    let first_request_tools = tool_names(&first_request_body);
     assert!(
         first_request_tools
             .iter()
@@ -853,7 +855,8 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         })]
     );
 
-    let second_request_tools = tool_names(&requests[1].body_json());
+    let second_request_body = requests[1].body_json();
+    let second_request_tools = tool_names(&second_request_body);
     assert!(
         !second_request_tools.iter().any(|name| name == tool_name),
         "follow-up request should rely on tool_search_output history, not tool injection: {second_request_tools:?}"
@@ -870,7 +873,8 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         FunctionCallOutputPayload::from_text("dynamic-search-ok".to_string())
     );
 
-    let third_request_tools = tool_names(&requests[2].body_json());
+    let third_request_body = requests[2].body_json();
+    let third_request_tools = tool_names(&third_request_body);
     assert!(
         !third_request_tools.iter().any(|name| name == tool_name),
         "post-tool follow-up should rely on tool_search_output history, not tool injection: {third_request_tools:?}"

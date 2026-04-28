@@ -1194,11 +1194,21 @@ pub(crate) async fn lookup_mcp_tool_metadata(
             .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
             .and_then(serde_json::Value::as_object)
             .cloned(),
-        openai_file_input_params: Some(declared_openai_file_input_param_names(
+        // Disallow custom MCPs from uploading files via fileParams.
+        openai_file_input_params: openai_file_input_params_for_server(
+            server,
             tool_info.tool.meta.as_deref(),
-        ))
-        .filter(|params| !params.is_empty()),
+        ),
     })
+}
+
+fn openai_file_input_params_for_server(
+    server: &str,
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<Vec<String>> {
+    (server == CODEX_APPS_MCP_SERVER_NAME)
+        .then_some(declared_openai_file_input_param_names(meta))
+        .filter(|params| !params.is_empty())
 }
 
 fn get_mcp_app_resource_uri(

@@ -42,7 +42,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::analytics::assert_basic_thread_initialized_event;
-use super::analytics::enable_analytics_capture;
+use super::analytics::mount_analytics_capture;
 use super::analytics::thread_initialized_event;
 use super::analytics::wait_for_analytics_payload;
 
@@ -385,13 +385,8 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml_with_chatgpt_base_url(
-        codex_home.path(),
-        &server.uri(),
-        &server.uri(),
-        /*general_analytics_enabled*/ true,
-    )?;
-    enable_analytics_capture(&server, codex_home.path()).await?;
+    create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let conversation_id = create_fake_rollout(
         codex_home.path(),
@@ -496,7 +491,6 @@ async fn thread_fork_surfaces_cloud_requirements_load_errors() -> Result<()> {
         codex_home.path(),
         &model_server.uri(),
         &chatgpt_base_url,
-        /*general_analytics_enabled*/ false,
     )?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -793,13 +787,7 @@ fn create_config_toml_with_chatgpt_base_url(
     codex_home: &Path,
     server_uri: &str,
     chatgpt_base_url: &str,
-    general_analytics_enabled: bool,
 ) -> std::io::Result<()> {
-    let general_analytics_toml = if general_analytics_enabled {
-        "\ngeneral_analytics = true".to_string()
-    } else {
-        "\ngeneral_analytics = false".to_string()
-    };
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
@@ -811,9 +799,6 @@ sandbox_mode = "read-only"
 chatgpt_base_url = "{chatgpt_base_url}"
 
 model_provider = "mock_provider"
-
-[features]
-{general_analytics_toml}
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

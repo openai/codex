@@ -80,7 +80,7 @@ impl FileSystemAccessMode {
 pub enum FileSystemSpecialPath {
     Root,
     Minimal,
-    CurrentWorkingDirectory,
+    #[serde(alias = "current_working_directory")]
     ProjectRoots {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -412,57 +412,65 @@ impl FileSystemSandboxPolicy {
         })
     }
 
-    /// Converts a legacy sandbox policy into a cwd-independent filesystem policy.
-    ///
-    /// `WorkspaceWrite` uses symbolic entries for cwd-scoped access so callers
-    /// can preserve the active cwd binding until the policy is actually
-    /// resolved for a turn or command.
-    pub fn from_legacy_sandbox_policy(sandbox_policy: &SandboxPolicy) -> Self {
-        let mut file_system_policy = Self::from(sandbox_policy);
-        let SandboxPolicy::WorkspaceWrite {
-            writable_roots,
-            exclude_tmpdir_env_var,
-            exclude_slash_tmp,
-            ..
-        } = sandbox_policy
-        else {
-            return file_system_policy;
-        };
+    /// Filesystem policy matching `WorkspaceWrite` semantics without requiring
+    /// callers to construct a legacy [`SandboxPolicy`] first.
+    pub fn workspace_write(
+        writable_roots: &[AbsolutePathBuf],
+        exclude_tmpdir_env_var: bool,
+        exclude_slash_tmp: bool,
+    ) -> Self {
+        let mut entries = vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        }];
 
-        prune_read_entries_under_writable_roots(
-            &mut file_system_policy.entries,
-            &legacy_non_cwd_writable_roots(
-                writable_roots,
-                *exclude_tmpdir_env_var,
-                *exclude_slash_tmp,
-            ),
+        entries.push(FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+        });
+        if !exclude_slash_tmp {
+            entries.push(FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::SlashTmp,
+                },
+                access: FileSystemAccessMode::Write,
+            });
+        }
+        if !exclude_tmpdir_env_var {
+            entries.push(FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Tmpdir,
+                },
+                access: FileSystemAccessMode::Write,
+            });
+        }
+        entries.extend(
+            writable_roots
+                .iter()
+                .cloned()
+                .map(|path| FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path },
+                    access: FileSystemAccessMode::Write,
+                }),
         );
 
-        append_default_read_only_project_root_subpath_if_no_explicit_rule(
-            &mut file_system_policy.entries,
-            ".git",
-        );
-        append_default_read_only_project_root_subpath_if_no_explicit_rule(
-            &mut file_system_policy.entries,
-            ".agents",
-        );
-        append_default_read_only_project_root_subpath_if_no_explicit_rule(
-            &mut file_system_policy.entries,
-            ".codex",
-        );
+        append_default_read_only_project_root_subpath_if_no_explicit_rule(&mut entries, ".git");
+        append_default_read_only_project_root_subpath_if_no_explicit_rule(&mut entries, ".agents");
+        append_default_read_only_project_root_subpath_if_no_explicit_rule(&mut entries, ".codex");
         for writable_root in writable_roots {
             for protected_path in default_read_only_subpaths_for_writable_root(
                 writable_root,
                 /*protect_missing_dot_codex*/ false,
             ) {
-                append_default_read_only_path_if_no_explicit_rule(
-                    &mut file_system_policy.entries,
-                    protected_path,
-                );
+                append_default_read_only_path_if_no_explicit_rule(&mut entries, protected_path);
             }
         }
 
-        file_system_policy
+        FileSystemSandboxPolicy::restricted(entries)
     }
 
     /// Converts a legacy sandbox policy into an equivalent filesystem policy
@@ -475,12 +483,6 @@ impl FileSystemSandboxPolicy {
     pub fn from_legacy_sandbox_policy_for_cwd(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Self {
         let mut file_system_policy = Self::from(sandbox_policy);
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = sandbox_policy {
-            let legacy_writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
-            prune_read_entries_under_writable_roots(
-                &mut file_system_policy.entries,
-                &legacy_writable_roots,
-            );
-
             if let Ok(cwd_root) = AbsolutePathBuf::from_absolute_path(cwd) {
                 for protected_path in default_read_only_subpaths_for_writable_root(
                     &cwd_root, /*protect_missing_dot_codex*/ true,
@@ -571,6 +573,28 @@ impl FileSystemSandboxPolicy {
         self.resolve_access_with_cwd(path, cwd).can_write()
     }
 
+    /// Replaces symbolic `:project_roots` entries with absolute paths resolved
+    /// against `cwd`.
+    ///
+    /// Use this when a durable permission profile must survive a cwd-only
+    /// update without rebinding its project-root authority to the new cwd.
+    pub fn materialize_project_roots_with_cwd(mut self, cwd: &Path) -> Self {
+        let cwd = AbsolutePathBuf::from_absolute_path(cwd).ok();
+        for entry in &mut self.entries {
+            let FileSystemPath::Special {
+                value: FileSystemSpecialPath::ProjectRoots { .. },
+            } = &entry.path
+            else {
+                continue;
+            };
+
+            if let Some(path) = resolve_file_system_path(&entry.path, cwd.as_ref()) {
+                entry.path = FileSystemPath::Path { path };
+            }
+        }
+        self
+    }
+
     pub fn with_additional_readable_roots(
         mut self,
         cwd: &Path,
@@ -613,6 +637,44 @@ impl FileSystemSandboxPolicy {
         self
     }
 
+    /// Add roots using legacy `WorkspaceWrite` behavior.
+    ///
+    /// Unlike [`Self::with_additional_writable_roots`], this mirrors legacy
+    /// writable-roots semantics by adding exact roots even when they are
+    /// already writable through `:project_roots`, and by adding the default
+    /// read-only protected subpaths for each new root.
+    pub fn with_additional_legacy_workspace_writable_roots(
+        mut self,
+        additional_writable_roots: &[AbsolutePathBuf],
+    ) -> Self {
+        if !matches!(self.kind, FileSystemSandboxKind::Restricted) {
+            return self;
+        }
+
+        for path in additional_writable_roots {
+            if !self.entries.iter().any(|entry| {
+                entry.access.can_write()
+                    && matches!(&entry.path, FileSystemPath::Path { path: existing } if existing == path)
+            }) {
+                self.entries.push(FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path: path.clone() },
+                    access: FileSystemAccessMode::Write,
+                });
+            }
+
+            for protected_path in default_read_only_subpaths_for_writable_root(
+                path, /*protect_missing_dot_codex*/ false,
+            ) {
+                append_default_read_only_path_if_no_explicit_rule(
+                    &mut self.entries,
+                    protected_path,
+                );
+            }
+        }
+
+        self
+    }
+
     pub fn needs_direct_runtime_enforcement(
         &self,
         network_policy: NetworkSandboxPolicy,
@@ -627,7 +689,7 @@ impl FileSystemSandboxPolicy {
         };
 
         self.semantic_signature(cwd)
-            != FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&legacy_policy, cwd)
+            != legacy_runtime_file_system_policy_for_cwd(&legacy_policy, cwd)
                 .semantic_signature(cwd)
     }
 
@@ -867,11 +929,6 @@ impl FileSystemSandboxPolicy {
                                 }
                             },
                             FileSystemSpecialPath::Minimal => {}
-                            FileSystemSpecialPath::CurrentWorkingDirectory => {
-                                if entry.access.can_write() {
-                                    workspace_root_writable = true;
-                                }
-                            }
                             FileSystemSpecialPath::ProjectRoots { subpath } => {
                                 if subpath.is_none() && entry.access.can_write() {
                                     workspace_root_writable = true;
@@ -991,47 +1048,11 @@ impl From<&SandboxPolicy> for FileSystemSandboxPolicy {
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
                 ..
-            } => {
-                let mut entries = vec![FileSystemSandboxEntry {
-                    path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::Root,
-                    },
-                    access: FileSystemAccessMode::Read,
-                }];
-
-                entries.push(FileSystemSandboxEntry {
-                    path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
-                    },
-                    access: FileSystemAccessMode::Write,
-                });
-                if !exclude_slash_tmp {
-                    entries.push(FileSystemSandboxEntry {
-                        path: FileSystemPath::Special {
-                            value: FileSystemSpecialPath::SlashTmp,
-                        },
-                        access: FileSystemAccessMode::Write,
-                    });
-                }
-                if !exclude_tmpdir_env_var {
-                    entries.push(FileSystemSandboxEntry {
-                        path: FileSystemPath::Special {
-                            value: FileSystemSpecialPath::Tmpdir,
-                        },
-                        access: FileSystemAccessMode::Write,
-                    });
-                }
-                entries.extend(
-                    writable_roots
-                        .iter()
-                        .cloned()
-                        .map(|path| FileSystemSandboxEntry {
-                            path: FileSystemPath::Path { path },
-                            access: FileSystemAccessMode::Write,
-                        }),
-                );
-                FileSystemSandboxPolicy::restricted(entries)
-            }
+            } => FileSystemSandboxPolicy::workspace_write(
+                writable_roots,
+                *exclude_tmpdir_env_var,
+                *exclude_slash_tmp,
+            ),
         }
     }
 }
@@ -1099,20 +1120,8 @@ fn special_paths_share_target(left: &FileSystemSpecialPath, right: &FileSystemSp
     match (left, right) {
         (FileSystemSpecialPath::Root, FileSystemSpecialPath::Root)
         | (FileSystemSpecialPath::Minimal, FileSystemSpecialPath::Minimal)
-        | (
-            FileSystemSpecialPath::CurrentWorkingDirectory,
-            FileSystemSpecialPath::CurrentWorkingDirectory,
-        )
         | (FileSystemSpecialPath::Tmpdir, FileSystemSpecialPath::Tmpdir)
         | (FileSystemSpecialPath::SlashTmp, FileSystemSpecialPath::SlashTmp) => true,
-        (
-            FileSystemSpecialPath::CurrentWorkingDirectory,
-            FileSystemSpecialPath::ProjectRoots { subpath: None },
-        )
-        | (
-            FileSystemSpecialPath::ProjectRoots { subpath: None },
-            FileSystemSpecialPath::CurrentWorkingDirectory,
-        ) => true,
         (
             FileSystemSpecialPath::ProjectRoots { subpath: left },
             FileSystemSpecialPath::ProjectRoots { subpath: right },
@@ -1210,10 +1219,6 @@ fn resolve_file_system_special_path(
         FileSystemSpecialPath::Root
         | FileSystemSpecialPath::Minimal
         | FileSystemSpecialPath::Unknown { .. } => None,
-        FileSystemSpecialPath::CurrentWorkingDirectory => {
-            let cwd = cwd?;
-            Some(cwd.clone())
-        }
         FileSystemSpecialPath::ProjectRoots { subpath } => {
             let cwd = cwd?;
             match subpath.as_ref() {
@@ -1336,6 +1341,87 @@ fn default_read_only_subpaths_for_writable_root(
     dedup_absolute_paths(subpaths, /*normalize_effective_paths*/ false)
 }
 
+/// Rebuilds the filesystem policy that legacy sandbox runtimes enforce for a
+/// concrete cwd.
+///
+/// Unlike [`FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd`], this
+/// intentionally does not add symbolic project-root metadata carveouts. Legacy
+/// runtime expansion only protected `.git`/`.agents` when those paths already
+/// existed, so missing-path carveouts still require direct profile enforcement.
+fn legacy_runtime_file_system_policy_for_cwd(
+    sandbox_policy: &SandboxPolicy,
+    cwd: &Path,
+) -> FileSystemSandboxPolicy {
+    let SandboxPolicy::WorkspaceWrite {
+        writable_roots,
+        exclude_tmpdir_env_var,
+        exclude_slash_tmp,
+        ..
+    } = sandbox_policy
+    else {
+        return FileSystemSandboxPolicy::from(sandbox_policy);
+    };
+
+    let mut entries = vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+    ];
+
+    if !*exclude_slash_tmp {
+        entries.push(FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::SlashTmp,
+            },
+            access: FileSystemAccessMode::Write,
+        });
+    }
+    if !*exclude_tmpdir_env_var {
+        entries.push(FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Tmpdir,
+            },
+            access: FileSystemAccessMode::Write,
+        });
+    }
+    entries.extend(
+        writable_roots
+            .iter()
+            .cloned()
+            .map(|path| FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path },
+                access: FileSystemAccessMode::Write,
+            }),
+    );
+
+    if let Ok(cwd_root) = AbsolutePathBuf::from_absolute_path(cwd) {
+        for protected_path in default_read_only_subpaths_for_writable_root(
+            &cwd_root, /*protect_missing_dot_codex*/ true,
+        ) {
+            append_default_read_only_path_if_no_explicit_rule(&mut entries, protected_path);
+        }
+    }
+    for writable_root in writable_roots {
+        for protected_path in default_read_only_subpaths_for_writable_root(
+            writable_root,
+            /*protect_missing_dot_codex*/ false,
+        ) {
+            append_default_read_only_path_if_no_explicit_rule(&mut entries, protected_path);
+        }
+    }
+
+    FileSystemSandboxPolicy::restricted(entries)
+}
+
 fn append_default_read_only_project_root_subpath_if_no_explicit_rule(
     entries: &mut Vec<FileSystemSandboxEntry>,
     subpath: impl Into<PathBuf>,
@@ -1370,58 +1456,6 @@ fn append_default_read_only_entry_if_no_explicit_rule(
         path,
         access: FileSystemAccessMode::Read,
     });
-}
-
-fn prune_read_entries_under_writable_roots(
-    entries: &mut Vec<FileSystemSandboxEntry>,
-    legacy_writable_roots: &[WritableRoot],
-) {
-    entries.retain(|entry| {
-        if entry.access != FileSystemAccessMode::Read {
-            return true;
-        }
-
-        match &entry.path {
-            FileSystemPath::Path { path } => !legacy_writable_roots
-                .iter()
-                .any(|root| root.is_path_writable(path.as_path())),
-            FileSystemPath::GlobPattern { .. } | FileSystemPath::Special { .. } => true,
-        }
-    });
-}
-
-fn legacy_non_cwd_writable_roots(
-    writable_roots: &[AbsolutePathBuf],
-    exclude_tmpdir_env_var: bool,
-    exclude_slash_tmp: bool,
-) -> Vec<WritableRoot> {
-    let mut roots: Vec<AbsolutePathBuf> = writable_roots.to_vec();
-
-    if cfg!(unix)
-        && !exclude_slash_tmp
-        && let Ok(slash_tmp) = AbsolutePathBuf::from_absolute_path("/tmp")
-        && slash_tmp.as_path().is_dir()
-    {
-        roots.push(slash_tmp);
-    }
-
-    if !exclude_tmpdir_env_var
-        && let Some(tmpdir) = std::env::var_os("TMPDIR")
-        && !tmpdir.is_empty()
-        && let Ok(tmpdir_path) = AbsolutePathBuf::from_absolute_path(PathBuf::from(tmpdir))
-    {
-        roots.push(tmpdir_path);
-    }
-
-    dedup_absolute_paths(roots, /*normalize_effective_paths*/ true)
-        .into_iter()
-        .map(|root| WritableRoot {
-            read_only_subpaths: default_read_only_subpaths_for_writable_root(
-                &root, /*protect_missing_dot_codex*/ false,
-            ),
-            root,
-        })
-        .collect()
 }
 
 fn has_explicit_resolved_path_entry(
@@ -1550,7 +1584,7 @@ mod tests {
 
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Write,
         }]);
@@ -1566,7 +1600,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_workspace_write_projection_preserves_symbolic_cwd() {
+    fn legacy_workspace_write_projection_preserves_symbolic_project_root() {
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
             network_access: false,
@@ -1575,7 +1609,7 @@ mod tests {
         };
 
         assert_eq!(
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy),
+            FileSystemSandboxPolicy::from(&policy),
             FileSystemSandboxPolicy::restricted(vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
@@ -1585,7 +1619,7 @@ mod tests {
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                     },
                     access: FileSystemAccessMode::Write,
                 },
@@ -1611,6 +1645,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn legacy_current_working_directory_special_path_deserializes_as_project_roots()
+    -> serde_json::Result<()> {
+        let value = serde_json::json!({
+            "kind": "current_working_directory",
+        });
+
+        let special_path = serde_json::from_value::<FileSystemSpecialPath>(value)?;
+        assert_eq!(
+            special_path,
+            FileSystemSpecialPath::project_roots(/*subpath*/ None)
+        );
+        assert_eq!(
+            serde_json::to_value(&special_path)?,
+            serde_json::json!({
+                "kind": "project_roots",
+            })
+        );
+        Ok(())
+    }
+
     #[cfg(unix)]
     #[test]
     fn writable_roots_skip_default_dot_codex_when_explicit_user_rule_exists() {
@@ -1624,7 +1679,7 @@ mod tests {
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             },
@@ -1703,9 +1758,27 @@ mod tests {
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                     },
                     access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::project_roots(Some(".git".into())),
+                    },
+                    access: FileSystemAccessMode::Read,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::project_roots(Some(".agents".into())),
+                    },
+                    access: FileSystemAccessMode::Read,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::project_roots(Some(".codex".into())),
+                    },
+                    access: FileSystemAccessMode::Read,
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Path {
@@ -1774,7 +1847,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn current_working_directory_special_path_preserves_symlinked_cwd() {
+    fn project_roots_special_path_preserves_symlinked_root() {
         let cwd = TempDir::new().expect("tempdir");
         let real_root = cwd.path().join("real");
         let link_root = cwd.path().join("link");
@@ -1804,7 +1877,7 @@ mod tests {
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             },
@@ -2094,7 +2167,7 @@ mod tests {
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             },
@@ -2141,7 +2214,7 @@ mod tests {
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             },
@@ -2155,7 +2228,7 @@ mod tests {
             policy.needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path(),)
         );
 
-        let legacy_workspace_write = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+        let legacy_workspace_write = legacy_runtime_file_system_policy_for_cwd(
             &SandboxPolicy::new_workspace_write_policy(),
             cwd.path(),
         );
@@ -2174,8 +2247,7 @@ mod tests {
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };
-        let legacy_order =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&legacy_policy, cwd.path());
+        let legacy_order = legacy_runtime_file_system_policy_for_cwd(&legacy_policy, cwd.path());
         let mut reordered_entries = legacy_order.entries.clone();
         reordered_entries.reverse();
         let reordered = FileSystemSandboxPolicy::restricted(reordered_entries);
@@ -2187,6 +2259,33 @@ mod tests {
         assert!(
             !reordered
                 .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path())
+        );
+    }
+
+    #[test]
+    fn missing_symbolic_metadata_carveouts_need_direct_runtime_enforcement() {
+        let cwd = TempDir::new().expect("tempdir");
+        let legacy_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let profile_projection =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&legacy_policy, cwd.path());
+        assert!(
+            profile_projection
+                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path()),
+            "symbolic .git/.agents carveouts protect missing paths that legacy sandboxes cannot represent"
+        );
+
+        let legacy_runtime_projection =
+            legacy_runtime_file_system_policy_for_cwd(&legacy_policy, cwd.path());
+        assert!(
+            !legacy_runtime_projection
+                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path()),
+            "true legacy runtime expansion should still classify as legacy-compatible"
         );
     }
 
@@ -2318,7 +2417,7 @@ mod tests {
         let cwd_root = AbsolutePathBuf::from_absolute_path(cwd.path()).expect("absolute cwd");
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Read,
         }]);
@@ -2336,7 +2435,7 @@ mod tests {
         let cwd_root = AbsolutePathBuf::from_absolute_path(cwd.path()).expect("absolute cwd");
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Write,
         }]);
@@ -2356,7 +2455,7 @@ mod tests {
             .expect("resolve extra root");
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Write,
         }]);
@@ -2368,13 +2467,54 @@ mod tests {
             FileSystemSandboxPolicy::restricted(vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                     },
                     access: FileSystemAccessMode::Write,
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Path { path: extra },
                     access: FileSystemAccessMode::Write,
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn with_additional_legacy_workspace_writable_roots_protects_metadata() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let extra = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("extra"))
+            .expect("resolve extra root");
+        std::fs::create_dir_all(extra.join(".git")).expect("create .git dir");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let actual =
+            policy.with_additional_legacy_workspace_writable_roots(std::slice::from_ref(&extra));
+
+        assert_eq!(
+            actual,
+            FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: extra.clone()
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: extra.join(".git")
+                    },
+                    access: FileSystemAccessMode::Read,
                 },
             ])
         );

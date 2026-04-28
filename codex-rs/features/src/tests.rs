@@ -55,6 +55,12 @@ fn use_linux_sandbox_bwrap_is_removed_and_disabled_by_default() {
 }
 
 #[test]
+fn undo_is_removed_and_disabled_by_default() {
+    assert_eq!(Feature::GhostCommit.stage(), Stage::Removed);
+    assert_eq!(Feature::GhostCommit.default_enabled(), false);
+}
+
+#[test]
 fn image_detail_original_is_removed_and_disabled_by_default() {
     assert_eq!(Feature::ImageDetailOriginal.stage(), Stage::Removed);
     assert_eq!(Feature::ImageDetailOriginal.default_enabled(), false);
@@ -154,12 +160,6 @@ fn browser_controls_are_stable_and_enabled_by_default() {
     assert_eq!(Feature::ComputerUse.stage(), Stage::Stable);
     assert_eq!(Feature::ComputerUse.default_enabled(), true);
     assert_eq!(feature_for_key("computer_use"), Some(Feature::ComputerUse));
-}
-
-#[test]
-fn general_analytics_is_stable_and_enabled_by_default() {
-    assert_eq!(Feature::GeneralAnalytics.stage(), Stage::Stable);
-    assert_eq!(Feature::GeneralAnalytics.default_enabled(), true);
 }
 
 #[test]
@@ -342,6 +342,22 @@ fn from_sources_ignores_removed_image_detail_original_feature_key() {
         "image_detail_original".to_string(),
         true,
     )]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+}
+
+#[test]
+fn from_sources_ignores_removed_undo_feature_key() {
+    let features_toml = FeaturesToml::from(BTreeMap::from([("undo".to_string(), true)]));
 
     let features = Features::from_sources(
         FeatureConfigSource {

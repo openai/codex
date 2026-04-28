@@ -33,7 +33,7 @@ runs:
       run: Copy-Item (Get-Command dotslash).Source -Destination "$env:LOCALAPPDATA\Microsoft\WindowsApps\dotslash.exe"
 
     - name: Set up Bazel
-      uses: bazelbuild/setup-bazelisk@b39c379c82683a5f25d34f0d062761f62693e0b2 # v3
+      uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
 
     - name: Configure Bazel repository cache
       id: configure_bazel_repository_cache

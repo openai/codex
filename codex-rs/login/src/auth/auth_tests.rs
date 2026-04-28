@@ -116,10 +116,11 @@ fn login_with_agent_identity_rejects_invalid_jwt() {
     );
 }
 
-#[test]
-fn missing_auth_json_returns_none() {
+#[tokio::test]
+async fn missing_auth_json_returns_none() {
     let dir = tempdir().unwrap();
     let auth = CodexAuth::from_auth_storage(dir.path(), AuthCredentialsStoreMode::File)
+        .await
         .expect("call should succeed");
     assert_eq!(auth, None);
 }
@@ -143,6 +144,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
     )
+    .await
     .unwrap()
     .unwrap();
     assert_eq!(None, auth.api_key());
@@ -196,6 +198,7 @@ async fn loads_api_key_from_auth_json() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
     )
+    .await
     .unwrap()
     .unwrap();
     assert_eq!(auth.auth_mode(), AuthMode::ApiKey);
@@ -222,15 +225,16 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
     Ok(())
 }
 
-#[test]
-fn unauthorized_recovery_reports_mode_and_step_names() {
+#[tokio::test]
+async fn unauthorized_recovery_reports_mode_and_step_names() {
     let dir = tempdir().unwrap();
     let manager = AuthManager::shared(
         dir.path().to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
-    );
+    )
+    .await;
     let managed = UnauthorizedRecovery {
         manager: Arc::clone(&manager),
         step: UnauthorizedRecoveryStep::Reload,
@@ -250,8 +254,8 @@ fn unauthorized_recovery_reports_mode_and_step_names() {
     assert_eq!(external.step_name(), "external_refresh");
 }
 
-#[test]
-fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
+#[tokio::test]
+async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
     let codex_home = tempdir().unwrap();
     write_auth_file(
         AuthFileParams {
@@ -268,6 +272,7 @@ fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
     )
+    .await
     .expect("load auth")
     .expect("auth available");
     let mut updated_auth_dot_json = auth
@@ -284,6 +289,7 @@ fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
         updated_auth_dot_json,
         AuthCredentialsStoreMode::File,
     )
+    .await
     .expect("updated auth should parse");
 
     let manager = AuthManager::from_auth_for_testing(auth.clone());
@@ -619,35 +625,9 @@ impl Drop for EnvVarGuard {
     }
 }
 
-#[test]
+#[tokio::test]
 #[serial(codex_auth_env)]
-fn load_auth_reads_agent_identity_from_env() {
-    let codex_home = tempdir().unwrap();
-    let expected_record = agent_identity_record("account-123");
-    let agent_identity = fake_agent_identity_jwt(&expected_record).expect("fake agent identity");
-    let _agent_guard = EnvVarGuard::set(CODEX_AGENT_IDENTITY_ENV_VAR, &agent_identity);
-
-    let auth = super::load_auth(
-        codex_home.path(),
-        /*enable_codex_api_key_env*/ false,
-        AuthCredentialsStoreMode::File,
-    )
-    .expect("env auth should load")
-    .expect("env auth should be present");
-
-    let CodexAuth::AgentIdentity(agent_identity) = auth else {
-        panic!("env auth should load as agent identity");
-    };
-    assert_eq!(agent_identity.record(), &expected_record);
-    assert!(
-        !get_auth_file(codex_home.path()).exists(),
-        "env auth should not write auth.json"
-    );
-}
-
-#[test]
-#[serial(codex_auth_env)]
-fn load_auth_keeps_codex_api_key_env_precedence() {
+async fn load_auth_keeps_codex_api_key_env_precedence() {
     let codex_home = tempdir().unwrap();
     let record = agent_identity_record("account-123");
     let agent_identity = fake_agent_identity_jwt(&record).expect("fake agent identity");
@@ -659,6 +639,7 @@ fn load_auth_keeps_codex_api_key_env_precedence() {
         /*enable_codex_api_key_env*/ true,
         AuthCredentialsStoreMode::File,
     )
+    .await
     .expect("env auth should load")
     .expect("env auth should be present");
 
@@ -679,8 +660,9 @@ async fn enforce_login_restrictions_logs_out_for_method_mismatch() {
     )
     .await;
 
-    let err =
-        super::enforce_login_restrictions(&config).expect_err("expected method mismatch to error");
+    let err = super::enforce_login_restrictions(&config)
+        .await
+        .expect_err("expected method mismatch to error");
     assert!(err.to_string().contains("ChatGPT login is required"));
     assert!(
         !codex_home.path().join("auth.json").exists(),
@@ -710,6 +692,7 @@ async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
     .await;
 
     let err = super::enforce_login_restrictions(&config)
+        .await
         .expect_err("expected workspace mismatch to error");
     assert!(err.to_string().contains("workspace org_mine"));
     assert!(
@@ -739,7 +722,9 @@ async fn enforce_login_restrictions_allows_matching_workspace() {
     )
     .await;
 
-    super::enforce_login_restrictions(&config).expect("matching workspace should succeed");
+    super::enforce_login_restrictions(&config)
+        .await
+        .expect("matching workspace should succeed");
     assert!(
         codex_home.path().join("auth.json").exists(),
         "auth.json should remain when restrictions pass"
@@ -761,7 +746,9 @@ async fn enforce_login_restrictions_allows_api_key_if_login_method_not_set_but_f
     )
     .await;
 
-    super::enforce_login_restrictions(&config).expect("matching workspace should succeed");
+    super::enforce_login_restrictions(&config)
+        .await
+        .expect("matching workspace should succeed");
     assert!(
         codex_home.path().join("auth.json").exists(),
         "auth.json should remain when restrictions pass"
@@ -782,6 +769,7 @@ async fn enforce_login_restrictions_blocks_env_api_key_when_chatgpt_required() {
     .await;
 
     let err = super::enforce_login_restrictions(&config)
+        .await
         .expect_err("environment API key should not satisfy forced ChatGPT login");
     assert!(
         err.to_string()
@@ -790,9 +778,11 @@ async fn enforce_login_restrictions_blocks_env_api_key_when_chatgpt_required() {
 }
 
 fn agent_identity_record(account_id: &str) -> AgentIdentityAuthRecord {
+    let key_material =
+        codex_agent_identity::generate_agent_key_material().expect("generate agent key material");
     AgentIdentityAuthRecord {
         agent_runtime_id: "agent-runtime-id".to_string(),
-        agent_private_key: "private-key".to_string(),
+        agent_private_key: key_material.private_key_pkcs8_base64,
         account_id: account_id.to_string(),
         chatgpt_user_id: "user-id".to_string(),
         email: "user@example.com".to_string(),
@@ -818,8 +808,8 @@ fn fake_agent_identity_jwt(record: &AgentIdentityAuthRecord) -> std::io::Result<
     Ok(format!("{header_b64}.{payload_b64}.{signature_b64}"))
 }
 
-#[test]
-fn plan_type_maps_known_plan() {
+#[tokio::test]
+async fn plan_type_maps_known_plan() {
     let codex_home = tempdir().unwrap();
     let _jwt = write_auth_file(
         AuthFileParams {
@@ -836,14 +826,15 @@ fn plan_type_maps_known_plan() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
     )
+    .await
     .expect("load auth")
     .expect("auth available");
 
     pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Pro));
 }
 
-#[test]
-fn plan_type_maps_self_serve_business_usage_based_plan() {
+#[tokio::test]
+async fn plan_type_maps_self_serve_business_usage_based_plan() {
     let codex_home = tempdir().unwrap();
     let _jwt = write_auth_file(
         AuthFileParams {
@@ -860,6 +851,7 @@ fn plan_type_maps_self_serve_business_usage_based_plan() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
     )
+    .await
     .expect("load auth")
     .expect("auth available");
 
@@ -869,8 +861,8 @@ fn plan_type_maps_self_serve_business_usage_based_plan() {
     );
 }
 
-#[test]
-fn plan_type_maps_enterprise_cbp_usage_based_plan() {
+#[tokio::test]
+async fn plan_type_maps_enterprise_cbp_usage_based_plan() {
     let codex_home = tempdir().unwrap();
     let _jwt = write_auth_file(
         AuthFileParams {
@@ -887,6 +879,7 @@ fn plan_type_maps_enterprise_cbp_usage_based_plan() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
     )
+    .await
     .expect("load auth")
     .expect("auth available");
 
@@ -896,8 +889,8 @@ fn plan_type_maps_enterprise_cbp_usage_based_plan() {
     );
 }
 
-#[test]
-fn plan_type_maps_unknown_to_unknown() {
+#[tokio::test]
+async fn plan_type_maps_unknown_to_unknown() {
     let codex_home = tempdir().unwrap();
     let _jwt = write_auth_file(
         AuthFileParams {
@@ -914,14 +907,15 @@ fn plan_type_maps_unknown_to_unknown() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
     )
+    .await
     .expect("load auth")
     .expect("auth available");
 
     pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Unknown));
 }
 
-#[test]
-fn missing_plan_type_maps_to_unknown() {
+#[tokio::test]
+async fn missing_plan_type_maps_to_unknown() {
     let codex_home = tempdir().unwrap();
     let _jwt = write_auth_file(
         AuthFileParams {
@@ -938,6 +932,7 @@ fn missing_plan_type_maps_to_unknown() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
     )
+    .await
     .expect("load auth")
     .expect("auth available");
 

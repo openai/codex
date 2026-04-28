@@ -156,13 +156,10 @@ pub(crate) struct ThreadSessionState {
     pub(crate) service_tier: Option<codex_protocol::config_types::ServiceTier>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
-    /// Legacy sandbox projection kept for compatibility. Use this only when
-    /// `permission_profile` is `None`.
-    pub(crate) sandbox_policy: SandboxPolicy,
-    /// Canonical active permissions when available. Consumers should prefer
-    /// this over `sandbox_policy`; `None` means the session only has a legacy
-    /// sandbox projection.
-    pub(crate) permission_profile: Option<PermissionProfile>,
+    /// Canonical active permissions for this session. Legacy app-server
+    /// responses are converted to a profile at ingestion time using the
+    /// response cwd so cached sessions do not reinterpret cwd-bound grants.
+    pub(crate) permission_profile: PermissionProfile,
     pub(crate) cwd: AbsolutePathBuf,
     pub(crate) instruction_source_paths: Vec<AbsolutePathBuf>,
     pub(crate) reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
@@ -1407,6 +1404,8 @@ async fn thread_session_state_from_thread_response(
         .map_err(|err| format!("forked_from_id is invalid: {err}"))?;
     let (history_log_id, history_entry_count) = message_history_metadata(config).await;
     let history_entry_count = u64::try_from(history_entry_count).unwrap_or(u64::MAX);
+    let permission_profile =
+        permission_profile_from_response_permissions(&sandbox_policy, permission_profile, &cwd);
 
     Ok(ThreadSessionState {
         thread_id,
@@ -1418,7 +1417,6 @@ async fn thread_session_state_from_thread_response(
         service_tier,
         approval_policy,
         approvals_reviewer,
-        sandbox_policy,
         permission_profile,
         cwd,
         instruction_source_paths,
@@ -1427,6 +1425,16 @@ async fn thread_session_state_from_thread_response(
         history_entry_count,
         network_proxy: None,
         rollout_path,
+    })
+}
+
+fn permission_profile_from_response_permissions(
+    sandbox_policy: &SandboxPolicy,
+    permission_profile: Option<PermissionProfile>,
+    cwd: &AbsolutePathBuf,
+) -> PermissionProfile {
+    permission_profile.unwrap_or_else(|| {
+        PermissionProfile::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd.as_path())
     })
 }
 
@@ -1770,7 +1778,11 @@ mod tests {
         );
         assert_eq!(
             started.session.permission_profile,
-            response.permission_profile.clone().map(Into::into)
+            response
+                .permission_profile
+                .clone()
+                .map(Into::into)
+                .expect("response includes profile")
         );
         assert_eq!(started.turns.len(), 1);
         assert_eq!(started.turns[0], response.thread.turns[0]);

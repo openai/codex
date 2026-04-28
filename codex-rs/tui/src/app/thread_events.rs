@@ -157,6 +157,40 @@ impl ThreadEventStore {
             .collect()
     }
 
+    pub(super) fn file_change_changes(
+        &self,
+        turn_id: &str,
+        item_id: &str,
+    ) -> Option<Vec<codex_app_server_protocol::FileUpdateChange>> {
+        self.buffer
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                ThreadBufferedEvent::Notification(ServerNotification::ItemStarted(
+                    notification,
+                )) if turn_id_matches(turn_id, &notification.turn_id) => {
+                    file_change_item_changes(&notification.item, item_id)
+                }
+                ThreadBufferedEvent::Notification(ServerNotification::ItemCompleted(
+                    notification,
+                )) if turn_id_matches(turn_id, &notification.turn_id) => {
+                    file_change_item_changes(&notification.item, item_id)
+                }
+                ThreadBufferedEvent::Request(_)
+                | ThreadBufferedEvent::Notification(_)
+                | ThreadBufferedEvent::HistoryEntryResponse(_)
+                | ThreadBufferedEvent::FeedbackSubmission(_) => None,
+            })
+            .or_else(|| {
+                self.turns
+                    .iter()
+                    .rev()
+                    .filter(|turn| turn_id_matches(turn_id, &turn.id))
+                    .flat_map(|turn| turn.items.iter().rev())
+                    .find_map(|item| file_change_item_changes(item, item_id))
+            })
+    }
+
     pub(super) fn apply_thread_rollback(&mut self, response: &ThreadRollbackResponse) {
         self.turns = response.thread.turns.clone();
         self.buffer.clear();
@@ -231,6 +265,20 @@ impl ThreadEventStore {
     }
 }
 
+fn turn_id_matches(request_turn_id: &str, candidate_turn_id: &str) -> bool {
+    request_turn_id.is_empty() || request_turn_id == candidate_turn_id
+}
+
+fn file_change_item_changes(
+    item: &ThreadItem,
+    item_id: &str,
+) -> Option<Vec<codex_app_server_protocol::FileUpdateChange>> {
+    match item {
+        ThreadItem::FileChange { id, changes, .. } if id == item_id => Some(changes.clone()),
+        _ => None,
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct ThreadEventChannel {
     pub(super) sender: mpsc::Sender<ThreadBufferedEvent>,
@@ -287,7 +335,6 @@ mod tests {
     use codex_config::types::ApprovalsReviewer;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::protocol::AskForApproval;
-    use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
@@ -302,8 +349,7 @@ mod tests {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: Some(PermissionProfile::read_only()),
+            permission_profile: PermissionProfile::read_only(),
             cwd: cwd.abs(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,

@@ -354,7 +354,7 @@ mod tests {
                 entries: vec![
                     FileSystemSandboxEntry {
                         path: FileSystemPath::Special {
-                            value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                            value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                         },
                         access: FileSystemAccessMode::Write,
                     },

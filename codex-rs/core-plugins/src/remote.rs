@@ -49,6 +49,8 @@ pub struct RemotePluginDetail {
     pub marketplace_display_name: String,
     pub summary: RemotePluginSummary,
     pub description: Option<String>,
+    pub release_version: Option<String>,
+    pub bundle_download_url: Option<String>,
     pub skills: Vec<RemotePluginSkill>,
     pub app_ids: Vec<String>,
 }
@@ -168,23 +170,16 @@ impl RemotePluginScope {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RemotePluginPagination {
-    #[serde(alias = "nextPageToken")]
     next_page_token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RemotePluginSkillInterfaceResponse {
-    #[serde(alias = "displayName")]
     display_name: Option<String>,
-    #[serde(alias = "shortDescription")]
     short_description: Option<String>,
-    #[serde(alias = "brandColor")]
     brand_color: Option<String>,
-    #[serde(alias = "defaultPrompt")]
     default_prompt: Option<String>,
-    #[serde(alias = "iconSmallUrl")]
     icon_small_url: Option<String>,
-    #[serde(alias = "iconLargeUrl")]
     icon_large_url: Option<String>,
 }
 
@@ -197,41 +192,32 @@ struct RemotePluginSkillResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RemotePluginReleaseInterfaceResponse {
-    #[serde(alias = "shortDescription")]
     short_description: Option<String>,
-    #[serde(alias = "longDescription")]
     long_description: Option<String>,
-    #[serde(alias = "developerName")]
     developer_name: Option<String>,
     category: Option<String>,
     #[serde(default)]
     capabilities: Vec<String>,
-    #[serde(alias = "websiteUrl")]
     website_url: Option<String>,
-    #[serde(alias = "privacyPolicyUrl")]
     privacy_policy_url: Option<String>,
-    #[serde(alias = "termsOfServiceUrl")]
     terms_of_service_url: Option<String>,
-    #[serde(alias = "brandColor")]
     brand_color: Option<String>,
-    #[serde(alias = "defaultPrompt")]
     default_prompt: Option<String>,
-    #[serde(alias = "composerIconUrl")]
     composer_icon_url: Option<String>,
-    #[serde(alias = "logoUrl")]
     logo_url: Option<String>,
     #[serde(default)]
-    #[serde(alias = "screenshotUrls")]
     screenshot_urls: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RemotePluginReleaseResponse {
-    #[serde(alias = "displayName")]
+    #[serde(default)]
+    version: Option<String>,
     display_name: String,
     description: String,
     #[serde(default)]
-    #[serde(alias = "appIds")]
+    bundle_download_url: Option<String>,
+    #[serde(default)]
     app_ids: Vec<String>,
     interface: RemotePluginReleaseInterfaceResponse,
     #[serde(default)]
@@ -243,9 +229,7 @@ struct RemotePluginDirectoryItem {
     id: String,
     name: String,
     scope: RemotePluginScope,
-    #[serde(alias = "installationPolicy")]
     installation_policy: PluginInstallPolicy,
-    #[serde(alias = "authenticationPolicy")]
     authentication_policy: PluginAuthPolicy,
     release: RemotePluginReleaseResponse,
 }
@@ -256,7 +240,6 @@ struct RemotePluginInstalledItem {
     plugin: RemotePluginDirectoryItem,
     enabled: bool,
     #[serde(default)]
-    #[serde(alias = "disabledSkillNames")]
     disabled_skill_names: Vec<String>,
 }
 
@@ -382,13 +365,46 @@ pub async fn fetch_remote_plugin_detail(
     marketplace_name: &str,
     plugin_id: &str,
 ) -> Result<RemotePluginDetail, RemotePluginCatalogError> {
+    fetch_remote_plugin_detail_with_download_url_option(
+        config,
+        auth,
+        marketplace_name,
+        plugin_id,
+        /*include_download_urls*/ false,
+    )
+    .await
+}
+
+pub async fn fetch_remote_plugin_detail_with_download_urls(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    marketplace_name: &str,
+    plugin_id: &str,
+) -> Result<RemotePluginDetail, RemotePluginCatalogError> {
+    fetch_remote_plugin_detail_with_download_url_option(
+        config,
+        auth,
+        marketplace_name,
+        plugin_id,
+        /*include_download_urls*/ true,
+    )
+    .await
+}
+
+async fn fetch_remote_plugin_detail_with_download_url_option(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    marketplace_name: &str,
+    plugin_id: &str,
+    include_download_urls: bool,
+) -> Result<RemotePluginDetail, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
     let scope = RemotePluginScope::from_marketplace_name(marketplace_name).ok_or_else(|| {
         RemotePluginCatalogError::UnknownMarketplace {
             marketplace_name: marketplace_name.to_string(),
         }
     })?;
-    let plugin = fetch_plugin_detail(config, auth, plugin_id).await?;
+    let plugin = fetch_plugin_detail(config, auth, plugin_id, include_download_urls).await?;
     let actual_marketplace_name = plugin.scope.marketplace_name();
     if actual_marketplace_name != marketplace_name {
         return Err(RemotePluginCatalogError::MarketplaceMismatch {
@@ -433,6 +449,8 @@ pub async fn fetch_remote_plugin_detail(
         marketplace_display_name: scope.marketplace_display_name().to_string(),
         summary: build_remote_plugin_summary(&plugin, installed_plugin.as_ref()),
         description: non_empty_string(Some(&plugin.release.description)),
+        release_version: plugin.release.version,
+        bundle_download_url: plugin.release.bundle_download_url,
         skills,
         app_ids: plugin.release.app_ids,
     })
@@ -651,11 +669,15 @@ async fn fetch_plugin_detail(
     config: &RemotePluginServiceConfig,
     auth: &CodexAuth,
     plugin_id: &str,
+    include_download_urls: bool,
 ) -> Result<RemotePluginDirectoryItem, RemotePluginCatalogError> {
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/{plugin_id}");
     let client = build_reqwest_client();
-    let request = authenticated_request(client.get(&url), auth)?;
+    let mut request = authenticated_request(client.get(&url), auth)?;
+    if include_download_urls {
+        request = request.query(&[("includeDownloadUrls", true)]);
+    }
     send_and_decode(request, &url).await
 }
 

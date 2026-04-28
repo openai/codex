@@ -1,0 +1,25 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-memories-read"
+version.workspace = true
+
+[lib]
+name = "codex_memories_read"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-protocol = { workspace = true }
+codex-shell-command = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+codex-utils-output-truncation = { workspace = true }
+codex-utils-template = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros"] }

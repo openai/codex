@@ -127,7 +127,7 @@ impl TracingHarness {
         let server = create_mock_responses_server_repeating_assistant("Done").await;
         let codex_home = TempDir::new()?;
         let config = Arc::new(build_test_config(codex_home.path(), &server.uri()).await?);
-        let (processor, outgoing_rx) = build_test_processor(config);
+        let (processor, outgoing_rx) = build_test_processor(config).await;
         let tracing = init_test_tracing();
         tracing.exporter.reset();
         tracing::callsite::rebuild_interest_cache();
@@ -257,7 +257,7 @@ async fn build_test_config(codex_home: &Path, server_uri: &str) -> Result<Config
         .await?)
 }
 
-fn build_test_processor(
+async fn build_test_processor(
     config: Arc<Config>,
 ) -> (
     Arc<MessageProcessor>,
@@ -266,7 +266,7 @@ fn build_test_processor(
     let (outgoing_tx, outgoing_rx) = mpsc::channel(16);
     let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
     let auth_manager =
-        AuthManager::shared_from_config(config.as_ref(), /*enable_codex_api_key_env*/ false);
+        AuthManager::shared_from_config(config.as_ref(), /*enable_codex_api_key_env*/ false).await;
     let config_manager = ConfigManager::new(
         config.codex_home.to_path_buf(),
         Vec::new(),

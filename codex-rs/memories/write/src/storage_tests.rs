@@ -1,5 +1,4 @@
 use super::rollout_summary_file_stem;
-use super::rollout_summary_file_stem_from_parts;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_protocol::ThreadId;
@@ -32,14 +31,6 @@ fn rollout_summary_file_stem_uses_uuid_timestamp_and_hash_when_slug_missing() {
     let memory = stage1_output_with_slug(thread_id, /*rollout_slug*/ None);
 
     assert_eq!(rollout_summary_file_stem(&memory), FIXED_PREFIX);
-    assert_eq!(
-        rollout_summary_file_stem_from_parts(
-            memory.thread_id,
-            memory.source_updated_at,
-            memory.rollout_slug.as_deref(),
-        ),
-        FIXED_PREFIX
-    );
 }
 
 #[test]

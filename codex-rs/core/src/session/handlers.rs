@@ -681,7 +681,7 @@ pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: St
         errors.push("state db unavailable; memory rows were not cleared".to_string());
     }
 
-    if let Err(err) = crate::memories::clear_memory_roots_contents(&config.codex_home).await {
+    if let Err(err) = codex_memories_write::clear_memory_roots_contents(&config.codex_home).await {
         errors.push(format!(
             "failed clearing memory directories under {}: {err}",
             config.codex_home.display()
@@ -689,7 +689,7 @@ pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: St
     }
 
     if errors.is_empty() {
-        let memory_root = crate::memories::memory_root(&config.codex_home);
+        let memory_root = codex_memories_write::memory_root(&config.codex_home);
         sess.send_event_raw(Event {
             id: sub_id,
             msg: EventMsg::Warning(WarningEvent {
@@ -977,7 +977,10 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         id: sub_id,
         msg: EventMsg::ShutdownComplete,
     };
-    sess.send_event_raw(event).await;
+    sess.services
+        .rollout_thread_trace
+        .record_protocol_event(&event.msg);
+    sess.deliver_event_raw(event).await;
     sess.services
         .rollout_thread_trace
         .record_ended(codex_rollout_trace::RolloutStatus::Completed);

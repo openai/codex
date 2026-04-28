@@ -103,8 +103,7 @@ impl ContextManager {
     {
         for item in items {
             let item_ref = item.deref();
-            let is_ghost_snapshot = matches!(item_ref, ResponseItem::GhostSnapshot { .. });
-            if !is_api_message(item_ref) && !is_ghost_snapshot {
+            if !is_api_message(item_ref) {
                 continue;
             }
 
@@ -119,8 +118,6 @@ impl ContextManager {
     /// outputs.
     pub(crate) fn for_prompt(mut self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
         self.normalize_history(input_modalities);
-        self.items
-            .retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
         self.items
     }
 
@@ -403,7 +400,6 @@ impl ContextManager {
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::CustomToolCall { .. }
             | ResponseItem::Compaction { .. }
-            | ResponseItem::GhostSnapshot { .. }
             | ResponseItem::Other => item.clone(),
         }
     }
@@ -492,7 +488,6 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. } => true,
-        ResponseItem::GhostSnapshot { .. } => false,
         ResponseItem::Other => false,
     }
 }
@@ -519,6 +514,10 @@ const RESIZED_IMAGE_BYTES_ESTIMATE: i64 = 7373;
 // Use a direct 32px patch count only for `detail: "original"`;
 // all other image inputs continue to use `RESIZED_IMAGE_BYTES_ESTIMATE`.
 const ORIGINAL_IMAGE_PATCH_SIZE: u32 = 32;
+// See https://platform.openai.com/docs/guides/images-vision#model-sizing-behavior.
+// Keep this hard-coded for now; move it into model capabilities if the patch
+// budget starts changing often across model releases.
+const ORIGINAL_IMAGE_MAX_PATCHES: usize = 10_000;
 const ORIGINAL_IMAGE_ESTIMATE_CACHE_SIZE: usize = 32;
 
 static ORIGINAL_IMAGE_ESTIMATE_CACHE: LazyLock<BlockingLruCache<[u8; 20], Option<i64>>> =
@@ -530,7 +529,6 @@ static ORIGINAL_IMAGE_ESTIMATE_CACHE: LazyLock<BlockingLruCache<[u8; 20], Option
 
 pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
     match item {
-        ResponseItem::GhostSnapshot { .. } => 0,
         ResponseItem::Reasoning {
             encrypted_content: Some(content),
             ..
@@ -621,6 +619,7 @@ fn estimate_original_image_bytes(image_url: &str) -> Option<i64> {
         let patches_high = height.saturating_add(patch_size.saturating_sub(1)) / patch_size;
         let patch_count = patches_wide.saturating_mul(patches_high);
         let patch_count = usize::try_from(patch_count).unwrap_or(usize::MAX);
+        let patch_count = patch_count.min(ORIGINAL_IMAGE_MAX_PATCHES);
         Some(i64::try_from(approx_bytes_for_tokens(patch_count)).unwrap_or(i64::MAX))
     })
 }
@@ -686,7 +685,6 @@ fn is_model_generated_item(item: &ResponseItem) -> bool {
         ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::ToolSearchOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
-        | ResponseItem::GhostSnapshot { .. }
         | ResponseItem::Other => false,
     }
 }

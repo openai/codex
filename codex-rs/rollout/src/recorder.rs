@@ -444,9 +444,19 @@ impl RolloutRecorder {
             ));
         }
 
-        // Warm the DB by repairing every filesystem hit before querying SQLite.
+        // For metadata-filtered listings the filesystem page is the page we return. Track those
+        // IDs so the later DB page only triggers full reconciliation for DB-only hits.
+        let fs_page_thread_ids = fs_page
+            .items
+            .iter()
+            .filter_map(|item| item.thread_id)
+            .collect::<HashSet<_>>();
+
+        // Warm the DB by repairing every filesystem hit before querying SQLite. Source/provider/cwd
+        // filters are already validated from rollout head metadata, so lightweight read-repair is
+        // enough there. Search can depend on full title metadata, so keep full reconciliation.
         for item in &fs_page.items {
-            if listing_has_metadata_filters {
+            if search_term.is_some() {
                 state_db::reconcile_rollout(
                     state_db_ctx.as_deref(),
                     item.path.as_path(),
@@ -517,6 +527,12 @@ impl RolloutRecorder {
             }
             if listing_has_metadata_filters {
                 for item in &db_page.items {
+                    // Rows that also appeared in the filesystem page were just validated from the
+                    // rollout head. Rows only found by SQLite may be stale filter matches, so fully
+                    // reconcile those before returning the filesystem-backed page.
+                    if fs_page_thread_ids.contains(&item.id) {
+                        continue;
+                    }
                     state_db::reconcile_rollout(
                         state_db_ctx.as_deref(),
                         item.rollout_path.as_path(),
@@ -851,7 +867,7 @@ impl RolloutRecorder {
             if line.trim().is_empty() {
                 continue;
             }
-            let v: Value = match serde_json::from_str(line) {
+            let mut v: Value = match serde_json::from_str(line) {
                 Ok(v) => v,
                 Err(e) => {
                     warn!("failed to parse line as JSON: {line:?}, error: {e}");
@@ -859,6 +875,10 @@ impl RolloutRecorder {
                     continue;
                 }
             };
+            if strip_legacy_ghost_snapshot_rollout_line(&mut v) {
+                trace!("skipping legacy ghost_snapshot rollout line");
+                continue;
+            }
 
             // Parse the rollout line structure
             match serde_json::from_value::<RolloutLine>(v.clone()) {
@@ -943,6 +963,29 @@ impl RolloutRecorder {
         };
         Ok(())
     }
+}
+
+fn strip_legacy_ghost_snapshot_rollout_line(value: &mut Value) -> bool {
+    match value.get("type").and_then(Value::as_str) {
+        Some("response_item") => value
+            .get("payload")
+            .is_some_and(is_legacy_ghost_snapshot_response_item),
+        Some("compacted") => {
+            if let Some(replacement_history) = value
+                .get_mut("payload")
+                .and_then(|payload| payload.get_mut("replacement_history"))
+                .and_then(Value::as_array_mut)
+            {
+                replacement_history.retain(|item| !is_legacy_ghost_snapshot_response_item(item));
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn is_legacy_ghost_snapshot_response_item(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("ghost_snapshot")
 }
 
 fn truncate_fs_page(
@@ -1030,13 +1073,13 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
     if item.cwd.is_none() {
         item.cwd = cwd;
     }
-    if item.git_branch.is_none() {
+    if git_branch.is_some() {
         item.git_branch = git_branch;
     }
-    if item.git_sha.is_none() {
+    if git_sha.is_some() {
         item.git_sha = git_sha;
     }
-    if item.git_origin_url.is_none() {
+    if git_origin_url.is_some() {
         item.git_origin_url = git_origin_url;
     }
     if item.source.is_none() {

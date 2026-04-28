@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
+use crate::ExecutorFileSystem;
 use crate::HttpClient;
 use crate::client::LazyRemoteExecServerClient;
 use crate::client::http_client::ReqwestHttpClient;
-use crate::file_system::ExecutorFileSystem;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;

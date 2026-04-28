@@ -13,6 +13,7 @@ use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 /// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
 pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
@@ -175,6 +176,9 @@ fn strip_total_output_header(output: &str) -> Option<(&str, u32)> {
 
 pub struct ResponseStream {
     pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
+    /// Signals the mapper task that the consumer stopped polling before the
+    /// provider stream reached its own terminal event.
+    pub(crate) consumer_dropped: CancellationToken,
 }
 
 impl Stream for ResponseStream {
@@ -182,6 +186,12 @@ impl Stream for ResponseStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.rx_event.poll_recv(cx)
+    }
+}
+
+impl Drop for ResponseStream {
+    fn drop(&mut self) {
+        self.consumer_dropped.cancel();
     }
 }
 

@@ -1622,6 +1622,10 @@ impl BottomPaneView for McpServerElicitationOverlay {
         }
     }
 
+    fn terminal_title_requires_action(&self) -> bool {
+        true
+    }
+
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         if !self.current_field_is_select() && !self.composer.current_text_with_pending().is_empty()
         {

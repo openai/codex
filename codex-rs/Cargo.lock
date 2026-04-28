@@ -1880,6 +1880,7 @@ dependencies = [
  "codex-utils-rustls-provider",
  "constant_time_eq 0.3.1",
  "core_test_support",
+ "flate2",
  "futures",
  "gethostname",
  "hmac",
@@ -1895,6 +1896,7 @@ dependencies = [
  "serial_test",
  "sha2",
  "shlex",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "time",
@@ -2288,9 +2290,9 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "codex-app-server-protocol",
- "codex-exec-server",
  "codex-execpolicy",
  "codex-features",
+ "codex-file-system",
  "codex-git-utils",
  "codex-model-provider-info",
  "codex-network-proxy",
@@ -2370,6 +2372,8 @@ dependencies = [
  "codex-hooks",
  "codex-login",
  "codex-mcp",
+ "codex-memories-read",
+ "codex-memories-write",
  "codex-model-provider",
  "codex-model-provider-info",
  "codex-models-manager",
@@ -2477,11 +2481,13 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-plugins",
  "dirs",
+ "flate2",
  "libc",
  "pretty_assertions",
  "reqwest",
  "serde",
  "serde_json",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -2607,6 +2613,7 @@ dependencies = [
  "bytes",
  "codex-app-server-protocol",
  "codex-client",
+ "codex-file-system",
  "codex-protocol",
  "codex-sandboxing",
  "codex-test-binary-support",
@@ -2718,13 +2725,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-file-system"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "serde",
+]
+
+[[package]]
 name = "codex-git-utils"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "assert_matches",
  "chrono",
- "codex-exec-server",
+ "codex-file-system",
  "codex-protocol",
  "codex-utils-absolute-path",
  "futures",
@@ -2919,6 +2935,40 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wiremock",
+]
+
+[[package]]
+name = "codex-memories-read"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "codex-shell-command",
+ "codex-utils-absolute-path",
+ "codex-utils-output-truncation",
+ "codex-utils-template",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "codex-memories-write"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "codex-git-utils",
+ "codex-models-manager",
+ "codex-protocol",
+ "codex-state",
+ "codex-utils-absolute-path",
+ "codex-utils-output-truncation",
+ "codex-utils-template",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -12231,6 +12281,16 @@ name = "tagptr"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
+
+[[package]]
+name = "tar"
+version = "0.4.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22692a6476a21fa75fdfc11d452fda482af402c008cdbaf3476414e122040973"
+dependencies = [
+ "filetime",
+ "libc",
+]
 
 [[package]]
 name = "target-lexicon"
