@@ -130,11 +130,6 @@ async fn dispatch_lifecycle_trace_records_direct_and_code_mode_requesters() -> a
 }
 
 #[tokio::test]
-async fn dispatch_lifecycle_trace_skips_noncanonical_boundaries() -> anyhow::Result<()> {
-    assert_dispatch_trace_skips(ToolCallSource::JsRepl).await
-}
-
-#[tokio::test]
 async fn dispatch_lifecycle_trace_records_unsupported_tool_failures() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let (mut session, turn) = make_session_and_context().await;
@@ -230,35 +225,6 @@ async fn missing_code_mode_wait_traces_only_the_wait_tool_call() -> anyhow::Resu
             .raw_result_payload_id
             .is_some()
     );
-
-    Ok(())
-}
-
-async fn assert_dispatch_trace_skips(source: ToolCallSource) -> anyhow::Result<()> {
-    let temp = TempDir::new()?;
-    let (mut session, turn) = make_session_and_context().await;
-    attach_test_trace(&mut session, &turn, temp.path())?;
-
-    let registry = ToolRegistry::with_handler_for_test(
-        codex_tools::ToolName::plain("test_tool"),
-        Arc::new(TestHandler),
-    );
-    let session = Arc::new(session);
-    let turn = Arc::new(turn);
-
-    registry
-        .dispatch_any(test_invocation(
-            session,
-            turn,
-            "skipped-call",
-            "test_tool",
-            source,
-            "{}",
-        ))
-        .await?;
-
-    let replayed = codex_rollout_trace::replay_bundle(single_bundle_dir(temp.path())?)?;
-    assert_eq!(replayed.tool_calls, Default::default());
 
     Ok(())
 }

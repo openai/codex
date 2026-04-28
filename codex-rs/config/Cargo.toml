@@ -14,14 +14,18 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+base64 = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-features = { workspace = true }
+codex-file-system = { workspace = true }
+codex-git-utils = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path = { workspace = true }
+dunce = { workspace = true }
 futures = { workspace = true, features = ["alloc", "std"] }
 gethostname = { workspace = true }
 multimap = { workspace = true }
@@ -44,8 +48,16 @@ wildmatch = { workspace = true }
 dns-lookup = { workspace = true }
 libc = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.9"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 winapi-util = { workspace = true }
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

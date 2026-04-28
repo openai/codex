@@ -73,7 +73,6 @@ fn build_add_file_patch(patch_path: &Path, content: &str) -> String {
 fn workspace_write_excluding_tmp() -> SandboxPolicy {
     SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -205,7 +204,9 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
 
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config
+            .set_legacy_sandbox_policy(sandbox_policy_for_config)
+            .expect("set sandbox policy");
         config
             .features
             .enable(Feature::ExecPermissionApprovals)
@@ -335,7 +336,9 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
 
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config
+            .set_legacy_sandbox_policy(sandbox_policy_for_config)
+            .expect("set sandbox policy");
         config
             .features
             .enable(Feature::ExecPermissionApprovals)

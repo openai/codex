@@ -244,7 +244,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                 }
                 Some(TuiEvent::Key(key_event))
             }
-            Event::Resize(_, _) => Some(TuiEvent::Draw),
+            Event::Resize(_, _) => Some(TuiEvent::Resize),
             Event::Paste(pasted) => Some(TuiEvent::Paste(pasted)),
             Event::FocusGained => {
                 self.terminal_focused.store(true, Ordering::Relaxed);
@@ -449,6 +449,17 @@ mod tests {
 
         let first = stream.next().await;
         assert!(matches!(first, Some(TuiEvent::Draw)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resize_event_maps_to_resize() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker, draw_rx, terminal_focused);
+
+        handle.send(Ok(Event::Resize(80, 24)));
+
+        let next = stream.next().await;
+        assert!(matches!(next, Some(TuiEvent::Resize)));
     }
 
     #[tokio::test(flavor = "current_thread")]

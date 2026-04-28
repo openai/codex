@@ -26,7 +26,6 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -351,43 +350,6 @@ fn seatbelt_args_without_extension_profile_keep_legacy_preferences_read_access()
 }
 
 #[test]
-fn seatbelt_legacy_workspace_write_nested_readable_root_stays_writable() {
-    let tmp = TempDir::new().expect("tempdir");
-    let cwd = tmp.path().join("workspace");
-    fs::create_dir_all(cwd.join("docs")).expect("create docs");
-    let docs = AbsolutePathBuf::from_absolute_path(cwd.join("docs")).expect("absolute docs");
-    let args = create_seatbelt_command_args_for_legacy_policy(
-        vec!["/bin/true".to_string()],
-        &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            read_only_access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: true,
-                readable_roots: vec![docs.clone()],
-            },
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        },
-        cwd.as_path(),
-        /*enforce_managed_network*/ false,
-        /*network*/ None,
-    );
-
-    assert!(
-        !args
-            .iter()
-            .any(|arg| arg.ends_with(&format!("={}", docs.as_path().display()))),
-        "legacy workspace-write readable roots under cwd should not become seatbelt carveouts:\n{args:#?}",
-    );
-    assert!(
-        args.iter()
-            .any(|arg| arg.starts_with("-DWRITABLE_ROOT_0_EXCLUDED_")
-                && arg.ends_with("/workspace/.codex")),
-        "expected proactive .codex carveout for cwd root: {args:#?}",
-    );
-}
-
-#[test]
 fn create_seatbelt_args_allows_local_binding_when_explicitly_enabled() {
     let policy = dynamic_network_policy(
         &SandboxPolicy::new_read_only_policy(),
@@ -427,7 +389,6 @@ fn dynamic_network_policy_preserves_restricted_policy_when_proxy_config_without_
     let policy = dynamic_network_policy(
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
-            read_only_access: Default::default(),
             network_access: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -464,7 +425,6 @@ fn dynamic_network_policy_blocks_dns_when_local_binding_has_no_proxy_ports() {
     let policy = dynamic_network_policy(
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
-            read_only_access: Default::default(),
             network_access: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -493,7 +453,6 @@ fn dynamic_network_policy_preserves_restricted_policy_for_managed_network_withou
     let policy = dynamic_network_policy(
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
-            read_only_access: Default::default(),
             network_access: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -784,7 +743,6 @@ fn create_seatbelt_args_full_network_with_proxy_is_still_proxy_only() {
     let policy = dynamic_network_policy(
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
-            read_only_access: Default::default(),
             network_access: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -835,7 +793,6 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
             .into_iter()
             .map(|p| p.try_into().unwrap())
             .collect(),
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -871,7 +828,12 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     );
     assert!(
         policy_text.contains("WRITABLE_ROOT_0_EXCLUDED_0"),
-        "expected cwd .codex carveout in policy:\n{policy_text}",
+        "expected cwd metadata carveouts in policy:\n{policy_text}",
+    );
+    assert!(
+        policy_text.contains("WRITABLE_ROOT_0_EXCLUDED_1")
+            && policy_text.contains("WRITABLE_ROOT_0_EXCLUDED_2"),
+        "expected symbolic cwd .git/.agents carveouts in policy:\n{policy_text}",
     );
     assert!(
         policy_text.contains("WRITABLE_ROOT_1_EXCLUDED_0")
@@ -895,6 +857,20 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
             cwd.canonicalize()
                 .expect("canonicalize cwd")
                 .join(".codex")
+                .display()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_0_EXCLUDED_1={}",
+            cwd.canonicalize()
+                .expect("canonicalize cwd")
+                .join(".git")
+                .display()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_0_EXCLUDED_2={}",
+            cwd.canonicalize()
+                .expect("canonicalize cwd")
+                .join(".agents")
                 .display()
         ),
         format!(
@@ -1054,7 +1030,6 @@ fn create_seatbelt_args_block_first_time_dot_codex_creation_with_exact_and_desce
     let config_toml = dot_codex.join("config.toml");
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![repo_root.as_path().try_into().expect("absolute repo root")],
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -1110,7 +1085,6 @@ fn create_seatbelt_args_with_read_only_git_pointer_file() {
 
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![worktree_root.try_into().expect("worktree_root is absolute")],
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -1206,7 +1180,6 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
     // `.codex` checks are done properly for cwd.
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -1240,7 +1213,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         .map(|p| p.to_string_lossy().to_string());
 
     let tempdir_policy_entry = if tmpdir_env_var.is_some() {
-        r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_1"))) )"#
+        r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_2"))) )"#
     } else {
         ""
     };
@@ -1249,13 +1222,13 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
     // Note that the policy includes:
     // - the base policy,
     // - read-only access to the filesystem,
-    // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
+    // - write access to WRITABLE_ROOT_0 (but not its metadata subpaths), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
     let expected_policy = format!(
         r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_2"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
 )
 
 "#,
@@ -1277,6 +1250,10 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
             dot_codex_canonical.to_string_lossy()
         ),
         format!(
+            "-DWRITABLE_ROOT_0_EXCLUDED_2={}",
+            vulnerable_root_canonical.join(".agents").to_string_lossy()
+        ),
+        format!(
             "-DWRITABLE_ROOT_1={}",
             PathBuf::from("/tmp")
                 .canonicalize()
@@ -1293,6 +1270,10 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         ));
         expected_args.push(format!(
             "-DWRITABLE_ROOT_2_EXCLUDED_1={}",
+            vulnerable_root_canonical.join(".agents").to_string_lossy()
+        ));
+        expected_args.push(format!(
+            "-DWRITABLE_ROOT_2_EXCLUDED_2={}",
             dot_codex_canonical.to_string_lossy()
         ));
     }

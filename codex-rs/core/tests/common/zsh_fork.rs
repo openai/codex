@@ -36,14 +36,15 @@ impl ZshForkRuntime {
         config.main_execve_wrapper_exe = Some(self.main_execve_wrapper_exe.clone());
         config.permissions.allow_login_shell = false;
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy);
+        config
+            .set_legacy_sandbox_policy(sandbox_policy)
+            .expect("set sandbox policy");
     }
 }
 
 pub fn restrictive_workspace_write_policy() -> SandboxPolicy {
     SandboxPolicy::WorkspaceWrite {
         writable_roots: Vec::new(),
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,

@@ -60,9 +60,9 @@ Upgrade with the narrowest safe change set:
 
 Output rule:
 
-- Always emit a starting `reasoning_effort_recommendation` for each usage site.
-- If the repo exposes the current reasoning setting, preserve it first unless current OpenAI docs say otherwise.
-- If the repo does not expose the current setting, do not add one unless current OpenAI docs require it.
+- For each usage site, state the starting reasoning-effort recommendation.
+- If the repo exposes the current reasoning setting, recommend preserving it first unless current OpenAI docs say otherwise.
+- If the repo does not expose the current setting, recommend not adding one unless current OpenAI docs require it.
 
 ## Upgrade outcomes
 
@@ -99,10 +99,10 @@ Default action:
 - make only the smallest prompt edits needed for the observed workflow risk
 - read the [GPT-5.5 prompting guide](/api/docs/guides/prompt-guidance?model=gpt-5.5) to choose the smallest prompt changes that recover or improve behavior
 - avoid broad prompt cleanup unrelated to the upgrade
-- for research workflows, default to `research_mode` + `citation_rules` + `empty_result_handling`; add `tool_persistence_rules` when the host already uses retrieval tools
-- for dependency-aware or tool-heavy workflows, default to `tool_persistence_rules` + `dependency_checks` + `verification_loop`; add `parallel_tool_calling` only when retrieval steps are truly independent
-- for coding or terminal workflows, default to `terminal_tool_hygiene` + `verification_loop`
-- for multi-agent support or triage workflows, default to at least one of `tool_persistence_rules`, `completeness_contract`, or `verification_loop`
+- for research workflows, add citation rules, retrieval budgets, missing-evidence behavior, and validation guidance from the prompting guide
+- for dependency-aware or tool-heavy workflows, add prerequisite checks, missing-context handling, explicit tool budgets, stop conditions, and validation guidance
+- for coding or terminal workflows, add repo-specific constraints, acceptance criteria, and concrete validation commands
+- for multi-agent support or triage workflows, add task ownership, handoff, completeness, and stopping criteria
 - for long-running Responses agents with preambles or multiple assistant messages, explicitly review whether `phase` is already handled; if adding or preserving `phase` would require code edits, mark the path as `blocked`
 - do not classify a coding or tool-using Responses workflow as `blocked` just because the visible snippet is minimal; prefer `model string + light prompt rewrite` unless the repo clearly shows that a safe GPT-5.5 path would require host-side code changes
 

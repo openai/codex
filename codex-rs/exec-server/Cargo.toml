@@ -17,7 +17,7 @@ base64 = { workspace = true }
 bytes = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-client = { workspace = true }
-codex-config = { workspace = true }
+codex-file-system = { workspace = true }
 codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-utils-absolute-path = { workspace = true }

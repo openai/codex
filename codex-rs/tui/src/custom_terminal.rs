@@ -416,8 +416,12 @@ where
         if self.viewport_area.is_empty() {
             return Ok(());
         }
-        self.backend
-            .set_cursor_position(self.viewport_area.as_position())?;
+        self.clear_after_position(self.viewport_area.as_position())
+    }
+
+    /// Clear from `position` through the end of the visible screen and force a full redraw.
+    pub(crate) fn clear_after_position(&mut self, position: Position) -> io::Result<()> {
+        self.backend.set_cursor_position(position)?;
         self.backend.clear_region(ClearType::AfterCursor)?;
         // Reset the back buffer to make sure the next update will redraw everything.
         self.previous_buffer_mut().reset();

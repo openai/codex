@@ -5,6 +5,8 @@
 //! any other backing store.
 
 mod error;
+#[cfg(debug_assertions)]
+mod in_memory;
 mod live_thread;
 mod local;
 mod remote;
@@ -13,6 +15,10 @@ mod types;
 
 pub use error::ThreadStoreError;
 pub use error::ThreadStoreResult;
+#[cfg(debug_assertions)]
+pub use in_memory::InMemoryThreadStore;
+#[cfg(debug_assertions)]
+pub use in_memory::InMemoryThreadStoreCalls;
 pub use live_thread::LiveThread;
 pub use live_thread::LiveThreadInitGuard;
 pub use local::LocalThreadStore;

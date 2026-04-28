@@ -1,10 +1,6 @@
 use super::*;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
-use crate::config_loader::ConfigLayerEntry;
-use crate::config_loader::ConfigLayerStack;
-use crate::config_loader::ConfigRequirements;
-use crate::config_loader::ConfigRequirementsToml;
 use crate::plugins::LoadedPlugin;
 use crate::plugins::PluginLoadOutcome;
 use crate::plugins::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
@@ -13,6 +9,10 @@ use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated
 use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigRequirements;
+use codex_config::ConfigRequirementsToml;
 use codex_config::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core_plugins::installed_marketplaces::marketplace_install_root;

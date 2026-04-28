@@ -36,6 +36,7 @@ members = [
     "hooks",
     "secrets",
     "exec",
+    "file-system",
     "exec-server",
     "execpolicy",
     "execpolicy-legacy",
@@ -46,6 +47,8 @@ members = [
     "login",
     "codex-mcp",
     "mcp-server",
+    "memories/read",
+    "memories/write",
     "model-provider-info",
     "models-manager",
     "network-proxy",
@@ -140,6 +143,7 @@ codex-core-plugins = { path = "core-plugins" }
 codex-core-skills = { path = "core-skills" }
 codex-device-key = { path = "device-key" }
 codex-exec = { path = "exec" }
+codex-file-system = { path = "file-system" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
@@ -153,6 +157,8 @@ codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
+codex-memories-read = { path = "memories/read" }
+codex-memories-write = { path = "memories/write" }
 codex-mcp = { path = "codex-mcp" }
 codex-mcp-server = { path = "mcp-server" }
 codex-model-provider-info = { path = "model-provider-info" }

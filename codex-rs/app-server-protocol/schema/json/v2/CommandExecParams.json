@@ -150,21 +150,6 @@
           "properties": {
             "kind": {
               "enum": [
-                "current_working_directory"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "CurrentWorkingDirectoryFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
                 "project_roots"
               ],
               "type": "string"
@@ -374,53 +359,6 @@
       ],
       "type": "object"
     },
-    "ReadOnlyAccess": {
-      "oneOf": [
-        {
-          "properties": {
-            "includePlatformDefaults": {
-              "default": true,
-              "type": "boolean"
-            },
-            "readableRoots": {
-              "default": [],
-              "items": {
-                "$ref": "#/definitions/AbsolutePathBuf"
-              },
-              "type": "array"
-            },
-            "type": {
-              "enum": [
-                "restricted"
-              ],
-              "title": "RestrictedReadOnlyAccessType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "RestrictedReadOnlyAccess",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "fullAccess"
-              ],
-              "title": "FullAccessReadOnlyAccessType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "FullAccessReadOnlyAccess",
-          "type": "object"
-        }
-      ]
-    },
     "SandboxPolicy": {
       "oneOf": [
         {
@@ -441,16 +379,6 @@
         },
         {
           "properties": {
-            "access": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ReadOnlyAccess"
-                }
-              ],
-              "default": {
-                "type": "fullAccess"
-              }
-            },
             "networkAccess": {
               "default": false,
               "type": "boolean"
@@ -506,16 +434,6 @@
             "networkAccess": {
               "default": false,
               "type": "boolean"
-            },
-            "readOnlyAccess": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ReadOnlyAccess"
-                }
-              ],
-              "default": {
-                "type": "fullAccess"
-              }
             },
             "type": {
               "enum": [

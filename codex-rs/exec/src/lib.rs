@@ -52,6 +52,9 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+use codex_config::ConfigLoadError;
+use codex_config::LoaderOverrides;
+use codex_config::format_config_error_with_source;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -59,9 +62,6 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_and_loader_overrides;
 use codex_core::config::resolve_oss_provider;
-use codex_core::config_loader::ConfigLoadError;
-use codex_core::config_loader::LoaderOverrides;
-use codex_core::config_loader::format_config_error_with_source;
 use codex_core::find_thread_meta_by_name_str;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
@@ -348,7 +348,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
         chatgpt_base_url,
-    );
+    )
+    .await;
     let run_cli_overrides = cli_kv_overrides.clone();
     let run_loader_overrides = loader_overrides.clone();
     let run_cloud_requirements = cloud_requirements.clone();
@@ -399,8 +400,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         codex_self_exe: arg0_paths.codex_self_exe.clone(),
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
-        js_repl_node_path: None,
-        js_repl_node_module_dirs: None,
         zsh_path: None,
         base_instructions: None,
         developer_instructions: None,
@@ -440,7 +439,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
         forced_login_method: config.forced_login_method,
         forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
-    }) {
+    })
+    .await
+    {
         eprintln!("{err}");
         std::process::exit(1);
     }
@@ -577,7 +578,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
 
     let default_cwd = config.cwd.to_path_buf();
     let default_approval_policy = config.permissions.approval_policy.value();
-    let default_sandbox_policy = config.permissions.sandbox_policy.get();
     let default_effort = config.model_reasoning_effort;
 
     let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
@@ -719,7 +719,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
     if !json_mode
         && let Some(message) =
-            codex_core::config::system_bwrap_warning(config.permissions.sandbox_policy.get())
+            codex_core::config::system_bwrap_warning(config.permissions.permission_profile.get())
     {
         event_processor.process_warning(message);
     }
@@ -739,10 +739,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             items,
             output_schema,
         } => {
-            let permission_profile = permission_profile_override_from_config(&config);
-            let sandbox_policy = permission_profile
-                .is_none()
-                .then(|| default_sandbox_policy.clone().into());
+            let permission_profile = Some(config.permissions.permission_profile().into());
             let response: TurnStartResponse = send_request_with_response(
                 &client,
                 ClientRequest::TurnStart {
@@ -755,7 +752,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         cwd: Some(default_cwd),
                         approval_policy: Some(default_approval_policy.into()),
                         approvals_reviewer: None,
-                        sandbox_policy,
+                        sandbox_policy: None,
                         permission_profile,
                         model: None,
                         service_tier: None,
@@ -912,37 +909,15 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn sandbox_mode_from_policy(
-    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
-) -> Option<codex_app_server_protocol::SandboxMode> {
-    match sandbox_policy {
-        codex_protocol::protocol::SandboxPolicy::DangerFullAccess => {
-            Some(codex_app_server_protocol::SandboxMode::DangerFullAccess)
-        }
-        codex_protocol::protocol::SandboxPolicy::ReadOnly { .. } => {
-            Some(codex_app_server_protocol::SandboxMode::ReadOnly)
-        }
-        codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. } => {
-            Some(codex_app_server_protocol::SandboxMode::WorkspaceWrite)
-        }
-        codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. } => None,
-    }
-}
-
 fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
-    let permission_profile = permission_profile_override_from_config(config);
-    let sandbox = permission_profile
-        .is_none()
-        .then(|| sandbox_mode_from_policy(config.permissions.sandbox_policy.get()))
-        .flatten();
     ThreadStartParams {
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
-        sandbox,
-        permission_profile,
+        sandbox: None,
+        permission_profile: Some(config.permissions.permission_profile().into()),
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
         ..ThreadStartParams::default()
@@ -950,11 +925,6 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
 }
 
 fn thread_resume_params_from_config(config: &Config, thread_id: String) -> ThreadResumeParams {
-    let permission_profile = permission_profile_override_from_config(config);
-    let sandbox = permission_profile
-        .is_none()
-        .then(|| sandbox_mode_from_policy(config.permissions.sandbox_policy.get()))
-        .flatten();
     ThreadResumeParams {
         thread_id,
         model: config.model.clone(),
@@ -962,23 +932,10 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
-        sandbox,
-        permission_profile,
+        sandbox: None,
+        permission_profile: Some(config.permissions.permission_profile().into()),
         config: config_request_overrides_from_config(config),
         ..ThreadResumeParams::default()
-    }
-}
-
-fn permission_profile_override_from_config(
-    config: &Config,
-) -> Option<codex_app_server_protocol::PermissionProfile> {
-    if matches!(
-        config.permissions.sandbox_policy.get(),
-        SandboxPolicy::ExternalSandbox { .. }
-    ) {
-        None
-    } else {
-        Some(config.permissions.permission_profile().into())
     }
 }
 

@@ -10,8 +10,10 @@ use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
 use codex_cli::WindowsCommand;
+use codex_cli::read_agent_identity_from_stdin;
 use codex_cli::read_api_key_from_stdin;
 use codex_cli::run_login_status;
+use codex_cli::run_login_with_agent_identity;
 use codex_cli::run_login_with_api_key;
 use codex_cli::run_login_with_chatgpt;
 use codex_cli::run_login_with_device_code;
@@ -43,14 +45,11 @@ mod app_cmd;
 mod desktop_app;
 mod marketplace_cmd;
 mod mcp_cmd;
-mod responses_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
-use crate::responses_cmd::ResponsesCommand;
-use crate::responses_cmd::run_responses_command;
 
 use codex_core::build_models_manager;
 use codex_core::clear_memory_roots_contents;
@@ -162,10 +161,6 @@ enum Subcommand {
     /// Internal: run the responses API proxy.
     #[clap(hide = true)]
     ResponsesApiProxy(ResponsesApiProxyArgs),
-
-    /// Internal: send one raw Responses API payload through Codex auth.
-    #[clap(hide = true)]
-    Responses(ResponsesCommand),
 
     /// Internal: relay stdio to a Unix domain socket.
     #[clap(hide = true, name = "stdio-to-uds")]
@@ -365,6 +360,12 @@ struct LoginCommand {
         help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`)"
     )]
     with_api_key: bool,
+
+    #[arg(
+        long = "with-agent-identity",
+        help = "Read the experimental Agent Identity token from stdin (e.g. `printenv CODEX_AGENT_IDENTITY | codex login --with-agent-identity`)"
+    )]
+    with_agent_identity: bool,
 
     #[arg(
         long = "api-key",
@@ -829,7 +830,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     codex_app_server::run_main_with_transport(
                         arg0_paths.clone(),
                         root_config_overrides,
-                        codex_core::config_loader::LoaderOverrides::default(),
+                        codex_config::LoaderOverrides::default(),
                         analytics_default_enabled,
                         transport,
                         codex_protocol::protocol::SessionSource::VSCode,
@@ -947,7 +948,12 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     run_login_status(login_cli.config_overrides).await;
                 }
                 None => {
-                    if login_cli.use_device_code {
+                    if login_cli.with_api_key && login_cli.with_agent_identity {
+                        eprintln!(
+                            "Choose one login credential source: --with-api-key or --with-agent-identity."
+                        );
+                        std::process::exit(1);
+                    } else if login_cli.use_device_code {
                         run_login_with_device_code(
                             login_cli.config_overrides,
                             login_cli.issuer_base_url,
@@ -962,6 +968,10 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     } else if login_cli.with_api_key {
                         let api_key = read_api_key_from_stdin();
                         run_login_with_api_key(login_cli.config_overrides, api_key).await;
+                    } else if login_cli.with_agent_identity {
+                        let agent_identity = read_agent_identity_from_stdin();
+                        run_login_with_agent_identity(login_cli.config_overrides, agent_identity)
+                            .await;
                     } else {
                         run_login_with_chatgpt(login_cli.config_overrides).await;
                     }
@@ -1129,14 +1139,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )?;
             tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
                 .await??;
-        }
-        Some(Subcommand::Responses(ResponsesCommand {})) => {
-            reject_remote_mode_for_subcommand(
-                root_remote.as_deref(),
-                root_remote_auth_token_env.as_deref(),
-                "responses",
-            )?;
-            run_responses_command(root_config_overrides).await?;
         }
         Some(Subcommand::StdioToUds(cmd)) => {
             reject_remote_mode_for_subcommand(
@@ -1382,7 +1384,7 @@ async fn run_debug_models_command(
             .map_err(anyhow::Error::msg)?;
         let config = Config::load_with_cli_overrides(cli_overrides).await?;
         let auth_manager =
-            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true);
+            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true).await;
         let models_manager =
             build_models_manager(&config, auth_manager, CollaborationModesConfig::default());
         models_manager
@@ -1549,7 +1551,7 @@ async fn run_interactive_tui(
     codex_tui::run_main(
         interactive,
         arg0_paths,
-        codex_core::config_loader::LoaderOverrides::default(),
+        codex_config::LoaderOverrides::default(),
         normalized_remote,
         remote_auth_token,
     )
@@ -1837,12 +1839,13 @@ mod tests {
     }
 
     #[test]
-    fn responses_subcommand_is_hidden_from_help_but_parses() {
-        let help = MultitoolCli::command().render_help().to_string();
-        assert!(!help.contains("responses"));
-
-        let cli = MultitoolCli::try_parse_from(["codex", "responses"]).expect("parse");
-        assert!(matches!(cli.subcommand, Some(Subcommand::Responses(_))));
+    fn responses_subcommand_is_not_registered() {
+        let command = MultitoolCli::command();
+        assert!(
+            command
+                .get_subcommands()
+                .all(|subcommand| subcommand.get_name() != "responses")
+        );
     }
 
     fn help_from_args(args: &[&str]) -> String {

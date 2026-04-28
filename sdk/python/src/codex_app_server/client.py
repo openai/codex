@@ -44,6 +44,7 @@ from .models import (
     UnknownNotification,
 )
 from .retry import retry_on_overload
+from ._version import __version__ as SDK_VERSION
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 ApprovalHandler = Callable[[str, JsonObject | None], JsonObject]
@@ -129,7 +130,7 @@ class AppServerConfig:
     env: dict[str, str] | None = None
     client_name: str = "codex_python_sdk"
     client_title: str = "Codex Python SDK"
-    client_version: str = "0.2.0"
+    client_version: str = SDK_VERSION
     experimental_api: bool = True
 
 
