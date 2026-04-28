@@ -592,20 +592,20 @@ fn remove_remote_plugin_cache(
         .join(PLUGINS_CACHE_DIR)
         .join(marketplace_name)
         .join(legacy_plugin_id);
-    if legacy_remote_plugin_cache_root != plugin_cache_root.as_path() {
-        if legacy_remote_plugin_cache_root.exists() {
-            let result = if legacy_remote_plugin_cache_root.is_dir() {
-                fs::remove_dir_all(&legacy_remote_plugin_cache_root)
-            } else {
-                fs::remove_file(&legacy_remote_plugin_cache_root)
-            };
-            result.map_err(|err| {
-                format!(
-                    "failed to remove remote plugin cache entry {}: {err}",
-                    legacy_remote_plugin_cache_root.display()
-                )
-            })?;
-        }
+    if legacy_remote_plugin_cache_root != plugin_cache_root.as_path()
+        && legacy_remote_plugin_cache_root.exists()
+    {
+        let result = if legacy_remote_plugin_cache_root.is_dir() {
+            fs::remove_dir_all(&legacy_remote_plugin_cache_root)
+        } else {
+            fs::remove_file(&legacy_remote_plugin_cache_root)
+        };
+        result.map_err(|err| {
+            format!(
+                "failed to remove remote plugin cache entry {}: {err}",
+                legacy_remote_plugin_cache_root.display()
+            )
+        })?;
     }
     Ok(())
 }
