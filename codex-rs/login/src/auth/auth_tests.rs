@@ -728,11 +728,12 @@ async fn load_auth_reads_agent_identity_from_env() {
     let _agent_guard = EnvVarGuard::set(CODEX_AGENT_IDENTITY_ENV_VAR, &agent_identity);
 
     let chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let _authapi_guard =
+        EnvVarGuard::set("CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL", &chatgpt_base_url);
     let auth = super::load_auth(
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
-        /*agent_identity_authapi_base_url*/ Some(&chatgpt_base_url),
         Some(&chatgpt_base_url),
     )
     .await
