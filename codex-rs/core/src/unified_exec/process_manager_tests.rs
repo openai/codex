@@ -146,6 +146,18 @@ async fn network_denial_fallback_message_names_sandbox_network_proxy() {
 }
 
 #[tokio::test]
+async fn late_network_denial_grace_observes_cancellation_after_exit() {
+    let cancellation = CancellationToken::new();
+    let cancellation_for_task = cancellation.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        cancellation_for_task.cancel();
+    });
+
+    assert!(wait_for_late_network_denial(Some(cancellation)).await);
+}
+
+#[tokio::test]
 async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
     let (session, turn, rx_event) = crate::session::tests::make_session_and_context_with_rx().await;
     let context = UnifiedExecContext::new(

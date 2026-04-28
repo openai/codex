@@ -337,6 +337,36 @@ async fn finish_call_returns_denial_and_unregisters_active_call() {
 }
 
 #[tokio::test]
+async fn deferred_finish_reuses_denial_result_after_first_consumer() {
+    let service = NetworkApprovalService::default();
+    let cancellation_token =
+        register_call_with_default_shell_trigger(&service, "registration-1").await;
+    let deferred = DeferredNetworkApproval {
+        registration_id: "registration-1".to_string(),
+        cancellation_token,
+        finish_outcome: Arc::new(OnceCell::new()),
+    };
+    service
+        .record_call_outcome(
+            "registration-1",
+            NetworkApprovalOutcome::DeniedByPolicy("network denied".to_string()),
+        )
+        .await;
+
+    let first = deferred
+        .finish(&service)
+        .await
+        .expect_err("first consumer should see denial");
+    let second = deferred
+        .finish(&service)
+        .await
+        .expect_err("second consumer should reuse denial");
+
+    assert!(matches!(first, ToolError::Rejected(message) if message == "network denied"));
+    assert!(matches!(second, ToolError::Rejected(message) if message == "network denied"));
+}
+
+#[tokio::test]
 async fn record_call_outcome_ignores_inactive_call() {
     let service = NetworkApprovalService::default();
     let cancellation_token =

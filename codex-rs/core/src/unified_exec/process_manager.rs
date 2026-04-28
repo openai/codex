@@ -71,6 +71,7 @@ const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
 ];
 const NETWORK_ACCESS_DENIED_MESSAGE: &str =
     "Network access was denied by the Codex sandbox network proxy.";
+const LATE_NETWORK_DENIAL_GRACE_PERIOD: Duration = Duration::from_millis(100);
 
 /// Test-only override for deterministic unified exec process IDs.
 ///
@@ -194,10 +195,15 @@ async fn unregister_network_approval_for_entry(entry: &ProcessEntry) {
     }
 }
 
-async fn finish_network_approval_for_entry(entry: &ProcessEntry) -> Result<(), String> {
+async fn finish_network_approval_after_process_exit_for_entry(
+    entry: &ProcessEntry,
+) -> Result<(), String> {
     let session = entry.session.upgrade();
-    finish_deferred_network_approval_for_session(session.as_ref(), entry.network_approval.clone())
-        .await
+    finish_deferred_network_approval_after_process_exit_for_session(
+        session.as_ref(),
+        entry.network_approval.clone(),
+    )
+    .await
 }
 
 async fn finish_deferred_network_approval_for_session(
@@ -230,6 +236,33 @@ async fn network_denial_message_for_session(
         Ok(()) => NETWORK_ACCESS_DENIED_MESSAGE.to_string(),
         Err(err) => network_approval_error_message(err),
     }
+}
+
+async fn wait_for_late_network_denial(network_cancelled: Option<CancellationToken>) -> bool {
+    let Some(network_cancelled) = network_cancelled else {
+        return false;
+    };
+    if network_cancelled.is_cancelled() {
+        return true;
+    }
+
+    tokio::select! {
+        _ = network_cancelled.cancelled() => true,
+        _ = tokio::time::sleep(LATE_NETWORK_DENIAL_GRACE_PERIOD) => false,
+    }
+}
+
+async fn finish_deferred_network_approval_after_process_exit_for_session(
+    session: Option<&Arc<crate::session::session::Session>>,
+    deferred: Option<DeferredNetworkApproval>,
+) -> Result<(), String> {
+    wait_for_late_network_denial(
+        deferred
+            .as_ref()
+            .map(DeferredNetworkApproval::cancellation_token),
+    )
+    .await;
+    finish_deferred_network_approval_for_session(session, deferred).await
 }
 
 fn fail_process_with_message(process: &UnifiedExecProcess, message: String) -> UnifiedExecError {
@@ -280,13 +313,14 @@ fn terminate_process_on_network_denial(
     let network_cancelled = deferred.cancellation_token();
     let process_exited = process.cancellation_token();
     tokio::spawn(async move {
-        tokio::select! {
-            _ = network_cancelled.cancelled() => {}
+        let denied = tokio::select! {
+            _ = network_cancelled.cancelled() => true,
             _ = process_exited.cancelled() => {
-                if !network_cancelled.is_cancelled() {
-                    return;
-                }
+                wait_for_late_network_denial(Some(network_cancelled.clone())).await
             }
+        };
+        if !denied {
+            return;
         }
         let session = session.upgrade();
         let message = network_denial_message_for_session(session.as_ref(), Some(deferred)).await;
@@ -483,11 +517,12 @@ impl UnifiedExecProcessManager {
                     ..
                 } => (Some(process_id), exit_code),
                 ProcessStatus::Exited { exit_code, entry } => {
-                    if let Err(message) = finish_deferred_network_approval_for_session(
-                        Some(&context.session),
-                        deferred_network_approval.take(),
-                    )
-                    .await
+                    if let Err(message) =
+                        finish_deferred_network_approval_after_process_exit_for_session(
+                            Some(&context.session),
+                            deferred_network_approval.take(),
+                        )
+                        .await
                     {
                         return Err(fail_process_with_message(entry.process.as_ref(), message));
                     }
@@ -502,7 +537,7 @@ impl UnifiedExecProcessManager {
             // Short‑lived command: emit ExecCommandEnd immediately using the
             // same helper as the background watcher, so all end events share
             // one implementation.
-            let finish_result = finish_deferred_network_approval_for_session(
+            let finish_result = finish_deferred_network_approval_after_process_exit_for_session(
                 Some(&context.session),
                 deferred_network_approval.take(),
             )
@@ -674,7 +709,9 @@ impl UnifiedExecProcessManager {
             } => (Some(process_id), exit_code, call_id),
             ProcessStatus::Exited { exit_code, entry } => {
                 let call_id = entry.call_id.clone();
-                if let Err(message) = finish_network_approval_for_entry(&entry).await {
+                if let Err(message) =
+                    finish_network_approval_after_process_exit_for_entry(&entry).await
+                {
                     return Err(fail_process_with_message(entry.process.as_ref(), message));
                 }
                 (None, exit_code, call_id)

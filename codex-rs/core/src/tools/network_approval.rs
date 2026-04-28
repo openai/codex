@@ -33,6 +33,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -56,6 +57,7 @@ pub(crate) struct NetworkApprovalSpec {
 pub(crate) struct DeferredNetworkApproval {
     registration_id: String,
     cancellation_token: CancellationToken,
+    finish_outcome: Arc<OnceCell<Option<NetworkApprovalOutcome>>>,
 }
 
 impl DeferredNetworkApproval {
@@ -69,6 +71,15 @@ impl DeferredNetworkApproval {
 
     pub(crate) fn is_cancelled(&self) -> bool {
         self.cancellation_token.is_cancelled()
+    }
+
+    async fn finish(&self, service: &NetworkApprovalService) -> Result<(), ToolError> {
+        let outcome = self
+            .finish_outcome
+            .get_or_init(|| async { service.finish_call_outcome(&self.registration_id).await })
+            .await
+            .clone();
+        network_approval_outcome_to_result(outcome)
     }
 }
 
@@ -99,6 +110,7 @@ impl ActiveNetworkApproval {
                 Some(DeferredNetworkApproval {
                     registration_id,
                     cancellation_token,
+                    finish_outcome: Arc::new(OnceCell::new()),
                 })
             }
             _ => None,
@@ -143,6 +155,18 @@ enum PendingApprovalDecision {
 enum NetworkApprovalOutcome {
     DeniedByUser,
     DeniedByPolicy(String),
+}
+
+fn network_approval_outcome_to_result(
+    outcome: Option<NetworkApprovalOutcome>,
+) -> Result<(), ToolError> {
+    match outcome {
+        Some(NetworkApprovalOutcome::DeniedByUser) => {
+            Err(ToolError::Rejected("rejected by user".to_string()))
+        }
+        Some(NetworkApprovalOutcome::DeniedByPolicy(message)) => Err(ToolError::Rejected(message)),
+        None => Ok(()),
+    }
 }
 
 /// Whether an allowlist miss may be reviewed instead of hard-denied.
@@ -325,18 +349,12 @@ impl NetworkApprovalService {
         calls.call_outcomes.remove(registration_id)
     }
 
-    async fn finish_call(&self, registration_id: &str) -> Result<(), ToolError> {
-        let approval_outcome = self.remove_call(registration_id).await;
+    async fn finish_call_outcome(&self, registration_id: &str) -> Option<NetworkApprovalOutcome> {
+        self.remove_call(registration_id).await
+    }
 
-        match approval_outcome {
-            Some(NetworkApprovalOutcome::DeniedByUser) => {
-                Err(ToolError::Rejected("rejected by user".to_string()))
-            }
-            Some(NetworkApprovalOutcome::DeniedByPolicy(message)) => {
-                Err(ToolError::Rejected(message))
-            }
-            None => Ok(()),
-        }
+    async fn finish_call(&self, registration_id: &str) -> Result<(), ToolError> {
+        network_approval_outcome_to_result(self.finish_call_outcome(registration_id).await)
     }
 
     pub(crate) async fn record_blocked_request(&self, blocked: BlockedRequest) {
@@ -737,11 +755,7 @@ pub(crate) async fn finish_deferred_network_approval(
     let Some(deferred) = deferred else {
         return Ok(());
     };
-    session
-        .services
-        .network_approval
-        .finish_call(deferred.registration_id())
-        .await
+    deferred.finish(&session.services.network_approval).await
 }
 
 #[cfg(test)]
