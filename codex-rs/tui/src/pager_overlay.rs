@@ -1221,7 +1221,7 @@ mod tests {
 
     #[test]
     fn transcript_overlay_consolidation_remaps_highlight_inside_range() {
-        let mut overlay = TranscriptOverlay::new(
+        let mut overlay = transcript_overlay(
             (0..6)
                 .map(|i| {
                     Arc::new(TestCell {
@@ -1248,7 +1248,7 @@ mod tests {
 
     #[test]
     fn transcript_overlay_consolidation_remaps_highlight_after_range() {
-        let mut overlay = TranscriptOverlay::new(
+        let mut overlay = transcript_overlay(
             (0..7)
                 .map(|i| {
                     Arc::new(TestCell {

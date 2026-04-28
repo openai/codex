@@ -23,7 +23,6 @@ use crate::bottom_pane::list_selection_view::ListSelectionView;
 use crate::bottom_pane::list_selection_view::SelectionItem;
 use crate::bottom_pane::list_selection_view::SelectionViewParams;
 use crate::bottom_pane::popup_consts::accept_cancel_hint_line;
-use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
 use crate::key_hint;
@@ -1896,7 +1895,14 @@ mod tests {
             cwd: absolute_path("/tmp"),
             changes,
         };
-        let view = ApprovalOverlay::new(request, tx, Features::with_defaults());
+        let keymap = crate::keymap::RuntimeKeymap::defaults();
+        let view = ApprovalOverlay::new(
+            request,
+            tx,
+            Features::with_defaults(),
+            keymap.approval,
+            keymap.list,
+        );
         let rendered = render_overlay_lines(&view, /*width*/ 120);
         assert!(rendered.contains("Thread: Banach [worker]"));
         assert!(rendered.contains("o to open thread"));
