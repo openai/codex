@@ -1055,6 +1055,8 @@ async fn assert_agent_identity_plan_alias(
         .mount(&server)
         .await;
     let chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let _authapi_guard =
+        EnvVarGuard::set("CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL", &chatgpt_base_url);
     let auth = CodexAuth::from_agent_identity_jwt(&jwt, Some(&chatgpt_base_url))
         .await
         .expect("agent identity auth");
