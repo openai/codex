@@ -1938,7 +1938,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                     }
                 };
 
-                outgoing.send_response(request_id, response).await;
+                outgoing
+                    .send_response(
+                        request_id,
+                        codex_app_server_protocol::ClientResponsePayload::ThreadRollback(response),
+                    )
+                    .await;
             }
         }
         EventMsg::ThreadNameUpdated(thread_name_event) => {
@@ -2354,10 +2359,24 @@ async fn respond_to_pending_interrupts(
                     continue;
                 };
                 let response = InterruptConversationResponse { abort_reason };
-                outgoing.send_response(rid, response).await;
+                outgoing
+                    .send_response(
+                        rid,
+                        codex_app_server_protocol::ClientResponsePayload::InterruptConversation(
+                            response,
+                        ),
+                    )
+                    .await;
             }
             ApiVersion::V2 => {
-                outgoing.send_response(rid, TurnInterruptResponse {}).await;
+                outgoing
+                    .send_response(
+                        rid,
+                        codex_app_server_protocol::ClientResponsePayload::TurnInterrupt(
+                            TurnInterruptResponse {},
+                        ),
+                    )
+                    .await;
             }
         }
     }

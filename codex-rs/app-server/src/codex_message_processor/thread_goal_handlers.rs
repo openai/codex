@@ -171,7 +171,9 @@ impl CodexMessageProcessor {
         self.outgoing
             .send_response(
                 request_id.clone(),
-                ThreadGoalSetResponse { goal: goal.clone() },
+                codex_app_server_protocol::ClientResponsePayload::ThreadGoalSet(
+                    ThreadGoalSetResponse { goal: goal.clone() },
+                ),
             )
             .await;
         self.emit_thread_goal_updated_ordered(thread_id, goal, listener_command_tx)
@@ -215,7 +217,12 @@ impl CodexMessageProcessor {
             }
         };
         self.outgoing
-            .send_response(request_id, ThreadGoalGetResponse { goal })
+            .send_response(
+                request_id,
+                codex_app_server_protocol::ClientResponsePayload::ThreadGoalGet(
+                    ThreadGoalGetResponse { goal },
+                ),
+            )
             .await;
     }
 
@@ -315,7 +322,12 @@ impl CodexMessageProcessor {
         }
 
         self.outgoing
-            .send_response(request_id, ThreadGoalClearResponse { cleared })
+            .send_response(
+                request_id,
+                codex_app_server_protocol::ClientResponsePayload::ThreadGoalClear(
+                    ThreadGoalClearResponse { cleared },
+                ),
+            )
             .await;
         if cleared {
             self.emit_thread_goal_cleared_ordered(thread_id, listener_command_tx)

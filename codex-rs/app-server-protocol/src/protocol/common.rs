@@ -158,6 +158,84 @@ macro_rules! client_request_definitions {
                     })
                     .unwrap_or_else(|| "<unknown>".to_string())
             }
+
+            pub fn into_jsonrpc_parts(
+                self,
+            ) -> std::result::Result<(RequestId, crate::Result), serde_json::Error> {
+                match self {
+                    $(
+                        Self::$variant { request_id, response } => {
+                            serde_json::to_value(response).map(|result| (request_id, result))
+                        }
+                    )*
+                }
+            }
+        }
+
+        #[derive(Debug, Clone)]
+        #[allow(clippy::large_enum_variant)]
+        pub enum ClientResponsePayload {
+            $( $variant($response), )*
+            InterruptConversation(v1::InterruptConversationResponse),
+        }
+
+        impl ClientResponsePayload {
+            pub fn into_jsonrpc_parts_and_payload(
+                self,
+                request_id: RequestId,
+            ) -> std::result::Result<
+                (RequestId, crate::Result, Option<ClientResponsePayload>),
+                serde_json::Error,
+            > {
+                match self {
+                    $(
+                        Self::$variant(response) => {
+                            let result = serde_json::to_value(&response)?;
+                            Ok((request_id, result, Some(Self::$variant(response))))
+                        }
+                    )*
+                    Self::InterruptConversation(response) => {
+                        serde_json::to_value(response).map(|result| (request_id, result, None))
+                    }
+                }
+            }
+
+            pub fn into_client_response(self, request_id: RequestId) -> Option<ClientResponse> {
+                match self {
+                    $(
+                        Self::$variant(response) => {
+                            Some(ClientResponse::$variant {
+                                request_id,
+                                response,
+                            })
+                        }
+                    )*
+                    Self::InterruptConversation(_) => None,
+                }
+            }
+
+            pub fn into_jsonrpc_parts(
+                self,
+                request_id: RequestId,
+            ) -> std::result::Result<(RequestId, crate::Result), serde_json::Error> {
+                self.to_jsonrpc_parts(request_id)
+            }
+
+            pub fn to_jsonrpc_parts(
+                &self,
+                request_id: RequestId,
+            ) -> std::result::Result<(RequestId, crate::Result), serde_json::Error> {
+                match self {
+                    $(
+                        Self::$variant(response) => {
+                            serde_json::to_value(response).map(|result| (request_id, result))
+                        }
+                    )*
+                    Self::InterruptConversation(response) => {
+                        serde_json::to_value(response).map(|result| (request_id, result))
+                    }
+                }
+            }
         }
 
         impl crate::experimental_api::ExperimentalApi for ClientRequest {
@@ -2215,3 +2293,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "common_tests.rs"]
+mod common_tests;

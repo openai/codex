@@ -33,6 +33,7 @@ use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
@@ -676,7 +677,10 @@ impl MessageProcessor {
             };
 
             self.outgoing
-                .send_response(connection_request_id, response)
+                .send_response(
+                    connection_request_id,
+                    ClientResponsePayload::Initialize(response),
+                )
                 .await;
 
             if let Some(outbound_initialized) = outbound_initialized {
@@ -717,15 +721,11 @@ impl MessageProcessor {
             return Err(invalid_request(experimental_required_message(reason)));
         }
         let connection_id = connection_request_id.connection_id;
-        if let ClientRequest::TurnStart { request_id, .. }
-        | ClientRequest::TurnSteer { request_id, .. } = &codex_request
-        {
-            self.analytics_events_client.track_request(
-                connection_id.0,
-                request_id.clone(),
-                codex_request.clone(),
-            );
-        }
+        self.analytics_events_client.track_request(
+            connection_id.0,
+            connection_request_id.request_id.clone(),
+            codex_request.clone(),
+        );
 
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
@@ -763,6 +763,7 @@ impl MessageProcessor {
                     .send_result(
                         request_id_for_connection(request_id),
                         self.config_api.read(params).await,
+                        ClientResponsePayload::ConfigRead,
                     )
                     .await;
             }
@@ -771,6 +772,7 @@ impl MessageProcessor {
                     .send_result(
                         request_id_for_connection(request_id),
                         self.external_agent_config_api.detect(params).await,
+                        ClientResponsePayload::ExternalAgentConfigDetect,
                     )
                     .await;
             }
@@ -804,6 +806,7 @@ impl MessageProcessor {
                     .send_result(
                         request_id_for_connection(request_id),
                         self.config_api.config_requirements_read().await,
+                        ClientResponsePayload::ConfigRequirementsRead,
                     )
                     .await;
             }
@@ -833,6 +836,7 @@ impl MessageProcessor {
                     .send_result(
                         request_id_for_connection(request_id),
                         self.fs_api.read_file(params).await,
+                        ClientResponsePayload::FsReadFile,
                     )
                     .await;
             }
@@ -841,6 +845,7 @@ impl MessageProcessor {
                     .send_result(
                         request_id_for_connection(request_id),
                         self.fs_api.write_file(params).await,
+                        ClientResponsePayload::FsWriteFile,
                     )
                     .await;
             }
@@ -849,6 +854,7 @@ impl MessageProcessor {
                     .send_result(
                         request_id_for_connection(request_id),
                         self.fs_api.create_directory(params).await,
+                        ClientResponsePayload::FsCreateDirectory,
                     )
                     .await;
             }
@@ -857,6 +863,7 @@ impl MessageProcessor {
                     .send_result(
                         request_id_for_connection(request_id),
                         self.fs_api.get_metadata(params).await,
+                        ClientResponsePayload::FsGetMetadata,
                     )
                     .await;
             }
@@ -865,6 +872,7 @@ impl MessageProcessor {
                     .send_result(
                         request_id_for_connection(request_id),
                         self.fs_api.read_directory(params).await,
+                        ClientResponsePayload::FsReadDirectory,
                     )
                     .await;
             }
@@ -873,6 +881,7 @@ impl MessageProcessor {
                     .send_result(
                         request_id_for_connection(request_id),
                         self.fs_api.remove(params).await,
+                        ClientResponsePayload::FsRemove,
                     )
                     .await;
             }
@@ -881,6 +890,7 @@ impl MessageProcessor {
                     .send_result(
                         request_id_for_connection(request_id),
                         self.fs_api.copy(params).await,
+                        ClientResponsePayload::FsCopy,
                     )
                     .await;
             }
@@ -889,6 +899,7 @@ impl MessageProcessor {
                     .send_result(
                         request_id_for_connection(request_id),
                         self.fs_watch_manager.watch(connection_id, params).await,
+                        ClientResponsePayload::FsWatch,
                     )
                     .await;
             }
@@ -897,6 +908,7 @@ impl MessageProcessor {
                     .send_result(
                         request_id_for_connection(request_id),
                         self.fs_watch_manager.unwatch(connection_id, params).await,
+                        ClientResponsePayload::FsUnwatch,
                     )
                     .await;
             }
@@ -925,7 +937,12 @@ impl MessageProcessor {
         params: ConfigValueWriteParams,
     ) {
         let result = self.config_api.write_value(params).await;
-        self.handle_config_mutation_result(request_id, result).await
+        self.handle_config_mutation_result(
+            request_id,
+            result,
+            ClientResponsePayload::ConfigValueWrite,
+        )
+        .await
     }
 
     async fn handle_config_batch_write(
@@ -934,7 +951,12 @@ impl MessageProcessor {
         params: ConfigBatchWriteParams,
     ) {
         let result = self.config_api.batch_write(params).await;
-        self.handle_config_mutation_result(request_id, result).await;
+        self.handle_config_mutation_result(
+            request_id,
+            result,
+            ClientResponsePayload::ConfigBatchWrite,
+        )
+        .await;
     }
 
     async fn handle_experimental_feature_enablement_set(
@@ -948,7 +970,12 @@ impl MessageProcessor {
             .set_experimental_feature_enablement(params)
             .await;
         let is_ok = result.is_ok();
-        self.handle_config_mutation_result(request_id, result).await;
+        self.handle_config_mutation_result(
+            request_id,
+            result,
+            ClientResponsePayload::ExperimentalFeatureEnablementSet,
+        )
+        .await;
         if should_refresh_apps_list && is_ok {
             self.refresh_apps_list_after_experimental_feature_enablement_set()
                 .await;
@@ -1024,15 +1051,18 @@ impl MessageProcessor {
         });
     }
 
-    async fn handle_config_mutation_result<T: serde::Serialize>(
+    async fn handle_config_mutation_result<T>(
         &self,
         request_id: ConnectionRequestId,
         result: std::result::Result<T, JSONRPCErrorError>,
+        wrap_success: impl FnOnce(T) -> ClientResponsePayload,
     ) {
         match result {
             Ok(response) => {
                 self.handle_config_mutation().await;
-                self.outgoing.send_response(request_id, response).await;
+                self.outgoing
+                    .send_response(request_id, wrap_success(response))
+                    .await;
             }
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
@@ -1071,6 +1101,7 @@ impl MessageProcessor {
             request_id,
             "device/key/create",
             device_key_requests_allowed,
+            ClientResponsePayload::DeviceKeyCreate,
             move |device_key_api| async move { device_key_api.create(params).await },
         );
     }
@@ -1085,6 +1116,7 @@ impl MessageProcessor {
             request_id,
             "device/key/public",
             device_key_requests_allowed,
+            ClientResponsePayload::DeviceKeyPublic,
             move |device_key_api| async move { device_key_api.public(params).await },
         );
     }
@@ -1099,6 +1131,7 @@ impl MessageProcessor {
             request_id,
             "device/key/sign",
             device_key_requests_allowed,
+            ClientResponsePayload::DeviceKeySign,
             move |device_key_api| async move { device_key_api.sign(params).await },
         );
     }
@@ -1108,6 +1141,7 @@ impl MessageProcessor {
         request_id: ConnectionRequestId,
         method: &'static str,
         device_key_requests_allowed: bool,
+        wrap_success: fn(R) -> ClientResponsePayload,
         run_request: F,
     ) where
         R: serde::Serialize + Send + 'static,
@@ -1126,7 +1160,7 @@ impl MessageProcessor {
                 run_request(device_key_api).await
             }
             .await;
-            outgoing.send_result(request_id, result).await;
+            outgoing.send_result(request_id, result, wrap_success).await;
         });
     }
 
@@ -1147,7 +1181,12 @@ impl MessageProcessor {
             self.handle_config_mutation().await;
         }
         self.outgoing
-            .send_response(request_id, ExternalAgentConfigImportResponse {})
+            .send_response(
+                request_id,
+                ClientResponsePayload::ExternalAgentConfigImport(
+                    ExternalAgentConfigImportResponse {},
+                ),
+            )
             .await;
 
         if !has_plugin_imports {

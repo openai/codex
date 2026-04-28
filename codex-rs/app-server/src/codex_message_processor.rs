@@ -43,6 +43,7 @@ use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CollaborationModeListResponse;
@@ -1375,7 +1376,9 @@ impl CodexMessageProcessor {
             .await
             .map(|()| LoginAccountResponse::ApiKey {});
         let logged_in = result.is_ok();
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::LoginAccount)
+            .await;
 
         if logged_in {
             self.send_login_success_notifications(/*login_id*/ None)
@@ -1443,7 +1446,9 @@ impl CodexMessageProcessor {
 
     async fn login_chatgpt_v2(&self, request_id: ConnectionRequestId) {
         let result = self.login_chatgpt_response().await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::LoginAccount)
+            .await;
     }
 
     async fn login_chatgpt_response(&self) -> Result<LoginAccountResponse, JSONRPCErrorError> {
@@ -1512,7 +1517,9 @@ impl CodexMessageProcessor {
 
     async fn login_chatgpt_device_code_v2(&self, request_id: ConnectionRequestId) {
         let result = self.login_chatgpt_device_code_response().await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::LoginAccount)
+            .await;
     }
 
     async fn login_chatgpt_device_code_response(
@@ -1602,7 +1609,13 @@ impl CodexMessageProcessor {
         params: CancelLoginAccountParams,
     ) {
         let result = self.cancel_login_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::CancelLoginAccount,
+            )
+            .await;
     }
 
     async fn cancel_login_response(
@@ -1630,7 +1643,9 @@ impl CodexMessageProcessor {
             .login_chatgpt_auth_tokens_response(access_token, chatgpt_account_id, chatgpt_plan_type)
             .await;
         let logged_in = result.is_ok();
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::LoginAccount)
+            .await;
 
         if logged_in {
             self.send_login_success_notifications(/*login_id*/ None)
@@ -1784,7 +1799,11 @@ impl CodexMessageProcessor {
                     plan_type: None,
                 });
         self.outgoing
-            .send_result(request_id, result.map(|_| LogoutAccountResponse {}))
+            .send_result(
+                request_id,
+                result.map(|_| LogoutAccountResponse {}),
+                ClientResponsePayload::LogoutAccount,
+            )
             .await;
 
         if let Some(payload) = account_updated {
@@ -1869,12 +1888,19 @@ impl CodexMessageProcessor {
             }
         };
 
-        self.outgoing.send_response(request_id, response).await;
+        self.outgoing
+            .send_response(
+                request_id,
+                codex_app_server_protocol::ClientResponsePayload::GetAuthStatus(response),
+            )
+            .await;
     }
 
     async fn get_account(&self, request_id: ConnectionRequestId, params: GetAccountParams) {
         let result = self.get_account_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::GetAccount)
+            .await;
     }
 
     async fn get_account_response(
@@ -1920,7 +1946,13 @@ impl CodexMessageProcessor {
                         ),
                     },
                 );
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::GetAccountRateLimits,
+            )
+            .await;
     }
 
     async fn send_add_credits_nudge_email(
@@ -1932,7 +1964,13 @@ impl CodexMessageProcessor {
             .send_add_credits_nudge_email_inner(params)
             .await
             .map(|status| SendAddCreditsNudgeEmailResponse { status });
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::SendAddCreditsNudgeEmail,
+            )
+            .await;
     }
 
     async fn send_add_credits_nudge_email_inner(
@@ -2063,7 +2101,7 @@ impl CodexMessageProcessor {
         let result = self
             .exec_one_off_command_inner(request_id.clone(), params)
             .await
-            .map(|()| None::<serde_json::Value>);
+            .map(|()| None);
         self.send_optional_result(request_id, result).await;
     }
 
@@ -2311,7 +2349,9 @@ impl CodexMessageProcessor {
             .command_exec_manager
             .write(request_id.clone(), params)
             .await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::CommandExecWrite)
+            .await;
     }
 
     async fn command_exec_resize(
@@ -2323,7 +2363,9 @@ impl CodexMessageProcessor {
             .command_exec_manager
             .resize(request_id.clone(), params)
             .await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::CommandExecResize)
+            .await;
     }
 
     async fn command_exec_terminate(
@@ -2335,7 +2377,13 @@ impl CodexMessageProcessor {
             .command_exec_manager
             .terminate(request_id.clone(), params)
             .await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::CommandExecTerminate,
+            )
+            .await;
     }
 
     async fn thread_start(
@@ -2747,10 +2795,12 @@ impl CodexMessageProcessor {
                             response: response.clone(),
                         },
                     );
-
                 listener_task_context
                     .outgoing
-                    .send_response(request_id, response)
+                    .send_response(
+                        request_id,
+                        codex_app_server_protocol::ClientResponsePayload::ThreadStart(response),
+                    )
                     .instrument(tracing::info_span!(
                         "app_server.thread_start.send_response",
                         otel.name = "app_server.thread_start.send_response",
@@ -2817,7 +2867,11 @@ impl CodexMessageProcessor {
             .ok()
             .map(|(_, thread_ids)| thread_ids.clone());
         self.outgoing
-            .send_result(request_id, result.map(|(response, _)| response))
+            .send_result(
+                request_id,
+                result.map(|(response, _)| response),
+                ClientResponsePayload::ThreadArchive,
+            )
             .await;
 
         if let Some(archived_thread_ids) = archived_thread_ids {
@@ -2959,7 +3013,13 @@ impl CodexMessageProcessor {
             })
         }
         .await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::ThreadIncrementElicitation,
+            )
+            .await;
     }
 
     async fn thread_decrement_elicitation(
@@ -2984,7 +3044,13 @@ impl CodexMessageProcessor {
             })
         }
         .await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::ThreadDecrementElicitation,
+            )
+            .await;
     }
 
     async fn thread_set_name(&self, request_id: ConnectionRequestId, params: ThreadSetNameParams) {
@@ -2994,7 +3060,11 @@ impl CodexMessageProcessor {
             .ok()
             .and_then(|(_, notification)| notification.clone());
         self.outgoing
-            .send_result(request_id, result.map(|(response, _)| response))
+            .send_result(
+                request_id,
+                result.map(|(response, _)| response),
+                ClientResponsePayload::ThreadSetName,
+            )
             .await;
 
         if let Some(notification) = notification {
@@ -3051,7 +3121,13 @@ impl CodexMessageProcessor {
         params: ThreadMemoryModeSetParams,
     ) {
         let result = self.thread_memory_mode_set_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::ThreadMemoryModeSet,
+            )
+            .await;
     }
 
     async fn thread_memory_mode_set_response(
@@ -3095,7 +3171,9 @@ impl CodexMessageProcessor {
 
     async fn memory_reset(&self, request_id: ConnectionRequestId, _params: Option<()>) {
         let result = self.memory_reset_response().await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::MemoryReset)
+            .await;
     }
 
     async fn memory_reset_response(&self) -> Result<MemoryResetResponse, JSONRPCErrorError> {
@@ -3130,7 +3208,13 @@ impl CodexMessageProcessor {
         params: ThreadMetadataUpdateParams,
     ) {
         let result = self.thread_metadata_update_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::ThreadMetadataUpdate,
+            )
+            .await;
     }
 
     async fn thread_metadata_update_response(
@@ -3363,7 +3447,11 @@ impl CodexMessageProcessor {
                     thread_id: thread_id.clone(),
                 });
         self.outgoing
-            .send_result(request_id, result.map(|(response, _)| response))
+            .send_result(
+                request_id,
+                result.map(|(response, _)| response),
+                ClientResponsePayload::ThreadUnarchive,
+            )
             .await;
 
         if let Some(notification) = notification {
@@ -3411,7 +3499,7 @@ impl CodexMessageProcessor {
         let result = self
             .thread_rollback_start(&request_id, params)
             .await
-            .map(|()| None::<serde_json::Value>);
+            .map(|()| None);
         self.send_optional_result(request_id, result).await;
     }
 
@@ -3482,7 +3570,13 @@ impl CodexMessageProcessor {
             Ok::<_, JSONRPCErrorError>(ThreadCompactStartResponse {})
         }
         .await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::ThreadCompactStart,
+            )
+            .await;
     }
 
     async fn thread_background_terminals_clean(
@@ -3502,7 +3596,13 @@ impl CodexMessageProcessor {
             Ok::<_, JSONRPCErrorError>(ThreadBackgroundTerminalsCleanResponse {})
         }
         .await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::ThreadBackgroundTerminalsClean,
+            )
+            .await;
     }
 
     async fn thread_shell_command(
@@ -3528,7 +3628,13 @@ impl CodexMessageProcessor {
             Ok::<_, JSONRPCErrorError>(ThreadShellCommandResponse {})
         }
         .await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::ThreadShellCommand,
+            )
+            .await;
     }
 
     async fn thread_approve_guardian_denied_action(
@@ -3552,12 +3658,20 @@ impl CodexMessageProcessor {
             Ok::<_, JSONRPCErrorError>(ThreadApproveGuardianDeniedActionResponse {})
         }
         .await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::ThreadApproveGuardianDeniedAction,
+            )
+            .await;
     }
 
     async fn thread_list(&self, request_id: ConnectionRequestId, params: ThreadListParams) {
         let result = self.thread_list_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::ThreadList)
+            .await;
     }
 
     async fn thread_list_response(
@@ -3651,7 +3765,9 @@ impl CodexMessageProcessor {
         params: ThreadLoadedListParams,
     ) {
         let result = self.thread_loaded_list_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::ThreadLoadedList)
+            .await;
     }
 
     async fn thread_loaded_list_response(
@@ -3703,7 +3819,9 @@ impl CodexMessageProcessor {
 
     async fn thread_read(&self, request_id: ConnectionRequestId, params: ThreadReadParams) {
         let result = self.thread_read_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::ThreadRead)
+            .await;
     }
 
     async fn thread_read_response(
@@ -3881,7 +3999,9 @@ impl CodexMessageProcessor {
         params: ThreadTurnsListParams,
     ) {
         let result = self.thread_turns_list_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::ThreadTurnsList)
+            .await;
     }
 
     async fn thread_turns_list_response(
@@ -4260,6 +4380,9 @@ impl CodexMessageProcessor {
                     permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
                 };
+
+                let connection_id = request_id.connection_id;
+                let token_usage_thread = include_turns.then(|| response.thread.clone());
                 self.analytics_events_client.track_response(
                     request_id.connection_id.0,
                     ClientResponse::ThreadResume {
@@ -4267,10 +4390,12 @@ impl CodexMessageProcessor {
                         response: response.clone(),
                     },
                 );
-
-                let connection_id = request_id.connection_id;
-                let token_usage_thread = include_turns.then(|| response.thread.clone());
-                self.outgoing.send_response(request_id, response).await;
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        codex_app_server_protocol::ClientResponsePayload::ThreadResume(response),
+                    )
+                    .await;
                 // `excludeTurns` is explicitly the cheap resume path, so avoid
                 // rebuilding history only to attribute a replayed usage update.
                 if let Some(token_usage_thread) = token_usage_thread {
@@ -4879,6 +5004,8 @@ impl CodexMessageProcessor {
             }
         };
 
+        let connection_id = request_id.connection_id;
+        let token_usage_thread = include_turns.then(|| response.thread.clone());
         self.analytics_events_client.track_response(
             request_id.connection_id.0,
             ClientResponse::ThreadFork {
@@ -4886,10 +5013,12 @@ impl CodexMessageProcessor {
                 response: response.clone(),
             },
         );
-
-        let connection_id = request_id.connection_id;
-        let token_usage_thread = include_turns.then(|| response.thread.clone());
-        self.outgoing.send_response(request_id, response).await;
+        self.outgoing
+            .send_response(
+                request_id,
+                codex_app_server_protocol::ClientResponsePayload::ThreadFork(response),
+            )
+            .await;
         // `excludeTurns` is the cheap fork path, so skip restored usage replay
         // instead of rebuilding history only to attribute a historical update.
         if let Some(token_usage_thread) = token_usage_thread {
@@ -4927,7 +5056,13 @@ impl CodexMessageProcessor {
         params: GetConversationSummaryParams,
     ) {
         let result = self.get_thread_summary_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::GetConversationSummary,
+            )
+            .await;
     }
 
     async fn get_thread_summary_response(
@@ -5131,7 +5266,9 @@ impl CodexMessageProcessor {
             })
         }
         .await;
-        outgoing.send_result(request_id, result).await;
+        outgoing
+            .send_result(request_id, result, ClientResponsePayload::ModelList)
+            .await;
     }
 
     async fn list_collaboration_modes(
@@ -5147,7 +5284,12 @@ impl CodexMessageProcessor {
             .map(Into::into)
             .collect();
         let response = CollaborationModeListResponse { data: items };
-        outgoing.send_response(request_id, response).await;
+        outgoing
+            .send_response(
+                request_id,
+                codex_app_server_protocol::ClientResponsePayload::CollaborationModeList(response),
+            )
+            .await;
     }
 
     async fn experimental_feature_list(
@@ -5156,7 +5298,13 @@ impl CodexMessageProcessor {
         params: ExperimentalFeatureListParams,
     ) {
         let result = self.experimental_feature_list_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::ExperimentalFeatureList,
+            )
+            .await;
     }
 
     async fn experimental_feature_list_response(
@@ -5254,7 +5402,12 @@ impl CodexMessageProcessor {
     ) {
         let MockExperimentalMethodParams { value } = params;
         let response = MockExperimentalMethodResponse { echoed: value };
-        self.outgoing.send_response(request_id, response).await;
+        self.outgoing
+            .send_response(
+                request_id,
+                codex_app_server_protocol::ClientResponsePayload::MockExperimentalMethod(response),
+            )
+            .await;
     }
 
     async fn mcp_server_refresh(&self, request_id: ConnectionRequestId, _params: Option<()>) {
@@ -5264,7 +5417,9 @@ impl CodexMessageProcessor {
             Ok::<_, JSONRPCErrorError>(McpServerRefreshResponse {})
         }
         .await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::McpServerRefresh)
+            .await;
     }
 
     async fn queue_mcp_server_refresh_for_config(
@@ -5319,7 +5474,13 @@ impl CodexMessageProcessor {
         params: McpServerOauthLoginParams,
     ) {
         let result = self.mcp_server_oauth_login_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::McpServerOauthLogin,
+            )
+            .await;
     }
 
     async fn mcp_server_oauth_login_response(
@@ -5467,7 +5628,13 @@ impl CodexMessageProcessor {
             runtime_environment,
         )
         .await;
-        outgoing.send_result(request_id, result).await;
+        outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::McpServerStatusList,
+            )
+            .await;
     }
 
     async fn list_mcp_server_status_response(
@@ -5638,7 +5805,9 @@ impl CodexMessageProcessor {
                     ))
                 })
             });
-        outgoing.send_result(request_id, result).await;
+        outgoing
+            .send_result(request_id, result, ClientResponsePayload::McpResourceRead)
+            .await;
     }
 
     async fn call_mcp_server_tool(
@@ -5663,17 +5832,17 @@ impl CodexMessageProcessor {
                 .await
                 .map(McpServerToolCallResponse::from)
                 .map_err(|error| internal_error(format!("{error:#}")));
-            outgoing.send_result(request_id, result).await;
+            outgoing
+                .send_result(request_id, result, ClientResponsePayload::McpServerToolCall)
+                .await;
         });
     }
 
-    async fn send_optional_result<T>(
+    async fn send_optional_result(
         &self,
         request_id: ConnectionRequestId,
-        result: Result<Option<T>, JSONRPCErrorError>,
-    ) where
-        T: serde::Serialize,
-    {
+        result: Result<Option<ClientResponsePayload>, JSONRPCErrorError>,
+    ) {
         match result {
             Ok(Some(response)) => self.outgoing.send_response(request_id, response).await,
             Ok(None) => {}
@@ -5786,7 +5955,9 @@ impl CodexMessageProcessor {
         let result = self
             .thread_unsubscribe_response(params, request_id.connection_id)
             .await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::ThreadUnsubscribe)
+            .await;
     }
 
     async fn thread_unsubscribe_response(
@@ -5871,10 +6042,10 @@ impl CodexMessageProcessor {
             self.outgoing
                 .send_response(
                     request_id,
-                    AppsListResponse {
+                    codex_app_server_protocol::ClientResponsePayload::AppsList(AppsListResponse {
                         data: Vec::new(),
                         next_cursor: None,
-                    },
+                    }),
                 )
                 .await;
             return;
@@ -5887,10 +6058,10 @@ impl CodexMessageProcessor {
             self.outgoing
                 .send_response(
                     request_id,
-                    AppsListResponse {
+                    codex_app_server_protocol::ClientResponsePayload::AppsList(AppsListResponse {
                         data: Vec::new(),
                         next_cursor: None,
-                    },
+                    }),
                 )
                 .await;
             return;
@@ -5912,7 +6083,9 @@ impl CodexMessageProcessor {
         environment_manager: Arc<EnvironmentManager>,
     ) {
         let result = Self::apps_list_response(&outgoing, params, config, environment_manager).await;
-        outgoing.send_result(request_id, result).await;
+        outgoing
+            .send_result(request_id, result, ClientResponsePayload::AppsList)
+            .await;
     }
 
     async fn apps_list_response(
@@ -6060,7 +6233,9 @@ impl CodexMessageProcessor {
 
     async fn skills_list(&self, request_id: ConnectionRequestId, params: SkillsListParams) {
         let result = self.skills_list_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::SkillsList)
+            .await;
     }
 
     async fn skills_list_response(
@@ -6207,7 +6382,9 @@ impl CodexMessageProcessor {
             MarketplaceRemoveError::InvalidRequest(message) => invalid_request(message),
             MarketplaceRemoveError::Internal(message) => internal_error(message),
         });
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::MarketplaceRemove)
+            .await;
     }
 
     async fn marketplace_upgrade(
@@ -6216,7 +6393,13 @@ impl CodexMessageProcessor {
         params: MarketplaceUpgradeParams,
     ) {
         let result = self.marketplace_upgrade_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::MarketplaceUpgrade,
+            )
+            .await;
     }
 
     async fn marketplace_upgrade_response(
@@ -6268,7 +6451,9 @@ impl CodexMessageProcessor {
             MarketplaceAddError::InvalidRequest(message) => invalid_request(message),
             MarketplaceAddError::Internal(message) => internal_error(message),
         });
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::MarketplaceAdd)
+            .await;
     }
 
     async fn skills_config_write(
@@ -6277,7 +6462,9 @@ impl CodexMessageProcessor {
         params: SkillsConfigWriteParams,
     ) {
         let result = self.skills_config_write_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::SkillsConfigWrite)
+            .await;
     }
 
     async fn skills_config_write_response(
@@ -6499,7 +6686,12 @@ impl CodexMessageProcessor {
                         response: response.clone(),
                     },
                 );
-                self.outgoing.send_response(request_id, response).await;
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        codex_app_server_protocol::ClientResponsePayload::TurnStart(response),
+                    )
+                    .await;
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -6513,7 +6705,9 @@ impl CodexMessageProcessor {
         params: ThreadInjectItemsParams,
     ) {
         let result = self.thread_inject_items_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::ThreadInjectItems)
+            .await;
     }
 
     async fn thread_inject_items_response(
@@ -6676,7 +6870,12 @@ impl CodexMessageProcessor {
                         response: response.clone(),
                     },
                 );
-                self.outgoing.send_response(request_id, response).await;
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        codex_app_server_protocol::ClientResponsePayload::TurnSteer(response),
+                    )
+                    .await;
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -6753,7 +6952,11 @@ impl CodexMessageProcessor {
             Ok::<_, JSONRPCErrorError>(Some(ThreadRealtimeStartResponse::default()))
         }
         .await;
-        self.send_optional_result(request_id, result).await;
+        self.send_optional_result(
+            request_id,
+            result.map(|response| response.map(ClientResponsePayload::ThreadRealtimeStart)),
+        )
+        .await;
     }
 
     async fn thread_realtime_append_audio(
@@ -6784,7 +6987,11 @@ impl CodexMessageProcessor {
             Ok::<_, JSONRPCErrorError>(Some(ThreadRealtimeAppendAudioResponse::default()))
         }
         .await;
-        self.send_optional_result(request_id, result).await;
+        self.send_optional_result(
+            request_id,
+            result.map(|response| response.map(ClientResponsePayload::ThreadRealtimeAppendAudio)),
+        )
+        .await;
     }
 
     async fn thread_realtime_append_text(
@@ -6813,7 +7020,11 @@ impl CodexMessageProcessor {
             Ok::<_, JSONRPCErrorError>(Some(ThreadRealtimeAppendTextResponse::default()))
         }
         .await;
-        self.send_optional_result(request_id, result).await;
+        self.send_optional_result(
+            request_id,
+            result.map(|response| response.map(ClientResponsePayload::ThreadRealtimeAppendText)),
+        )
+        .await;
     }
 
     async fn thread_realtime_stop(
@@ -6836,7 +7047,11 @@ impl CodexMessageProcessor {
             Ok::<_, JSONRPCErrorError>(Some(ThreadRealtimeStopResponse::default()))
         }
         .await;
-        self.send_optional_result(request_id, result).await;
+        self.send_optional_result(
+            request_id,
+            result.map(|response| response.map(ClientResponsePayload::ThreadRealtimeStop)),
+        )
+        .await;
     }
 
     async fn thread_realtime_list_voices(
@@ -6847,9 +7062,11 @@ impl CodexMessageProcessor {
         self.outgoing
             .send_response(
                 request_id,
-                ThreadRealtimeListVoicesResponse {
-                    voices: RealtimeVoicesList::builtin(),
-                },
+                codex_app_server_protocol::ClientResponsePayload::ThreadRealtimeListVoices(
+                    ThreadRealtimeListVoicesResponse {
+                        voices: RealtimeVoicesList::builtin(),
+                    },
+                ),
             )
             .await;
     }
@@ -6890,7 +7107,10 @@ impl CodexMessageProcessor {
             review_thread_id,
         };
         self.outgoing
-            .send_response(request_id.clone(), response)
+            .send_response(
+                request_id.clone(),
+                codex_app_server_protocol::ClientResponsePayload::ReviewStart(response),
+            )
             .await;
     }
 
@@ -7078,7 +7298,11 @@ impl CodexMessageProcessor {
             Ok::<_, JSONRPCErrorError>(None::<ReviewStartResponse>)
         }
         .await;
-        self.send_optional_result(request_id, result).await;
+        self.send_optional_result(
+            request_id,
+            result.map(|response| response.map(ClientResponsePayload::ReviewStart)),
+        )
+        .await;
     }
 
     async fn turn_interrupt(&self, request_id: ConnectionRequestId, params: TurnInterruptParams) {
@@ -7147,7 +7371,11 @@ impl CodexMessageProcessor {
             }
         }
         .await;
-        self.send_optional_result(request_id, result).await;
+        self.send_optional_result(
+            request_id,
+            result.map(|response| response.map(ClientResponsePayload::TurnInterrupt)),
+        )
+        .await;
     }
 
     async fn ensure_conversation_listener(
@@ -7469,7 +7697,9 @@ impl CodexMessageProcessor {
                     "failed to compute git diff to remote for cwd: {cwd:?}"
                 ))
             });
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::GitDiffToRemote)
+            .await;
     }
 
     async fn fuzzy_file_search(
@@ -7513,7 +7743,12 @@ impl CodexMessageProcessor {
         }
 
         let response = FuzzyFileSearchResponse { files: results };
-        self.outgoing.send_response(request_id, response).await;
+        self.outgoing
+            .send_response(
+                request_id,
+                codex_app_server_protocol::ClientResponsePayload::FuzzyFileSearch(response),
+            )
+            .await;
     }
 
     async fn fuzzy_file_search_session_start(
@@ -7522,7 +7757,13 @@ impl CodexMessageProcessor {
         params: FuzzyFileSearchSessionStartParams,
     ) {
         let result = self.fuzzy_file_search_session_start_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::FuzzyFileSearchSessionStart,
+            )
+            .await;
     }
 
     async fn fuzzy_file_search_session_start_response(
@@ -7552,7 +7793,13 @@ impl CodexMessageProcessor {
         params: FuzzyFileSearchSessionUpdateParams,
     ) {
         let result = self.fuzzy_file_search_session_update_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(
+                request_id,
+                result,
+                ClientResponsePayload::FuzzyFileSearchSessionUpdate,
+            )
+            .await;
     }
 
     async fn fuzzy_file_search_session_update_response(
@@ -7590,13 +7837,20 @@ impl CodexMessageProcessor {
         }
 
         self.outgoing
-            .send_response(request_id, FuzzyFileSearchSessionStopResponse {})
+            .send_response(
+                request_id,
+                codex_app_server_protocol::ClientResponsePayload::FuzzyFileSearchSessionStop(
+                    FuzzyFileSearchSessionStopResponse {},
+                ),
+            )
             .await;
     }
 
     async fn upload_feedback(&self, request_id: ConnectionRequestId, params: FeedbackUploadParams) {
         let result = self.upload_feedback_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::FeedbackUpload)
+            .await;
     }
 
     async fn upload_feedback_response(
@@ -7768,7 +8022,9 @@ impl CodexMessageProcessor {
         self.outgoing
             .send_response(
                 request_id.clone(),
-                WindowsSandboxSetupStartResponse { started: true },
+                codex_app_server_protocol::ClientResponsePayload::WindowsSandboxSetupStart(
+                    WindowsSandboxSetupStartResponse { started: true },
+                ),
             )
             .await;
 
@@ -8126,7 +8382,12 @@ async fn handle_pending_thread_resume_request(
         reasoning_effort,
     };
     let token_usage_thread = pending.include_turns.then(|| response.thread.clone());
-    outgoing.send_response(request_id, response).await;
+    outgoing
+        .send_response(
+            request_id,
+            codex_app_server_protocol::ClientResponsePayload::ThreadResume(response),
+        )
+        .await;
     // Match cold resume: metadata-only resume should attach the listener without
     // paying the cost of turn reconstruction for historical usage replay.
     if let Some(token_usage_thread) = token_usage_thread {

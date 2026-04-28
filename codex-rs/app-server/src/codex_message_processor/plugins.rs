@@ -10,7 +10,9 @@ impl CodexMessageProcessor {
         params: PluginListParams,
     ) {
         let result = self.plugin_list_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::PluginList)
+            .await;
     }
 
     async fn plugin_list_response(
@@ -169,7 +171,9 @@ impl CodexMessageProcessor {
         params: PluginReadParams,
     ) {
         let result = self.plugin_read_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::PluginRead)
+            .await;
     }
 
     async fn plugin_read_response(
@@ -304,7 +308,9 @@ impl CodexMessageProcessor {
         params: PluginInstallParams,
     ) {
         let result = self.plugin_install_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::PluginInstall)
+            .await;
     }
 
     async fn plugin_install_response(
@@ -538,7 +544,9 @@ impl CodexMessageProcessor {
         params: PluginUninstallParams,
     ) {
         let result = self.plugin_uninstall_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
+        self.outgoing
+            .send_result(request_id, result, ClientResponsePayload::PluginUninstall)
+            .await;
     }
 
     async fn plugin_uninstall_response(
