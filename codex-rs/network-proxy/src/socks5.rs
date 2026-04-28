@@ -1,4 +1,5 @@
 use crate::config::NetworkMode;
+use crate::connect_policy::TargetCheckedTcpConnector;
 use crate::network_policy::BlockDecisionAuditEventArgs;
 use crate::network_policy::NetworkDecision;
 use crate::network_policy::NetworkDecisionSource;
@@ -34,7 +35,6 @@ use rama_socks5::server::udp::RelayRequest;
 use rama_socks5::server::udp::RelayResponse;
 use rama_tcp::TcpStream;
 use rama_tcp::client::Request as TcpRequest;
-use rama_tcp::client::service::TcpConnector;
 use rama_tcp::server::TcpListener;
 use std::io;
 use std::net::SocketAddr;
@@ -94,7 +94,7 @@ async fn run_socks5_with_listener(
         }
     }
 
-    let tcp_connector = TcpConnector::default();
+    let tcp_connector = TargetCheckedTcpConnector::new(state.clone());
     let policy_tcp_connector = service_fn({
         let policy_decider = policy_decider.clone();
         move |req: TcpRequest| {
@@ -131,7 +131,7 @@ async fn run_socks5_with_listener(
 
 async fn handle_socks5_tcp(
     req: TcpRequest,
-    tcp_connector: TcpConnector,
+    tcp_connector: TargetCheckedTcpConnector,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 ) -> Result<EstablishedClientConnection<TcpStream, TcpRequest>, BoxError> {
     let app_state = req
@@ -548,7 +548,7 @@ mod tests {
         let (result, events) = capture_events(|| async {
             handle_socks5_tcp(
                 request,
-                TcpConnector::default(),
+                TargetCheckedTcpConnector::new(state.clone()),
                 /*policy_decider*/ None,
             )
             .await
