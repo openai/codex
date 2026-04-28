@@ -1241,7 +1241,7 @@ mod tests {
 
     #[tokio::test]
     async fn host_blocked_allows_scoped_ipv6_literal_when_explicitly_allowlisted() {
-        let state = network_proxy_state_for_policy(network_settings(&["fe80::1%lo0"], &[]));
+        let state = network_proxy_state_for_policy(network_settings(&["fe80::1"], &[]));
 
         assert_eq!(
             state
@@ -1250,6 +1250,22 @@ mod tests {
                 .unwrap(),
             HostBlockDecision::Allowed
         );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_denies_scoped_ipv6_literal_before_local_binding() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allow_local_binding: true,
+            ..network_settings(&["*"], &["fd00::1"])
+        });
+
+        for host in ["fd00::1%eth0", "[fd00::1%eth0]", "[fd00::1%25eth0]"] {
+            assert_eq!(
+                state.host_blocked(host, /*port*/ 80).await.unwrap(),
+                HostBlockDecision::Blocked(HostBlockReason::Denied),
+                "host should be denied after normalization: {host}"
+            );
+        }
     }
 
     #[tokio::test]
