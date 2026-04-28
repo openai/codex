@@ -1,8 +1,8 @@
-use super::ConversationMessage;
-use super::ExternalAgentSessionMigration;
-use super::MessageRole;
-use super::summarize_for_label;
-use super::truncate;
+use crate::ConversationMessage;
+use crate::ExternalAgentSessionMigration;
+use crate::MessageRole;
+use crate::summarize_for_label;
+use crate::truncate;
 use serde_json::Value as JsonValue;
 use std::fs::File;
 use std::io;
@@ -14,12 +14,12 @@ use std::path::PathBuf;
 const NOTE_MAX_LEN: usize = 2_000;
 const TOOL_RESULT_MAX_LEN: usize = 4_000;
 
-pub(super) struct SessionSummary {
-    pub(super) latest_timestamp: i64,
-    pub(super) migration: ExternalAgentSessionMigration,
+pub struct SessionSummary {
+    pub latest_timestamp: i64,
+    pub migration: ExternalAgentSessionMigration,
 }
 
-pub(super) fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
+pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut cwd = None;

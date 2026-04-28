@@ -1,7 +1,7 @@
-use super::ExternalAgentSessionMigration;
 use super::ledger::load_import_ledger;
 use super::now_unix_seconds;
-use super::records::summarize_session;
+use codex_external_agent_sessions::ExternalAgentSessionMigration;
+use codex_external_agent_sessions::summarize_session;
 use std::fs;
 use std::io;
 use std::path::Path;

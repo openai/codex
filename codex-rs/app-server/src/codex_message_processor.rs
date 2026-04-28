@@ -8,7 +8,6 @@ use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::error_code::invalid_params;
-use crate::external_agent_sessions::ImportedExternalAgentSession;
 use crate::fuzzy_file_search::FuzzyFileSearchSession;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::fuzzy_file_search::start_fuzzy_file_search_session;
@@ -291,6 +290,7 @@ use codex_core_plugins::remote::RemotePluginServiceConfig;
 use codex_core_plugins::remote::RemotePluginSummary as RemoteCatalogPluginSummary;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::LOCAL_FS;
+use codex_external_agent_sessions::ImportedExternalAgentSession;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::Stage;
@@ -2491,7 +2491,6 @@ impl CodexMessageProcessor {
                 .await
                 .map_err(|err| internal_error(format!("failed to name imported session: {err}")))?;
         }
-        imported_thread.thread.recompute_token_usage().await;
         Ok(imported_thread.thread_id)
     }
 
