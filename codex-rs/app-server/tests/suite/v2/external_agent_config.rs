@@ -214,17 +214,25 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     std::fs::write(
         &session_path,
         [
-            format!(
-                r#"{{"type":"user","cwd":"{}","timestamp":"{}","message":{{"content":"first request"}}}}"#,
-                project_root.display(),
-                recent_timestamp
-            ),
-            format!(
-                r#"{{"type":"assistant","cwd":"{}","timestamp":"{}","message":{{"content":"first answer"}}}}"#,
-                project_root.display(),
-                recent_timestamp
-            ),
-            r#"{"type":"custom-title","customTitle":"source session title"}"#.to_string(),
+            serde_json::json!({
+                "type": "user",
+                "cwd": &project_root,
+                "timestamp": &recent_timestamp,
+                "message": { "content": "first request" },
+            })
+            .to_string(),
+            serde_json::json!({
+                "type": "assistant",
+                "cwd": &project_root,
+                "timestamp": &recent_timestamp,
+                "message": { "content": "first answer" },
+            })
+            .to_string(),
+            serde_json::json!({
+                "type": "custom-title",
+                "customTitle": "source session title",
+            })
+            .to_string(),
         ]
         .join("\n"),
     )?;
@@ -375,11 +383,13 @@ async fn external_agent_config_import_skips_already_imported_session_versions() 
     std::fs::create_dir_all(&session_dir)?;
     std::fs::write(
         &session_path,
-        format!(
-            r#"{{"type":"user","cwd":"{}","timestamp":"{}","message":{{"content":"first request"}}}}"#,
-            project_root.display(),
-            recent_timestamp
-        ),
+        serde_json::json!({
+            "type": "user",
+            "cwd": &project_root,
+            "timestamp": &recent_timestamp,
+            "message": { "content": "first request" },
+        })
+        .to_string(),
     )?;
 
     let home_dir = codex_home.path().display().to_string();
@@ -564,18 +574,20 @@ async fn external_agent_config_import_compacts_huge_session_before_first_follow_
     std::fs::write(
         &session_path,
         [
-            format!(
-                r#"{{"type":"user","cwd":"{}","timestamp":"{}","message":{{"content":"{}"}}}}"#,
-                project_root.display(),
-                recent_timestamp,
-                huge_user
-            ),
-            format!(
-                r#"{{"type":"assistant","cwd":"{}","timestamp":"{}","message":{{"content":"{}"}}}}"#,
-                project_root.display(),
-                recent_timestamp,
-                huge_assistant
-            ),
+            serde_json::json!({
+                "type": "user",
+                "cwd": &project_root,
+                "timestamp": &recent_timestamp,
+                "message": { "content": &huge_user },
+            })
+            .to_string(),
+            serde_json::json!({
+                "type": "assistant",
+                "cwd": &project_root,
+                "timestamp": &recent_timestamp,
+                "message": { "content": &huge_assistant },
+            })
+            .to_string(),
         ]
         .join("\n"),
     )?;

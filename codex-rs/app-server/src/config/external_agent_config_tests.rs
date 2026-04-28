@@ -100,11 +100,13 @@ async fn detect_home_lists_recent_sessions() {
     fs::create_dir_all(session_path.parent().expect("session parent")).expect("create sessions");
     fs::write(
         &session_path,
-        format!(
-            r#"{{"type":"user","cwd":"{}","timestamp":"{}","message":{{"content":"first request"}}}}"#,
-            project_root.display(),
-            recent_timestamp
-        ),
+        serde_json::json!({
+            "type": "user",
+            "cwd": &project_root,
+            "timestamp": &recent_timestamp,
+            "message": { "content": "first request" },
+        })
+        .to_string(),
     )
     .expect("write session");
 
