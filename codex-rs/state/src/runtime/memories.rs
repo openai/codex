@@ -335,9 +335,10 @@ WHERE thread_id IN (
     ///   `last_usage` is within `max_unused_days`, or whose
     ///   `source_updated_at` is within that window when the memory has never
     ///   been used
-    /// - eligible rows are ordered by `usage_count DESC`,
+    /// - eligible rows are ranked by `usage_count DESC`,
     ///   `COALESCE(last_usage, source_updated_at) DESC`, `source_updated_at DESC`,
     ///   `thread_id DESC`
+    /// - the selected top-N rows are returned in stable `thread_id ASC` order
     ///
     /// The returned rows are the complete Phase 2 filesystem input. Phase 2
     /// syncs these rows directly; deletions are represented by the workspace
@@ -355,30 +356,43 @@ WHERE thread_id IN (
         let current_rows = sqlx::query(
             r#"
 SELECT
-    so.thread_id,
-    COALESCE(t.rollout_path, '') AS rollout_path,
-    so.source_updated_at,
-    so.raw_memory,
-    so.rollout_summary,
-    so.rollout_slug,
-    so.generated_at,
-    COALESCE(t.cwd, '') AS cwd,
-    t.git_branch AS git_branch
-FROM stage1_outputs AS so
-LEFT JOIN threads AS t
-    ON t.id = so.thread_id
-WHERE t.memory_mode = 'enabled'
-  AND (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
-  AND (
-        (so.last_usage IS NOT NULL AND so.last_usage >= ?)
-        OR (so.last_usage IS NULL AND so.source_updated_at >= ?)
-  )
-ORDER BY
-    COALESCE(so.usage_count, 0) DESC,
-    COALESCE(so.last_usage, so.source_updated_at) DESC,
-    so.source_updated_at DESC,
-    so.thread_id DESC
-LIMIT ?
+    selected.thread_id,
+    selected.rollout_path,
+    selected.source_updated_at,
+    selected.raw_memory,
+    selected.rollout_summary,
+    selected.rollout_slug,
+    selected.generated_at,
+    selected.cwd,
+    selected.git_branch
+FROM (
+    SELECT
+        so.thread_id,
+        COALESCE(t.rollout_path, '') AS rollout_path,
+        so.source_updated_at,
+        so.raw_memory,
+        so.rollout_summary,
+        so.rollout_slug,
+        so.generated_at,
+        COALESCE(t.cwd, '') AS cwd,
+        t.git_branch AS git_branch
+    FROM stage1_outputs AS so
+    LEFT JOIN threads AS t
+        ON t.id = so.thread_id
+    WHERE t.memory_mode = 'enabled'
+      AND (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
+      AND (
+            (so.last_usage IS NOT NULL AND so.last_usage >= ?)
+            OR (so.last_usage IS NULL AND so.source_updated_at >= ?)
+      )
+    ORDER BY
+        COALESCE(so.usage_count, 0) DESC,
+        COALESCE(so.last_usage, so.source_updated_at) DESC,
+        so.source_updated_at DESC,
+        so.thread_id DESC
+    LIMIT ?
+) AS selected
+ORDER BY selected.thread_id ASC
             "#,
         )
         .bind(cutoff)
@@ -1259,6 +1273,10 @@ mod tests {
     use sqlx::Row;
     use std::sync::Arc;
     use uuid::Uuid;
+
+    fn stable_thread_id(value: &str) -> ThreadId {
+        ThreadId::from_string(value).expect("thread id")
+    }
 
     #[tokio::test]
     async fn stage1_claim_skips_when_up_to_date() {
@@ -2829,9 +2847,9 @@ VALUES (?, ?, ?, ?, ?)
             .await
             .expect("initialize runtime");
 
-        let thread_id_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        let thread_id_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        let thread_id_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let thread_id_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
+        let thread_id_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
+        let thread_id_c = stable_thread_id("00000000-0000-4000-8000-000000000003");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
         for (thread_id, workspace) in [
@@ -2918,12 +2936,21 @@ VALUES (?, ?, ?, ?, ?)
             .expect("load phase2 input selection");
 
         assert_eq!(selection.len(), 2);
-        assert_eq!(selection[0].thread_id, thread_id_c);
         assert_eq!(
-            selection[0].rollout_path,
+            selection
+                .iter()
+                .map(|output| output.thread_id)
+                .collect::<Vec<_>>(),
+            vec![thread_id_b, thread_id_c]
+        );
+        let selected_c = selection
+            .iter()
+            .find(|output| output.thread_id == thread_id_c)
+            .expect("thread c should be selected");
+        assert_eq!(
+            selected_c.rollout_path,
             codex_home.join(format!("rollout-{thread_id_c}.jsonl"))
         );
-        assert_eq!(selection[1].thread_id, thread_id_b);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -3235,10 +3262,10 @@ VALUES (?, ?, ?, ?, ?)
             .await
             .expect("initialize runtime");
 
-        let thread_id_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread a");
-        let thread_id_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread b");
-        let thread_id_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread c");
-        let thread_id_d = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread d");
+        let thread_id_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
+        let thread_id_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
+        let thread_id_c = stable_thread_id("00000000-0000-4000-8000-000000000003");
+        let thread_id_d = stable_thread_id("00000000-0000-4000-8000-000000000004");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
         for (thread_id, workspace) in [
@@ -3365,7 +3392,7 @@ VALUES (?, ?, ?, ?, ?)
                 .iter()
                 .map(|output| output.thread_id)
                 .collect::<Vec<_>>(),
-            vec![thread_id_d, thread_id_c]
+            vec![thread_id_c, thread_id_d]
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -3768,9 +3795,9 @@ VALUES (?, ?, ?, ?, ?)
 
         let now = Utc::now();
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
-        let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id a");
-        let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id b");
-        let thread_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id c");
+        let thread_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
+        let thread_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
+        let thread_c = stable_thread_id("00000000-0000-4000-8000-000000000003");
 
         for (thread_id, workspace) in [
             (thread_a, "workspace-a"),
@@ -3840,7 +3867,7 @@ VALUES (?, ?, ?, ?, ?)
         }
 
         let selection = runtime
-            .get_phase2_input_selection(/*n*/ 3, /*max_unused_days*/ 30)
+            .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 30)
             .await
             .expect("load phase2 input selection");
 
@@ -3849,7 +3876,7 @@ VALUES (?, ?, ?, ?, ?)
                 .iter()
                 .map(|output| output.thread_id)
                 .collect::<Vec<_>>(),
-            vec![thread_b, thread_a, thread_c]
+            vec![thread_b]
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -3864,9 +3891,9 @@ VALUES (?, ?, ?, ?, ?)
 
         let now = Utc::now();
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
-        let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id a");
-        let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id b");
-        let thread_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id c");
+        let thread_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
+        let thread_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
+        let thread_c = stable_thread_id("00000000-0000-4000-8000-000000000003");
 
         for (thread_id, workspace) in [
             (thread_a, "workspace-a"),
@@ -3945,7 +3972,7 @@ VALUES (?, ?, ?, ?, ?)
                 .iter()
                 .map(|output| output.thread_id)
                 .collect::<Vec<_>>(),
-            vec![thread_c, thread_b]
+            vec![thread_b, thread_c]
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
