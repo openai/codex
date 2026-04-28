@@ -28,6 +28,8 @@ brew install --cask codex
 
 Then simply run `codex` to get started.
 
+To update an existing install, run `codex update`.
+
 <details>
 <summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
 
