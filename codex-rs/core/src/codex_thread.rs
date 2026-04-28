@@ -381,10 +381,6 @@ impl CodexThread {
         self.codex.session.get_config().await
     }
 
-    pub async fn is_next_turn_first(&self) -> bool {
-        self.codex.session.is_next_turn_first().await
-    }
-
     pub async fn read_mcp_resource(
         &self,
         server: &str,

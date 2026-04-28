@@ -351,7 +351,6 @@ use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionMetaLine;
-use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::protocol::W3cTraceContext;
@@ -522,7 +521,6 @@ pub(crate) struct CodexMessageProcessor {
     config_manager: ConfigManager,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
-    memories_started_thread_ids: Arc<Mutex<HashSet<ThreadId>>>,
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
     command_exec_manager: CommandExecManager,
@@ -789,7 +787,6 @@ impl CodexMessageProcessor {
             config_manager,
             active_login: Arc::new(Mutex::new(None)),
             pending_thread_unloads: Arc::new(Mutex::new(HashSet::new())),
-            memories_started_thread_ids: Arc::new(Mutex::new(HashSet::new())),
             thread_state_manager: ThreadStateManager::new(),
             thread_watch_manager: ThreadWatchManager::new_with_outgoing(outgoing),
             command_exec_manager: CommandExecManager::default(),
@@ -2501,31 +2498,6 @@ impl CodexMessageProcessor {
         thread
             .submit_with_trace(op, self.request_trace_context(request_id).await)
             .await
-    }
-
-    async fn first_root_turn_memory_startup_candidate(
-        &self,
-        thread: &CodexThread,
-        turn_has_input: bool,
-    ) -> Option<(Arc<Config>, SessionSource)> {
-        if !turn_has_input || !thread.is_next_turn_first().await {
-            return None;
-        }
-
-        let config_snapshot = thread.config_snapshot().await;
-        let session_source = config_snapshot.session_source;
-        if session_source.is_non_root_agent() {
-            return None;
-        }
-
-        Some((thread.config().await, session_source))
-    }
-
-    async fn claim_memory_startup_for_thread(&self, thread_id: ThreadId) -> bool {
-        self.memories_started_thread_ids
-            .lock()
-            .await
-            .insert(thread_id)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6493,9 +6465,6 @@ impl CodexMessageProcessor {
                     responsesapi_client_metadata: params.responsesapi_client_metadata,
                 }
             };
-            let memory_startup = self
-                .first_root_turn_memory_startup_candidate(thread.as_ref(), turn_has_input)
-                .await;
             let turn_id = self
                 .submit_core_op(&request_id, thread.as_ref(), turn_op)
                 .await
@@ -6505,16 +6474,15 @@ impl CodexMessageProcessor {
                     error
                 })?;
 
-            if let Some((memory_config, session_source)) = memory_startup
-                && self.claim_memory_startup_for_thread(thread_id).await
-            {
+            if turn_has_input {
+                let config_snapshot = thread.config_snapshot().await;
                 codex_memories_write::start_memories_startup_task(
                     Arc::clone(&self.thread_manager),
                     Arc::clone(&self.auth_manager),
                     thread_id,
                     Arc::clone(&thread),
-                    memory_config,
-                    &session_source,
+                    thread.config().await,
+                    &config_snapshot.session_source,
                 );
             }
 
