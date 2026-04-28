@@ -331,20 +331,19 @@ mod tests {
 
     #[test]
     fn git_branch_global_options_respect_safety_rules() {
-        use pretty_assertions::assert_eq;
-
-        assert_eq!(
-            is_known_safe_command(&vec_str(&["git", "branch", "--show-current"])),
-            true
-        );
-        assert_eq!(
-            is_known_safe_command(&vec_str(&["git", "branch", "-d", "feature"])),
-            false
-        );
-        assert_eq!(
-            is_known_safe_command(&vec_str(&["bash", "-lc", "git branch -d feature",])),
-            false
-        );
+        assert!(is_known_safe_command(&vec_str(&[
+            "git",
+            "branch",
+            "--show-current",
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git", "branch", "-d", "feature",
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "git branch -d feature",
+        ])));
     }
 
     #[test]
