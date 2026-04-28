@@ -563,7 +563,18 @@ impl ExternalAgentConfigService {
         source_settings: Option<JsonValue>,
     ) -> io::Result<Option<JsonValue>> {
         if repo_root.is_some() && source_settings.is_none() {
-            read_external_settings(&self.external_agent_home.join("settings.json"))
+            let home_settings = self.external_agent_home.join("settings.json");
+            match read_external_settings(&home_settings) {
+                Ok(settings) => Ok(settings),
+                Err(err) => {
+                    tracing::warn!(
+                        path = %home_settings.display(),
+                        error = %err,
+                        "ignoring invalid external agent home settings during repo MCP migration"
+                    );
+                    Ok(None)
+                }
+            }
         } else {
             Ok(source_settings)
         }

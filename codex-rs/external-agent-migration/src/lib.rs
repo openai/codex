@@ -238,13 +238,17 @@ fn read_external_mcp_servers(
         let raw = fs::read_to_string(&source_file)?;
         let parsed: JsonValue = serde_json::from_str(&raw)
             .map_err(|err| invalid_data_error(format!("invalid MCP config: {err}")))?;
-        append_mcp_servers_from_value(&parsed, &mut servers);
+        append_mcp_servers_from_value(&parsed, &mut servers, McpServerMerge::Overwrite);
         if relative_path == project_config_file
             && let Some(projects) = parsed.get("projects").and_then(JsonValue::as_object)
         {
             for (project_path, project_config) in projects {
                 if project_path_matches_source_root(project_path, source_root) {
-                    append_mcp_servers_from_value(project_config, &mut servers);
+                    append_mcp_servers_from_value(
+                        project_config,
+                        &mut servers,
+                        McpServerMerge::Overwrite,
+                    );
                 }
             }
         }
@@ -278,18 +282,41 @@ fn append_external_agent_project_mcp_servers(
     };
     for (project_path, project_config) in projects {
         if project_path_matches_source_root(project_path, source_root) {
-            append_mcp_servers_from_value(project_config, servers);
+            append_mcp_servers_from_value(
+                project_config,
+                servers,
+                McpServerMerge::PreserveExisting,
+            );
         }
     }
     Ok(())
 }
 
-fn append_mcp_servers_from_value(value: &JsonValue, servers: &mut BTreeMap<String, JsonValue>) {
+#[derive(Clone, Copy)]
+enum McpServerMerge {
+    Overwrite,
+    PreserveExisting,
+}
+
+fn append_mcp_servers_from_value(
+    value: &JsonValue,
+    servers: &mut BTreeMap<String, JsonValue>,
+    merge: McpServerMerge,
+) {
     let Some(mcp_servers) = value.get("mcpServers").and_then(JsonValue::as_object) else {
         return;
     };
     for (server_name, server_config) in mcp_servers {
-        servers.insert(server_name.clone(), server_config.clone());
+        match merge {
+            McpServerMerge::Overwrite => {
+                servers.insert(server_name.clone(), server_config.clone());
+            }
+            McpServerMerge::PreserveExisting => {
+                servers
+                    .entry(server_name.clone())
+                    .or_insert_with(|| server_config.clone());
+            }
+        }
     }
 }
 
@@ -634,8 +661,8 @@ fn rewrite_hook_command(command: &str, target_config_dir: Option<&Path>) -> Stri
     let Some(target_config_dir) = target_config_dir else {
         return command.to_string();
     };
-    let hook_dir =
-        shell_quote_path_prefix(&target_config_dir.join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR));
+    let target_hooks_dir = target_config_dir.join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR);
+    let hook_dir = shell_quote_path_prefix(&target_hooks_dir);
     let project_dir_env_var = external_agent_project_dir_env_var();
     let source_hooks_path = format!(
         "{}/{EXTERNAL_AGENT_HOOKS_SUBDIR}/",
@@ -647,10 +674,20 @@ fn rewrite_hook_command(command: &str, target_config_dir: Option<&Path>) -> Stri
         format!("./{source_hooks_path}"),
         source_hooks_path.clone(),
     ];
-    let command =
-        replace_quoted_hook_path_prefixes(command, '\'', &source_hook_prefixes, &hook_dir);
-    let command =
-        replace_quoted_hook_path_prefixes(&command, '"', &source_hook_prefixes, &hook_dir);
+    let command = replace_quoted_hook_path_prefixes(
+        command,
+        '\'',
+        &source_hook_prefixes,
+        &hook_dir,
+        &target_hooks_dir,
+    );
+    let command = replace_quoted_hook_path_prefixes(
+        &command,
+        '"',
+        &source_hook_prefixes,
+        &hook_dir,
+        &target_hooks_dir,
+    );
     command
         .replace(
             &format!("\"${project_dir_env_var}\"/{source_hooks_path}"),
@@ -677,6 +714,7 @@ fn replace_quoted_hook_path_prefixes(
     quote: char,
     source_hook_prefixes: &[String],
     hook_dir: &str,
+    target_hooks_dir: &Path,
 ) -> String {
     let mut rewritten = command.to_string();
     for source_hook_prefix in source_hook_prefixes {
@@ -688,7 +726,8 @@ fn replace_quoted_hook_path_prefixes(
             if let Some(relative_end) = rewritten[path_start..].find(quote) {
                 let end = path_start + relative_end;
                 let suffix = rewritten[path_start..end].to_string();
-                let replacement = format!("{hook_dir}{suffix}");
+                let replacement =
+                    shell_single_quote(target_hooks_dir.join(suffix).to_string_lossy().as_ref());
                 rewritten.replace_range(start..end + quote.len_utf8(), &replacement);
                 search_start = start + replacement.len();
             } else {
@@ -1259,6 +1298,10 @@ mod tests {
         format!("python3 '/repo/.codex/{EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR}'/{script_name}")
     }
 
+    fn migrated_quoted_hook_command(script_name: &str) -> String {
+        format!("python3 '/repo/.codex/{EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR}/{script_name}'")
+    }
+
     #[test]
     fn env_placeholder_accepts_defaults() {
         assert_eq!(
@@ -1402,6 +1445,59 @@ command = "top-server"
             toml::from_str(
                 r#"
 [mcp_servers.repo]
+command = "repo-server"
+"#
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn mcp_migration_preserves_repo_servers_over_home_project_entries() {
+        let root = tempfile::TempDir::new().expect("tempdir");
+        let project = root.path().join("repo");
+        fs::create_dir_all(&project).expect("create repo");
+        let external_agent_home = root.path().join(external_agent_config_dir());
+        fs::create_dir_all(&external_agent_home).expect("create external agent home");
+        fs::write(
+            project.join(EXTERNAL_AGENT_MCP_CONFIG_FILE),
+            serde_json::json!({
+                "mcpServers": {
+                    "shared": {"command": "repo-server"}
+                }
+            })
+            .to_string(),
+        )
+        .expect("write repo mcp");
+        fs::write(
+            root.path().join(external_agent_project_config_file()),
+            serde_json::json!({
+                "projects": {
+                    project.display().to_string(): {
+                        "mcpServers": {
+                            "home-only": {"command": "home-only-server"},
+                            "shared": {"command": "home-server"}
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("write external agent project config");
+
+        assert_eq!(
+            build_mcp_config_from_external(
+                &project,
+                Some(&external_agent_home),
+                /*settings*/ None,
+            )
+            .unwrap(),
+            toml::from_str(
+                r#"
+[mcp_servers.home-only]
+command = "home-only-server"
+
+[mcp_servers.shared]
 command = "repo-server"
 "#
             )
@@ -1737,14 +1833,21 @@ Review carefully."""
                 "python3 '${CLAUDE_PROJECT_DIR}/.claude/hooks/check.py'",
                 Some(Path::new("/repo/.codex")),
             ),
-            migrated_hook_command("check.py")
+            migrated_quoted_hook_command("check.py")
         );
         assert_eq!(
             rewrite_hook_command(
                 "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/check.py\"",
                 Some(Path::new("/repo/.codex")),
             ),
-            migrated_hook_command("check.py")
+            migrated_quoted_hook_command("check.py")
+        );
+        assert_eq!(
+            rewrite_hook_command(
+                "python3 '${CLAUDE_PROJECT_DIR}/.claude/hooks/my script.py'",
+                Some(Path::new("/repo/.codex")),
+            ),
+            migrated_quoted_hook_command("my script.py")
         );
     }
 
