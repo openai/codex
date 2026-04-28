@@ -15,8 +15,9 @@ pub(crate) struct ConnectionRpcGate {
 
 impl ConnectionRpcGate {
     pub(crate) fn new() -> Self {
+        let accepting = true;
         Self {
-            accepting: Mutex::new(true),
+            accepting: Mutex::new(accepting),
             tasks: TaskTracker::new(),
         }
     }
@@ -77,11 +78,11 @@ mod tests {
     #[tokio::test]
     async fn run_executes_while_open() {
         let gate = ConnectionRpcGate::new();
-        let ran = Arc::new(AtomicBool::new(false));
+        let ran = Arc::new(AtomicBool::new(/*v*/ false));
         let ran_clone = Arc::clone(&ran);
 
         gate.run(async move {
-            ran_clone.store(true, Ordering::Release);
+            ran_clone.store(/*val*/ true, Ordering::Release);
         })
         .await;
 
@@ -92,11 +93,11 @@ mod tests {
     async fn run_drops_future_without_polling_after_shutdown() {
         let gate = ConnectionRpcGate::new();
         gate.shutdown().await;
-        let polled = Arc::new(AtomicBool::new(false));
+        let polled = Arc::new(AtomicBool::new(/*v*/ false));
         let polled_clone = Arc::clone(&polled);
 
         gate.run(async move {
-            polled_clone.store(true, Ordering::Release);
+            polled_clone.store(/*val*/ true, Ordering::Release);
         })
         .await;
 
@@ -127,7 +128,7 @@ mod tests {
             gate_for_shutdown.shutdown().await;
         });
 
-        timeout(Duration::from_millis(50), shutdown_task)
+        timeout(Duration::from_millis(/*millis*/ 50), shutdown_task)
             .await
             .expect_err("shutdown should wait for the running future");
 
@@ -160,14 +161,14 @@ mod tests {
             gate_for_shutdown.shutdown().await;
         });
 
-        timeout(Duration::from_millis(50), shutdown_task)
+        timeout(Duration::from_millis(/*millis*/ 50), shutdown_task)
             .await
             .expect_err("shutdown should wait for the running future");
 
-        let late_polled = Arc::new(AtomicBool::new(false));
+        let late_polled = Arc::new(AtomicBool::new(/*v*/ false));
         let late_polled_clone = Arc::clone(&late_polled);
         gate.run(async move {
-            late_polled_clone.store(true, Ordering::Release);
+            late_polled_clone.store(/*val*/ true, Ordering::Release);
         })
         .await;
 

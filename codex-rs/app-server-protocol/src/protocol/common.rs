@@ -1333,7 +1333,8 @@ mod tests {
     }
 
     fn request_id() -> RequestId {
-        RequestId::Integer(1)
+        const REQUEST_ID: i64 = 1;
+        RequestId::Integer(REQUEST_ID)
     }
 
     #[test]

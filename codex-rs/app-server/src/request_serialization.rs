@@ -155,8 +155,20 @@ mod tests {
     use tokio::time::Duration;
     use tokio::time::timeout;
 
+    const FIRST_REQUEST_VALUE: i32 = 1;
+    const SECOND_REQUEST_VALUE: i32 = 2;
+    const THIRD_REQUEST_VALUE: i32 = 3;
+
     fn gate() -> Arc<ConnectionRpcGate> {
         Arc::new(ConnectionRpcGate::new())
+    }
+
+    fn queue_drain_timeout() -> Duration {
+        Duration::from_secs(/*secs*/ 1)
+    }
+
+    fn shutdown_wait_timeout() -> Duration {
+        Duration::from_millis(/*millis*/ 50)
     }
 
     #[tokio::test]
@@ -166,7 +178,11 @@ mod tests {
         let gate = gate();
         let (tx, mut rx) = mpsc::unbounded_channel();
 
-        for value in [1, 2, 3] {
+        for value in [
+            FIRST_REQUEST_VALUE,
+            SECOND_REQUEST_VALUE,
+            THIRD_REQUEST_VALUE,
+        ] {
             let tx = tx.clone();
             queues
                 .enqueue(
@@ -180,14 +196,21 @@ mod tests {
         drop(tx);
 
         let mut values = Vec::new();
-        while let Some(value) = timeout(Duration::from_secs(1), rx.recv())
+        while let Some(value) = timeout(queue_drain_timeout(), rx.recv())
             .await
             .expect("timed out waiting for queued request")
         {
             values.push(value);
         }
 
-        assert_eq!(values, vec![1, 2, 3]);
+        assert_eq!(
+            values,
+            vec![
+                FIRST_REQUEST_VALUE,
+                SECOND_REQUEST_VALUE,
+                THIRD_REQUEST_VALUE
+            ]
+        );
     }
 
     #[tokio::test]
@@ -213,7 +236,7 @@ mod tests {
             )
             .await;
 
-        timeout(Duration::from_secs(1), ran_rx)
+        timeout(queue_drain_timeout(), ran_rx)
             .await
             .expect("other key should not be blocked")
             .expect("sender should be open");
@@ -238,7 +261,8 @@ mod tests {
                 .enqueue(
                     key.clone(),
                     QueuedInitializedRequest::new(Arc::clone(&live_gate), async move {
-                        tx.send(1).expect("receiver should be open");
+                        tx.send(FIRST_REQUEST_VALUE)
+                            .expect("receiver should be open");
                         let _ = blocked_rx.await;
                     }),
                 )
@@ -250,7 +274,8 @@ mod tests {
                 .enqueue(
                     key.clone(),
                     QueuedInitializedRequest::new(closed_gate, async move {
-                        tx.send(2).expect("receiver should be open");
+                        tx.send(SECOND_REQUEST_VALUE)
+                            .expect("receiver should be open");
                     }),
                 )
                 .await;
@@ -261,7 +286,8 @@ mod tests {
                 .enqueue(
                     key,
                     QueuedInitializedRequest::new(live_gate, async move {
-                        tx.send(3).expect("receiver should be open");
+                        tx.send(THIRD_REQUEST_VALUE)
+                            .expect("receiver should be open");
                     }),
                 )
                 .await;
@@ -269,24 +295,24 @@ mod tests {
         drop(tx);
 
         assert_eq!(
-            timeout(Duration::from_secs(1), rx.recv())
+            timeout(queue_drain_timeout(), rx.recv())
                 .await
                 .expect("timed out waiting for first request"),
-            Some(1)
+            Some(FIRST_REQUEST_VALUE)
         );
         blocked_tx
             .send(())
             .expect("blocked request should be waiting");
 
         let mut values = Vec::new();
-        while let Some(value) = timeout(Duration::from_secs(1), rx.recv())
+        while let Some(value) = timeout(queue_drain_timeout(), rx.recv())
             .await
             .expect("timed out waiting for queue to drain")
         {
             values.push(value);
         }
 
-        assert_eq!(values, vec![3]);
+        assert_eq!(values, vec![THIRD_REQUEST_VALUE]);
     }
 
     #[tokio::test]
@@ -303,7 +329,8 @@ mod tests {
                 .enqueue(
                     key.clone(),
                     QueuedInitializedRequest::new(Arc::clone(&live_gate), async move {
-                        tx.send(1).expect("receiver should be open");
+                        tx.send(FIRST_REQUEST_VALUE)
+                            .expect("receiver should be open");
                         let _ = blocked_rx.await;
                     }),
                 )
@@ -315,7 +342,8 @@ mod tests {
                 .enqueue(
                     key,
                     QueuedInitializedRequest::new(live_gate.clone(), async move {
-                        tx.send(2).expect("receiver should be open");
+                        tx.send(SECOND_REQUEST_VALUE)
+                            .expect("receiver should be open");
                     }),
                 )
                 .await;
@@ -323,10 +351,10 @@ mod tests {
         drop(tx);
 
         assert_eq!(
-            timeout(Duration::from_secs(1), rx.recv())
+            timeout(queue_drain_timeout(), rx.recv())
                 .await
                 .expect("timed out waiting for first request"),
-            Some(1)
+            Some(FIRST_REQUEST_VALUE)
         );
 
         let gate_for_shutdown = Arc::clone(&live_gate);
@@ -334,7 +362,7 @@ mod tests {
             gate_for_shutdown.shutdown().await;
         });
 
-        timeout(Duration::from_millis(50), shutdown_task)
+        timeout(shutdown_wait_timeout(), shutdown_task)
             .await
             .expect_err("shutdown should wait for the running request");
 
@@ -343,7 +371,7 @@ mod tests {
             .expect("blocked request should still be waiting");
 
         assert_eq!(
-            timeout(Duration::from_secs(1), rx.recv())
+            timeout(queue_drain_timeout(), rx.recv())
                 .await
                 .expect("timed out waiting for queue to drain"),
             None
