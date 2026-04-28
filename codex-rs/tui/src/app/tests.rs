@@ -2211,7 +2211,6 @@ async fn inactive_thread_approval_bubbles_into_active_view() -> Result<()> {
             /*capacity*/ 1,
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
                 permission_profile: PermissionProfile::workspace_write(),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
@@ -2371,7 +2370,6 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
             /*capacity*/ 4,
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
                 permission_profile: PermissionProfile::workspace_write(),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
@@ -2663,7 +2661,6 @@ async fn inactive_thread_approval_badge_clears_after_turn_completion_notificatio
             /*capacity*/ 4,
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
                 permission_profile: PermissionProfile::workspace_write(),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
@@ -2717,7 +2714,6 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
         ThreadId::from_string("00000000-0000-0000-0000-000000000202").expect("valid thread");
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
-        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
         permission_profile: PermissionProfile::workspace_write(),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
@@ -2742,7 +2738,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
         current_date: None,
         timezone: None,
         approval_policy: primary_session.approval_policy,
-        sandbox_policy: primary_session.sandbox_policy.clone(),
+        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
         permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
@@ -2830,7 +2826,6 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
         ThreadId::from_string("00000000-0000-0000-0000-000000000302").expect("valid thread");
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
-        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
         permission_profile: PermissionProfile::workspace_write(),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
@@ -2899,7 +2894,6 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         ThreadId::from_string("00000000-0000-0000-0000-000000000402").expect("valid thread");
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
-        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
         permission_profile: PermissionProfile::workspace_write(),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
@@ -3566,8 +3560,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: Some(ReasoningEffortConfig::High),
             history_log_id: 0,
@@ -3703,6 +3696,7 @@ async fn make_test_app() -> App {
         transcript_reflow: TranscriptReflowState::default(),
         initial_history_replay_buffer: None,
         enhanced_keys_supported: false,
+        keymap: crate::keymap::RuntimeKeymap::defaults(),
         commit_anim_running: Arc::new(AtomicBool::new(false)),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -3762,6 +3756,7 @@ async fn make_test_app_with_channels() -> (
             transcript_reflow: TranscriptReflowState::default(),
             initial_history_replay_buffer: None,
             enhanced_keys_supported: false,
+            keymap: crate::keymap::RuntimeKeymap::defaults(),
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -3804,7 +3799,6 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
         permission_profile: PermissionProfile::read_only(),
         cwd: cwd.abs(),
         instruction_source_paths: Vec::new(),
@@ -4317,8 +4311,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4381,8 +4374,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4475,8 +4467,7 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4765,7 +4756,10 @@ async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
             /*is_first_line*/ false,
         )) as Arc<dyn HistoryCell>,
     ];
-    app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
+    app.overlay = Some(Overlay::new_transcript(
+        app.transcript_cells.clone(),
+        app.keymap.pager.clone(),
+    ));
     app.deferred_history_lines = vec![Line::from("stale buffered line")];
     app.backtrack.overlay_preview_active = true;
     app.backtrack.nth_user_message = 1;
@@ -4859,8 +4853,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        permission_profile: None,
+        permission_profile: PermissionProfile::read_only(),
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: None,
         history_log_id: 0,
@@ -4972,8 +4965,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4991,7 +4983,10 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
         local_image_paths: Vec::new(),
         remote_image_urls: Vec::new(),
     }) as Arc<dyn HistoryCell>];
-    app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
+    app.overlay = Some(Overlay::new_transcript(
+        app.transcript_cells.clone(),
+        crate::keymap::RuntimeKeymap::defaults().pager,
+    ));
     app.deferred_history_lines = vec![Line::from("stale buffered line")];
     app.has_emitted_history_lines = true;
     app.backtrack.primed = true;

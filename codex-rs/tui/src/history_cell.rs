@@ -54,6 +54,8 @@ use codex_protocol::account::PlanType;
 use codex_protocol::mcp::Resource;
 #[cfg(test)]
 use codex_protocol::mcp::ResourceTemplate;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -64,7 +66,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::McpInvocation;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
@@ -1240,7 +1241,7 @@ pub(crate) fn new_session_info(
         model,
         reasoning_effort,
         approval_policy,
-        sandbox_policy,
+        permission_profile,
         ..
     } = event;
     // Header box rendered as history (so it appears at the very top)
@@ -1251,7 +1252,7 @@ pub(crate) fn new_session_info(
         config.cwd.to_path_buf(),
         CODEX_CLI_VERSION,
     )
-    .with_yolo_mode(has_yolo_permissions(approval_policy, &sandbox_policy));
+    .with_yolo_mode(has_yolo_permissions(approval_policy, &permission_profile));
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
     if is_first_event {
@@ -1313,14 +1314,23 @@ pub(crate) fn new_session_info(
 pub(crate) fn is_yolo_mode(config: &Config) -> bool {
     has_yolo_permissions(
         config.permissions.approval_policy.value(),
-        &config
-            .permissions
-            .legacy_sandbox_policy(config.cwd.as_path()),
+        &config.permissions.permission_profile(),
     )
 }
 
-fn has_yolo_permissions(approval_policy: AskForApproval, sandbox_policy: &SandboxPolicy) -> bool {
-    approval_policy == AskForApproval::Never && *sandbox_policy == SandboxPolicy::DangerFullAccess
+fn has_yolo_permissions(
+    approval_policy: AskForApproval,
+    permission_profile: &PermissionProfile,
+) -> bool {
+    approval_policy == AskForApproval::Never
+        && matches!(
+            permission_profile,
+            PermissionProfile::Disabled
+                | PermissionProfile::Managed {
+                    file_system: ManagedFileSystemPermissions::Unrestricted,
+                    network: codex_protocol::protocol::NetworkSandboxPolicy::Enabled,
+                }
+        )
 }
 
 pub(crate) fn new_user_prompt(
@@ -2815,7 +2825,7 @@ pub struct FinalMessageSeparator {
     runtime_metrics: Option<RuntimeMetricsSummary>,
 }
 impl FinalMessageSeparator {
-    /// Creates a separator; `elapsed_seconds` typically comes from the status indicator timer.
+    /// Creates a separator; completed turns should pass protocol turn duration when available.
     pub(crate) fn new(
         elapsed_seconds: Option<u64>,
         runtime_metrics: Option<RuntimeMetricsSummary>,
@@ -2993,7 +3003,6 @@ mod tests {
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::McpAuthStatus;
-    use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionConfiguredEvent;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
@@ -3184,8 +3193,7 @@ mod tests {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4203,6 +4211,31 @@ mod tests {
 
         let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn yolo_mode_includes_managed_full_access_profiles() {
+        let permission_profile = PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Unrestricted,
+            network: codex_protocol::protocol::NetworkSandboxPolicy::Enabled,
+        };
+
+        assert!(has_yolo_permissions(
+            AskForApproval::Never,
+            &permission_profile
+        ));
+    }
+
+    #[test]
+    fn yolo_mode_excludes_external_sandbox_profiles() {
+        let permission_profile = PermissionProfile::External {
+            network: codex_protocol::protocol::NetworkSandboxPolicy::Enabled,
+        };
+
+        assert!(!has_yolo_permissions(
+            AskForApproval::Never,
+            &permission_profile
+        ));
     }
 
     #[test]

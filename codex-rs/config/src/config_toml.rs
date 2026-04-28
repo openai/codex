@@ -114,7 +114,8 @@ pub struct ConfigToml {
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
-    /// Default named permissions profile to apply from the `[permissions]`
+    /// Default permissions profile to apply. Names starting with `:` refer to
+    /// built-in profiles; other names are resolved from the `[permissions]`
     /// table.
     pub default_permissions: Option<String>,
 

@@ -78,6 +78,7 @@ pub(crate) struct FooterProps {
     pub(crate) context_window_used_tokens: Option<i64>,
     pub(crate) status_line_value: Option<Line<'static>>,
     pub(crate) status_line_enabled: bool,
+    pub(crate) key_hints: FooterKeyHints,
     /// Active thread label shown when the footer is rendering contextual information instead of an
     /// instructional hint.
     ///
@@ -105,6 +106,36 @@ pub(crate) enum GoalStatusIndicator {
 
 const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
 const FOOTER_CONTEXT_GAP_COLS: u16 = 1;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FooterKeyHints {
+    pub(crate) toggle_shortcuts: Option<KeyBinding>,
+    pub(crate) queue: Option<KeyBinding>,
+    pub(crate) insert_newline: Option<KeyBinding>,
+    pub(crate) external_editor: Option<KeyBinding>,
+    pub(crate) edit_previous: Option<KeyBinding>,
+    pub(crate) show_transcript: Option<KeyBinding>,
+    pub(crate) history_search: Option<KeyBinding>,
+    pub(crate) reasoning_down: Option<KeyBinding>,
+    pub(crate) reasoning_up: Option<KeyBinding>,
+}
+
+impl FooterKeyHints {
+    #[cfg(test)]
+    pub(crate) fn default_bindings() -> Self {
+        Self {
+            toggle_shortcuts: Some(key_hint::plain(KeyCode::Char('?'))),
+            queue: Some(key_hint::plain(KeyCode::Tab)),
+            insert_newline: Some(key_hint::ctrl(KeyCode::Char('j'))),
+            external_editor: Some(key_hint::ctrl(KeyCode::Char('g'))),
+            edit_previous: Some(key_hint::plain(KeyCode::Esc)),
+            show_transcript: Some(key_hint::ctrl(KeyCode::Char('t'))),
+            history_search: Some(key_hint::ctrl(KeyCode::Char('r'))),
+            reasoning_down: Some(key_hint::alt(KeyCode::Char(','))),
+            reasoning_up: Some(key_hint::alt(KeyCode::Char('.'))),
+        }
+    }
+}
 
 impl CollaborationModeIndicator {
     fn label(self, show_cycle_hint: bool) -> String {
@@ -284,21 +315,28 @@ struct LeftSideState {
 fn left_side_line(
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     state: LeftSideState,
+    key_hints: FooterKeyHints,
 ) -> Line<'static> {
     let mut line = Line::from("");
     match state.hint {
         SummaryHintKind::None => {}
         SummaryHintKind::Shortcuts => {
-            line.push_span(key_hint::plain(KeyCode::Char('?')));
-            line.push_span(" for shortcuts".dim());
+            if let Some(key) = key_hints.toggle_shortcuts {
+                line.push_span(key);
+                line.push_span(" for shortcuts".dim());
+            }
         }
         SummaryHintKind::QueueMessage => {
-            line.push_span(key_hint::plain(KeyCode::Tab));
-            line.push_span(" to queue message".dim());
+            if let Some(key) = key_hints.queue {
+                line.push_span(key);
+                line.push_span(" to queue message".dim());
+            }
         }
         SummaryHintKind::QueueShort => {
-            line.push_span(key_hint::plain(KeyCode::Tab));
-            line.push_span(" to queue".dim());
+            if let Some(key) = key_hints.queue {
+                line.push_span(key);
+                line.push_span(" to queue".dim());
+            }
         }
     };
 
@@ -327,6 +365,7 @@ pub(crate) fn single_line_footer_layout(
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
+    key_hints: FooterKeyHints,
 ) -> (SummaryLeft, bool) {
     let hint_kind = if show_queue_hint {
         SummaryHintKind::QueueMessage
@@ -339,7 +378,7 @@ pub(crate) fn single_line_footer_layout(
         hint: hint_kind,
         show_cycle_hint,
     };
-    let default_line = left_side_line(collaboration_mode_indicator, default_state);
+    let default_line = left_side_line(collaboration_mode_indicator, default_state, key_hints);
     let default_width = default_line.width() as u16;
     if default_width > 0 && can_show_left_with_context(area, default_width, context_width) {
         return (SummaryLeft::Default, true);
@@ -349,7 +388,7 @@ pub(crate) fn single_line_footer_layout(
         if state == default_state {
             default_line.clone()
         } else {
-            left_side_line(collaboration_mode_indicator, state)
+            left_side_line(collaboration_mode_indicator, state, key_hints)
         }
     };
     let state_width = |state: LeftSideState| -> u16 { state_line(state).width() as u16 };
@@ -457,8 +496,12 @@ pub(crate) fn single_line_footer_layout(
         };
         // Compute the width without going through `state_line` so we do not
         // depend on `default_state` (which may still be a queue variant).
-        let mode_only_width =
-            left_side_line(Some(collaboration_mode_indicator), mode_only_state).width() as u16;
+        let mode_only_width = left_side_line(
+            Some(collaboration_mode_indicator),
+            mode_only_state,
+            key_hints,
+        )
+        .width() as u16;
         if !context_requires_cycle_hint
             && can_show_left_with_context(area, mode_only_width, context_width)
         {
@@ -466,6 +509,7 @@ pub(crate) fn single_line_footer_layout(
                 SummaryLeft::Custom(left_side_line(
                     Some(collaboration_mode_indicator),
                     mode_only_state,
+                    key_hints,
                 )),
                 true, // show_context
             );
@@ -475,6 +519,7 @@ pub(crate) fn single_line_footer_layout(
                 SummaryLeft::Custom(left_side_line(
                     Some(collaboration_mode_indicator),
                     mode_only_state,
+                    key_hints,
                 )),
                 false, // show_context
             );
@@ -637,6 +682,7 @@ fn footer_from_props_lines(
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
 ) -> Vec<Line<'static>> {
+    let key_hints = props.key_hints;
     // Passive footer context can come from the configurable status line, the
     // active agent label, or both combined.
     if let Some(status_line) = passive_footer_status_line(props) {
@@ -656,7 +702,11 @@ fn footer_from_props_lines(
                 },
                 show_cycle_hint,
             };
-            vec![left_side_line(collaboration_mode_indicator, state)]
+            vec![left_side_line(
+                collaboration_mode_indicator,
+                state,
+                key_hints,
+            )]
         }
         FooterMode::ShortcutOverlay => {
             let state = ShortcutsState {
@@ -664,6 +714,7 @@ fn footer_from_props_lines(
                 esc_backtrack_hint: props.esc_backtrack_hint,
                 is_wsl: props.is_wsl,
                 collaboration_modes_enabled: props.collaboration_modes_enabled,
+                key_hints,
             };
             shortcut_overlay_lines(state)
         }
@@ -679,7 +730,11 @@ fn footer_from_props_lines(
                 },
                 show_cycle_hint,
             };
-            vec![left_side_line(collaboration_mode_indicator, state)]
+            vec![left_side_line(
+                collaboration_mode_indicator,
+                state,
+                key_hints,
+            )]
         }
     }
 }
@@ -781,6 +836,7 @@ struct ShortcutsState {
     esc_backtrack_hint: bool,
     is_wsl: bool,
     collaboration_modes_enabled: bool,
+    key_hints: FooterKeyHints,
 }
 
 fn quit_shortcut_reminder_line(key: KeyBinding) -> Line<'static> {
@@ -856,10 +912,15 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     if change_mode.width() > 0 {
         ordered.push(change_mode);
     }
-    ordered.push(Line::from(""));
     ordered.push(show_transcript);
 
-    build_columns(ordered)
+    let mut lines = build_columns(ordered);
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        "customize shortcuts with ".into(),
+        "/keymap".cyan(),
+    ]));
+    lines
 }
 
 fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
@@ -987,8 +1048,23 @@ impl ShortcutDescriptor {
     }
 
     fn overlay_entry(&self, state: ShortcutsState) -> Option<Line<'static>> {
-        let binding = self.binding_for(state)?;
-        let mut line = Line::from(vec![self.prefix.into(), binding.key.into()]);
+        let key = match self.id {
+            ShortcutId::InsertNewline => state.key_hints.insert_newline,
+            ShortcutId::QueueMessageTab => state.key_hints.queue,
+            ShortcutId::ExternalEditor => state.key_hints.external_editor,
+            ShortcutId::EditPrevious => state.key_hints.edit_previous,
+            ShortcutId::ShowTranscript => state.key_hints.show_transcript,
+            ShortcutId::HistorySearch => state.key_hints.history_search,
+            ShortcutId::ReasoningDown => state.key_hints.reasoning_down,
+            ShortcutId::ReasoningUp => state.key_hints.reasoning_up,
+            ShortcutId::Commands
+            | ShortcutId::ShellCommands
+            | ShortcutId::FilePaths
+            | ShortcutId::PasteImage
+            | ShortcutId::Quit
+            | ShortcutId::ChangeMode => self.binding_for(state).map(|binding| binding.key),
+        }?;
+        let mut line = Line::from(vec![self.prefix.into(), key.into()]);
         match self.id {
             ShortcutId::EditPrevious => {
                 if state.esc_backtrack_hint {
@@ -996,7 +1072,7 @@ impl ShortcutDescriptor {
                 } else {
                     line.extend(vec![
                         " ".into(),
-                        key_hint::plain(KeyCode::Esc).into(),
+                        key.into(),
                         " to edit previous message".into(),
                     ]);
                 }
@@ -1287,6 +1363,7 @@ mod tests {
                             show_cycle_hint,
                             show_shortcuts_hint,
                             show_queue_hint,
+                            props.key_hints,
                         );
                         match summary_left {
                             SummaryLeft::Default => {
@@ -1374,6 +1451,7 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
             },
         );
@@ -1392,6 +1470,10 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                key_hints: FooterKeyHints {
+                    insert_newline: Some(key_hint::shift(KeyCode::Enter)),
+                    ..FooterKeyHints::default_bindings()
+                },
                 active_agent_label: None,
             },
         );
@@ -1410,6 +1492,7 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
             },
         );
@@ -1428,6 +1511,7 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
             },
         );
@@ -1446,6 +1530,7 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
             },
         );
@@ -1464,6 +1549,7 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
             },
         );
@@ -1482,6 +1568,7 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
             },
         );
@@ -1500,6 +1587,7 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
             },
         );
@@ -1518,6 +1606,7 @@ mod tests {
                 context_window_used_tokens: Some(123_456),
                 status_line_value: None,
                 status_line_enabled: false,
+                key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
             },
         );
@@ -1536,6 +1625,7 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
             },
         );
@@ -1552,6 +1642,7 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
+            key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
         };
 
@@ -1581,6 +1672,7 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
+            key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
         };
 
@@ -1603,6 +1695,7 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
+            key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
         };
 
@@ -1620,6 +1713,7 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
+            key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
         };
 
@@ -1637,6 +1731,7 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
+            key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
         };
 
@@ -1654,6 +1749,7 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: None, // command timed out / empty
             status_line_enabled: true,
+            key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
         };
 
@@ -1676,6 +1772,7 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
+            key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
         };
 
@@ -1698,6 +1795,7 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: None,
             status_line_enabled: true,
+            key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
         };
 
@@ -1723,6 +1821,7 @@ mod tests {
                 "Status line content that should truncate before the mode indicator".to_string(),
             )),
             status_line_enabled: true,
+            key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
         };
 
@@ -1745,6 +1844,7 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
+            key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: Some("Robie [explorer]".to_string()),
         };
 
@@ -1762,6 +1862,7 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
+            key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: Some("Robie [explorer]".to_string()),
         };
 
@@ -1785,6 +1886,7 @@ mod tests {
                     .to_string(),
             )),
             status_line_enabled: true,
+            key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
         };
 
@@ -1838,6 +1940,7 @@ mod tests {
                 esc_backtrack_hint: false,
                 is_wsl,
                 collaboration_modes_enabled: false,
+                key_hints: FooterKeyHints::default_bindings(),
             })
             .expect("shortcut binding")
             .key;

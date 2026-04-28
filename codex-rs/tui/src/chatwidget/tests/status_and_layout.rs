@@ -200,16 +200,6 @@ async fn prefetch_rate_limits_is_gated_on_chatgpt_auth_provider() {
 }
 
 #[tokio::test]
-async fn worked_elapsed_from_resets_when_timer_restarts() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    assert_eq!(chat.worked_elapsed_from(/*current_elapsed*/ 5), 5);
-    assert_eq!(chat.worked_elapsed_from(/*current_elapsed*/ 9), 4);
-    // Simulate status timer resetting (e.g., status indicator recreated for a new task).
-    assert_eq!(chat.worked_elapsed_from(/*current_elapsed*/ 3), 3);
-    assert_eq!(chat.worked_elapsed_from(/*current_elapsed*/ 7), 4);
-}
-
-#[tokio::test]
 async fn rate_limit_warnings_emit_thresholds() {
     let mut state = RateLimitWarningState::default();
     let mut warnings: Vec<String> = Vec::new();
@@ -1741,8 +1731,7 @@ async fn session_configured_clears_goal_status_footer() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: Some(ReasoningEffortConfig::default()),
             history_log_id: 0,
@@ -1934,7 +1923,9 @@ async fn runtime_metrics_websocket_timing_logs_and_final_separator_sums_totals()
         .expect("expected websocket timing log");
     assert!(second_log.contains("TTFT: 80ms (iapi)"));
 
-    chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
+    chat.on_task_complete(
+        /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
+    );
     let mut final_separator = None;
     while let Ok(event) = rx.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = event {

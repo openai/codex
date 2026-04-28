@@ -59,7 +59,9 @@ use rmcp::model::FormElicitationCapability;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::ProtocolVersion;
+use rmcp::model::Tool as RmcpTool;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 /// MCP server capability indicating that Codex should include [`SandboxState`]
 /// in tool-call request `_meta` under this key.
@@ -70,6 +72,14 @@ pub(crate) const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str =
     "codex.mcp.tools.fetch_uncached.duration_ms";
 pub(crate) const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
+
+const UNTRUSTED_CONNECTOR_META_KEYS: &[&str] = &[
+    "connector_id",
+    "connector_name",
+    "connector_display_name",
+    "connector_description",
+    "connectorDescription",
+];
 
 #[derive(Clone)]
 pub(crate) struct ManagedClient {
@@ -115,6 +125,7 @@ pub(crate) struct AsyncManagedClient {
     pub(crate) startup_snapshot: Option<Vec<ToolInfo>>,
     pub(crate) startup_complete: Arc<AtomicBool>,
     pub(crate) tool_plugin_provenance: Arc<ToolPluginProvenance>,
+    pub(crate) cancel_token: CancellationToken,
 }
 
 impl AsyncManagedClient {
@@ -142,8 +153,9 @@ impl AsyncManagedClient {
         let startup_tool_filter = tool_filter;
         let startup_complete = Arc::new(AtomicBool::new(false));
         let startup_complete_for_fut = Arc::clone(&startup_complete);
+        let cancel_token_for_fut = cancel_token.clone();
         let fut = async move {
-            let outcome = async {
+            let outcome = match async {
                 if let Err(error) = validate_mcp_server_name(&server_name) {
                     return Err(error.into());
                 }
@@ -158,7 +170,7 @@ impl AsyncManagedClient {
                     )
                     .await?,
                 );
-                match start_server_task(
+                start_server_task(
                     server_name,
                     client,
                     StartServerTaskParams {
@@ -172,14 +184,14 @@ impl AsyncManagedClient {
                         codex_apps_tools_cache_context,
                     },
                 )
-                .or_cancel(&cancel_token)
                 .await
-                {
-                    Ok(result) => result,
-                    Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
-                }
             }
-            .await;
+            .or_cancel(&cancel_token_for_fut)
+            .await
+            {
+                Ok(result) => result,
+                Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
+            };
 
             startup_complete_for_fut.store(true, Ordering::Release);
             outcome
@@ -197,11 +209,23 @@ impl AsyncManagedClient {
             startup_snapshot,
             startup_complete,
             tool_plugin_provenance,
+            cancel_token,
         }
     }
 
     pub(crate) async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
         self.client.clone().await
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        self.cancel_token.cancel();
+        match self.client().await {
+            Ok(client) => client.client.shutdown().await,
+            Err(StartupOutcomeError::Cancelled) => {}
+            Err(error) => {
+                warn!("failed to initialize MCP client during shutdown: {error:#}");
+            }
+        }
     }
 
     fn startup_snapshot_while_initializing(&self) -> Option<Vec<ToolInfo>> {
@@ -320,19 +344,23 @@ pub(crate) async fn list_tools_for_client_uncached(
         .tools
         .into_iter()
         .map(|tool| {
+            let mut tool_def = tool.tool;
+            let (connector_id, connector_name, connector_description) =
+                sanitize_tool_connector_metadata(
+                    server_name,
+                    &mut tool_def,
+                    tool.connector_id,
+                    tool.connector_name,
+                    tool.connector_description,
+                );
             let callable_name = normalize_codex_apps_callable_name(
                 server_name,
-                &tool.tool.name,
-                tool.connector_id.as_deref(),
-                tool.connector_name.as_deref(),
+                &tool_def.name,
+                connector_id.as_deref(),
+                connector_name.as_deref(),
             );
-            let callable_namespace = normalize_codex_apps_callable_namespace(
-                server_name,
-                tool.connector_name.as_deref(),
-            );
-            let connector_name = tool.connector_name;
-            let connector_description = tool.connector_description;
-            let mut tool_def = tool.tool;
+            let callable_namespace =
+                normalize_codex_apps_callable_namespace(server_name, connector_name.as_deref());
             if let Some(title) = tool_def.title.as_deref() {
                 let normalized_title =
                     normalize_codex_apps_tool_title(server_name, connector_name.as_deref(), title);
@@ -346,7 +374,7 @@ pub(crate) async fn list_tools_for_client_uncached(
                 callable_namespace,
                 server_instructions: server_instructions.map(str::to_string),
                 tool: tool_def,
-                connector_id: tool.connector_id,
+                connector_id,
                 connector_name,
                 plugin_display_names: Vec::new(),
                 connector_description,
@@ -357,6 +385,31 @@ pub(crate) async fn list_tools_for_client_uncached(
         return Ok(filter_disallowed_codex_apps_tools(tools));
     }
     Ok(tools)
+}
+
+fn sanitize_tool_connector_metadata(
+    server_name: &str,
+    tool: &mut RmcpTool,
+    connector_id: Option<String>,
+    connector_name: Option<String>,
+    connector_description: Option<String>,
+) -> (Option<String>, Option<String>, Option<String>) {
+    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        return (connector_id, connector_name, connector_description);
+    }
+
+    strip_untrusted_connector_meta(tool);
+    (None, None, None)
+}
+
+fn strip_untrusted_connector_meta(tool: &mut RmcpTool) {
+    if let Some(meta) = tool.meta.as_mut() {
+        meta.retain(|key, _| !is_untrusted_connector_meta_key(key));
+    }
+}
+
+fn is_untrusted_connector_meta_key(key: &str) -> bool {
+    UNTRUSTED_CONNECTOR_META_KEYS.contains(&key)
 }
 
 fn resolve_bearer_token(
@@ -586,6 +639,109 @@ async fn make_rmcp_client(
             )
             .await
             .map_err(StartupOutcomeError::from)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmcp::model::JsonObject;
+    use rmcp::model::Meta;
+
+    fn tool_with_connector_meta() -> RmcpTool {
+        RmcpTool {
+            name: "capture_file_upload".to_string().into(),
+            title: None,
+            description: Some("test tool".to_string().into()),
+            input_schema: Arc::new(JsonObject::default()),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: Some(Meta(
+                serde_json::json!({
+                    "connector_id": "connector_gmail",
+                    "connector_name": "Gmail",
+                    "connector_display_name": "Gmail",
+                    "connector_description": "Mail connector",
+                    "connectorDescription": "Mail connector",
+                    "connectorFutureField": "future connector metadata",
+                    "CONNECTOR_UPPERCASE": "uppercase connector metadata",
+                    "openai/fileParams": ["file"],
+                    "custom": "kept"
+                })
+                .as_object()
+                .expect("object")
+                .clone(),
+            )),
+        }
+    }
+
+    #[test]
+    fn custom_mcp_connector_metadata_is_stripped() {
+        let mut tool = tool_with_connector_meta();
+
+        let (connector_id, connector_name, connector_description) =
+            sanitize_tool_connector_metadata(
+                "minimaltest",
+                &mut tool,
+                Some("connector_gmail".to_string()),
+                Some("Gmail".to_string()),
+                Some("Mail connector".to_string()),
+            );
+
+        assert_eq!(connector_id, None);
+        assert_eq!(connector_name, None);
+        assert_eq!(connector_description, None);
+
+        let meta = tool.meta.as_ref().expect("meta");
+        for key in [
+            "connector_id",
+            "connector_name",
+            "connector_display_name",
+            "connector_description",
+            "connectorDescription",
+        ] {
+            assert!(!meta.0.contains_key(key), "{key} should be stripped");
+        }
+        assert!(meta.0.contains_key("connectorFutureField"));
+        assert!(meta.0.contains_key("CONNECTOR_UPPERCASE"));
+        assert!(meta.0.contains_key("openai/fileParams"));
+        assert_eq!(
+            meta.0.get("custom").and_then(|value| value.as_str()),
+            Some("kept")
+        );
+    }
+
+    #[test]
+    fn codex_apps_connector_metadata_is_preserved() {
+        let mut tool = tool_with_connector_meta();
+
+        let (connector_id, connector_name, connector_description) =
+            sanitize_tool_connector_metadata(
+                CODEX_APPS_MCP_SERVER_NAME,
+                &mut tool,
+                Some("connector_gmail".to_string()),
+                Some("Gmail".to_string()),
+                Some("Mail connector".to_string()),
+            );
+
+        assert_eq!(connector_id.as_deref(), Some("connector_gmail"));
+        assert_eq!(connector_name.as_deref(), Some("Gmail"));
+        assert_eq!(connector_description.as_deref(), Some("Mail connector"));
+
+        let meta = tool.meta.as_ref().expect("meta");
+        for key in [
+            "connector_id",
+            "connector_name",
+            "connector_display_name",
+            "connector_description",
+            "connectorDescription",
+            "connectorFutureField",
+            "CONNECTOR_UPPERCASE",
+        ] {
+            assert!(meta.0.contains_key(key), "{key} should be preserved");
         }
     }
 }

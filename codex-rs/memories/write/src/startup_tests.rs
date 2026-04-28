@@ -1,10 +1,10 @@
-use anyhow::Result;
-use chrono::Duration as ChronoDuration;
-use chrono::Utc;
+use crate::start_memories_startup_task;
 use codex_features::Feature;
 use codex_git_utils::diff_since_latest_init;
 use codex_git_utils::reset_git_repository;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ServiceTier;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
@@ -26,18 +26,18 @@ use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn memories_startup_phase2_tracks_workspace_diff_across_runs() -> Result<()> {
+#[tokio::test]
+async fn memories_startup_phase2_tracks_workspace_diff_across_runs() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     let db = init_state_db(&home).await?;
     let memory_root = home.path().join("memories");
 
-    let now = Utc::now();
+    let now = chrono::Utc::now();
     let _thread_a = seed_stage1_output(
         db.as_ref(),
         home.path(),
-        now - ChronoDuration::hours(2),
+        now - chrono::Duration::hours(2),
         "raw memory A",
         "rollout summary A",
         "rollout-a",
@@ -61,7 +61,7 @@ async fn memories_startup_phase2_tracks_workspace_diff_across_runs() -> Result<(
     let _thread_b = seed_stage1_output(
         db.as_ref(),
         home.path(),
-        now - ChronoDuration::hours(1),
+        now - chrono::Duration::hours(1),
         "raw memory B",
         "rollout summary B",
         "rollout-b",
@@ -78,7 +78,9 @@ async fn memories_startup_phase2_tracks_workspace_diff_across_runs() -> Result<(
     )
     .await;
 
-    let codex = build_test_codex(&server, home.clone()).await?;
+    let test = build_test_codex(&server, home.clone()).await?;
+    trigger_memories_startup(&test).await;
+
     let request = wait_for_single_request(&phase2).await;
     let prompt = phase2_prompt_text(&request);
     assert!(
@@ -108,20 +110,20 @@ async fn memories_startup_phase2_tracks_workspace_diff_across_runs() -> Result<(
             .all(|summary| !summary.contains("rollout summary A"))
     );
 
-    shutdown_test_codex(&codex).await?;
+    shutdown_test_codex(&test).await?;
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn memories_startup_phase2_prunes_old_extension_resources() -> Result<()> {
+#[tokio::test]
+async fn memories_startup_phase2_prunes_old_extension_resources() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     let db = init_state_db(&home).await?;
-    let now = Utc::now();
+    let now = chrono::Utc::now();
     let _thread_id = seed_stage1_output(
         db.as_ref(),
         home.path(),
-        now - ChronoDuration::hours(1),
+        now - chrono::Duration::hours(1),
         "raw memory",
         "rollout summary",
         "rollout",
@@ -136,15 +138,14 @@ async fn memories_startup_phase2_prunes_old_extension_resources() -> Result<()> 
         "instructions",
     )
     .await?;
-    let old_file_name = format!(
+    let old_file = chronicle_resources.join(format!(
         "{}-abcd-10min-old.md",
-        (now - ChronoDuration::days(8)).format("%Y-%m-%dT%H-%M-%S")
-    );
-    let old_file = chronicle_resources.join(&old_file_name);
+        (now - chrono::Duration::days(8)).format("%Y-%m-%dT%H-%M-%S")
+    ));
     tokio::fs::write(&old_file, "old resource").await?;
     let recent_file = chronicle_resources.join(format!(
         "{}-abcd-10min-recent.md",
-        (now - ChronoDuration::days(6)).format("%Y-%m-%dT%H-%M-%S")
+        (now - chrono::Duration::days(6)).format("%Y-%m-%dT%H-%M-%S")
     ));
     tokio::fs::write(&recent_file, "recent resource").await?;
 
@@ -158,10 +159,11 @@ async fn memories_startup_phase2_prunes_old_extension_resources() -> Result<()> 
     )
     .await;
 
-    let codex = build_test_codex(&server, home.clone()).await?;
+    let test = build_test_codex(&server, home.clone()).await?;
+    trigger_memories_startup(&test).await;
+
     let request = wait_for_single_request(&phase2).await;
     let prompt = phase2_prompt_text(&request);
-
     assert!(
         prompt.contains("phase2_workspace_diff.md"),
         "expected workspace diff file in prompt: {prompt}"
@@ -178,20 +180,20 @@ async fn memories_startup_phase2_prunes_old_extension_resources() -> Result<()> 
         "recent extension resource should be retained"
     );
 
-    shutdown_test_codex(&codex).await?;
+    shutdown_test_codex(&test).await?;
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn memories_startup_phase2_prunes_old_extension_resources_without_stage1_input() -> Result<()>
-{
+#[tokio::test]
+async fn memories_startup_phase2_prunes_old_extension_resources_without_stage1_input()
+-> anyhow::Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     let db = init_state_db(&home).await?;
     db.enqueue_global_consolidation(/*input_watermark*/ 1)
         .await?;
 
-    let now = Utc::now();
+    let now = chrono::Utc::now();
     let chronicle_resources = home.path().join("memories/extensions/chronicle/resources");
     tokio::fs::create_dir_all(&chronicle_resources).await?;
     tokio::fs::write(
@@ -200,11 +202,10 @@ async fn memories_startup_phase2_prunes_old_extension_resources_without_stage1_i
         "instructions",
     )
     .await?;
-    let old_file_name = format!(
+    let old_file = chronicle_resources.join(format!(
         "{}-abcd-10min-old.md",
-        (now - ChronoDuration::days(8)).format("%Y-%m-%dT%H-%M-%S")
-    );
-    let old_file = chronicle_resources.join(&old_file_name);
+        (now - chrono::Duration::days(8)).format("%Y-%m-%dT%H-%M-%S")
+    ));
     tokio::fs::write(&old_file, "old resource").await?;
 
     let phase2 = mount_sse_once(
@@ -217,52 +218,120 @@ async fn memories_startup_phase2_prunes_old_extension_resources_without_stage1_i
     )
     .await;
 
-    let codex = build_test_codex(&server, home.clone()).await?;
+    let test = build_test_codex(&server, home.clone()).await?;
+    trigger_memories_startup(&test).await;
+
     let request = wait_for_single_request(&phase2).await;
     let prompt = phase2_prompt_text(&request);
-
     assert!(
         prompt.contains("phase2_workspace_diff.md"),
         "expected workspace diff file in prompt: {prompt}"
     );
+
     wait_for_file_removed(&old_file).await?;
     wait_for_phase2_workspace_reset(&home.path().join("memories")).await?;
 
-    shutdown_test_codex(&codex).await?;
+    shutdown_test_codex(&test).await?;
     Ok(())
 }
 
-async fn build_test_codex(server: &wiremock::MockServer, home: Arc<TempDir>) -> Result<TestCodex> {
-    #[allow(clippy::expect_used)]
-    let mut builder = test_codex().with_home(home).with_config(|config| {
-        config
-            .features
-            .enable(Feature::Sqlite)
-            .expect("test config should allow feature update");
-        config
-            .features
-            .enable(Feature::MemoryTool)
-            .expect("test config should allow feature update");
-        config.memories.max_raw_memories_for_consolidation = 1;
-    });
-    builder.build(server).await
+#[tokio::test]
+async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let test = build_test_codex(&server, home).await?;
+    assert_eq!(test.config.service_tier, None);
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox_policy: None,
+            permission_profile: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: Some(Some(ServiceTier::Fast)),
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let config_snapshot = wait_for_service_tier(&test, Some(ServiceTier::Fast)).await?;
+    assert_eq!(config_snapshot.service_tier, Some(ServiceTier::Fast));
+
+    let context = crate::runtime::MemoryStartupContext::new(
+        Arc::clone(&test.thread_manager),
+        test.thread_manager.auth_manager(),
+        test.session_configured.session_id,
+        Arc::clone(&test.codex),
+        &test.config,
+        config_snapshot.session_source.clone(),
+    );
+    let request_context = context
+        .stage_one_request_context(
+            &test.config,
+            test.config.model.as_deref().unwrap_or("gpt-5.4-mini"),
+            ReasoningEffort::Low,
+        )
+        .await;
+    assert_eq!(request_context.service_tier, Some(ServiceTier::Fast));
+
+    shutdown_test_codex(&test).await?;
+    Ok(())
 }
 
-async fn init_state_db(home: &Arc<TempDir>) -> Result<Arc<codex_state::StateRuntime>> {
+async fn build_test_codex(
+    server: &wiremock::MockServer,
+    home: Arc<TempDir>,
+) -> anyhow::Result<TestCodex> {
+    test_codex()
+        .with_home(home)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Sqlite)
+                .expect("test config should allow feature update");
+            config.memories.max_raw_memories_for_consolidation = 1;
+        })
+        .build(server)
+        .await
+}
+
+async fn init_state_db(home: &Arc<TempDir>) -> anyhow::Result<Arc<codex_state::StateRuntime>> {
     let db =
         codex_state::StateRuntime::init(home.path().to_path_buf(), "test-provider".into()).await?;
     db.mark_backfill_complete(/*last_watermark*/ None).await?;
     Ok(db)
 }
 
+async fn trigger_memories_startup(test: &TestCodex) {
+    let config_snapshot = test.codex.config_snapshot().await;
+    let mut config = test.config.clone();
+    config
+        .features
+        .enable(Feature::MemoryTool)
+        .expect("test config should allow feature update");
+    start_memories_startup_task(
+        Arc::clone(&test.thread_manager),
+        test.thread_manager.auth_manager(),
+        test.session_configured.session_id,
+        Arc::clone(&test.codex),
+        Arc::new(config),
+        &config_snapshot.session_source,
+    );
+}
+
 async fn seed_stage1_output(
     db: &codex_state::StateRuntime,
     codex_home: &Path,
-    updated_at: chrono::DateTime<Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
     raw_memory: &str,
     rollout_summary: &str,
     rollout_slug: &str,
-) -> Result<ThreadId> {
+) -> anyhow::Result<ThreadId> {
     let thread_id = ThreadId::new();
     let mut metadata_builder = codex_state::ThreadMetadataBuilder::new(
         thread_id,
@@ -293,7 +362,7 @@ async fn wait_for_single_request(mock: &ResponseMock) -> ResponsesRequest {
     wait_for_request(mock, /*expected_count*/ 1).await.remove(0)
 }
 
-async fn wait_for_file_removed(path: &Path) -> Result<()> {
+async fn wait_for_file_removed(path: &Path) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if !tokio::fs::try_exists(path).await? {
@@ -323,7 +392,25 @@ async fn wait_for_request(mock: &ResponseMock, expected_count: usize) -> Vec<Res
     }
 }
 
-#[allow(clippy::expect_used)]
+async fn wait_for_service_tier(
+    test: &TestCodex,
+    expected_service_tier: Option<ServiceTier>,
+) -> anyhow::Result<codex_core::ThreadConfigSnapshot> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let config_snapshot = test.codex.config_snapshot().await;
+        if config_snapshot.service_tier == expected_service_tier {
+            return Ok(config_snapshot);
+        }
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "timed out waiting for service_tier to become {expected_service_tier:?}, current={:?}",
+            config_snapshot.service_tier
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 fn phase2_prompt_text(request: &ResponsesRequest) -> String {
     request
         .message_input_texts("user")
@@ -332,7 +419,7 @@ fn phase2_prompt_text(request: &ResponsesRequest) -> String {
         .expect("phase2 prompt text")
 }
 
-async fn wait_for_phase2_workspace_reset(memory_root: &Path) -> Result<()> {
+async fn wait_for_phase2_workspace_reset(memory_root: &Path) -> anyhow::Result<()> {
     wait_for_file_removed(&memory_root.join("phase2_workspace_diff.md")).await?;
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -356,7 +443,7 @@ async fn seed_stage1_output_for_existing_thread(
     raw_memory: &str,
     rollout_summary: &str,
     rollout_slug: Option<&str>,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let owner = ThreadId::new();
     let claim = db
         .try_claim_stage1_job(
@@ -385,7 +472,7 @@ async fn seed_stage1_output_for_existing_thread(
     Ok(())
 }
 
-async fn read_rollout_summary_bodies(memory_root: &Path) -> Result<Vec<String>> {
+async fn read_rollout_summary_bodies(memory_root: &Path) -> anyhow::Result<Vec<String>> {
     let mut dir = tokio::fs::read_dir(memory_root.join("rollout_summaries")).await?;
     let mut summaries = Vec::new();
     while let Some(entry) = dir.next_entry().await? {
@@ -395,7 +482,7 @@ async fn read_rollout_summary_bodies(memory_root: &Path) -> Result<Vec<String>> 
     Ok(summaries)
 }
 
-async fn shutdown_test_codex(test: &TestCodex) -> Result<()> {
+async fn shutdown_test_codex(test: &TestCodex) -> anyhow::Result<()> {
     test.codex.submit(Op::Shutdown {}).await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
     Ok(())

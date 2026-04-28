@@ -19,6 +19,7 @@ use uuid::Uuid;
 const JOB_KIND_MEMORY_STAGE1: &str = "memory_stage1";
 const JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL: &str = "memory_consolidate_global";
 const MEMORY_CONSOLIDATION_JOB_KEY: &str = "global";
+const PHASE2_SUCCESS_COOLDOWN_SECONDS: i64 = 6 * 60 * 60;
 
 const DEFAULT_RETRY_REMAINING: i64 = 3;
 
@@ -335,9 +336,10 @@ WHERE thread_id IN (
     ///   `last_usage` is within `max_unused_days`, or whose
     ///   `source_updated_at` is within that window when the memory has never
     ///   been used
-    /// - eligible rows are ordered by `usage_count DESC`,
+    /// - eligible rows are ranked by `usage_count DESC`,
     ///   `COALESCE(last_usage, source_updated_at) DESC`, `source_updated_at DESC`,
     ///   `thread_id DESC`
+    /// - the selected top-N rows are returned in stable `thread_id ASC` order
     ///
     /// The returned rows are the complete Phase 2 filesystem input. Phase 2
     /// syncs these rows directly; deletions are represented by the workspace
@@ -355,30 +357,43 @@ WHERE thread_id IN (
         let current_rows = sqlx::query(
             r#"
 SELECT
-    so.thread_id,
-    COALESCE(t.rollout_path, '') AS rollout_path,
-    so.source_updated_at,
-    so.raw_memory,
-    so.rollout_summary,
-    so.rollout_slug,
-    so.generated_at,
-    COALESCE(t.cwd, '') AS cwd,
-    t.git_branch AS git_branch
-FROM stage1_outputs AS so
-LEFT JOIN threads AS t
-    ON t.id = so.thread_id
-WHERE t.memory_mode = 'enabled'
-  AND (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
-  AND (
-        (so.last_usage IS NOT NULL AND so.last_usage >= ?)
-        OR (so.last_usage IS NULL AND so.source_updated_at >= ?)
-  )
-ORDER BY
-    COALESCE(so.usage_count, 0) DESC,
-    COALESCE(so.last_usage, so.source_updated_at) DESC,
-    so.source_updated_at DESC,
-    so.thread_id DESC
-LIMIT ?
+    selected.thread_id,
+    selected.rollout_path,
+    selected.source_updated_at,
+    selected.raw_memory,
+    selected.rollout_summary,
+    selected.rollout_slug,
+    selected.generated_at,
+    selected.cwd,
+    selected.git_branch
+FROM (
+    SELECT
+        so.thread_id,
+        COALESCE(t.rollout_path, '') AS rollout_path,
+        so.source_updated_at,
+        so.raw_memory,
+        so.rollout_summary,
+        so.rollout_slug,
+        so.generated_at,
+        COALESCE(t.cwd, '') AS cwd,
+        t.git_branch AS git_branch
+    FROM stage1_outputs AS so
+    LEFT JOIN threads AS t
+        ON t.id = so.thread_id
+    WHERE t.memory_mode = 'enabled'
+      AND (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
+      AND (
+            (so.last_usage IS NOT NULL AND so.last_usage >= ?)
+            OR (so.last_usage IS NULL AND so.source_updated_at >= ?)
+      )
+    ORDER BY
+        COALESCE(so.usage_count, 0) DESC,
+        COALESCE(so.last_usage, so.source_updated_at) DESC,
+        so.source_updated_at DESC,
+        so.thread_id DESC
+    LIMIT ?
+) AS selected
+ORDER BY selected.thread_id ASC
             "#,
         )
         .bind(cutoff)
@@ -859,6 +874,8 @@ WHERE kind = ? AND job_key = ?
     ///   dirtiness is the source of truth after the caller materializes inputs
     /// - returns `SkippedRetryUnavailable` when retry backoff is active
     /// - returns `SkippedRunning` when an active running lease exists
+    /// - returns `SkippedCooldown` when the latest successful run finished
+    ///   within the phase-2 success cooldown
     /// - otherwise updates the row to `running`, sets ownership + lease, and
     ///   returns `Claimed`
     pub async fn try_claim_global_phase2_job(
@@ -868,6 +885,7 @@ WHERE kind = ? AND job_key = ?
     ) -> anyhow::Result<Phase2JobClaimOutcome> {
         let now = Utc::now().timestamp();
         let lease_until = now.saturating_add(lease_seconds.max(0));
+        let cooldown_cutoff = now.saturating_sub(PHASE2_SUCCESS_COOLDOWN_SECONDS);
         let ownership_token = Uuid::new_v4().to_string();
         let worker_id = worker_id.to_string();
 
@@ -875,7 +893,7 @@ WHERE kind = ? AND job_key = ?
 
         let existing_job = sqlx::query(
             r#"
-SELECT status, lease_until, retry_at, input_watermark
+SELECT status, lease_until, retry_at, input_watermark, finished_at, last_error
 FROM jobs
 WHERE kind = ? AND job_key = ?
             "#,
@@ -932,6 +950,8 @@ INSERT INTO jobs (
         let status: String = existing_job.try_get("status")?;
         let existing_lease_until: Option<i64> = existing_job.try_get("lease_until")?;
         let retry_at: Option<i64> = existing_job.try_get("retry_at")?;
+        let finished_at: Option<i64> = existing_job.try_get("finished_at")?;
+        let last_error: Option<String> = existing_job.try_get("last_error")?;
         if retry_at.is_some_and(|retry_at| retry_at > now) {
             tx.commit().await?;
             return Ok(Phase2JobClaimOutcome::SkippedRetryUnavailable);
@@ -940,6 +960,12 @@ INSERT INTO jobs (
         {
             tx.commit().await?;
             return Ok(Phase2JobClaimOutcome::SkippedRunning);
+        }
+        if last_error.is_none()
+            && finished_at.is_some_and(|finished_at| finished_at > cooldown_cutoff)
+        {
+            tx.commit().await?;
+            return Ok(Phase2JobClaimOutcome::SkippedCooldown);
         }
 
         let rows_affected = sqlx::query(
@@ -957,6 +983,7 @@ SET
 WHERE kind = ? AND job_key = ?
   AND (status != 'running' OR lease_until IS NULL OR lease_until <= ?)
   AND (retry_at IS NULL OR retry_at <= ?)
+  AND (last_error IS NOT NULL OR finished_at IS NULL OR finished_at <= ?)
             "#,
         )
         .bind(worker_id.as_str())
@@ -967,6 +994,7 @@ WHERE kind = ? AND job_key = ?
         .bind(MEMORY_CONSOLIDATION_JOB_KEY)
         .bind(now)
         .bind(now)
+        .bind(cooldown_cutoff)
         .execute(&mut *tx)
         .await?
         .rows_affected();
@@ -1246,6 +1274,8 @@ ON CONFLICT(kind, job_key) DO UPDATE SET
 mod tests {
     use super::JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL;
     use super::JOB_KIND_MEMORY_STAGE1;
+    use super::MEMORY_CONSOLIDATION_JOB_KEY;
+    use super::PHASE2_SUCCESS_COOLDOWN_SECONDS;
     use super::StateRuntime;
     use super::test_support::test_thread_metadata;
     use super::test_support::unique_temp_dir;
@@ -1259,6 +1289,20 @@ mod tests {
     use sqlx::Row;
     use std::sync::Arc;
     use uuid::Uuid;
+
+    fn stable_thread_id(value: &str) -> ThreadId {
+        ThreadId::from_string(value).expect("thread id")
+    }
+
+    async fn age_phase2_success_beyond_cooldown(runtime: &StateRuntime) {
+        sqlx::query("UPDATE jobs SET finished_at = ? WHERE kind = ? AND job_key = ?")
+            .bind(Utc::now().timestamp() - PHASE2_SUCCESS_COOLDOWN_SECONDS - 1)
+            .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+            .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("age phase2 success beyond cooldown");
+    }
 
     #[tokio::test]
     async fn stage1_claim_skips_when_up_to_date() {
@@ -2345,6 +2389,7 @@ WHERE kind = 'memory_stage1'
                 .expect("stage1 output count");
         assert_eq!(output_row_count, 0);
 
+        age_phase2_success_beyond_cooldown(&runtime).await;
         let claim_phase2 = runtime
             .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
@@ -2468,7 +2513,7 @@ WHERE kind = 'memory_stage1'
     }
 
     #[tokio::test]
-    async fn phase2_global_lock_can_be_reclaimed_after_success_without_new_watermark() {
+    async fn phase2_global_lock_respects_success_cooldown() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -2504,10 +2549,27 @@ WHERE kind = 'memory_stage1'
             .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
             .expect("claim phase2 after success");
-        assert!(
-            matches!(claim_after_success, Phase2JobClaimOutcome::Claimed { .. }),
-            "the DB claim is only a lock; git workspace diff decides whether there is work"
-        );
+        assert_eq!(claim_after_success, Phase2JobClaimOutcome::SkippedCooldown);
+
+        runtime
+            .enqueue_global_consolidation(/*input_watermark*/ 101)
+            .await
+            .expect("enqueue global consolidation after success");
+        let claim_after_enqueue = runtime
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
+            .await
+            .expect("claim phase2 after enqueue");
+        assert_eq!(claim_after_enqueue, Phase2JobClaimOutcome::SkippedCooldown);
+
+        age_phase2_success_beyond_cooldown(&runtime).await;
+        let claim_after_cooldown = runtime
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
+            .await
+            .expect("claim phase2 after cooldown");
+        assert!(matches!(
+            claim_after_cooldown,
+            Phase2JobClaimOutcome::Claimed { .. }
+        ));
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -2829,9 +2891,9 @@ VALUES (?, ?, ?, ?, ?)
             .await
             .expect("initialize runtime");
 
-        let thread_id_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        let thread_id_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        let thread_id_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let thread_id_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
+        let thread_id_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
+        let thread_id_c = stable_thread_id("00000000-0000-4000-8000-000000000003");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
         for (thread_id, workspace) in [
@@ -2918,12 +2980,21 @@ VALUES (?, ?, ?, ?, ?)
             .expect("load phase2 input selection");
 
         assert_eq!(selection.len(), 2);
-        assert_eq!(selection[0].thread_id, thread_id_c);
         assert_eq!(
-            selection[0].rollout_path,
+            selection
+                .iter()
+                .map(|output| output.thread_id)
+                .collect::<Vec<_>>(),
+            vec![thread_id_b, thread_id_c]
+        );
+        let selected_c = selection
+            .iter()
+            .find(|output| output.thread_id == thread_id_c)
+            .expect("thread c should be selected");
+        assert_eq!(
+            selected_c.rollout_path,
             codex_home.join(format!("rollout-{thread_id_c}.jsonl"))
         );
-        assert_eq!(selection[1].thread_id, thread_id_b);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -3100,6 +3171,7 @@ VALUES (?, ?, ?, ?, ?)
             "thread should transition to polluted"
         );
 
+        age_phase2_success_beyond_cooldown(&runtime).await;
         let next_claim = runtime
             .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
@@ -3235,10 +3307,10 @@ VALUES (?, ?, ?, ?, ?)
             .await
             .expect("initialize runtime");
 
-        let thread_id_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread a");
-        let thread_id_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread b");
-        let thread_id_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread c");
-        let thread_id_d = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread d");
+        let thread_id_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
+        let thread_id_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
+        let thread_id_c = stable_thread_id("00000000-0000-4000-8000-000000000003");
+        let thread_id_d = stable_thread_id("00000000-0000-4000-8000-000000000004");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
         for (thread_id, workspace) in [
@@ -3365,7 +3437,7 @@ VALUES (?, ?, ?, ?, ?)
                 .iter()
                 .map(|output| output.thread_id)
                 .collect::<Vec<_>>(),
-            vec![thread_id_d, thread_id_c]
+            vec![thread_id_c, thread_id_d]
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -3468,6 +3540,7 @@ VALUES (?, ?, ?, ?, ?)
             "refreshed stage1 success should persist output"
         );
 
+        age_phase2_success_beyond_cooldown(&runtime).await;
         let second_phase2_claim = runtime
             .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
@@ -3768,9 +3841,9 @@ VALUES (?, ?, ?, ?, ?)
 
         let now = Utc::now();
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
-        let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id a");
-        let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id b");
-        let thread_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id c");
+        let thread_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
+        let thread_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
+        let thread_c = stable_thread_id("00000000-0000-4000-8000-000000000003");
 
         for (thread_id, workspace) in [
             (thread_a, "workspace-a"),
@@ -3840,7 +3913,7 @@ VALUES (?, ?, ?, ?, ?)
         }
 
         let selection = runtime
-            .get_phase2_input_selection(/*n*/ 3, /*max_unused_days*/ 30)
+            .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 30)
             .await
             .expect("load phase2 input selection");
 
@@ -3849,7 +3922,7 @@ VALUES (?, ?, ?, ?, ?)
                 .iter()
                 .map(|output| output.thread_id)
                 .collect::<Vec<_>>(),
-            vec![thread_b, thread_a, thread_c]
+            vec![thread_b]
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -3864,9 +3937,9 @@ VALUES (?, ?, ?, ?, ?)
 
         let now = Utc::now();
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
-        let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id a");
-        let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id b");
-        let thread_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id c");
+        let thread_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
+        let thread_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
+        let thread_c = stable_thread_id("00000000-0000-4000-8000-000000000003");
 
         for (thread_id, workspace) in [
             (thread_a, "workspace-a"),
@@ -3945,7 +4018,7 @@ VALUES (?, ?, ?, ?, ?)
                 .iter()
                 .map(|output| output.thread_id)
                 .collect::<Vec<_>>(),
-            vec![thread_c, thread_b]
+            vec![thread_b, thread_c]
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -4430,10 +4503,7 @@ VALUES (?, ?, ?, ?, ?)
             .try_claim_global_phase2_job(owner_b, /*lease_seconds*/ 3_600)
             .await
             .expect("claim global phase2 lock after success");
-        assert!(
-            matches!(claim_after_success, Phase2JobClaimOutcome::Claimed { .. }),
-            "git workspace diff, not the DB watermark, decides whether the claimed lock has work"
-        );
+        assert_eq!(claim_after_success, Phase2JobClaimOutcome::SkippedCooldown);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -4556,6 +4626,7 @@ VALUES (?, ?, ?, ?, ?)
             .await
             .expect("enqueue lower-watermark consolidation");
 
+        age_phase2_success_beyond_cooldown(&runtime).await;
         let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner b");
         let claim_b = runtime
             .try_claim_global_phase2_job(owner_b, /*lease_seconds*/ 3_600)

@@ -267,7 +267,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         .default_environment()
         .unwrap_or_else(|| environment_manager.local_environment());
 
-    let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
+    let (mut mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries,
@@ -346,6 +346,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     }
     let accessible_connectors =
         with_app_plugin_sources(accessible_connectors, &tool_plugin_provenance);
+    mcp_connection_manager.shutdown().await;
     Ok(AccessibleConnectorsStatus {
         connectors: accessible_connectors,
         codex_apps_ready,

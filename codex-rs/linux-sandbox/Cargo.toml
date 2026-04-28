@@ -17,6 +17,7 @@ workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 clap = { workspace = true, features = ["derive"] }
+codex-process-hardening = { workspace = true }
 codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-utils-absolute-path = { workspace = true }

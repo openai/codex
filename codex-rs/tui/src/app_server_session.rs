@@ -156,9 +156,6 @@ pub(crate) struct ThreadSessionState {
     pub(crate) service_tier: Option<codex_protocol::config_types::ServiceTier>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
-    /// Legacy sandbox projection kept only for compatibility fields that have
-    /// not migrated to `PermissionProfile` yet.
-    pub(crate) sandbox_policy: SandboxPolicy,
     /// Canonical active permissions for this session. Legacy app-server
     /// responses are converted to a profile at ingestion time using the
     /// response cwd so cached sessions do not reinterpret cwd-bound grants.
@@ -1420,7 +1417,6 @@ async fn thread_session_state_from_thread_response(
         service_tier,
         approval_policy,
         approvals_reviewer,
-        sandbox_policy,
         permission_profile,
         cwd,
         instruction_source_paths,

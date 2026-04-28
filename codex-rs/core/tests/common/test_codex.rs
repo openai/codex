@@ -12,6 +12,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_config::CloudRequirementsLoader;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
@@ -47,6 +48,7 @@ use crate::PathBufExt;
 use crate::TempDirExt;
 use crate::get_remote_test_env;
 use crate::load_default_config_for_test;
+use crate::load_default_config_for_test_with_cloud_requirements;
 use crate::responses::WebSocketTestServer;
 use crate::responses::output_value_to_text;
 use crate::responses::start_mock_server;
@@ -206,6 +208,7 @@ pub struct TestCodexBuilder {
     pre_build_hooks: Vec<Box<PreBuildHook>>,
     workspace_setups: Vec<Box<WorkspaceSetup>>,
     home: Option<Arc<TempDir>>,
+    cloud_requirements: Option<CloudRequirementsLoader>,
     user_shell_override: Option<Shell>,
     exec_server_url: Option<String>,
 }
@@ -251,6 +254,11 @@ impl TestCodexBuilder {
 
     pub fn with_home(mut self, home: Arc<TempDir>) -> Self {
         self.home = Some(home);
+        self
+    }
+
+    pub fn with_cloud_requirements(mut self, cloud_requirements: CloudRequirementsLoader) -> Self {
+        self.cloud_requirements = Some(cloud_requirements);
         self
     }
 
@@ -485,7 +493,11 @@ impl TestCodexBuilder {
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());
         }
-        let mut config = load_default_config_for_test(home).await;
+        let mut config = if let Some(cloud_requirements) = self.cloud_requirements.take() {
+            load_default_config_for_test_with_cloud_requirements(home, cloud_requirements).await
+        } else {
+            load_default_config_for_test(home).await
+        };
         config.cwd = cwd_override;
         config.model_provider = model_provider;
         if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
@@ -923,6 +935,7 @@ pub fn test_codex() -> TestCodexBuilder {
         pre_build_hooks: vec![],
         workspace_setups: vec![],
         home: None,
+        cloud_requirements: None,
         user_shell_override: None,
         exec_server_url: None,
     }
