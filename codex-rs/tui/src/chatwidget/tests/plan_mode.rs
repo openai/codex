@@ -1,6 +1,126 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+#[test]
+fn plan_mode_nudge_matches_only_standalone_plain_text_keyword() {
+    assert!(contains_plan_keyword("plan"));
+    assert!(contains_plan_keyword("Make a Plan first."));
+    assert!(!contains_plan_keyword("plane"));
+    assert!(!contains_plan_keyword("planning"));
+    assert!(contains_plan_keyword("/plan"));
+    assert!(contains_plan_keyword("!plan"));
+}
+
+#[tokio::test]
+async fn plan_mode_nudge_shows_only_for_eligible_default_mode_drafts() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_composer_text("make a plan".to_string(), Vec::new(), Vec::new());
+    chat.pre_draw_tick();
+    assert!(chat.bottom_pane.plan_mode_nudge_visible());
+
+    chat.set_composer_text("/plan".to_string(), Vec::new(), Vec::new());
+    chat.pre_draw_tick();
+    assert!(!chat.bottom_pane.plan_mode_nudge_visible());
+
+    chat.set_composer_text("!plan".to_string(), Vec::new(), Vec::new());
+    chat.pre_draw_tick();
+    assert!(!chat.bottom_pane.plan_mode_nudge_visible());
+
+    chat.set_composer_text("make a plan".to_string(), Vec::new(), Vec::new());
+    let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    chat.pre_draw_tick();
+    assert!(!chat.bottom_pane.plan_mode_nudge_visible());
+}
+
+#[tokio::test]
+async fn plan_mode_nudge_hides_while_task_or_modal_is_active() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_composer_text("make a plan".to_string(), Vec::new(), Vec::new());
+    chat.pre_draw_tick();
+    assert!(chat.bottom_pane.plan_mode_nudge_visible());
+
+    chat.on_task_started();
+    chat.pre_draw_tick();
+    assert!(!chat.bottom_pane.plan_mode_nudge_visible());
+
+    chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
+    chat.show_selection_view(SelectionViewParams {
+        items: vec![SelectionItem {
+            name: "Keep planning".to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    chat.pre_draw_tick();
+    assert!(!chat.bottom_pane.plan_mode_nudge_visible());
+}
+
+#[tokio::test]
+async fn plan_mode_nudge_dismissal_is_scoped_to_current_thread() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let first_thread = ThreadId::new();
+    let second_thread = ThreadId::new();
+    chat.thread_id = Some(first_thread);
+    chat.set_composer_text("make a plan".to_string(), Vec::new(), Vec::new());
+    chat.pre_draw_tick();
+    assert!(chat.bottom_pane.plan_mode_nudge_visible());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.pre_draw_tick();
+    assert!(!chat.bottom_pane.plan_mode_nudge_visible());
+
+    chat.thread_id = Some(second_thread);
+    chat.pre_draw_tick();
+    assert!(chat.bottom_pane.plan_mode_nudge_visible());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.pre_draw_tick();
+    assert!(!chat.bottom_pane.plan_mode_nudge_visible());
+
+    chat.thread_id = Some(first_thread);
+    chat.pre_draw_tick();
+    assert!(!chat.bottom_pane.plan_mode_nudge_visible());
+}
+
+#[tokio::test]
+async fn plan_mode_nudge_shift_tab_uses_existing_mode_cycle_path() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_composer_text("make a plan".to_string(), Vec::new(), Vec::new());
+    chat.pre_draw_tick();
+    assert!(chat.bottom_pane.plan_mode_nudge_visible());
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    chat.pre_draw_tick();
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert!(!chat.bottom_pane.plan_mode_nudge_visible());
+}
+
+#[tokio::test]
+async fn plan_mode_nudge_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_token_info(Some(make_token_info(
+        /*total_tokens*/ 50_000, /*context_window*/ 100_000,
+    )));
+    chat.set_composer_text("make a plan".to_string(), Vec::new(), Vec::new());
+    chat.pre_draw_tick();
+
+    assert_chatwidget_snapshot!("plan_mode_nudge", render_bottom_popup(&chat, /*width*/ 80));
+}
+
+#[tokio::test]
+async fn plan_mode_nudge_narrow_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_composer_text("make a plan".to_string(), Vec::new(), Vec::new());
+    chat.pre_draw_tick();
+
+    assert_chatwidget_snapshot!(
+        "plan_mode_nudge_narrow",
+        render_bottom_popup(&chat, /*width*/ 36)
+    );
+}
+
 #[tokio::test]
 async fn plan_implementation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;

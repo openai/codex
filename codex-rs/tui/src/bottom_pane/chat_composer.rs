@@ -349,6 +349,7 @@ pub(crate) struct ChatComposer {
     disable_paste_burst: bool,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
+    plan_mode_nudge_visible: bool,
     remote_image_urls: Vec<String>,
     /// Tracks keyboard selection for the remote-image rows so Up/Down + Delete/Backspace
     /// can highlight and remove remote attachments from the composer UI.
@@ -440,6 +441,18 @@ fn status_line_right_indicator(
         .or_else(|| goal_status_indicator_line(goal_status_indicator))
 }
 
+fn plan_mode_nudge_line() -> Line<'static> {
+    Line::from(vec![
+        "Create a plan?".magenta(),
+        "  ".into(),
+        key_hint::shift(KeyCode::Tab).into(),
+        " use Plan mode".into(),
+        "   ".into(),
+        key_hint::plain(KeyCode::Esc).into(),
+        " dismiss".into(),
+    ])
+}
+
 impl ChatComposer {
     fn builtin_command_flags(&self) -> BuiltinCommandFlags {
         BuiltinCommandFlags {
@@ -513,6 +526,7 @@ impl ChatComposer {
             disable_paste_burst: false,
             footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
+            plan_mode_nudge_visible: false,
             remote_image_urls: Vec::new(),
             selected_remote_image_index: None,
             pending_slash_command_history: None,
@@ -955,6 +969,10 @@ impl ChatComposer {
         text
     }
 
+    pub(crate) fn input_enabled(&self) -> bool {
+        self.input_enabled
+    }
+
     pub(crate) fn pending_pastes(&self) -> Vec<(String, String)> {
         self.pending_pastes.clone()
     }
@@ -971,6 +989,19 @@ impl ChatComposer {
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.footer_hint_override = items;
+    }
+
+    pub(crate) fn set_plan_mode_nudge_visible(&mut self, visible: bool) -> bool {
+        if self.plan_mode_nudge_visible == visible {
+            return false;
+        }
+        self.plan_mode_nudge_visible = visible;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn plan_mode_nudge_visible(&self) -> bool {
+        self.plan_mode_nudge_visible
     }
 
     pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
@@ -3945,6 +3976,17 @@ impl ChatComposer {
                 };
                 if let Some(line) = self.history_search_footer_line() {
                     render_footer_line(hint_rect, buf, line);
+                } else if self.plan_mode_nudge_visible {
+                    let available_width =
+                        hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
+                    render_footer_line(
+                        hint_rect,
+                        buf,
+                        truncate_line_with_ellipsis_if_overflow(
+                            plan_mode_nudge_line(),
+                            available_width,
+                        ),
+                    );
                 } else {
                     let available_width =
                         hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
