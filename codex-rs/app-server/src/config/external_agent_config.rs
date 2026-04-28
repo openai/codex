@@ -288,8 +288,11 @@ impl ExternalAgentConfigService {
         }
 
         let source_root = self.source_root(repo_root);
-        let migrated_mcp =
-            build_mcp_config_from_external(source_root.as_path(), settings.as_ref())?;
+        let migrated_mcp = build_mcp_config_from_external(
+            source_root.as_path(),
+            Some(self.external_agent_home.as_path()),
+            settings.as_ref(),
+        )?;
         if !is_empty_toml_table(&migrated_mcp) {
             let mut should_include = true;
             if target_config.exists() {
@@ -772,6 +775,7 @@ impl ExternalAgentConfigService {
         let settings = read_external_settings(&source_settings)?;
         let migrated = build_mcp_config_from_external(
             self.source_root(repo_root.as_deref()).as_path(),
+            Some(self.external_agent_home.as_path()),
             settings.as_ref(),
         )?;
         if is_empty_toml_table(&migrated) {

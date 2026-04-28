@@ -64,9 +64,10 @@ impl HookMigration {
 
 pub(super) fn build_mcp_config_from_external(
     source_root: &Path,
+    external_agent_home: Option<&Path>,
     settings: Option<&JsonValue>,
 ) -> io::Result<TomlValue> {
-    let mcp_servers = read_external_mcp_servers(source_root)?;
+    let mcp_servers = read_external_mcp_servers(source_root, external_agent_home)?;
     if mcp_servers.is_empty() {
         return Ok(TomlValue::Table(Default::default()));
     }
@@ -107,7 +108,7 @@ pub(super) fn hooks_migration_description(
     source_external_agent_dir: &Path,
     target_hooks: &Path,
 ) -> io::Result<Option<String>> {
-    let migration = hook_migration(source_external_agent_dir)?;
+    let migration = hook_migration(source_external_agent_dir, target_hooks.parent())?;
     if !migration.has_active_hooks() {
         return Ok(None);
     }
@@ -132,14 +133,14 @@ pub(super) fn import_hooks(
     source_external_agent_dir: &Path,
     target_hooks: &Path,
 ) -> io::Result<bool> {
-    let migration = hook_migration(source_external_agent_dir)?;
+    let Some(parent) = target_hooks.parent() else {
+        return Err(invalid_data_error("hooks target path has no parent"));
+    };
+    let migration = hook_migration(source_external_agent_dir, Some(parent))?;
     if !migration.has_active_hooks() {
         return Ok(false);
     }
 
-    let Some(parent) = target_hooks.parent() else {
-        return Err(invalid_data_error("hooks target path has no parent"));
-    };
     fs::create_dir_all(parent)?;
 
     let mut wrote_active_hooks = false;
@@ -169,10 +170,10 @@ pub(super) fn count_missing_subagents(
         if agent_metadata(&document).is_none() {
             continue;
         }
-        let Some(stem) = source_file.file_stem() else {
+        let Some(target) = subagent_target_file(&source_file, target_agents) else {
             continue;
         };
-        if !target_agents.join(stem).with_extension("toml").exists() {
+        if !target.exists() {
             count += 1;
         }
     }
@@ -187,10 +188,9 @@ pub(super) fn import_subagents(source_agents: &Path, target_agents: &Path) -> io
     fs::create_dir_all(target_agents)?;
     let mut imported = 0usize;
     for source_file in agent_source_files(source_agents)? {
-        let Some(stem) = source_file.file_stem() else {
+        let Some(target) = subagent_target_file(&source_file, target_agents) else {
             continue;
         };
-        let target = target_agents.join(stem).with_extension("toml");
         if target.exists() {
             continue;
         }
@@ -241,7 +241,10 @@ pub(super) fn import_commands(source_commands: &Path, target_skills: &Path) -> i
     Ok(imported)
 }
 
-fn read_external_mcp_servers(source_root: &Path) -> io::Result<BTreeMap<String, JsonValue>> {
+fn read_external_mcp_servers(
+    source_root: &Path,
+    external_agent_home: Option<&Path>,
+) -> io::Result<BTreeMap<String, JsonValue>> {
     let mut servers = BTreeMap::new();
     for relative_path in [".mcp.json", ".claude.json"] {
         let source_file = source_root.join(relative_path);
@@ -251,15 +254,72 @@ fn read_external_mcp_servers(source_root: &Path) -> io::Result<BTreeMap<String, 
         let raw = fs::read_to_string(&source_file)?;
         let parsed: JsonValue = serde_json::from_str(&raw)
             .map_err(|err| invalid_data_error(format!("invalid MCP config: {err}")))?;
-        let Some(mcp_servers) = parsed.get("mcpServers").and_then(JsonValue::as_object) else {
-            continue;
-        };
-        for (server_name, server_config) in mcp_servers {
-            servers.insert(server_name.clone(), server_config.clone());
+        append_mcp_servers_from_value(&parsed, &mut servers);
+        if relative_path == ".claude.json"
+            && let Some(projects) = parsed.get("projects").and_then(JsonValue::as_object)
+        {
+            for (project_path, project_config) in projects {
+                if project_path_matches_source_root(project_path, source_root) {
+                    append_mcp_servers_from_value(project_config, &mut servers);
+                }
+            }
         }
+    }
+    if let Some(external_agent_root) = external_agent_home.and_then(Path::parent)
+        && external_agent_root != source_root
+    {
+        append_claude_json_project_mcp_servers(
+            &external_agent_root.join(".claude.json"),
+            source_root,
+            &mut servers,
+        )?;
     }
 
     Ok(servers)
+}
+
+fn append_claude_json_project_mcp_servers(
+    source_file: &Path,
+    source_root: &Path,
+    servers: &mut BTreeMap<String, JsonValue>,
+) -> io::Result<()> {
+    if !source_file.is_file() {
+        return Ok(());
+    }
+    let raw = fs::read_to_string(source_file)?;
+    let parsed: JsonValue = serde_json::from_str(&raw)
+        .map_err(|err| invalid_data_error(format!("invalid MCP config: {err}")))?;
+    let Some(projects) = parsed.get("projects").and_then(JsonValue::as_object) else {
+        return Ok(());
+    };
+    for (project_path, project_config) in projects {
+        if project_path_matches_source_root(project_path, source_root) {
+            append_mcp_servers_from_value(project_config, servers);
+        }
+    }
+    Ok(())
+}
+
+fn append_mcp_servers_from_value(value: &JsonValue, servers: &mut BTreeMap<String, JsonValue>) {
+    let Some(mcp_servers) = value.get("mcpServers").and_then(JsonValue::as_object) else {
+        return;
+    };
+    for (server_name, server_config) in mcp_servers {
+        servers.insert(server_name.clone(), server_config.clone());
+    }
+}
+
+fn project_path_matches_source_root(project_path: &str, source_root: &Path) -> bool {
+    let project_path = Path::new(project_path);
+    if project_path == source_root {
+        return true;
+    }
+    let Ok(project_path) = project_path.canonicalize() else {
+        return false;
+    };
+    source_root
+        .canonicalize()
+        .is_ok_and(|source_root| source_root == project_path)
 }
 
 fn mcp_server_toml_table(
@@ -271,6 +331,14 @@ fn mcp_server_toml_table(
     let mut table = toml::map::Map::new();
     let server_config = server_config?;
     let transport_type = server_config.get("type").and_then(JsonValue::as_str);
+    if mcp_server_is_disabled(
+        server_name,
+        server_config,
+        enabled_servers,
+        disabled_servers,
+    ) {
+        return None;
+    }
 
     if let Some(command) = server_config.get("command").and_then(json_string) {
         if !matches!(transport_type, None | Some("stdio")) {
@@ -311,22 +379,25 @@ fn mcp_server_toml_table(
         return None;
     }
 
-    let disabled_by_server = server_config
+    Some(table)
+}
+
+fn mcp_server_is_disabled(
+    server_name: &str,
+    server_config: &serde_json::Map<String, JsonValue>,
+    enabled_servers: &[String],
+    disabled_servers: &BTreeSet<String>,
+) -> bool {
+    server_config
         .get("enabled")
         .and_then(JsonValue::as_bool)
         .is_some_and(|enabled| !enabled)
         || server_config
             .get("disabled")
             .and_then(JsonValue::as_bool)
-            .unwrap_or(false);
-    if disabled_by_server
+            .unwrap_or(false)
         || (!enabled_servers.is_empty() && !enabled_servers.iter().any(|name| name == server_name))
         || disabled_servers.contains(server_name)
-    {
-        table.insert("enabled".to_string(), TomlValue::Boolean(false));
-    }
-
-    Some(table)
 }
 
 fn append_header_config(
@@ -400,10 +471,9 @@ fn append_env_config(
 
 fn parse_env_placeholder(value: &str) -> Option<String> {
     let inner = value.strip_prefix("${")?.strip_suffix('}')?;
-    if inner.contains(":-") {
-        return None;
-    }
-    let name = inner;
+    let name = inner
+        .split_once(":-")
+        .map_or(inner, |(name, _default)| name);
     let mut chars = name.chars();
     let first = chars.next()?;
     if !(first == '_' || first.is_ascii_alphabetic()) {
@@ -419,8 +489,12 @@ fn contains_env_placeholder(value: &str) -> bool {
     value.contains("${")
 }
 
-fn hook_migration(source_external_agent_dir: &Path) -> io::Result<HookMigration> {
-    let mut migration = HookMigration::default();
+fn hook_migration(
+    source_external_agent_dir: &Path,
+    target_config_dir: Option<&Path>,
+) -> io::Result<HookMigration> {
+    let mut settings_files = Vec::new();
+    let mut disable_all_hooks = None;
     for settings_name in ["settings.json", "settings.local.json"] {
         let settings_file = source_external_agent_dir.join(settings_name);
         if !settings_file.is_file() {
@@ -429,20 +503,29 @@ fn hook_migration(source_external_agent_dir: &Path) -> io::Result<HookMigration>
         let raw = fs::read_to_string(&settings_file)?;
         let settings: JsonValue = serde_json::from_str(&raw)
             .map_err(|err| invalid_data_error(format!("invalid hooks settings: {err}")))?;
-        if settings
-            .get("disableAllHooks")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false)
-        {
-            return Ok(HookMigration::default());
+        if let Some(disabled) = settings.get("disableAllHooks").and_then(JsonValue::as_bool) {
+            disable_all_hooks = Some(disabled);
         }
-        append_convertible_hook_groups(&settings, &mut migration);
+        settings_files.push(settings);
+    }
+
+    if disable_all_hooks.unwrap_or(false) {
+        return Ok(HookMigration::default());
+    }
+
+    let mut migration = HookMigration::default();
+    for settings in settings_files {
+        append_convertible_hook_groups(&settings, &mut migration, target_config_dir);
     }
 
     Ok(migration)
 }
 
-fn append_convertible_hook_groups(settings: &JsonValue, migration: &mut HookMigration) {
+fn append_convertible_hook_groups(
+    settings: &JsonValue,
+    migration: &mut HookMigration,
+    target_config_dir: Option<&Path>,
+) {
     let Some(hooks_config) = settings.get("hooks").and_then(JsonValue::as_object) else {
         return;
     };
@@ -515,7 +598,7 @@ fn append_convertible_hook_groups(settings: &JsonValue, migration: &mut HookMigr
                         .insert("type".to_string(), JsonValue::String("command".to_string()));
                     command_payload.insert(
                         "command".to_string(),
-                        JsonValue::String(rewrite_hook_command(command)),
+                        JsonValue::String(rewrite_hook_command(command, target_config_dir)),
                     );
                     if let Some(timeout) = hook_object
                         .get("timeout")
@@ -564,12 +647,24 @@ fn append_convertible_hook_groups(settings: &JsonValue, migration: &mut HookMigr
     }
 }
 
-fn rewrite_hook_command(command: &str) -> String {
+fn rewrite_hook_command(command: &str, target_config_dir: Option<&Path>) -> String {
+    let Some(target_config_dir) = target_config_dir else {
+        return command.to_string();
+    };
+    let hook_dir = shell_quote_path_prefix(&target_config_dir.join("hooks"));
     command
-        .replace("\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/", ".codex/hooks/")
-        .replace("${CLAUDE_PROJECT_DIR}/.claude/hooks/", ".codex/hooks/")
-        .replace("$CLAUDE_PROJECT_DIR/.claude/hooks/", ".codex/hooks/")
-        .replace(".claude/hooks/", ".codex/hooks/")
+        .replace("\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/", &hook_dir)
+        .replace("${CLAUDE_PROJECT_DIR}/.claude/hooks/", &hook_dir)
+        .replace("$CLAUDE_PROJECT_DIR/.claude/hooks/", &hook_dir)
+        .replace(".claude/hooks/", &hook_dir)
+}
+
+fn shell_quote_path_prefix(path: &Path) -> String {
+    format!("{}/", shell_single_quote(path.to_string_lossy().as_ref()))
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn copy_hook_scripts(source_external_agent_dir: &Path, target_config_dir: &Path) -> io::Result<()> {
@@ -618,6 +713,10 @@ fn agent_source_files(source_agents: &Path) -> io::Result<Vec<PathBuf>> {
     }
     files.sort();
     Ok(files)
+}
+
+fn subagent_target_file(source_file: &Path, target_agents: &Path) -> Option<PathBuf> {
+    Some(target_agents.join(format!("{}.toml", source_file.file_stem()?.to_str()?)))
 }
 
 fn command_source_files(source_commands: &Path) -> io::Result<Vec<PathBuf>> {
@@ -1021,8 +1120,11 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn env_placeholder_rejects_defaults() {
-        assert_eq!(parse_env_placeholder("${TOKEN:-fallback}"), None);
+    fn env_placeholder_accepts_defaults() {
+        assert_eq!(
+            parse_env_placeholder("${TOKEN:-fallback}"),
+            Some("TOKEN".to_string())
+        );
     }
 
     #[test]
@@ -1035,13 +1137,18 @@ mod tests {
         .expect("write mcp");
 
         assert_eq!(
-            build_mcp_config_from_external(root.path(), /*settings*/ None).unwrap(),
+            build_mcp_config_from_external(
+                root.path(),
+                /*external_agent_home*/ None,
+                /*settings*/ None,
+            )
+            .unwrap(),
             TomlValue::Table(Default::default())
         );
     }
 
     #[test]
-    fn mcp_migration_skips_unsupported_transports_and_placeholders() {
+    fn mcp_migration_skips_unsupported_transports() {
         let root = tempfile::TempDir::new().expect("tempdir");
         fs::write(
             root.path().join(".mcp.json"),
@@ -1058,8 +1165,143 @@ mod tests {
         .expect("write mcp");
 
         assert_eq!(
-            build_mcp_config_from_external(root.path(), /*settings*/ None).unwrap(),
-            TomlValue::Table(Default::default())
+            build_mcp_config_from_external(
+                root.path(),
+                /*external_agent_home*/ None,
+                /*settings*/ None,
+            )
+            .unwrap(),
+            toml::from_str(
+                r#"
+[mcp_servers.vault]
+url = "https://example.invalid/vault"
+bearer_token_env_var = "VAULT_TOKEN"
+"#
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn mcp_migration_reads_matching_project_entries_from_repo_claude_json() {
+        let root = tempfile::TempDir::new().expect("tempdir");
+        let project = root.path().join("repo");
+        fs::create_dir_all(&project).expect("create repo");
+        let other = root.path().join("other");
+        fs::create_dir_all(&other).expect("create other");
+        fs::write(
+            project.join(".claude.json"),
+            serde_json::json!({
+                "mcpServers": {
+                    "top": {"command": "top-server"}
+                },
+                "projects": {
+                    project.display().to_string(): {
+                        "mcpServers": {
+                            "repo": {"command": "repo-server"}
+                        }
+                    },
+                    other.display().to_string(): {
+                        "mcpServers": {
+                            "other": {"command": "other-server"}
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("write claude json");
+
+        assert_eq!(
+            build_mcp_config_from_external(
+                &project, /*external_agent_home*/ None, /*settings*/ None,
+            )
+            .unwrap(),
+            toml::from_str(
+                r#"
+[mcp_servers.repo]
+command = "repo-server"
+
+[mcp_servers.top]
+command = "top-server"
+"#
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn mcp_migration_reads_matching_project_entries_from_home_claude_json() {
+        let root = tempfile::TempDir::new().expect("tempdir");
+        let project = root.path().join("repo");
+        fs::create_dir_all(&project).expect("create repo");
+        let external_agent_home = root.path().join(".claude");
+        fs::create_dir_all(&external_agent_home).expect("create external agent home");
+        fs::write(
+            root.path().join(".claude.json"),
+            serde_json::json!({
+                "projects": {
+                    project.display().to_string(): {
+                        "mcpServers": {
+                            "repo": {"command": "repo-server"}
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("write claude json");
+
+        assert_eq!(
+            build_mcp_config_from_external(
+                &project,
+                Some(&external_agent_home),
+                /*settings*/ None,
+            )
+            .unwrap(),
+            toml::from_str(
+                r#"
+[mcp_servers.repo]
+command = "repo-server"
+"#
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn mcp_migration_skips_disabled_servers() {
+        let root = tempfile::TempDir::new().expect("tempdir");
+        fs::write(
+            root.path().join(".mcp.json"),
+            r#"{
+              "mcpServers": {
+                "enabled": {"command": "enabled-server"},
+                "explicit-disabled": {"command": "disabled-server", "disabled": true},
+                "not-enabled": {"command": "not-enabled-server"}
+              }
+            }"#,
+        )
+        .expect("write mcp");
+        let settings = serde_json::json!({
+            "enabledMcpjsonServers": ["enabled"],
+            "disabledMcpjsonServers": ["explicit-disabled"]
+        });
+
+        assert_eq!(
+            build_mcp_config_from_external(
+                root.path(),
+                /*external_agent_home*/ None,
+                Some(&settings),
+            )
+            .unwrap(),
+            toml::from_str(
+                r#"
+[mcp_servers.enabled]
+command = "enabled-server"
+"#
+            )
+            .unwrap()
         );
     }
 
@@ -1148,6 +1390,17 @@ mod tests {
     }
 
     #[test]
+    fn subagent_target_preserves_dotted_file_stem() {
+        let target_agents = Path::new("/repo/.codex/agents");
+        let source_file = Path::new("/repo/.claude/agents/security.audit.md");
+
+        assert_eq!(
+            subagent_target_file(source_file, target_agents),
+            Some(PathBuf::from("/repo/.codex/agents/security.audit.toml"))
+        );
+    }
+
+    #[test]
     fn frontmatter_accepts_crlf_delimiters() {
         let document = parse_document_content(
             "---\r\nname: reviewer\r\ndescription: Review code\r\n---\r\nReview carefully.\r\n",
@@ -1212,7 +1465,7 @@ mod tests {
             }
         });
         let mut migration = HookMigration::default();
-        append_convertible_hook_groups(&settings, &mut migration);
+        append_convertible_hook_groups(&settings, &mut migration, Some(Path::new("/repo/.codex")));
 
         assert_eq!(
             migration.hooks_payload,
@@ -1221,7 +1474,7 @@ mod tests {
                     "matcher": "Bash",
                     "hooks": [{
                         "type": "command",
-                        "command": "python3 .codex/hooks/approve.py"
+                        "command": "python3 '/repo/.codex/hooks'/approve.py"
                     }]
                 }]
             })
@@ -1249,8 +1502,83 @@ mod tests {
         .expect("write settings");
 
         assert_eq!(
-            hook_migration(root.path()).unwrap().hooks_payload,
+            hook_migration(root.path(), /*target_config_dir*/ None)
+                .unwrap()
+                .hooks_payload,
             serde_json::Map::new()
+        );
+    }
+
+    #[test]
+    fn hook_migration_honors_settings_local_disable_override() {
+        let root = tempfile::TempDir::new().expect("tempdir");
+        fs::write(
+            root.path().join("settings.json"),
+            r#"{
+              "disableAllHooks": true,
+              "hooks": {
+                "SessionStart": [{
+                  "matcher": "project",
+                  "hooks": [{"type": "command", "command": "echo project"}]
+                }]
+              }
+            }"#,
+        )
+        .expect("write project settings");
+        fs::write(
+            root.path().join("settings.local.json"),
+            r#"{
+              "disableAllHooks": false,
+              "hooks": {
+                "SessionStart": [{
+                  "matcher": "local",
+                  "hooks": [{"type": "command", "command": "echo local"}]
+                }]
+              }
+            }"#,
+        )
+        .expect("write local settings");
+
+        assert_eq!(
+            hook_migration(root.path(), /*target_config_dir*/ None)
+                .unwrap()
+                .hooks_payload,
+            serde_json::json!({
+                "SessionStart": [{
+                    "matcher": "project",
+                    "hooks": [{
+                        "type": "command",
+                        "command": "echo project"
+                    }]
+                }, {
+                    "matcher": "local",
+                    "hooks": [{
+                        "type": "command",
+                        "command": "echo local"
+                    }]
+                }]
+            })
+            .as_object()
+            .cloned()
+            .expect("object")
+        );
+    }
+
+    #[test]
+    fn hook_command_paths_rewrite_to_target_hook_dir() {
+        assert_eq!(
+            rewrite_hook_command(
+                "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/check.py",
+                Some(Path::new("/repo/.codex")),
+            ),
+            "python3 '/repo/.codex/hooks'/check.py"
+        );
+        assert_eq!(
+            rewrite_hook_command(
+                "python3 .claude/hooks/check.py",
+                Some(Path::new("/repo/.codex")),
+            ),
+            "python3 '/repo/.codex/hooks'/check.py"
         );
     }
 
@@ -1269,7 +1597,7 @@ mod tests {
             }
         });
         let mut migration = HookMigration::default();
-        append_convertible_hook_groups(&settings, &mut migration);
+        append_convertible_hook_groups(&settings, &mut migration, /*target_config_dir*/ None);
 
         assert_eq!(
             migration.hooks_payload,
