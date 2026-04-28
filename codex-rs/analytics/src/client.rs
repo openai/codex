@@ -186,11 +186,22 @@ impl AnalyticsEventsClient {
         )));
     }
 
-    pub fn track_request(&self, connection_id: u64, request_id: RequestId, request: ClientRequest) {
+    pub fn track_request(
+        &self,
+        connection_id: u64,
+        request_id: RequestId,
+        request: &ClientRequest,
+    ) {
+        if !matches!(
+            request,
+            ClientRequest::TurnStart { .. } | ClientRequest::TurnSteer { .. }
+        ) {
+            return;
+        }
         self.record_fact(AnalyticsFact::ClientRequest {
             connection_id,
             request_id,
-            request: Box::new(request),
+            request: Box::new(request.clone()),
         });
     }
 
@@ -323,6 +334,10 @@ impl AnalyticsEventsClient {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;
 
 async fn send_track_events(
     auth_manager: &AuthManager,

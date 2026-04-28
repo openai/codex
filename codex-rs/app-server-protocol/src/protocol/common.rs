@@ -157,6 +157,7 @@ macro_rules! client_request_definitions {
                 params: $(#[$params_meta:meta])* $params:ty,
                 $(inspect_params: $inspect_params:tt,)?
                 serialization: $serialization:ident $( ( $($serialization_args:tt)* ) )?,
+                $(manual_payload_conversion: $manual_payload_conversion:ident,)?
                 response: $response:ty,
             }
         ),* $(,)?
@@ -243,7 +244,99 @@ macro_rules! client_request_definitions {
                     })
                     .unwrap_or_else(|| "<unknown>".to_string())
             }
+
+            pub fn into_jsonrpc_parts(
+                self,
+            ) -> std::result::Result<(RequestId, crate::Result), serde_json::Error> {
+                match self {
+                    $(
+                        Self::$variant { request_id, response } => {
+                            serde_json::to_value(response).map(|result| (request_id, result))
+                        }
+                    )*
+                }
+            }
         }
+
+        #[derive(Debug, Clone)]
+        #[allow(clippy::large_enum_variant)]
+        pub enum ClientResponsePayload {
+            $( $variant($response), )*
+            InterruptConversation(v1::InterruptConversationResponse),
+        }
+
+        impl ClientResponsePayload {
+            pub fn into_jsonrpc_parts_and_payload(
+                self,
+                request_id: RequestId,
+            ) -> std::result::Result<
+                (RequestId, crate::Result, Option<ClientResponsePayload>),
+                serde_json::Error,
+            > {
+                match self {
+                    $(
+                        Self::$variant(response) => {
+                            let result = serde_json::to_value(&response)?;
+                            Ok((request_id, result, Some(Self::$variant(response))))
+                        }
+                    )*
+                    Self::InterruptConversation(response) => {
+                        serde_json::to_value(response).map(|result| (request_id, result, None))
+                    }
+                }
+            }
+
+            pub fn into_client_response(self, request_id: RequestId) -> Option<ClientResponse> {
+                match self {
+                    $(
+                        Self::$variant(response) => {
+                            Some(ClientResponse::$variant {
+                                request_id,
+                                response,
+                            })
+                        }
+                    )*
+                    Self::InterruptConversation(_) => None,
+                }
+            }
+
+            pub fn into_jsonrpc_parts(
+                self,
+                request_id: RequestId,
+            ) -> std::result::Result<(RequestId, crate::Result), serde_json::Error> {
+                self.to_jsonrpc_parts(request_id)
+            }
+
+            pub fn to_jsonrpc_parts(
+                &self,
+                request_id: RequestId,
+            ) -> std::result::Result<(RequestId, crate::Result), serde_json::Error> {
+                match self {
+                    $(
+                        Self::$variant(response) => {
+                            serde_json::to_value(response).map(|result| (request_id, result))
+                        }
+                    )*
+                    Self::InterruptConversation(response) => {
+                        serde_json::to_value(response).map(|result| (request_id, result))
+                    }
+                }
+            }
+        }
+
+        impl From<v1::InterruptConversationResponse> for ClientResponsePayload {
+            fn from(response: v1::InterruptConversationResponse) -> Self {
+                Self::InterruptConversation(response)
+            }
+        }
+
+        $(
+            client_response_payload_from_impl!(
+                $variant,
+                $response
+                $(, $manual_payload_conversion)?
+            );
+        )*
 
         impl crate::experimental_api::ExperimentalApi for ClientRequest {
             fn experimental_reason(&self) -> Option<&'static str> {
@@ -315,6 +408,17 @@ macro_rules! client_request_definitions {
             Ok(schemas)
         }
     };
+}
+
+macro_rules! client_response_payload_from_impl {
+    ($variant:ident, $response:ty) => {
+        impl From<$response> for ClientResponsePayload {
+            fn from(response: $response) -> Self {
+                Self::$variant(response)
+            }
+        }
+    };
+    ($variant:ident, $response:ty, manual) => {};
 }
 
 client_request_definitions! {
@@ -789,11 +893,13 @@ client_request_definitions! {
     ConfigValueWrite => "config/value/write" {
         params: v2::ConfigValueWriteParams,
         serialization: global("config"),
+        manual_payload_conversion: manual,
         response: v2::ConfigWriteResponse,
     },
     ConfigBatchWrite => "config/batchWrite" {
         params: v2::ConfigBatchWriteParams,
         serialization: global("config"),
+        manual_payload_conversion: manual,
         response: v2::ConfigWriteResponse,
     },
 
@@ -2766,3 +2872,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "common_tests.rs"]
+mod common_tests;
