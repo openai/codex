@@ -349,6 +349,10 @@ pub(crate) struct ChatComposer {
     disable_paste_burst: bool,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
+    /// Whether the ambient footer row is currently replaced by the Plan-mode nudge.
+    ///
+    /// Eligibility is decided by `ChatWidget`; the composer only owns presentation so enabling
+    /// the nudge never changes layout height or reimplements mode-selection policy here.
     plan_mode_nudge_visible: bool,
     remote_image_urls: Vec<String>,
     /// Tracks keyboard selection for the remote-image rows so Up/Down + Delete/Backspace
@@ -441,6 +445,7 @@ fn status_line_right_indicator(
         .or_else(|| goal_status_indicator_line(goal_status_indicator))
 }
 
+/// Builds the one-line nudge that replaces the ambient footer without adding layout height.
 fn plan_mode_nudge_line() -> Line<'static> {
     Line::from(vec![
         "Create a plan?".magenta(),
@@ -969,6 +974,7 @@ impl ChatComposer {
         text
     }
 
+    /// Returns whether the composer currently accepts interactive draft edits.
     pub(crate) fn input_enabled(&self) -> bool {
         self.input_enabled
     }
@@ -991,6 +997,10 @@ impl ChatComposer {
         self.footer_hint_override = items;
     }
 
+    /// Updates whether the Plan-mode nudge replaces the ambient footer row.
+    ///
+    /// Returns `true` only when the rendered footer can change so callers can avoid scheduling
+    /// redundant redraws while reevaluating nudge policy on routine composer updates.
     pub(crate) fn set_plan_mode_nudge_visible(&mut self, visible: bool) -> bool {
         if self.plan_mode_nudge_visible == visible {
             return false;

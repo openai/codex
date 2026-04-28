@@ -749,6 +749,7 @@ impl BottomPane {
         self.composer.current_text_with_pending()
     }
 
+    /// Returns whether the composer currently accepts interactive draft edits.
     pub(crate) fn composer_input_enabled(&self) -> bool {
         self.composer.input_enabled()
     }
@@ -767,6 +768,7 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Applies the externally decided Plan-mode nudge visibility to the footer presentation.
     pub(crate) fn set_plan_mode_nudge_visible(&mut self, visible: bool) {
         if self.composer.set_plan_mode_nudge_visible(visible) {
             self.request_redraw();

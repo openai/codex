@@ -924,6 +924,10 @@ pub(crate) struct ChatWidget {
     pending_status_indicator_restore: bool,
     suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
+    /// Nudge dismissals that should survive draft edits within the current thread scope.
+    ///
+    /// The nudge is only a discovery aid, so once a user dismisses it or enters Plan mode we keep it
+    /// hidden for that thread instead of resurfacing it on every matching draft.
     dismissed_plan_mode_nudge_scopes: HashSet<PlanModeNudgeScope>,
     last_turn_id: Option<String>,
     budget_limited_turn_ids: HashSet<String>,
@@ -1590,12 +1594,20 @@ enum SessionConfiguredDisplay {
     SideConversation,
 }
 
+/// Scope used to keep Plan-mode nudge dismissal local to one conversation context.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum PlanModeNudgeScope {
+    /// Drafts entered before the server has assigned a thread id.
     NewThread,
+    /// Drafts associated with one configured thread.
     Thread(ThreadId),
 }
 
+/// Returns whether `text` contains the standalone word `plan`.
+///
+/// This intentionally mirrors the App suggestion heuristic instead of trying to infer broader
+/// planning intent from substrings such as `planning`. Slash and shell drafts still match here so
+/// callers can keep lexical matching separate from presentation policy.
 fn contains_plan_keyword(text: &str) -> bool {
     text.split(|ch: char| !ch.is_alphanumeric() && ch != '_')
         .any(|word| word.eq_ignore_ascii_case("plan"))
@@ -10809,11 +10821,18 @@ impl ChatWidget {
         true
     }
 
+    /// Returns the dismissal scope that applies to the currently visible draft.
     fn plan_mode_nudge_scope(&self) -> PlanModeNudgeScope {
         self.thread_id
             .map_or(PlanModeNudgeScope::NewThread, PlanModeNudgeScope::Thread)
     }
 
+    /// Returns whether the current draft should replace the normal footer with the Plan-mode nudge.
+    ///
+    /// `ChatWidget` owns this policy because it can combine lexical draft matching with mode
+    /// availability, interaction state, and thread-scoped dismissal. `ChatComposer` only renders
+    /// the resulting visibility bit. Keeping slash and shell drafts out here avoids advertising a
+    /// mode switch while the user is intentionally composing another local command.
     fn should_show_plan_mode_nudge(&self) -> bool {
         let text = self.bottom_pane.composer_text();
         let trimmed = text.trim_start();
@@ -10831,11 +10850,13 @@ impl ChatWidget {
                 .contains(&self.plan_mode_nudge_scope())
     }
 
+    /// Synchronizes the footer presentation with the current Plan-mode nudge policy.
     fn refresh_plan_mode_nudge(&mut self) {
         self.bottom_pane
             .set_plan_mode_nudge_visible(self.should_show_plan_mode_nudge());
     }
 
+    /// Hides the nudge for the current thread scope until the user changes conversation context.
     fn dismiss_plan_mode_nudge(&mut self) {
         self.dismissed_plan_mode_nudge_scopes
             .insert(self.plan_mode_nudge_scope());
