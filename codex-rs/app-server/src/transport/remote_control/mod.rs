@@ -14,7 +14,7 @@ use self::protocol::normalize_remote_control_url;
 use super::CHANNEL_CAPACITY;
 use super::TransportEvent;
 use super::next_connection_id;
-use codex_app_server_protocol::RemoteControlConnectionState;
+use codex_app_server_protocol::RemoteControlConnectionStatus;
 use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_login::AuthManager;
 use codex_state::StateRuntime;
@@ -57,20 +57,15 @@ impl RemoteControlHandle {
             return;
         }
 
-        let state = if enabled {
-            RemoteControlConnectionState::Connecting
+        let connection_status = if enabled {
+            RemoteControlConnectionStatus::Connecting
         } else {
-            RemoteControlConnectionState::Disabled
-        };
-        let environment_id = if enabled {
-            self.status_tx.borrow().environment_id.clone()
-        } else {
-            None
+            RemoteControlConnectionStatus::Disabled
         };
         self.status_tx.send_if_modified(|status| {
             let next_status = RemoteControlStatusChangedNotification {
-                state,
-                environment_id,
+                status: connection_status,
+                environment_id: None,
             };
             if *status == next_status {
                 return false;
@@ -110,10 +105,10 @@ pub(crate) async fn start_remote_control(
 
     let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
     let initial_status = RemoteControlStatusChangedNotification {
-        state: if initial_enabled {
-            RemoteControlConnectionState::Connecting
+        status: if initial_enabled {
+            RemoteControlConnectionStatus::Connecting
         } else {
-            RemoteControlConnectionState::Disabled
+            RemoteControlConnectionStatus::Disabled
         },
         environment_id: None,
     };

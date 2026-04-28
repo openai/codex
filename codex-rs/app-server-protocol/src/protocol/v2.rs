@@ -2877,19 +2877,19 @@ pub struct DeviceKeyPublicResponse {
     pub protection_class: DeviceKeyProtectionClass,
 }
 
-/// Current remote-control connection state and environment id exposed to clients.
+/// Current remote-control connection status and environment id exposed to clients.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct RemoteControlStatusChangedNotification {
-    pub state: RemoteControlConnectionState,
+    pub status: RemoteControlConnectionStatus,
     pub environment_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
-pub enum RemoteControlConnectionState {
+pub enum RemoteControlConnectionStatus {
     Disabled,
     Connecting,
     Connected,

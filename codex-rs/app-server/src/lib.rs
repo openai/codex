@@ -940,7 +940,7 @@ pub async fn run_main_with_transport_options(
                         initialize_notification_sender
                             .send_server_notification(ServerNotification::RemoteControlStatusChanged(
                                 RemoteControlStatusChangedNotification {
-                                    state: status.state,
+                                    status: status.status,
                                     environment_id: status.environment_id,
                                 },
                             ))

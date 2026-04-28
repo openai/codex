@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "RemoteControlConnectionState": {
+    "RemoteControlConnectionStatus": {
       "enum": [
         "disabled",
         "connecting",
@@ -11,7 +11,7 @@
       "type": "string"
     }
   },
-  "description": "Current remote-control connection state and environment id exposed to clients.",
+  "description": "Current remote-control connection status and environment id exposed to clients.",
   "properties": {
     "environmentId": {
       "type": [
@@ -19,12 +19,12 @@
         "null"
       ]
     },
-    "state": {
-      "$ref": "#/definitions/RemoteControlConnectionState"
+    "status": {
+      "$ref": "#/definitions/RemoteControlConnectionStatus"
     }
   },
   "required": [
-    "state"
+    "status"
   ],
   "title": "RemoteControlStatusChangedNotification",
   "type": "object"

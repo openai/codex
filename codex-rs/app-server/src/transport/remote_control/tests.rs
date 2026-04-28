@@ -18,7 +18,7 @@ use base64::Engine;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::RemoteControlConnectionState;
+use codex_app_server_protocol::RemoteControlConnectionStatus;
 use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_config::types::AuthCredentialsStoreMode;
@@ -120,7 +120,7 @@ fn remote_control_url_for_listener(listener: &TcpListener) -> String {
 
 async fn expect_remote_control_status(
     status_rx: &mut watch::Receiver<RemoteControlStatusChangedNotification>,
-    expected_state: Option<RemoteControlConnectionState>,
+    expected_status: Option<RemoteControlConnectionStatus>,
     expected_environment_id: Option<&str>,
 ) {
     timeout(Duration::from_secs(5), status_rx.changed())
@@ -128,8 +128,8 @@ async fn expect_remote_control_status(
         .expect("remote control status event should arrive in time")
         .expect("remote control status watch should remain open");
     let status = status_rx.borrow();
-    if let Some(expected_state) = expected_state {
-        assert_eq!(status.state, expected_state);
+    if let Some(expected_status) = expected_status {
+        assert_eq!(status.status, expected_status);
     }
     assert_eq!(status.environment_id.as_deref(), expected_environment_id);
 }
@@ -169,7 +169,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
     let mut websocket = accept_remote_control_connection(&listener).await;
     expect_remote_control_status(
         &mut status_rx,
-        /*expected_state*/ None,
+        /*expected_status*/ None,
         Some("env_test"),
     )
     .await;
@@ -453,7 +453,7 @@ async fn remote_control_transport_reconnects_after_disconnect() {
     let mut second_websocket = accept_remote_control_connection(&listener).await;
     expect_remote_control_status(
         &mut status_rx,
-        /*expected_state*/ None,
+        /*expected_status*/ None,
         Some("env_test"),
     )
     .await;
@@ -582,7 +582,7 @@ async fn remote_control_start_reports_missing_state_db_as_disabled_when_enabled(
     assert_eq!(
         status_rx.borrow().clone(),
         RemoteControlStatusChangedNotification {
-            state: RemoteControlConnectionState::Disabled,
+            status: RemoteControlConnectionStatus::Disabled,
             environment_id: None,
         }
     );
@@ -627,6 +627,7 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
     )
     .await
     .expect("remote control should start");
+    let mut status_rx = remote_handle.status_receiver();
 
     let enroll_request = accept_http_request(&listener).await;
     assert_eq!(
@@ -639,8 +640,20 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
     )
     .await;
     let mut first_websocket = accept_remote_control_connection(&listener).await;
+    expect_remote_control_status(
+        &mut status_rx,
+        /*expected_status*/ None,
+        Some("env_test"),
+    )
+    .await;
 
     remote_handle.set_enabled(/*enabled*/ false);
+    expect_remote_control_status(
+        &mut status_rx,
+        Some(RemoteControlConnectionStatus::Disabled),
+        /*expected_environment_id*/ None,
+    )
+    .await;
     timeout(Duration::from_secs(1), first_websocket.next())
         .await
         .expect("disabling remote control should close the websocket");
@@ -649,7 +662,19 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
         .expect_err("disabled remote control should not reconnect");
 
     remote_handle.set_enabled(/*enabled*/ true);
+    expect_remote_control_status(
+        &mut status_rx,
+        Some(RemoteControlConnectionStatus::Connecting),
+        /*expected_environment_id*/ None,
+    )
+    .await;
     let mut second_websocket = accept_remote_control_connection(&listener).await;
+    expect_remote_control_status(
+        &mut status_rx,
+        /*expected_status*/ None,
+        Some("env_test"),
+    )
+    .await;
     second_websocket
         .close(None)
         .await
@@ -691,7 +716,7 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
     let mut first_websocket = accept_remote_control_connection(&listener).await;
     expect_remote_control_status(
         &mut status_rx,
-        /*expected_state*/ None,
+        /*expected_status*/ None,
         Some("env_test"),
     )
     .await;
@@ -890,7 +915,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
         accept_remote_control_backend_connection(&listener).await;
     expect_remote_control_status(
         &mut status_rx,
-        /*expected_state*/ None,
+        /*expected_status*/ None,
         Some("env_test"),
     )
     .await;
@@ -1302,14 +1327,14 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     );
     expect_remote_control_status(
         &mut status_rx,
-        /*expected_state*/ None,
+        /*expected_status*/ None,
         Some("env_stale"),
     )
     .await;
     respond_with_status(websocket_request.stream, "404 Not Found", "").await;
     expect_remote_control_status(
         &mut status_rx,
-        /*expected_state*/ None,
+        /*expected_status*/ None,
         /*expected_environment_id*/ None,
     )
     .await;
@@ -1331,7 +1356,7 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     let (handshake_request, _websocket) = accept_remote_control_backend_connection(&listener).await;
     expect_remote_control_status(
         &mut status_rx,
-        /*expected_state*/ None,
+        /*expected_status*/ None,
         Some("env_refreshed"),
     )
     .await;
