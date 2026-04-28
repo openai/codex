@@ -562,12 +562,13 @@ pub async fn run_main_with_transport_options(
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-    let state_db = codex_state::StateRuntime::init(
+    let state_db_result = codex_state::StateRuntime::init(
         config.sqlite_home.clone(),
         config.model_provider_id.clone(),
     )
-    .await
-    .ok();
+    .await;
+    let state_db_init_error = state_db_result.as_ref().err().map(ToString::to_string);
+    let state_db = state_db_result.ok();
     let log_db = state_db.clone().map(log_db::start);
     let log_db_layer = log_db
         .clone()
@@ -587,6 +588,9 @@ pub async fn run_main_with_transport_options(
             Some(details) => error!("{} {}", warning.summary, details),
             None => error!("{}", warning.summary),
         }
+    }
+    if let Some(err) = &state_db_init_error {
+        error!("failed to initialize sqlite state db: {err}");
     }
 
     let transport_shutdown_token = CancellationToken::new();
@@ -633,11 +637,19 @@ pub async fn run_main_with_transport_options(
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
-    let remote_control_enabled = config.features.enabled(Feature::RemoteControl);
+    let remote_control_config_enabled = config.features.enabled(Feature::RemoteControl);
+    let remote_control_enabled = remote_control_config_enabled && state_db.is_some();
+    if remote_control_config_enabled && state_db.is_none() {
+        error!("remote control disabled because sqlite state db is unavailable");
+    }
     if transport_accept_handles.is_empty() && !remote_control_enabled {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
-            "no transport configured; use --listen or enable remote control",
+            if remote_control_config_enabled && state_db.is_none() {
+                "no transport configured; remote control disabled because sqlite state db is unavailable"
+            } else {
+                "no transport configured; use --listen or enable remote control"
+            },
         ));
     }
 
