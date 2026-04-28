@@ -1,5 +1,5 @@
-use std::io;
 use std::ffi::c_void;
+use std::io;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Threading::DeleteProcThreadAttributeList;
