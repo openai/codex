@@ -21,23 +21,17 @@ struct AgentIdentityAuthProvider {
 impl AuthProvider for AgentIdentityAuthProvider {
     fn add_auth_headers(&self, headers: &mut HeaderMap) {
         let record = self.auth.record();
-        let header_value = self
-            .auth
-            .process_task_id()
-            .ok_or_else(|| std::io::Error::other("agent identity process task is not initialized"))
-            .and_then(|task_id| {
-                authorization_header_for_agent_task(
-                    AgentIdentityKey {
-                        agent_runtime_id: &record.agent_runtime_id,
-                        private_key_pkcs8_base64: &record.agent_private_key,
-                    },
-                    AgentTaskAuthorizationTarget {
-                        agent_runtime_id: &record.agent_runtime_id,
-                        task_id,
-                    },
-                )
-                .map_err(std::io::Error::other)
-            });
+        let header_value = authorization_header_for_agent_task(
+            AgentIdentityKey {
+                agent_runtime_id: &record.agent_runtime_id,
+                private_key_pkcs8_base64: &record.agent_private_key,
+            },
+            AgentTaskAuthorizationTarget {
+                agent_runtime_id: &record.agent_runtime_id,
+                task_id: self.auth.process_task_id(),
+            },
+        )
+        .map_err(std::io::Error::other);
 
         if let Ok(header_value) = header_value
             && let Ok(header) = HeaderValue::from_str(&header_value)

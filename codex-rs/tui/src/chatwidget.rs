@@ -142,12 +142,8 @@ use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::MessagePhase;
-use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
 #[cfg(test)]
@@ -1634,7 +1630,6 @@ fn thread_session_state_to_legacy_event(
         service_tier: session.service_tier,
         approval_policy: session.approval_policy,
         approvals_reviewer: session.approvals_reviewer,
-        sandbox_policy: session.sandbox_policy,
         permission_profile: session.permission_profile,
         cwd: session.cwd,
         reasoning_effort: session.reasoning_effort,
@@ -2363,32 +2358,14 @@ impl ChatWidget {
             self.config.permissions.approval_policy =
                 Constrained::allow_only(event.approval_policy);
         }
-        let permission_sync = match event.permission_profile.clone() {
-            Some(permission_profile) => self
-                .config
-                .permissions
-                .set_permission_profile(permission_profile),
-            None => self
-                .config
-                .permissions
-                .set_legacy_sandbox_policy(event.sandbox_policy.clone(), event.cwd.as_path()),
-        };
+        let permission_sync = self
+            .config
+            .permissions
+            .set_permission_profile(event.permission_profile.clone());
         if let Err(err) = permission_sync {
             tracing::warn!(%err, "failed to sync permissions from SessionConfigured");
-            let permission_profile = event.permission_profile.clone().unwrap_or_else(|| {
-                let file_system_sandbox_policy =
-                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                        &event.sandbox_policy,
-                        event.cwd.as_path(),
-                    );
-                PermissionProfile::from_runtime_permissions_with_enforcement(
-                    SandboxEnforcement::from_legacy_sandbox_policy(&event.sandbox_policy),
-                    &file_system_sandbox_policy,
-                    NetworkSandboxPolicy::from(&event.sandbox_policy),
-                )
-            });
             self.config.permissions.permission_profile =
-                Constrained::allow_only(permission_profile);
+                Constrained::allow_only(event.permission_profile.clone());
         }
         self.config.approvals_reviewer = event.approvals_reviewer;
         self.status_line_project_root_name_cache = None;

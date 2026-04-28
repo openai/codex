@@ -1,12 +1,16 @@
-//! Write-path helpers for Codex memories.
+//! Write-path implementation for Codex memories.
 //!
-//! This crate owns the file-backed memory artifact helpers, Phase 1 and Phase
-//! 2 prompt rendering, extension pruning, and workspace diffing. Runtime
-//! orchestration for Phase 1 and Phase 2 remains in `codex-core`.
+//! This crate owns the startup memory pipeline, file-backed memory artifact
+//! helpers, Phase 1 and Phase 2 prompt rendering, extension pruning, and
+//! workspace diffing.
 
 mod control;
 mod extensions;
+mod phase1;
+mod phase2;
 mod prompts;
+mod runtime;
+mod start;
 mod storage;
 pub mod workspace;
 
@@ -18,6 +22,7 @@ pub use control::clear_memory_roots_contents;
 pub use extensions::prune_old_extension_resources;
 pub use prompts::build_consolidation_prompt;
 pub use prompts::build_stage_one_input_message;
+pub use start::start_memories_startup_task;
 pub use storage::rebuild_raw_memories_file_from_memories;
 pub use storage::rollout_summary_file_stem;
 pub use storage::sync_rollout_summaries_from_memories;
@@ -35,6 +40,9 @@ pub const DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT: usize = 150_000;
 /// Keeping this below 100% leaves room for system instructions, prompt framing,
 /// and model output.
 pub const STAGE_ONE_CONTEXT_WINDOW_PERCENT: i64 = 70;
+
+#[cfg(test)]
+mod startup_tests;
 
 mod artifacts {
     pub(super) const EXTENSIONS_SUBDIR: &str = "extensions";

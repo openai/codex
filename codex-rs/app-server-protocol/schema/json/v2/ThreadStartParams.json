@@ -526,17 +526,6 @@
         "null"
       ]
     },
-    "permissionProfile": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/PermissionProfile"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Full permissions override for this thread. Cannot be combined with `sandbox`."
-    },
     "personality": {
       "anyOf": [
         {

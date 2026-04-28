@@ -7451,6 +7451,8 @@ enabled = true
 max_concurrent_threads_per_session = 5
 usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
+root_agent_usage_hint_text = "Root guidance."
+subagent_usage_hint_text = "Subagent guidance."
 hide_spawn_agent_metadata = true
 "#,
     )?;
@@ -7469,6 +7471,14 @@ hide_spawn_agent_metadata = true
         config.multi_agent_v2.usage_hint_text.as_deref(),
         Some("Custom delegation guidance.")
     );
+    assert_eq!(
+        config.multi_agent_v2.root_agent_usage_hint_text.as_deref(),
+        Some("Root guidance.")
+    );
+    assert_eq!(
+        config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
+        Some("Subagent guidance.")
+    );
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
 
     Ok(())
@@ -7485,12 +7495,16 @@ async fn profile_multi_agent_v2_config_overrides_base() -> std::io::Result<()> {
 max_concurrent_threads_per_session = 4
 usage_hint_enabled = true
 usage_hint_text = "base hint"
+root_agent_usage_hint_text = "base root hint"
+subagent_usage_hint_text = "base subagent hint"
 hide_spawn_agent_metadata = true
 
 [profiles.no_hint.features.multi_agent_v2]
 max_concurrent_threads_per_session = 6
 usage_hint_enabled = false
 usage_hint_text = "profile hint"
+root_agent_usage_hint_text = "profile root hint"
+subagent_usage_hint_text = "profile subagent hint"
 hide_spawn_agent_metadata = false
 "#,
     )?;
@@ -7506,6 +7520,14 @@ hide_spawn_agent_metadata = false
     assert_eq!(
         config.multi_agent_v2.usage_hint_text.as_deref(),
         Some("profile hint")
+    );
+    assert_eq!(
+        config.multi_agent_v2.root_agent_usage_hint_text.as_deref(),
+        Some("profile root hint")
+    );
+    assert_eq!(
+        config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
+        Some("profile subagent hint")
     );
     assert!(!config.multi_agent_v2.hide_spawn_agent_metadata);
 

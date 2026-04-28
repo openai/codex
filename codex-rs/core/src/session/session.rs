@@ -126,7 +126,6 @@ impl SessionConfiguration {
             service_tier: self.service_tier,
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
-            sandbox_policy: self.sandbox_policy(),
             permission_profile: self.permission_profile(),
             cwd: self.cwd.clone(),
             ephemeral: self.original_config_do_not_use.ephemeral,
@@ -426,10 +425,7 @@ impl Session {
             session_init.ephemeral = config.ephemeral,
         ));
 
-        let is_subagent = matches!(
-            session_configuration.session_source,
-            SessionSource::SubAgent(_)
-        );
+        let is_subagent = session_configuration.session_source.is_non_root_agent();
         let history_meta_fut = async {
             if is_subagent {
                 (0, 0)
@@ -867,7 +863,6 @@ impl Session {
             // Dispatch the SessionConfiguredEvent first and then report any errors.
             // If resuming, include converted initial messages in the payload so UIs can render them immediately.
             let initial_messages = initial_history.get_event_msgs();
-            let session_sandbox_policy = session_configuration.sandbox_policy();
             let events = std::iter::once(Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
                 msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -879,8 +874,7 @@ impl Session {
                     service_tier: session_configuration.service_tier,
                     approval_policy: session_configuration.approval_policy.value(),
                     approvals_reviewer: session_configuration.approvals_reviewer,
-                    sandbox_policy: session_sandbox_policy.clone(),
-                    permission_profile: Some(session_configuration.permission_profile()),
+                    permission_profile: session_configuration.permission_profile(),
                     cwd: session_configuration.cwd.clone(),
                     reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),
                     history_log_id,
@@ -991,12 +985,6 @@ impl Session {
                 let mut state = sess.state.lock().await;
                 state.set_pending_session_start_source(Some(session_start_source));
             }
-
-            memories::start_memories_startup_task(
-                &sess,
-                Arc::clone(&config),
-                &session_configuration.session_source,
-            );
 
             Ok(sess)
         }

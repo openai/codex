@@ -595,7 +595,25 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
 #[tokio::test]
 async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let mut parent_config = harness.config.clone();
+    let _ = parent_config.features.enable(Feature::MultiAgentV2);
+    parent_config.multi_agent_v2.root_agent_usage_hint_text =
+        Some("Parent root guidance.".to_string());
+    parent_config.multi_agent_v2.subagent_usage_hint_text =
+        Some("Parent subagent guidance.".to_string());
+    let mut child_config = harness.config.clone();
+    let _ = child_config.features.enable(Feature::MultiAgentV2);
+    child_config.multi_agent_v2.root_agent_usage_hint_text =
+        Some("Child root guidance.".to_string());
+    child_config.multi_agent_v2.subagent_usage_hint_text =
+        Some("Child subagent guidance.".to_string());
+    let new_thread = harness
+        .manager
+        .start_thread(parent_config)
+        .await
+        .expect("start parent thread");
+    let parent_thread_id = new_thread.thread_id;
+    let parent_thread = new_thread.thread;
     parent_thread
         .inject_user_message_without_turn("parent seed context".to_string())
         .await;
@@ -614,6 +632,22 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .record_conversation_items(
             turn_context.as_ref(),
             &[
+                ResponseItem::Message {
+                    id: None,
+                    role: "developer".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "Parent root guidance.".to_string(),
+                    }],
+                    phase: None,
+                },
+                ResponseItem::Message {
+                    id: None,
+                    role: "developer".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "Parent subagent guidance.".to_string(),
+                    }],
+                    phase: None,
+                },
                 assistant_message("parent commentary", Some(MessagePhase::Commentary)),
                 assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
                 assistant_message("parent unknown phase", /*phase*/ None),
@@ -643,7 +677,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let child_thread_id = harness
         .control
         .spawn_agent_with_metadata(
-            harness.config.clone(),
+            child_config,
             text_input("child task"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,

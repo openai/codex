@@ -120,11 +120,12 @@ Primary inputs (always read these, if exists):
 Under `{{ memory_root }}/`:
 
 - `raw_memories.md`
-  - mechanical merge of `raw_memories` from Phase 1; ordered latest-first.
-  - Use this recency ordering as a major heuristic when choosing what to promote, expand, or deprecate.
-  - Default scan order: top-to-bottom. In INCREMENTAL UPDATE mode, bias attention toward the newest
-    portion first, then expand to older entries with enough coverage to avoid missing important older
-    context.
+  - mechanical merge of selected `raw_memories` from Phase 1; ordered by stable ascending thread id.
+  - Do not treat file order as recency or importance; use `updated_at`, workspace diff context,
+    and rollout content when choosing what to promote, expand, or deprecate.
+  - Default scan order: top-to-bottom. In INCREMENTAL UPDATE mode, use the workspace diff to find
+    changed entries first, then expand to unchanged entries with enough coverage to avoid missing
+    important older context.
   - source of rollout-level metadata needed for MEMORY.md `### rollout_summary_files`
     annotations;
     you should be able to find `cwd`, `rollout_path`, and `updated_at` there.
