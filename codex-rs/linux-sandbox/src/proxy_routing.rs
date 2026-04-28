@@ -450,7 +450,7 @@ fn spawn_host_bridge(endpoint: SocketAddr, uds_path: &Path) -> io::Result<libc::
 }
 
 fn run_host_bridge(endpoint: SocketAddr, uds_path: &Path, ready_fd: libc::c_int) -> io::Result<()> {
-    set_parent_death_signal()?;
+    harden_bridge_process()?;
     if uds_path.exists() {
         std::fs::remove_file(uds_path)?;
     }
@@ -501,7 +501,7 @@ fn spawn_local_bridge(uds_path: &Path) -> io::Result<u16> {
 }
 
 fn run_local_bridge(uds_path: &Path, ready_fd: libc::c_int) -> io::Result<()> {
-    set_parent_death_signal()?;
+    harden_bridge_process()?;
     let listener = bind_local_loopback_listener()?;
     let port = listener.local_addr()?.port();
 
@@ -609,6 +609,20 @@ fn set_parent_death_signal() -> io::Result<()> {
         Err(io::Error::last_os_error())
     } else if unsafe { libc::getppid() } == 1 {
         Err(io::Error::other("parent process already exited"))
+    } else {
+        Ok(())
+    }
+}
+
+fn harden_bridge_process() -> io::Result<()> {
+    set_parent_death_signal()?;
+    disable_process_dumping()
+}
+
+fn disable_process_dumping() -> io::Result<()> {
+    let res = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+    if res != 0 {
+        Err(io::Error::last_os_error())
     } else {
         Ok(())
     }
