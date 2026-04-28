@@ -363,7 +363,6 @@ mod tests {
         let server = MockServer::start().await;
         let registration_id = Uuid::from_u128(1);
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         let request = RemoteExecutorConfig::new(server.uri())
             .registration_request(&auth, registration_id)
             .expect("registration request");
