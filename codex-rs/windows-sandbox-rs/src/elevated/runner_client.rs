@@ -103,7 +103,11 @@ fn try_take_completed_connect_result(
     Ok(Some(result))
 }
 
-fn connect_pipe_with_timeout(h_pipe: HANDLE, expected_runner_pid: u32, pipe_label: &str) -> Result<()> {
+fn connect_pipe_with_timeout(
+    h_pipe: HANDLE,
+    expected_runner_pid: u32,
+    pipe_label: &str,
+) -> Result<()> {
     let pipe_label = pipe_label.to_string();
     let pipe_label_for_thread = pipe_label.clone();
     let (thread_handle_tx, thread_handle_rx) = mpsc::sync_channel(1);
