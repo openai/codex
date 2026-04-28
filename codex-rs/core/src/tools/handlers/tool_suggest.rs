@@ -174,7 +174,7 @@ async fn maybe_persist_tool_suggest_disable(
     tool: &DiscoverableTool,
     response: &ElicitationResponse,
 ) {
-    if !tool_suggest_response_persists_always(response) {
+    if !tool_suggest_response_requests_persistent_disable(response) {
         return;
     }
 
@@ -190,7 +190,11 @@ async fn maybe_persist_tool_suggest_disable(
     session.reload_user_config_layer().await;
 }
 
-fn tool_suggest_response_persists_always(response: &ElicitationResponse) -> bool {
+fn tool_suggest_response_requests_persistent_disable(response: &ElicitationResponse) -> bool {
+    if response.action != ElicitationAction::Decline {
+        return false;
+    }
+
     response
         .meta
         .as_ref()

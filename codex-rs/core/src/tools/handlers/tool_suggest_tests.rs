@@ -58,22 +58,29 @@ async fn verified_plugin_suggestion_completed_requires_installed_plugin() {
 }
 
 #[test]
-fn tool_suggest_response_persists_only_always_mode() {
-    assert!(tool_suggest_response_persists_always(
+fn tool_suggest_response_persists_only_decline_always_mode() {
+    assert!(tool_suggest_response_requests_persistent_disable(
         &ElicitationResponse {
             action: ElicitationAction::Decline,
             content: None,
             meta: Some(json!({ TOOL_SUGGEST_PERSIST_KEY: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE })),
         }
     ));
-    assert!(!tool_suggest_response_persists_always(
+    assert!(!tool_suggest_response_requests_persistent_disable(
+        &ElicitationResponse {
+            action: ElicitationAction::Accept,
+            content: None,
+            meta: Some(json!({ TOOL_SUGGEST_PERSIST_KEY: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE })),
+        }
+    ));
+    assert!(!tool_suggest_response_requests_persistent_disable(
         &ElicitationResponse {
             action: ElicitationAction::Decline,
             content: None,
             meta: Some(json!({ TOOL_SUGGEST_PERSIST_KEY: "session" })),
         }
     ));
-    assert!(!tool_suggest_response_persists_always(
+    assert!(!tool_suggest_response_requests_persistent_disable(
         &ElicitationResponse {
             action: ElicitationAction::Decline,
             content: None,
