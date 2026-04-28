@@ -929,6 +929,12 @@ impl Config {
                 configured_mcp_servers.entry(name).or_insert(plugin_server);
             }
         }
+        if let Some(mcp_requirements) = self.config_layer_stack.requirements().mcp_servers.as_ref()
+            && mcp_requirements.value.is_empty()
+        {
+            // A present empty allowlist bans all MCPs, including plugin MCPs merged above.
+            filter_mcp_servers_by_requirements(&mut configured_mcp_servers, Some(mcp_requirements));
+        }
 
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
