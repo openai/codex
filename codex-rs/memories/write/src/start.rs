@@ -48,6 +48,11 @@ pub fn start_memories_startup_task(
     }
 
     tokio::spawn(async move {
+
+        // Clean memories to make preserve DB size. This does not consume tokens so can be
+        // done before the quota check.
+        phase1::prune(context.as_ref(), &config).await;
+
         if !guard::rate_limits_ok(&auth_manager, &config).await {
             context.counter(
                 MEMORY_STARTUP,
@@ -57,8 +62,6 @@ pub fn start_memories_startup_task(
             return;
         }
 
-        // Clean memories to make preserve DB size
-        phase1::prune(context.as_ref(), &config).await;
         // Run phase 1.
         phase1::run(Arc::clone(&context), Arc::clone(&config)).await;
         // Run phase 2.
