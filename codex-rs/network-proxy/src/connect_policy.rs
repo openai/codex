@@ -94,16 +94,12 @@ impl TargetPolicy {
             Self::Config {
                 allow_local_binding,
             } => Ok(*allow_local_binding),
-            Self::State(state) => state
-                .current_cfg()
-                .await
-                .map(|cfg| cfg.network.allow_local_binding)
-                .map_err(|err| {
-                    let err: BoxError = err.into();
-                    OpaqueError::from_boxed(err)
-                        .context("read network proxy config")
-                        .into_boxed()
-                }),
+            Self::State(state) => state.allow_local_binding().await.map_err(|err| {
+                let err: BoxError = err.into();
+                OpaqueError::from_boxed(err)
+                    .context("read network proxy config")
+                    .into_boxed()
+            }),
         }
     }
 }
@@ -111,45 +107,11 @@ impl TargetPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::NetworkProxyConfig;
     use crate::config::NetworkProxySettings;
-    use crate::runtime::ConfigReloader;
-    use crate::runtime::ConfigState;
-    use crate::state::NetworkProxyConstraints;
-    use crate::state::build_config_state;
-    use async_trait::async_trait;
+    use crate::state::network_proxy_state_for_policy;
     use rama_net::address::HostWithPort;
     use std::net::Ipv4Addr;
     use tokio::net::TcpListener;
-
-    #[derive(Clone)]
-    struct StaticReloader {
-        state: ConfigState,
-    }
-
-    #[async_trait]
-    impl ConfigReloader for StaticReloader {
-        async fn maybe_reload(&self) -> anyhow::Result<Option<ConfigState>> {
-            Ok(None)
-        }
-
-        async fn reload_now(&self) -> anyhow::Result<ConfigState> {
-            Ok(self.state.clone())
-        }
-
-        fn source_label(&self) -> String {
-            "static test reloader".to_string()
-        }
-    }
-
-    fn state_for_settings(network: NetworkProxySettings) -> Arc<NetworkProxyState> {
-        let config = NetworkProxyConfig { network };
-        let state = build_config_state(config, NetworkProxyConstraints::default()).unwrap();
-        let reloader = Arc::new(StaticReloader {
-            state: state.clone(),
-        });
-        Arc::new(NetworkProxyState::with_reloader(state, reloader))
-    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn direct_connector_rejects_non_public_target_when_local_binding_disabled() {
@@ -157,8 +119,9 @@ mod tests {
             .await
             .expect("bind local listener");
         let target = listener.local_addr().expect("local addr");
-        let connector =
-            TargetCheckedTcpConnector::new(state_for_settings(NetworkProxySettings::default()));
+        let connector = TargetCheckedTcpConnector::new(Arc::new(network_proxy_state_for_policy(
+            NetworkProxySettings::default(),
+        )));
 
         let request: rama_tcp::client::Request =
             rama_tcp::client::Request::new(HostWithPort::from(target));
@@ -178,10 +141,12 @@ mod tests {
             .await
             .expect("bind local listener");
         let target = listener.local_addr().expect("local addr");
-        let connector = TargetCheckedTcpConnector::new(state_for_settings(NetworkProxySettings {
-            allow_local_binding: true,
-            ..NetworkProxySettings::default()
-        }));
+        let connector = TargetCheckedTcpConnector::new(Arc::new(network_proxy_state_for_policy(
+            NetworkProxySettings {
+                allow_local_binding: true,
+                ..NetworkProxySettings::default()
+            },
+        )));
 
         let request: rama_tcp::client::Request =
             rama_tcp::client::Request::new(HostWithPort::from(target));
