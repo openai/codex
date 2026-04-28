@@ -1,4 +1,4 @@
-use crate::external_agent_sessions::detect_recent_sessions;
+use crate::config::external_agent_sessions::detect_recent_sessions;
 use codex_config::types::PluginConfig;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
