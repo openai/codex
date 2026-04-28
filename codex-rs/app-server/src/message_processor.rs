@@ -1133,7 +1133,7 @@ impl MessageProcessor {
         request_id: ConnectionRequestId,
         params: ExternalAgentConfigImportParams,
     ) -> Result<(), JSONRPCErrorError> {
-        let has_config_mutating_imports = migration_items_mutate_config(&params.migration_items);
+        let needs_runtime_refresh = migration_items_need_runtime_refresh(&params.migration_items);
         let has_plugin_imports = params.migration_items.iter().any(|item| {
             matches!(
                 item.item_type,
@@ -1144,7 +1144,7 @@ impl MessageProcessor {
             .external_agent_config_api
             .prepare_pending_session_imports(&params)?;
         let pending_plugin_imports = self.external_agent_config_api.import(params).await?;
-        if has_config_mutating_imports {
+        if needs_runtime_refresh {
             self.handle_config_mutation().await;
         }
         for pending_session_import in pending_session_imports {
@@ -1203,13 +1203,15 @@ impl MessageProcessor {
     }
 }
 
-fn migration_items_mutate_config(items: &[ExternalAgentConfigMigrationItem]) -> bool {
+fn migration_items_need_runtime_refresh(items: &[ExternalAgentConfigMigrationItem]) -> bool {
     items.iter().any(|item| {
         matches!(
             item.item_type,
             ExternalAgentConfigMigrationItemType::Config
+                | ExternalAgentConfigMigrationItemType::Skills
                 | ExternalAgentConfigMigrationItemType::McpServerConfig
                 | ExternalAgentConfigMigrationItemType::Hooks
+                | ExternalAgentConfigMigrationItemType::Commands
                 | ExternalAgentConfigMigrationItemType::Plugins
         )
     })
@@ -1234,18 +1236,27 @@ mod tests {
     }
 
     #[test]
-    fn config_file_imports_mutate_config() {
-        assert!(migration_items_mutate_config(&[migration_item(
+    fn migration_items_that_update_runtime_sources_trigger_refresh() {
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::Config,
+        )]));
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::Skills,
+        )]));
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
             ExternalAgentConfigMigrationItemType::McpServerConfig,
         )]));
-        assert!(migration_items_mutate_config(&[migration_item(
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
             ExternalAgentConfigMigrationItemType::Hooks,
         )]));
-        assert!(migration_items_mutate_config(&[migration_item(
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::Commands,
+        )]));
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
             ExternalAgentConfigMigrationItemType::Plugins,
         )]));
-        assert!(!migration_items_mutate_config(&[migration_item(
-            ExternalAgentConfigMigrationItemType::Commands,
+        assert!(!migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::Sessions,
         )]));
     }
 }
