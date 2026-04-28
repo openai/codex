@@ -55,9 +55,12 @@ fn is_git_global_option_with_inline_value(arg: &str) -> bool {
 
 /// Git global options that can redirect config, repository, or helper lookup
 /// and therefore must never be auto-approved as "safe".
+///
 pub(crate) fn git_global_option_requires_prompt(arg: &str) -> bool {
     matches!(
         arg,
+        // `-C` can redirect Git into a repo whose config runs helpers such as
+        // `core.fsmonitor` during read-only commands like `status`.
         "-C" | "-c"
             | "--config-env"
             | "--exec-path"

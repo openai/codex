@@ -334,15 +334,15 @@ mod tests {
         use pretty_assertions::assert_eq;
 
         assert_eq!(
-            is_known_safe_command(&vec_str(&["git", "-C", ".", "branch", "--show-current"])),
+            is_known_safe_command(&vec_str(&["git", "branch", "--show-current"])),
+            true
+        );
+        assert_eq!(
+            is_known_safe_command(&vec_str(&["git", "branch", "-d", "feature"])),
             false
         );
         assert_eq!(
-            is_known_safe_command(&vec_str(&["git", "-C", ".", "branch", "-d", "feature"])),
-            false
-        );
-        assert_eq!(
-            is_known_safe_command(&vec_str(&["bash", "-lc", "git -C . branch -d feature",])),
+            is_known_safe_command(&vec_str(&["bash", "-lc", "git branch -d feature",])),
             false
         );
     }
