@@ -335,7 +335,7 @@ async fn start_thread_accepts_explicit_environment_when_default_environment_is_d
 }
 
 #[tokio::test]
-async fn start_thread_can_return_internal_thread_without_registering_it() {
+async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -366,11 +366,14 @@ async fn start_thread_can_return_internal_thread_without_registering_it() {
 
     assert_eq!(manager.list_thread_ids().await, Vec::new());
     assert!(manager.get_thread(thread.thread_id).await.is_err());
-    thread
-        .thread
-        .shutdown_and_wait()
-        .await
-        .expect("internal thread should shut down");
+
+    let report = manager
+        .shutdown_all_threads_bounded(Duration::from_secs(10))
+        .await;
+    assert_eq!(report.completed, vec![thread.thread_id]);
+    assert!(report.submit_failed.is_empty());
+    assert!(report.timed_out.is_empty());
+    assert!(manager.list_thread_ids().await.is_empty());
 }
 
 #[tokio::test]

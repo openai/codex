@@ -74,6 +74,7 @@ pub struct CodexThreadTurnContextOverrides {
 
 pub struct CodexThread {
     pub(crate) codex: Codex,
+    pub(crate) session_source: SessionSource,
     rollout_path: Option<PathBuf>,
     out_of_band_elicitation_count: Mutex<u64>,
     _watch_registration: WatchRegistration,
@@ -85,10 +86,12 @@ impl CodexThread {
     pub(crate) fn new(
         codex: Codex,
         rollout_path: Option<PathBuf>,
+        session_source: SessionSource,
         watch_registration: WatchRegistration,
     ) -> Self {
         Self {
             codex,
+            session_source,
             rollout_path,
             out_of_band_elicitation_count: Mutex::new(0),
             _watch_registration: watch_registration,
