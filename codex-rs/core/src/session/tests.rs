@@ -372,6 +372,27 @@ fn developer_input_texts(items: &[ResponseItem]) -> Vec<&str> {
         .collect()
 }
 
+fn developer_message_texts(items: &[ResponseItem]) -> Vec<Vec<&str>> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "developer" => {
+                Some(content.as_slice())
+            }
+            _ => None,
+        })
+        .map(|content| {
+            content
+                .iter()
+                .filter_map(|item| match item {
+                    ContentItem::InputText { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect()
+}
+
 fn user_input_texts(items: &[ResponseItem]) -> Vec<&str> {
     items
         .iter()
@@ -1527,17 +1548,12 @@ async fn session_configured_reports_permission_profile_for_external_sandbox() ->
 
     let test = builder.build(&server).await?;
 
-    assert_eq!(
-        test.session_configured.sandbox_policy,
-        expected_sandbox_policy
-    );
     let expected_permission_profile =
         codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
             &expected_sandbox_policy,
         );
     assert_eq!(
-        test.session_configured.permission_profile,
-        Some(expected_permission_profile),
+        test.session_configured.permission_profile, expected_permission_profile,
         "ExternalSandbox is represented explicitly instead of as a lossy root-write profile"
     );
     Ok(())
@@ -2874,7 +2890,7 @@ async fn session_configuration_apply_preserves_profile_file_system_policy_on_cwd
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Write,
         },
@@ -3187,7 +3203,7 @@ async fn session_configuration_apply_preserves_absolute_cwd_write_root_on_cwd_up
         !updated
             .file_system_sandbox_policy()
             .can_write_path_with_cwd(next_cwd.as_path(), updated.cwd.as_path()),
-        "cwd-only update must not reinterpret an absolute old-cwd grant as :cwd"
+        "cwd-only update must not reinterpret an absolute old-cwd grant as :project_roots"
     );
 }
 
@@ -3850,7 +3866,7 @@ async fn request_permissions_response_materializes_session_cwd_grants_before_rec
         file_system: Some(FileSystemPermissions {
             entries: vec![FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             }],
@@ -4474,6 +4490,41 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
     assert_ne!(
         task_context.span().span_context().span_id(),
         dispatch_span_id
+    );
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
+    let (mut session, _turn_context) = make_session_and_context().await;
+    let store = Arc::new(codex_thread_store::InMemoryThreadStore::default());
+    let thread_store: Arc<dyn codex_thread_store::ThreadStore> = store.clone();
+    let live_thread = LiveThread::create(
+        Arc::clone(&thread_store),
+        CreateThreadParams {
+            thread_id: session.conversation_id,
+            forked_from_id: None,
+            source: SessionSource::Exec,
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            event_persistence_mode: ThreadEventPersistenceMode::Limited,
+        },
+    )
+    .await
+    .expect("create thread persistence");
+    session.services.thread_store = thread_store;
+    session.services.live_thread = Some(live_thread);
+    let session = Arc::new(session);
+
+    assert!(handlers::shutdown(&session, "sub-1".to_string()).await);
+
+    assert_eq!(
+        codex_thread_store::InMemoryThreadStoreCalls {
+            create_thread: 1,
+            shutdown_thread: 1,
+            ..Default::default()
+        },
+        store.calls().await
     );
 }
 
@@ -5281,6 +5332,137 @@ async fn build_initial_context_uses_previous_realtime_state() {
             .any(|text| text.contains("<realtime_conversation>")),
         "did not expect a duplicate realtime update, got {resumed_developer_texts:?}"
     );
+}
+
+async fn make_multi_agent_v2_usage_hint_test_session(
+    enable_multi_agent_v2: bool,
+) -> (Arc<Session>, Arc<TurnContext>) {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            if enable_multi_agent_v2 {
+                let _ = config.features.enable(Feature::MultiAgentV2);
+            }
+            config.multi_agent_v2.root_agent_usage_hint_text = Some("Root guidance.".to_string());
+            config.multi_agent_v2.subagent_usage_hint_text = Some("Subagent guidance.".to_string());
+        },
+    )
+    .await;
+    (session, turn_context)
+}
+
+#[tokio::test]
+async fn build_initial_context_adds_multi_agent_v2_root_usage_hint_as_developer_message() {
+    let (session, turn_context) =
+        make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ true).await;
+
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+
+    let developer_messages = developer_message_texts(&initial_context);
+    assert!(
+        developer_messages
+            .iter()
+            .any(|message| message.as_slice() == ["Root guidance."]),
+        "expected standalone root usage hint developer message, got {developer_messages:?}"
+    );
+    assert!(
+        !developer_messages
+            .iter()
+            .any(|message| message.as_slice() == ["Subagent guidance."]),
+        "did not expect subagent usage hint for root thread, got {developer_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_adds_multi_agent_v2_subagent_usage_hint_as_developer_message() {
+    let (session, mut turn_context) =
+        make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ true).await;
+    let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: ThreadId::new(),
+        depth: 1,
+        agent_path: Some(AgentPath::try_from("/root/worker").expect("agent path should parse")),
+        agent_nickname: Some("worker".to_string()),
+        agent_role: None,
+    });
+    session
+        .state
+        .lock()
+        .await
+        .session_configuration
+        .session_source = session_source.clone();
+    Arc::get_mut(&mut turn_context)
+        .expect("turn context should not be shared")
+        .session_source = session_source;
+
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+
+    let developer_messages = developer_message_texts(&initial_context);
+    assert!(
+        developer_messages
+            .iter()
+            .any(|message| message.as_slice() == ["Subagent guidance."]),
+        "expected standalone subagent usage hint developer message, got {developer_messages:?}"
+    );
+    assert!(
+        !developer_messages
+            .iter()
+            .any(|message| message.as_slice() == ["Root guidance."]),
+        "did not expect root usage hint for subagent thread, got {developer_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_omits_multi_agent_v2_usage_hints_when_feature_disabled() {
+    let (session, turn_context) =
+        make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ false).await;
+
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+
+    let developer_messages = developer_message_texts(&initial_context);
+    assert!(
+        !developer_messages.iter().any(|message| {
+            matches!(
+                message.as_slice(),
+                ["Root guidance."] | ["Subagent guidance."]
+            )
+        }),
+        "did not expect multi-agent v2 usage hint developer messages, got {developer_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn configured_multi_agent_v2_usage_hint_texts_use_effective_enabled_feature_state() {
+    let (mut session, _turn_context) =
+        make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ false).await;
+    let mut effective_features = Features::with_defaults();
+    effective_features.enable(Feature::MultiAgentV2);
+    Arc::get_mut(&mut session)
+        .expect("session should not be shared")
+        .features = effective_features.into();
+
+    let hint_texts = session.configured_multi_agent_v2_usage_hint_texts().await;
+
+    assert_eq!(
+        hint_texts,
+        vec![
+            "Root guidance.".to_string(),
+            "Subagent guidance.".to_string()
+        ]
+    );
+}
+
+#[tokio::test]
+async fn configured_multi_agent_v2_usage_hint_texts_omit_effectively_disabled_feature() {
+    let (mut session, _turn_context) =
+        make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ true).await;
+    Arc::get_mut(&mut session)
+        .expect("session should not be shared")
+        .features = Features::with_defaults().into();
+
+    let hint_texts = session.configured_multi_agent_v2_usage_hint_texts().await;
+
+    assert_eq!(hint_texts, Vec::<String>::new());
 }
 
 #[tokio::test]

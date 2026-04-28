@@ -1,9 +1,7 @@
 use std::collections::HashMap;
-use std::fmt;
 use std::io;
 use std::num::NonZeroUsize;
 use std::path::Path;
-use std::path::PathBuf;
 
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
@@ -27,60 +25,6 @@ use codex_utils_image::ImageProcessingError;
 use schemars::JsonSchema;
 
 use crate::mcp::CallToolResult;
-
-type CommitID = String;
-
-/// Details of a ghost commit created from a repository state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
-pub struct GhostCommit {
-    id: CommitID,
-    parent: Option<CommitID>,
-    preexisting_untracked_files: Vec<PathBuf>,
-    preexisting_untracked_dirs: Vec<PathBuf>,
-}
-
-impl GhostCommit {
-    /// Create a new ghost commit wrapper from a raw commit ID and optional parent.
-    pub fn new(
-        id: CommitID,
-        parent: Option<CommitID>,
-        preexisting_untracked_files: Vec<PathBuf>,
-        preexisting_untracked_dirs: Vec<PathBuf>,
-    ) -> Self {
-        Self {
-            id,
-            parent,
-            preexisting_untracked_files,
-            preexisting_untracked_dirs,
-        }
-    }
-
-    /// Commit ID for the snapshot.
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    /// Parent commit ID, if the repository had a `HEAD` at creation time.
-    pub fn parent(&self) -> Option<&str> {
-        self.parent.as_deref()
-    }
-
-    /// Untracked or ignored files that already existed when the snapshot was captured.
-    pub fn preexisting_untracked_files(&self) -> &[PathBuf] {
-        &self.preexisting_untracked_files
-    }
-
-    /// Untracked or ignored directories that already existed when the snapshot was captured.
-    pub fn preexisting_untracked_dirs(&self) -> &[PathBuf] {
-        &self.preexisting_untracked_dirs
-    }
-}
-
-impl fmt::Display for GhostCommit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.id)
-    }
-}
 
 /// Controls the per-command sandbox override requested by a shell-like tool call.
 #[derive(
@@ -402,57 +346,39 @@ impl PermissionProfile {
         }
     }
 
-    /// Managed workspace-write filesystem access with restricted network access.
+    /// Managed workspace-write filesystem access with restricted network
+    /// access.
+    ///
+    /// The returned profile contains symbolic `:project_roots` entries that
+    /// must be resolved against the active permission root before enforcement.
     pub fn workspace_write() -> Self {
+        Self::workspace_write_with(
+            &[],
+            NetworkSandboxPolicy::Restricted,
+            /*exclude_tmpdir_env_var*/ false,
+            /*exclude_slash_tmp*/ false,
+        )
+    }
+
+    /// Managed workspace-write filesystem access with the legacy
+    /// `sandbox_workspace_write` knobs applied directly to the profile.
+    ///
+    /// The returned profile contains symbolic `:project_roots` entries that
+    /// must be resolved against the active permission root before enforcement.
+    pub fn workspace_write_with(
+        writable_roots: &[AbsolutePathBuf],
+        network: NetworkSandboxPolicy,
+        exclude_tmpdir_env_var: bool,
+        exclude_slash_tmp: bool,
+    ) -> Self {
+        let file_system = FileSystemSandboxPolicy::workspace_write(
+            writable_roots,
+            exclude_tmpdir_env_var,
+            exclude_slash_tmp,
+        );
         Self::Managed {
-            file_system: ManagedFileSystemPermissions::Restricted {
-                entries: vec![
-                    FileSystemSandboxEntry {
-                        path: FileSystemPath::Special {
-                            value: FileSystemSpecialPath::Root,
-                        },
-                        access: FileSystemAccessMode::Read,
-                    },
-                    FileSystemSandboxEntry {
-                        path: FileSystemPath::Special {
-                            value: FileSystemSpecialPath::CurrentWorkingDirectory,
-                        },
-                        access: FileSystemAccessMode::Write,
-                    },
-                    FileSystemSandboxEntry {
-                        path: FileSystemPath::Special {
-                            value: FileSystemSpecialPath::SlashTmp,
-                        },
-                        access: FileSystemAccessMode::Write,
-                    },
-                    FileSystemSandboxEntry {
-                        path: FileSystemPath::Special {
-                            value: FileSystemSpecialPath::Tmpdir,
-                        },
-                        access: FileSystemAccessMode::Write,
-                    },
-                    FileSystemSandboxEntry {
-                        path: FileSystemPath::Special {
-                            value: FileSystemSpecialPath::project_roots(Some(".git".into())),
-                        },
-                        access: FileSystemAccessMode::Read,
-                    },
-                    FileSystemSandboxEntry {
-                        path: FileSystemPath::Special {
-                            value: FileSystemSpecialPath::project_roots(Some(".agents".into())),
-                        },
-                        access: FileSystemAccessMode::Read,
-                    },
-                    FileSystemSandboxEntry {
-                        path: FileSystemPath::Special {
-                            value: FileSystemSpecialPath::project_roots(Some(".codex".into())),
-                        },
-                        access: FileSystemAccessMode::Read,
-                    },
-                ],
-                glob_scan_max_depth: None,
-            },
-            network: NetworkSandboxPolicy::Restricted,
+            file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
+            network,
         }
     }
 
@@ -499,7 +425,15 @@ impl PermissionProfile {
     pub fn from_legacy_sandbox_policy(sandbox_policy: &SandboxPolicy) -> Self {
         Self::from_runtime_permissions_with_enforcement(
             SandboxEnforcement::from_legacy_sandbox_policy(sandbox_policy),
-            &FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy),
+            &FileSystemSandboxPolicy::from(sandbox_policy),
+            NetworkSandboxPolicy::from(sandbox_policy),
+        )
+    }
+
+    pub fn from_legacy_sandbox_policy_for_cwd(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Self {
+        Self::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::from_legacy_sandbox_policy(sandbox_policy),
+            &FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd),
             NetworkSandboxPolicy::from(sandbox_policy),
         )
     }
@@ -889,14 +823,8 @@ pub enum ResponseItem {
         revised_prompt: Option<String>,
         result: String,
     },
-    // Generated by the harness but considered exactly as a model response.
-    GhostSnapshot {
-        ghost_commit: GhostCommit,
-    },
     #[serde(alias = "compaction_summary")]
-    Compaction {
-        encrypted_content: String,
-    },
+    Compaction { encrypted_content: String },
     #[serde(other)]
     Other,
 }
@@ -1650,6 +1578,7 @@ mod tests {
     use anyhow::Result;
     use codex_execpolicy::Policy;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     #[test]
@@ -2387,6 +2316,24 @@ mod tests {
                 encrypted_content: "abc".into(),
             }
         );
+        Ok(())
+    }
+
+    #[test]
+    fn deserializes_legacy_ghost_snapshot_as_other() -> Result<()> {
+        let json = r#"{
+            "type":"ghost_snapshot",
+            "ghost_commit":{
+                "id":"ghost-1",
+                "parent":null,
+                "preexisting_untracked_files":[],
+                "preexisting_untracked_dirs":[]
+            }
+        }"#;
+
+        let item: ResponseItem = serde_json::from_str(json)?;
+
+        assert_eq!(item, ResponseItem::Other);
         Ok(())
     }
 

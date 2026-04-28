@@ -27,7 +27,6 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
-use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
@@ -47,13 +46,24 @@ pub struct ThreadConfigSnapshot {
     pub service_tier: Option<ServiceTier>,
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
-    pub sandbox_policy: SandboxPolicy,
     pub permission_profile: PermissionProfile,
     pub cwd: AbsolutePathBuf,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub personality: Option<Personality>,
     pub session_source: SessionSource,
+}
+
+impl ThreadConfigSnapshot {
+    pub fn sandbox_policy(&self) -> SandboxPolicy {
+        let file_system_sandbox_policy = self.permission_profile.file_system_sandbox_policy();
+        codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
+            &self.permission_profile,
+            &file_system_sandbox_policy,
+            self.permission_profile.network_sandbox_policy(),
+            self.cwd.as_path(),
+        )
+    }
 }
 
 /// Turn context overrides that app-server validates before starting a turn.
@@ -75,6 +85,7 @@ pub struct CodexThreadTurnContextOverrides {
 
 pub struct CodexThread {
     pub(crate) codex: Codex,
+    pub(crate) session_source: SessionSource,
     rollout_path: Option<PathBuf>,
     out_of_band_elicitation_count: Mutex<u64>,
     _watch_registration: WatchRegistration,
@@ -86,10 +97,12 @@ impl CodexThread {
     pub(crate) fn new(
         codex: Codex,
         rollout_path: Option<PathBuf>,
+        session_source: SessionSource,
         watch_registration: WatchRegistration,
     ) -> Self {
         Self {
             codex,
+            session_source,
             rollout_path,
             out_of_band_elicitation_count: Mutex::new(0),
             _watch_registration: watch_registration,
@@ -102,6 +115,11 @@ impl CodexThread {
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
         self.codex.shutdown_and_wait().await
+    }
+
+    /// Wait until the underlying session loop has terminated.
+    pub async fn wait_until_terminated(&self) {
+        self.codex.session_loop_termination.clone().await;
     }
 
     pub async fn apply_goal_resume_runtime_effects(&self) -> anyhow::Result<()> {
@@ -255,10 +273,6 @@ impl CodexThread {
 
     pub(crate) fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {
         self.codex.agent_status.clone()
-    }
-
-    pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {
-        self.codex.session.total_token_usage().await
     }
 
     /// Returns the complete token usage snapshot currently cached for this thread.

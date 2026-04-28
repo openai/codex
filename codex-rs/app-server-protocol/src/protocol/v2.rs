@@ -1434,7 +1434,7 @@ v2_enum_from_core!(
 pub enum FileSystemSpecialPath {
     Root,
     Minimal,
-    CurrentWorkingDirectory,
+    #[serde(alias = "current_working_directory")]
     ProjectRoots {
         subpath: Option<PathBuf>,
     },
@@ -1451,7 +1451,6 @@ impl From<CoreFileSystemSpecialPath> for FileSystemSpecialPath {
         match value {
             CoreFileSystemSpecialPath::Root => Self::Root,
             CoreFileSystemSpecialPath::Minimal => Self::Minimal,
-            CoreFileSystemSpecialPath::CurrentWorkingDirectory => Self::CurrentWorkingDirectory,
             CoreFileSystemSpecialPath::ProjectRoots { subpath } => Self::ProjectRoots { subpath },
             CoreFileSystemSpecialPath::Tmpdir => Self::Tmpdir,
             CoreFileSystemSpecialPath::SlashTmp => Self::SlashTmp,
@@ -1465,7 +1464,6 @@ impl From<FileSystemSpecialPath> for CoreFileSystemSpecialPath {
         match value {
             FileSystemSpecialPath::Root => Self::Root,
             FileSystemSpecialPath::Minimal => Self::Minimal,
-            FileSystemSpecialPath::CurrentWorkingDirectory => Self::CurrentWorkingDirectory,
             FileSystemSpecialPath::ProjectRoots { subpath } => Self::ProjectRoots { subpath },
             FileSystemSpecialPath::Tmpdir => Self::Tmpdir,
             FileSystemSpecialPath::SlashTmp => Self::SlashTmp,
@@ -1998,6 +1996,8 @@ impl From<CoreSessionSource> for SessionSource {
             CoreSessionSource::Exec => SessionSource::Exec,
             CoreSessionSource::Mcp => SessionSource::AppServer,
             CoreSessionSource::Custom(source) => SessionSource::Custom(source),
+            // We do not want to render those at the app-server level.
+            CoreSessionSource::Internal(_) => SessionSource::Unknown,
             CoreSessionSource::SubAgent(sub) => SessionSource::SubAgent(sub),
             CoreSessionSource::Unknown => SessionSource::Unknown,
         }
@@ -3165,7 +3165,7 @@ pub struct CommandExecTerminalSize {
 /// The final `command/exec` response is deferred until the process exits and is
 /// sent only after all `command/exec/outputDelta` notifications for that
 /// connection have been emitted.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CommandExecParams {
@@ -3244,6 +3244,7 @@ pub struct CommandExecParams {
     ///
     /// Defaults to the user's configured permissions when omitted. Cannot be
     /// combined with `sandboxPolicy`.
+    #[experimental("command/exec.permissionProfile")]
     #[ts(optional = nullable)]
     pub permission_profile: Option<PermissionProfile>,
 }
@@ -3366,6 +3367,7 @@ pub struct ThreadStartParams {
     pub sandbox: Option<SandboxMode>,
     /// Full permissions override for this thread. Cannot be combined with
     /// `sandbox`.
+    #[experimental("thread/start.permissionProfile")]
     #[ts(optional = nullable)]
     pub permission_profile: Option<PermissionProfile>,
     #[ts(optional = nullable)]
@@ -3449,6 +3451,7 @@ pub struct ThreadStartResponse {
     /// view.
     pub sandbox: SandboxPolicy,
     /// Canonical active permissions view for this thread.
+    #[experimental("thread/start.permissionProfile")]
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -3510,6 +3513,7 @@ pub struct ThreadResumeParams {
     pub sandbox: Option<SandboxMode>,
     /// Full permissions override for the resumed thread. Cannot be combined
     /// with `sandbox`.
+    #[experimental("thread/resume.permissionProfile")]
     #[ts(optional = nullable)]
     pub permission_profile: Option<PermissionProfile>,
     #[ts(optional = nullable)]
@@ -3553,6 +3557,7 @@ pub struct ThreadResumeResponse {
     /// view.
     pub sandbox: SandboxPolicy,
     /// Canonical active permissions view for this thread.
+    #[experimental("thread/resume.permissionProfile")]
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -3605,6 +3610,7 @@ pub struct ThreadForkParams {
     pub sandbox: Option<SandboxMode>,
     /// Full permissions override for the forked thread. Cannot be combined
     /// with `sandbox`.
+    #[experimental("thread/fork.permissionProfile")]
     #[ts(optional = nullable)]
     pub permission_profile: Option<PermissionProfile>,
     #[ts(optional = nullable)]
@@ -3648,6 +3654,7 @@ pub struct ThreadForkResponse {
     /// view.
     pub sandbox: SandboxPolicy,
     /// Canonical active permissions view for this thread.
+    #[experimental("thread/fork.permissionProfile")]
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -5186,6 +5193,7 @@ pub struct TurnStartParams {
     pub sandbox_policy: Option<SandboxPolicy>,
     /// Override the full permissions profile for this turn and subsequent
     /// turns. Cannot be combined with `sandboxPolicy`.
+    #[experimental("turn/start.permissionProfile")]
     #[ts(optional = nullable)]
     pub permission_profile: Option<PermissionProfile>,
     /// Override the model for this turn and subsequent turns.
@@ -8112,6 +8120,26 @@ mod tests {
     }
 
     #[test]
+    fn legacy_current_working_directory_special_path_deserializes_as_project_roots() {
+        let special_path = serde_json::from_value::<FileSystemSpecialPath>(json!({
+            "kind": "current_working_directory",
+        }))
+        .expect("legacy cwd special path should deserialize");
+
+        assert_eq!(
+            special_path,
+            FileSystemSpecialPath::ProjectRoots { subpath: None }
+        );
+        assert_eq!(
+            serde_json::to_value(&special_path).expect("serialize special path"),
+            json!({
+                "kind": "project_roots",
+                "subpath": null,
+            })
+        );
+    }
+
+    #[test]
     fn permissions_request_approval_response_uses_granted_permission_profile_without_macos() {
         let read_only_path = if cfg!(windows) {
             r"C:\tmp\read-only"
@@ -10277,6 +10305,27 @@ mod tests {
             .unwrap(),
             PluginUninstallParams {
                 plugin_id: "gmail@openai-curated".to_string(),
+            },
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginUninstallParams {
+                plugin_id: "plugins~Plugin_gmail".to_string(),
+            })
+            .unwrap(),
+            json!({
+                "pluginId": "plugins~Plugin_gmail",
+            }),
+        );
+
+        assert_eq!(
+            serde_json::from_value::<PluginUninstallParams>(json!({
+                "pluginId": "plugins~Plugin_gmail",
+                "forceRemoteSync": true,
+            }))
+            .unwrap(),
+            PluginUninstallParams {
+                plugin_id: "plugins~Plugin_gmail".to_string(),
             },
         );
     }

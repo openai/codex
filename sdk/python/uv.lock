@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.10"
 
 [options]
-exclude-newer = "2026-04-16T16:29:01.461661899Z"
+exclude-newer = "2026-04-20T18:19:27.620299Z"
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -79,30 +79,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/57/75/31212c6bf2503fdf9
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e4/20/71885d8b97d4f3dde17b1fdb92dbd4908b00541c5a3379787137285f602e/click-8.3.2-py3-none-any.whl", hash = "sha256:1924d2c27c5653561cd2cae4548d1406039cb79b858b747cfea24924bbc1616d", size = 108379, upload-time = "2026-04-03T19:14:43.505Z" },
 ]
-
-[[package]]
-name = "codex-app-server-sdk"
-version = "0.2.0"
-source = { editable = "." }
-dependencies = [
-    { name = "pydantic" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "datamodel-code-generator" },
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "datamodel-code-generator", marker = "extra == 'dev'", specifier = "==0.31.2" },
-    { name = "pydantic", specifier = ">=2.12" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11" },
-]
-provides-extras = ["dev"]
 
 [[package]]
 name = "colorama"
@@ -300,6 +276,30 @@ sdist = { url = "https://files.pythonhosted.org/packages/a2/6e/371856a3fb9d31ca8
 wheels = [
     { url = "https://files.pythonhosted.org/packages/79/7b/2c79738432f5c924bef5071f933bcc9efd0473bac3b4aa584a6f7c1c8df8/mypy_extensions-1.1.0-py3-none-any.whl", hash = "sha256:1be4cccdb0f2482337c4743e60421de3a356cd97508abadd57d47403e94f5505", size = 4963, upload-time = "2025-04-22T14:54:22.983Z" },
 ]
+
+[[package]]
+name = "openai-codex-app-server-sdk"
+version = "0.116.0a1"
+source = { editable = "." }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "datamodel-code-generator" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datamodel-code-generator", marker = "extra == 'dev'", specifier = "==0.31.2" },
+    { name = "pydantic", specifier = ">=2.12" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "packaging"

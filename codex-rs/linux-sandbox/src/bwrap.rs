@@ -24,7 +24,10 @@ use std::process::Command;
 
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
+use codex_protocol::protocol::FileSystemAccessMode;
+use codex_protocol::protocol::FileSystemPath;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
+use codex_protocol::protocol::FileSystemSpecialPath;
 use codex_protocol::protocol::WritableRoot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use globset::GlobBuilder;
@@ -258,6 +261,35 @@ fn create_filesystem_args(
             read_only_subpaths: Vec::new(),
         });
     }
+    let missing_auto_metadata_read_only_project_root_subpaths: HashSet<PathBuf> =
+        file_system_sandbox_policy
+            .entries
+            .iter()
+            .filter(|entry| entry.access == FileSystemAccessMode::Read)
+            .filter_map(|entry| {
+                let FileSystemPath::Special {
+                    value:
+                        FileSystemSpecialPath::ProjectRoots {
+                            subpath: Some(subpath),
+                        },
+                } = &entry.path
+                else {
+                    return None;
+                };
+                // Missing `.codex` remains protected so first-time project config
+                // creation still goes through the protected-path approval flow.
+                // Only the automatic repo-metadata read masks are skipped here:
+                // user-authored `read` rules for other subpaths and `none` rules
+                // should keep their normal bwrap behavior, which can mask the
+                // first missing component to prevent creation under writable roots.
+                let project_subpath = subpath.as_path();
+                if project_subpath != Path::new(".git") && project_subpath != Path::new(".agents") {
+                    return None;
+                }
+                let resolved = AbsolutePathBuf::resolve_path_against_base(subpath, cwd);
+                (!resolved.as_path().exists()).then(|| resolved.into_path_buf())
+            })
+            .collect();
     let mut unreadable_roots = file_system_sandbox_policy
         .get_unreadable_roots_with_cwd(cwd)
         .into_iter()
@@ -410,6 +442,7 @@ fn create_filesystem_args(
             .iter()
             .map(|path| path.as_path().to_path_buf())
             .filter(|path| !unreadable_paths.contains(path))
+            .filter(|path| !missing_auto_metadata_read_only_project_root_subpaths.contains(path))
             .collect();
         if let Some(target) = &symlink_target {
             read_only_subpaths = remap_paths_for_symlink_target(read_only_subpaths, root, target);
@@ -1143,7 +1176,7 @@ mod tests {
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             },
@@ -1397,6 +1430,106 @@ mod tests {
     }
 
     #[test]
+    fn skips_missing_project_root_metadata_carveouts_except_codex() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(".git".into())),
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(".agents".into())),
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(".codex".into())),
+                },
+                access: FileSystemAccessMode::Read,
+            },
+        ]);
+
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
+        let dot_git = path_to_string(&temp_dir.path().join(".git"));
+        let dot_agents = path_to_string(&temp_dir.path().join(".agents"));
+        let dot_codex = path_to_string(&temp_dir.path().join(".codex"));
+
+        assert!(!args.args.iter().any(|arg| arg == &dot_git));
+        assert!(!args.args.iter().any(|arg| arg == &dot_agents));
+        assert!(
+            args.args
+                .windows(3)
+                .any(|window| { window == ["--ro-bind", "/dev/null", dot_codex.as_str()] })
+        );
+    }
+
+    #[test]
+    fn missing_user_project_root_subpath_rules_are_still_enforced() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(".vscode".into())),
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(".secrets".into())),
+                },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
+        let dot_vscode = path_to_string(&temp_dir.path().join(".vscode"));
+        let dot_secrets = path_to_string(&temp_dir.path().join(".secrets"));
+
+        assert!(
+            args.args
+                .windows(3)
+                .any(|window| { window == ["--ro-bind", "/dev/null", dot_vscode.as_str()] })
+        );
+        assert!(
+            args.args
+                .windows(3)
+                .any(|window| { window == ["--ro-bind", "/dev/null", dot_secrets.as_str()] })
+        );
+    }
+
+    #[test]
     fn mounts_dev_before_writable_dev_binds() {
         let sandbox_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![AbsolutePathBuf::try_from(Path::new("/dev")).expect("/dev path")],
@@ -1427,7 +1560,7 @@ mod tests {
                 "/".to_string(),
                 // Mask the default protected .codex subpath under that writable
                 // root. Because the root is `/` in this test, the carveout path
-                // appears as `/.codex`.
+                // appears at the filesystem root.
                 "--ro-bind".to_string(),
                 "/dev/null".to_string(),
                 "/.codex".to_string(),

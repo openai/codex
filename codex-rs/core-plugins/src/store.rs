@@ -160,7 +160,7 @@ pub fn plugin_version_for_source(source_path: &Path) -> Result<String, PluginSto
     Ok(plugin_version)
 }
 
-fn validate_plugin_version_segment(plugin_version: &str) -> Result<(), String> {
+pub fn validate_plugin_version_segment(plugin_version: &str) -> Result<(), String> {
     if plugin_version.is_empty() {
         return Err("invalid plugin version: must not be empty".to_string());
     }

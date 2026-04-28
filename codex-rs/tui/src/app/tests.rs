@@ -2211,8 +2211,7 @@ async fn inactive_thread_approval_bubbles_into_active_view() -> Result<()> {
             /*capacity*/ 1,
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-                permission_profile: Some(PermissionProfile::workspace_write()),
+                permission_profile: PermissionProfile::workspace_write(),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2371,8 +2370,7 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
             /*capacity*/ 4,
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-                permission_profile: Some(PermissionProfile::workspace_write()),
+                permission_profile: PermissionProfile::workspace_write(),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2663,8 +2661,7 @@ async fn inactive_thread_approval_badge_clears_after_turn_completion_notificatio
             /*capacity*/ 4,
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-                permission_profile: Some(PermissionProfile::workspace_write()),
+                permission_profile: PermissionProfile::workspace_write(),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2717,8 +2714,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
         ThreadId::from_string("00000000-0000-0000-0000-000000000202").expect("valid thread");
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
-        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-        permission_profile: Some(PermissionProfile::workspace_write()),
+        permission_profile: PermissionProfile::workspace_write(),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
 
@@ -2742,7 +2738,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
         current_date: None,
         timezone: None,
         approval_policy: primary_session.approval_policy,
-        sandbox_policy: primary_session.sandbox_policy.clone(),
+        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
         permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
@@ -2830,8 +2826,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
         ThreadId::from_string("00000000-0000-0000-0000-000000000302").expect("valid thread");
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
-        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-        permission_profile: Some(PermissionProfile::workspace_write()),
+        permission_profile: PermissionProfile::workspace_write(),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
 
@@ -2887,9 +2882,9 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
     Ok(())
 }
 
-/// `thread/read` is metadata/replay hydration and does not return an
-/// authoritative runtime `PermissionProfile`, so it must not reuse the active
-/// primary session profile after swapping in the read thread's cwd.
+/// `thread/read` is metadata/replay hydration and does not return a fresh
+/// server-authored `PermissionProfile`, so it must not reuse the cached primary
+/// session profile after swapping in the read thread's cwd.
 #[tokio::test]
 async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
     let mut app = make_test_app().await;
@@ -2899,8 +2894,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         ThreadId::from_string("00000000-0000-0000-0000-000000000402").expect("valid thread");
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
-        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-        permission_profile: Some(PermissionProfile::workspace_write()),
+        permission_profile: PermissionProfile::workspace_write(),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
     app.primary_session_configured = Some(primary_session);
@@ -2931,10 +2925,15 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
 
     assert_eq!(session.thread_id, read_thread_id);
     assert_eq!(session.cwd.as_path(), test_path_buf("/tmp/read").as_path());
+    let expected_permission_profile = app
+        .chat_widget
+        .config_ref()
+        .permissions
+        .permission_profile();
     assert_eq!(
-        session.permission_profile, None,
-        "thread/read does not return an authoritative permission profile; reusing the primary \
-         session profile would reinterpret cwd-bound entries against the read thread cwd"
+        session.permission_profile, expected_permission_profile,
+        "thread/read does not return fresh server permissions; the fallback profile must use the \
+         active widget permissions rather than reusing the cached primary session profile"
     );
 }
 
@@ -3561,8 +3560,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: Some(ReasoningEffortConfig::High),
             history_log_id: 0,
@@ -3799,8 +3797,7 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        permission_profile: Some(PermissionProfile::read_only()),
+        permission_profile: PermissionProfile::read_only(),
         cwd: cwd.abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
@@ -4312,8 +4309,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4376,8 +4372,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4470,8 +4465,7 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4854,8 +4848,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        permission_profile: None,
+        permission_profile: PermissionProfile::read_only(),
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: None,
         history_log_id: 0,
@@ -4967,8 +4960,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,

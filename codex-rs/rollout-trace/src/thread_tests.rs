@@ -134,7 +134,7 @@ fn disabled_thread_context_accepts_trace_calls_without_writing() -> anyhow::Resu
     inference_attempt.record_started(&serde_json::json!({ "kind": "inference" }));
     let token_usage: Option<codex_protocol::protocol::TokenUsage> = None;
     inference_attempt.record_completed("response-1", &token_usage, &[]);
-    inference_attempt.record_failed("inference failed");
+    inference_attempt.record_failed("inference failed", &[]);
 
     let compaction_trace = thread_trace.compaction_trace_context(
         "turn-1",

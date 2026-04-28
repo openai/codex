@@ -196,6 +196,8 @@ impl SlashCommand {
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Plugins
+            | SlashCommand::Title
+            | SlashCommand::Statusline
             | SlashCommand::AutoReview
             | SlashCommand::Feedback
             | SlashCommand::Quit
@@ -207,9 +209,7 @@ impl SlashCommand {
             SlashCommand::Settings => true,
             SlashCommand::Collab => true,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
-            SlashCommand::Statusline => false,
             SlashCommand::Theme => false,
-            SlashCommand::Title => false,
         }
     }
 
@@ -249,8 +249,10 @@ mod tests {
     }
 
     #[test]
-    fn goal_command_is_available_during_task() {
+    fn certain_commands_are_available_during_task() {
         assert!(SlashCommand::Goal.available_during_task());
+        assert!(SlashCommand::Title.available_during_task());
+        assert!(SlashCommand::Statusline.available_during_task());
     }
 
     #[test]

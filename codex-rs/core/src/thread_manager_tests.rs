@@ -13,6 +13,9 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::InternalSessionSource;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use core_test_support::PathBufExt;
@@ -312,9 +315,10 @@ async fn start_thread_accepts_explicit_environment_when_default_environment_is_d
     );
 
     let thread = manager
-        .start_thread_with_tools_and_service_name(StartThreadWithToolsOptions {
+        .start_thread_with_options(StartThreadOptions {
             config: config.clone(),
             initial_history: InitialHistory::New,
+            session_source: None,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
@@ -328,6 +332,48 @@ async fn start_thread_accepts_explicit_environment_when_default_environment_is_d
         .expect("explicit sticky environment should resolve by id");
 
     assert_eq!(manager.list_thread_ids().await, vec![thread.thread_id]);
+}
+
+#[tokio::test]
+async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let thread = manager
+        .start_thread_with_options(StartThreadOptions {
+            config,
+            initial_history: InitialHistory::New,
+            session_source: Some(SessionSource::Internal(
+                InternalSessionSource::MemoryConsolidation,
+            )),
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+        })
+        .await
+        .expect("internal thread should start");
+
+    assert_eq!(manager.list_thread_ids().await, Vec::new());
+    assert!(manager.get_thread(thread.thread_id).await.is_err());
+
+    let report = manager
+        .shutdown_all_threads_bounded(Duration::from_secs(10))
+        .await;
+    assert_eq!(report.completed, vec![thread.thread_id]);
+    assert!(report.submit_failed.is_empty());
+    assert!(report.timed_out.is_empty());
+    assert!(manager.list_thread_ids().await.is_empty());
 }
 
 #[tokio::test]
@@ -357,9 +403,10 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     let default_cwd = config.cwd.clone();
 
     let source = manager
-        .start_thread_with_tools_and_service_name(StartThreadWithToolsOptions {
+        .start_thread_with_options(StartThreadOptions {
             config: config.clone(),
             initial_history: InitialHistory::New,
+            session_source: None,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,

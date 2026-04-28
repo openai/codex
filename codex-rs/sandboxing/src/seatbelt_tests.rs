@@ -828,7 +828,12 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     );
     assert!(
         policy_text.contains("WRITABLE_ROOT_0_EXCLUDED_0"),
-        "expected cwd .codex carveout in policy:\n{policy_text}",
+        "expected cwd metadata carveouts in policy:\n{policy_text}",
+    );
+    assert!(
+        policy_text.contains("WRITABLE_ROOT_0_EXCLUDED_1")
+            && policy_text.contains("WRITABLE_ROOT_0_EXCLUDED_2"),
+        "expected symbolic cwd .git/.agents carveouts in policy:\n{policy_text}",
     );
     assert!(
         policy_text.contains("WRITABLE_ROOT_1_EXCLUDED_0")
@@ -852,6 +857,20 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
             cwd.canonicalize()
                 .expect("canonicalize cwd")
                 .join(".codex")
+                .display()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_0_EXCLUDED_1={}",
+            cwd.canonicalize()
+                .expect("canonicalize cwd")
+                .join(".git")
+                .display()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_0_EXCLUDED_2={}",
+            cwd.canonicalize()
+                .expect("canonicalize cwd")
+                .join(".agents")
                 .display()
         ),
         format!(
@@ -1194,7 +1213,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         .map(|p| p.to_string_lossy().to_string());
 
     let tempdir_policy_entry = if tmpdir_env_var.is_some() {
-        r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_1"))) )"#
+        r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_2"))) )"#
     } else {
         ""
     };
@@ -1203,13 +1222,13 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
     // Note that the policy includes:
     // - the base policy,
     // - read-only access to the filesystem,
-    // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
+    // - write access to WRITABLE_ROOT_0 (but not its metadata subpaths), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
     let expected_policy = format!(
         r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_2"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
 )
 
 "#,
@@ -1231,6 +1250,10 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
             dot_codex_canonical.to_string_lossy()
         ),
         format!(
+            "-DWRITABLE_ROOT_0_EXCLUDED_2={}",
+            vulnerable_root_canonical.join(".agents").to_string_lossy()
+        ),
+        format!(
             "-DWRITABLE_ROOT_1={}",
             PathBuf::from("/tmp")
                 .canonicalize()
@@ -1247,6 +1270,10 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         ));
         expected_args.push(format!(
             "-DWRITABLE_ROOT_2_EXCLUDED_1={}",
+            vulnerable_root_canonical.join(".agents").to_string_lossy()
+        ));
+        expected_args.push(format!(
+            "-DWRITABLE_ROOT_2_EXCLUDED_2={}",
             dot_codex_canonical.to_string_lossy()
         ));
     }

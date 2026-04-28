@@ -55,6 +55,12 @@ fn use_linux_sandbox_bwrap_is_removed_and_disabled_by_default() {
 }
 
 #[test]
+fn undo_is_removed_and_disabled_by_default() {
+    assert_eq!(Feature::GhostCommit.stage(), Stage::Removed);
+    assert_eq!(Feature::GhostCommit.default_enabled(), false);
+}
+
+#[test]
 fn image_detail_original_is_removed_and_disabled_by_default() {
     assert_eq!(Feature::ImageDetailOriginal.stage(), Stage::Removed);
     assert_eq!(Feature::ImageDetailOriginal.default_enabled(), false);
@@ -154,12 +160,6 @@ fn browser_controls_are_stable_and_enabled_by_default() {
     assert_eq!(Feature::ComputerUse.stage(), Stage::Stable);
     assert_eq!(Feature::ComputerUse.default_enabled(), true);
     assert_eq!(feature_for_key("computer_use"), Some(Feature::ComputerUse));
-}
-
-#[test]
-fn general_analytics_is_stable_and_enabled_by_default() {
-    assert_eq!(Feature::GeneralAnalytics.stage(), Stage::Stable);
-    assert_eq!(Feature::GeneralAnalytics.default_enabled(), true);
 }
 
 #[test]
@@ -356,6 +356,22 @@ fn from_sources_ignores_removed_image_detail_original_feature_key() {
 }
 
 #[test]
+fn from_sources_ignores_removed_undo_feature_key() {
+    let features_toml = FeaturesToml::from(BTreeMap::from([("undo".to_string(), true)]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+}
+
+#[test]
 fn from_sources_ignores_removed_js_repl_feature_keys() {
     let features_toml = FeaturesToml::from(BTreeMap::from([
         ("js_repl".to_string(), true),
@@ -399,6 +415,8 @@ enabled = true
 max_concurrent_threads_per_session = 4
 usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
+root_agent_usage_hint_text = "Root guidance."
+subagent_usage_hint_text = "Subagent guidance."
 hide_spawn_agent_metadata = true
 "#,
     )
@@ -415,6 +433,8 @@ hide_spawn_agent_metadata = true
             max_concurrent_threads_per_session: Some(4),
             usage_hint_enabled: Some(false),
             usage_hint_text: Some("Custom delegation guidance.".to_string()),
+            root_agent_usage_hint_text: Some("Root guidance.".to_string()),
+            subagent_usage_hint_text: Some("Subagent guidance.".to_string()),
             hide_spawn_agent_metadata: Some(true),
         }))
     );
@@ -447,6 +467,8 @@ usage_hint_enabled = false
             max_concurrent_threads_per_session: None,
             usage_hint_enabled: Some(false),
             usage_hint_text: None,
+            root_agent_usage_hint_text: None,
+            subagent_usage_hint_text: None,
             hide_spawn_agent_metadata: None,
         }))
     );

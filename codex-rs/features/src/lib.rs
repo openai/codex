@@ -71,7 +71,8 @@ impl Stage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Feature {
     // Stable.
-    /// Create a ghost commit at each turn.
+    /// Removed compatibility flag retained as a no-op so old configs can
+    /// still parse `undo`.
     GhostCommit,
     /// Enable the default shell tool.
     ShellTool,
@@ -128,8 +129,6 @@ pub enum Feature {
     CodexGitCommit,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
-    /// Enable thread lifecycle analytics emitted via the app-server analytics pipeline.
-    GeneralAnalytics,
     /// Persist rollout metadata to a local SQLite database.
     Sqlite,
     /// Enable startup memory extraction and file-backed memory consolidation.
@@ -148,6 +147,8 @@ pub enum Feature {
     SpawnCsv,
     /// Enable apps.
     Apps,
+    /// Enable MCP apps.
+    EnableMcpApps,
     /// Enable the tool_search tool for apps.
     ToolSearch,
     /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
@@ -392,6 +393,9 @@ impl Features {
                 "tui_app_server" => {
                     continue;
                 }
+                "undo" => {
+                    continue;
+                }
                 "js_repl" => {
                     continue;
                 }
@@ -620,7 +624,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GhostCommit,
         key: "undo",
-        stage: Stage::Stable,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -711,12 +715,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "runtime_metrics",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::GeneralAnalytics,
-        key: "general_analytics",
-        stage: Stage::Stable,
-        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Sqlite,
@@ -841,6 +839,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "apps",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::EnableMcpApps,
+        key: "enable_mcp_apps",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ToolSearch,

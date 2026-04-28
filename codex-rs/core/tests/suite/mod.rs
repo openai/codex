@@ -54,7 +54,6 @@ mod items;
 mod json_result;
 mod live_cli;
 mod live_reload;
-mod memories;
 mod model_overrides;
 mod model_switching;
 mod model_visible_layout;

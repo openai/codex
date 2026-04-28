@@ -758,12 +758,6 @@ pub enum Op {
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
 
-    /// Drop all persisted memory artifacts and memory-tracking DB rows.
-    DropMemories,
-
-    /// Trigger a single pass of the startup memory pipeline.
-    UpdateMemories,
-
     /// Set a user-facing thread name in the persisted rollout metadata.
     /// This is a local-only operation handled by codex-core; it does not
     /// involve the model.
@@ -775,7 +769,10 @@ pub enum Op {
     /// model.
     SetThreadMemoryMode { mode: ThreadMemoryMode },
 
-    /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
+    /// Legacy request to undo a turn.
+    ///
+    /// The op is still accepted for compatibility, but ghost snapshots are no
+    /// longer produced so the request reports unavailable.
     Undo,
 
     /// Request Codex to drop the last N user turns from in-memory context.
@@ -903,8 +900,6 @@ impl Op {
             Self::ReloadUserConfig => "reload_user_config",
             Self::ListSkills { .. } => "list_skills",
             Self::Compact => "compact",
-            Self::DropMemories => "drop_memories",
-            Self::UpdateMemories => "update_memories",
             Self::SetThreadName { .. } => "set_thread_name",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::Undo => "undo",
@@ -2637,9 +2632,17 @@ pub enum SessionSource {
     Exec,
     Mcp,
     Custom(String),
+    Internal(InternalSessionSource),
     SubAgent(SubAgentSource),
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum InternalSessionSource {
+    MemoryConsolidation,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
@@ -2670,6 +2673,7 @@ impl fmt::Display for SessionSource {
             SessionSource::Exec => f.write_str("exec"),
             SessionSource::Mcp => f.write_str("mcp"),
             SessionSource::Custom(source) => f.write_str(source),
+            SessionSource::Internal(source) => write!(f, "internal_{source}"),
             SessionSource::SubAgent(sub_source) => write!(f, "subagent_{sub_source}"),
             SessionSource::Unknown => f.write_str("unknown"),
         }
@@ -2698,18 +2702,27 @@ impl SessionSource {
     pub fn thread_source_name(&self) -> Option<&'static str> {
         match self {
             SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
+            SessionSource::Internal(_) => Some("internal"),
             SessionSource::SubAgent(_) => Some("subagent"),
             SessionSource::Mcp | SessionSource::Custom(_) | SessionSource::Unknown => None,
         }
+    }
+
+    pub fn is_internal(&self) -> bool {
+        matches!(self, SessionSource::Internal(_))
+    }
+
+    pub fn is_non_root_agent(&self) -> bool {
+        matches!(
+            self,
+            SessionSource::Internal(_) | SessionSource::SubAgent(_)
+        )
     }
 
     pub fn get_nickname(&self) -> Option<String> {
         match self {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_nickname, .. }) => {
                 agent_nickname.clone()
-            }
-            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
-                Some("Morpheus".to_string())
             }
             _ => None,
         }
@@ -2720,9 +2733,6 @@ impl SessionSource {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_role, .. }) => {
                 agent_role.clone()
             }
-            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
-                Some("memory builder".to_string())
-            }
             _ => None,
         }
     }
@@ -2731,9 +2741,6 @@ impl SessionSource {
         match self {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. }) => {
                 agent_path.clone()
-            }
-            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
-                Some(AgentPath::morpheus())
             }
             _ => None,
         }
@@ -2747,7 +2754,7 @@ impl SessionSource {
             | SessionSource::Exec
             | SessionSource::Mcp
             | SessionSource::Unknown => Some(Product::Codex),
-            SessionSource::SubAgent(_) => None,
+            SessionSource::Internal(_) | SessionSource::SubAgent(_) => None,
         }
     }
 
@@ -2773,6 +2780,14 @@ impl fmt::Display for SubAgentSource {
                 write!(f, "thread_spawn_{parent_thread_id}_d{depth}")
             }
             SubAgentSource::Other(other) => f.write_str(other),
+        }
+    }
+}
+
+impl fmt::Display for InternalSessionSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InternalSessionSource::MemoryConsolidation => f.write_str("memory_consolidation"),
         }
     }
 }
@@ -3538,7 +3553,7 @@ pub struct SessionNetworkProxyRuntime {
     pub socks_addr: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Serialize, JsonSchema, TS)]
 pub struct SessionConfiguredEvent {
     pub session_id: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3566,16 +3581,8 @@ pub struct SessionConfiguredEvent {
     #[serde(default)]
     pub approvals_reviewer: ApprovalsReviewer,
 
-    /// Legacy sandbox projection for commands executed in the system.
-    ///
-    /// Consumers should prefer `permission_profile` when it is present. This
-    /// field remains available as a compatibility fallback for older emitters
-    /// and sessions that only expose legacy sandbox state.
-    pub sandbox_policy: SandboxPolicy,
-
     /// Canonical effective permissions for commands executed in the session.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permission_profile: PermissionProfile,
 
     /// Working directory that should be treated as the *root* of the
     /// session.
@@ -3604,6 +3611,70 @@ pub struct SessionConfiguredEvent {
     /// Path in which the rollout is stored. Can be `None` for ephemeral threads
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rollout_path: Option<PathBuf>,
+}
+
+impl<'de> Deserialize<'de> for SessionConfiguredEvent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Wire {
+            session_id: ThreadId,
+            forked_from_id: Option<ThreadId>,
+            #[serde(default)]
+            thread_name: Option<String>,
+            model: String,
+            model_provider_id: String,
+            service_tier: Option<ServiceTier>,
+            approval_policy: AskForApproval,
+            #[serde(default)]
+            approvals_reviewer: ApprovalsReviewer,
+            // `SessionConfiguredEvent` is persisted into rollout history. Older
+            // rollouts only have `sandbox_policy`, so accept it on deserialize
+            // and immediately project it into the canonical `permission_profile`.
+            sandbox_policy: Option<SandboxPolicy>,
+            permission_profile: Option<PermissionProfile>,
+            cwd: AbsolutePathBuf,
+            reasoning_effort: Option<ReasoningEffortConfig>,
+            history_log_id: u64,
+            history_entry_count: usize,
+            initial_messages: Option<Vec<EventMsg>>,
+            network_proxy: Option<SessionNetworkProxyRuntime>,
+            rollout_path: Option<PathBuf>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let permission_profile = match (wire.permission_profile, wire.sandbox_policy) {
+            (Some(permission_profile), _) => permission_profile,
+            (None, Some(sandbox_policy)) => PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+                &sandbox_policy,
+                wire.cwd.as_path(),
+            ),
+            (None, None) => {
+                return Err(serde::de::Error::missing_field("permission_profile"));
+            }
+        };
+
+        Ok(Self {
+            session_id: wire.session_id,
+            forked_from_id: wire.forked_from_id,
+            thread_name: wire.thread_name,
+            model: wire.model,
+            model_provider_id: wire.model_provider_id,
+            service_tier: wire.service_tier,
+            approval_policy: wire.approval_policy,
+            approvals_reviewer: wire.approvals_reviewer,
+            permission_profile,
+            cwd: wire.cwd,
+            reasoning_effort: wire.reasoning_effort,
+            history_log_id: wire.history_log_id,
+            history_entry_count: wire.history_entry_count,
+            initial_messages: wire.initial_messages,
+            network_proxy: wire.network_proxy,
+            rollout_path: wire.rollout_path,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -4043,6 +4114,10 @@ mod tests {
             (SessionSource::VSCode, Some("user")),
             (SessionSource::Exec, Some("user")),
             (
+                SessionSource::Internal(InternalSessionSource::MemoryConsolidation),
+                Some("internal"),
+            ),
+            (
                 SessionSource::SubAgent(SubAgentSource::Review),
                 Some("subagent"),
             ),
@@ -4082,6 +4157,11 @@ mod tests {
     fn session_source_restriction_product_does_not_guess_subagent_products() {
         assert_eq!(
             SessionSource::SubAgent(SubAgentSource::Review).restriction_product(),
+            None
+        );
+        assert_eq!(
+            SessionSource::Internal(InternalSessionSource::MemoryConsolidation)
+                .restriction_product(),
             None
         );
     }
@@ -4397,7 +4477,7 @@ mod tests {
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             },
@@ -4459,7 +4539,7 @@ mod tests {
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             },
@@ -5085,6 +5165,7 @@ mod tests {
     fn serialize_event() -> Result<()> {
         let conversation_id = ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
         let rollout_file = NamedTempFile::new()?;
+        let permission_profile = PermissionProfile::read_only();
         let event = Event {
             id: "1234".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -5096,8 +5177,7 @@ mod tests {
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                permission_profile: None,
+                permission_profile: permission_profile.clone(),
                 cwd: test_path_buf("/home/user/project").abs(),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 history_log_id: 0,
@@ -5117,9 +5197,7 @@ mod tests {
                 "model_provider_id": "openai",
                 "approval_policy": "never",
                 "approvals_reviewer": "user",
-                "sandbox_policy": {
-                    "type": "read-only"
-                },
+                "permission_profile": permission_profile,
                 "cwd": test_path_buf("/home/user/project"),
                 "reasoning_effort": "medium",
                 "history_log_id": 0,
@@ -5128,6 +5206,28 @@ mod tests {
             }
         });
         assert_eq!(expected, serde_json::to_value(&event)?);
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_legacy_session_configured_event_uses_sandbox_policy() -> Result<()> {
+        let cwd = test_path_buf("/home/user/project");
+        let value = json!({
+            "session_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+            "model": "codex-mini-latest",
+            "model_provider_id": "openai",
+            "approval_policy": "never",
+            "approvals_reviewer": "user",
+            "sandbox_policy": {
+                "type": "read-only"
+            },
+            "cwd": cwd,
+            "history_log_id": 0,
+            "history_entry_count": 0,
+        });
+
+        let event: SessionConfiguredEvent = serde_json::from_value(value)?;
+        assert_eq!(event.permission_profile, PermissionProfile::read_only());
         Ok(())
     }
 

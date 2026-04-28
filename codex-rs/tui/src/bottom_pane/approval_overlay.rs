@@ -102,7 +102,7 @@ impl ApprovalRequest {
         }
     }
 
-    fn matches_resolved_request(&self, request: &ResolvedAppServerRequest) -> bool {
+    pub(super) fn matches_resolved_request(&self, request: &ResolvedAppServerRequest) -> bool {
         match (self, request) {
             (
                 ApprovalRequest::Exec { id, .. },
@@ -528,6 +528,10 @@ impl BottomPaneView for ApprovalOverlay {
     fn dismiss_app_server_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
         self.dismiss_resolved_request(request)
     }
+
+    fn terminal_title_requires_action(&self) -> bool {
+        true
+    }
 }
 
 impl Renderable for ApprovalOverlay {
@@ -875,7 +879,6 @@ fn special_path_label(value: &FileSystemSpecialPath) -> String {
     match value {
         FileSystemSpecialPath::Root => ":root".to_string(),
         FileSystemSpecialPath::Minimal => ":minimal".to_string(),
-        FileSystemSpecialPath::CurrentWorkingDirectory => ":cwd".to_string(),
         FileSystemSpecialPath::ProjectRoots { subpath } => path_label(":project_roots", subpath),
         FileSystemSpecialPath::Tmpdir => ":tmpdir".to_string(),
         FileSystemSpecialPath::SlashTmp => "/tmp".to_string(),

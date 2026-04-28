@@ -9,9 +9,6 @@ use codex_login::ExternalAuth;
 use codex_login::ExternalAuthRefreshContext;
 use codex_login::ExternalAuthTokens;
 use codex_login::TokenData;
-use codex_login::auth::AgentIdentityAuth;
-use codex_login::auth::AgentIdentityAuthRecord;
-use codex_protocol::account::PlanType;
 use codex_protocol::openai_models::ModelsResponse;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -206,7 +203,7 @@ fn static_manager_for_tests(model_catalog: ModelsResponse) -> StaticModelsManage
     )
 }
 
-fn chatgpt_auth_tokens_for_tests(codex_home: &Path) -> CodexAuth {
+async fn chatgpt_auth_tokens_for_tests(codex_home: &Path) -> CodexAuth {
     let auth_dot_json = codex_login::AuthDotJson {
         auth_mode: Some(AuthMode::ChatgptAuthTokens),
         openai_api_key: None,
@@ -232,20 +229,9 @@ c2ln",
     .expect("auth.json should be written");
 
     CodexAuth::from_auth_storage(codex_home, AuthCredentialsStoreMode::File)
+        .await
         .expect("auth should load")
         .expect("auth should be present")
-}
-
-fn agent_identity_auth_for_tests() -> CodexAuth {
-    CodexAuth::AgentIdentity(AgentIdentityAuth::new(AgentIdentityAuthRecord {
-        agent_runtime_id: "agent-runtime-id".to_string(),
-        agent_private_key: "agent-private-key".to_string(),
-        account_id: "account-id".to_string(),
-        chatgpt_user_id: "chatgpt-user-id".to_string(),
-        email: "agent@example.com".to_string(),
-        plan_type: PlanType::Pro,
-        chatgpt_account_is_fedramp: false,
-    }))
 }
 
 #[tokio::test]
@@ -685,7 +671,7 @@ async fn refresh_available_models_fetches_with_chatgpt_auth_tokens() {
         "ChatGPT Auth Tokens",
         /*priority*/ 1,
     )]]);
-    let auth = chatgpt_auth_tokens_for_tests(codex_home.path());
+    let auth = chatgpt_auth_tokens_for_tests(codex_home.path()).await;
     let manager = openai_manager_for_tests_with_auth(
         codex_home.path().to_path_buf(),
         endpoint.clone(),
@@ -712,43 +698,6 @@ async fn refresh_available_models_fetches_with_chatgpt_auth_tokens() {
     );
 }
 
-#[tokio::test]
-async fn refresh_available_models_fetches_with_agent_identity() {
-    let dynamic_slug = "dynamic-model-only-for-test-agent-identity";
-    let codex_home = tempdir().expect("temp dir");
-    let endpoint = TestModelsEndpoint::new(vec![vec![remote_model(
-        dynamic_slug,
-        "Agent Identity",
-        /*priority*/ 1,
-    )]]);
-    let manager = openai_manager_for_tests_with_auth(
-        codex_home.path().to_path_buf(),
-        endpoint.clone(),
-        Some(AuthManager::from_auth_for_testing(
-            agent_identity_auth_for_tests(),
-        )),
-    );
-
-    manager
-        .refresh_available_models(RefreshStrategy::Online)
-        .await
-        .expect("refresh should fetch with agent identity");
-
-    assert!(
-        manager
-            .get_remote_models()
-            .await
-            .iter()
-            .any(|candidate| candidate.slug == dynamic_slug),
-        "remote refresh should include models fetched with agent identity"
-    );
-    assert_eq!(
-        endpoint.fetch_count(),
-        1,
-        "endpoint should fetch models with agent identity"
-    );
-}
-
 #[test]
 fn build_available_models_picks_default_after_hiding_hidden_models() {
     let manager = static_manager_for_tests(ModelsResponse { models: Vec::new() });
@@ -765,35 +714,6 @@ fn build_available_models_picks_default_after_hiding_hidden_models() {
     let available = manager.build_available_models(vec![hidden_model, visible_model]);
 
     assert_eq!(available, vec![expected_hidden, expected_visible]);
-}
-
-#[tokio::test]
-async fn static_manager_treats_agent_identity_as_backend_auth_for_filtering() {
-    let chatgpt_only_model = {
-        let mut model = remote_model("chatgpt-only", "ChatGPT Only", /*priority*/ 0);
-        model.supported_in_api = false;
-        model
-    };
-    let api_model = remote_model("api-model", "API Model", /*priority*/ 1);
-    let manager = StaticModelsManager::new(
-        Some(AuthManager::from_auth_for_testing(
-            agent_identity_auth_for_tests(),
-        )),
-        ModelsResponse {
-            models: vec![chatgpt_only_model, api_model],
-        },
-        CollaborationModesConfig::default(),
-    );
-
-    let agent_identity_models = manager.list_models(RefreshStrategy::Online).await;
-
-    assert_eq!(
-        agent_identity_models
-            .iter()
-            .map(|model| model.model.as_str())
-            .collect::<Vec<_>>(),
-        vec!["chatgpt-only", "api-model"]
-    );
 }
 
 #[tokio::test]

@@ -126,7 +126,6 @@ impl SessionConfiguration {
             service_tier: self.service_tier,
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
-            sandbox_policy: self.sandbox_policy(),
             permission_profile: self.permission_profile(),
             cwd: self.cwd.clone(),
             ephemeral: self.original_config_do_not_use.ephemeral,
@@ -149,19 +148,19 @@ impl SessionConfiguration {
             );
         let file_system_policy_matches_legacy = current_file_system_sandbox_policy
             .is_semantically_equivalent_to(&legacy_file_system_projection, &self.cwd);
-        let file_system_policy_has_rebindable_cwd_write = current_file_system_sandbox_policy
-            .entries
-            .iter()
-            .any(|entry| {
-                entry.access.can_write()
-                    && matches!(
-                        &entry.path,
-                        FileSystemPath::Special {
-                            value: FileSystemSpecialPath::CurrentWorkingDirectory
-                                | FileSystemSpecialPath::ProjectRoots { subpath: None },
-                        }
-                    )
-            });
+        let file_system_policy_has_rebindable_project_root_write =
+            current_file_system_sandbox_policy
+                .entries
+                .iter()
+                .any(|entry| {
+                    entry.access.can_write()
+                        && matches!(
+                            &entry.path,
+                            FileSystemPath::Special {
+                                value: FileSystemSpecialPath::ProjectRoots { subpath: None },
+                            }
+                        )
+                });
         if let Some(collaboration_mode) = updates.collaboration_mode.clone() {
             next_configuration.collaboration_mode = collaboration_mode;
         }
@@ -228,7 +227,7 @@ impl SessionConfiguration {
             )?;
         } else if cwd_changed
             && file_system_policy_matches_legacy
-            && file_system_policy_has_rebindable_cwd_write
+            && file_system_policy_has_rebindable_project_root_write
         {
             // Preserve richer split policies across cwd-only updates; only
             // rederive when the session is already using a structurally
@@ -426,10 +425,7 @@ impl Session {
             session_init.ephemeral = config.ephemeral,
         ));
 
-        let is_subagent = matches!(
-            session_configuration.session_source,
-            SessionSource::SubAgent(_)
-        );
+        let is_subagent = session_configuration.session_source.is_non_root_agent();
         let history_meta_fut = async {
             if is_subagent {
                 (0, 0)
@@ -867,7 +863,6 @@ impl Session {
             // Dispatch the SessionConfiguredEvent first and then report any errors.
             // If resuming, include converted initial messages in the payload so UIs can render them immediately.
             let initial_messages = initial_history.get_event_msgs();
-            let session_sandbox_policy = session_configuration.sandbox_policy();
             let events = std::iter::once(Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
                 msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -879,8 +874,7 @@ impl Session {
                     service_tier: session_configuration.service_tier,
                     approval_policy: session_configuration.approval_policy.value(),
                     approvals_reviewer: session_configuration.approvals_reviewer,
-                    sandbox_policy: session_sandbox_policy.clone(),
-                    permission_profile: Some(session_configuration.permission_profile()),
+                    permission_profile: session_configuration.permission_profile(),
                     cwd: session_configuration.cwd.clone(),
                     reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),
                     history_log_id,
@@ -991,12 +985,6 @@ impl Session {
                 let mut state = sess.state.lock().await;
                 state.set_pending_session_start_source(Some(session_start_source));
             }
-
-            memories::start_memories_startup_task(
-                &sess,
-                Arc::clone(&config),
-                &session_configuration.session_source,
-            );
 
             Ok(sess)
         }

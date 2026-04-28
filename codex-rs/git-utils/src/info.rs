@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_exec_server::ExecutorFileSystem;
+use codex_file_system::ExecutorFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::join_all;
 use schemars::JsonSchema;

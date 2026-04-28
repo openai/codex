@@ -142,12 +142,8 @@ use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::MessagePhase;
-use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
 #[cfg(test)]
@@ -1035,6 +1031,8 @@ pub(crate) struct ChatWidget {
     terminal_title_invalid_items_warned: Arc<AtomicBool>,
     // Last terminal title emitted, to avoid writing duplicate OSC updates.
     pub(crate) last_terminal_title: Option<String>,
+    // Last visible "action required" state observed by the terminal-title renderer.
+    last_terminal_title_requires_action: bool,
     // Original terminal-title config captured when the setup UI opens.
     //
     // The outer `Option` tracks whether a setup session is active (`Some`)
@@ -1618,7 +1616,6 @@ fn thread_session_state_to_legacy_event(
         service_tier: session.service_tier,
         approval_policy: session.approval_policy,
         approvals_reviewer: session.approvals_reviewer,
-        sandbox_policy: session.sandbox_policy,
         permission_profile: session.permission_profile,
         cwd: session.cwd,
         reasoning_effort: session.reasoning_effort,
@@ -2110,13 +2107,13 @@ impl ChatWidget {
                     .iter()
                     .any(|item| item == "run-state" || item == "status")
             });
-        let title_uses_spinner = self
-            .config
-            .tui_terminal_title
-            .as_ref()
-            .is_none_or(|items| items.iter().any(|item| item == "spinner"));
+        let title_uses_activity = self.config.tui_terminal_title.as_ref().is_none_or(|items| {
+            items
+                .iter()
+                .any(|item| item == "activity" || item == "spinner")
+        });
         if title_uses_status
-            || (title_uses_spinner
+            || (title_uses_activity
                 && self.terminal_title_status_kind == TerminalTitleStatusKind::Undoing)
         {
             self.refresh_status_surfaces();
@@ -2347,32 +2344,14 @@ impl ChatWidget {
             self.config.permissions.approval_policy =
                 Constrained::allow_only(event.approval_policy);
         }
-        let permission_sync = match event.permission_profile.clone() {
-            Some(permission_profile) => self
-                .config
-                .permissions
-                .set_permission_profile(permission_profile),
-            None => self
-                .config
-                .permissions
-                .set_legacy_sandbox_policy(event.sandbox_policy.clone(), event.cwd.as_path()),
-        };
+        let permission_sync = self
+            .config
+            .permissions
+            .set_permission_profile(event.permission_profile.clone());
         if let Err(err) = permission_sync {
             tracing::warn!(%err, "failed to sync permissions from SessionConfigured");
-            let permission_profile = event.permission_profile.clone().unwrap_or_else(|| {
-                let file_system_sandbox_policy =
-                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                        &event.sandbox_policy,
-                        event.cwd.as_path(),
-                    );
-                PermissionProfile::from_runtime_permissions_with_enforcement(
-                    SandboxEnforcement::from_legacy_sandbox_policy(&event.sandbox_policy),
-                    &file_system_sandbox_policy,
-                    NetworkSandboxPolicy::from(&event.sandbox_policy),
-                )
-            });
             self.config.permissions.permission_profile =
-                Constrained::allow_only(permission_profile);
+                Constrained::allow_only(event.permission_profile.clone());
         }
         self.config.approvals_reviewer = event.approvals_reviewer;
         self.status_line_project_root_name_cache = None;
@@ -4917,7 +4896,12 @@ impl ChatWidget {
         self.schedule_hook_timer_if_needed();
         self.bottom_pane.pre_draw_tick();
         self.refresh_goal_status_indicator_for_time_tick();
-        if self.should_animate_terminal_title_spinner() {
+        if self.terminal_title_shows_action_required() != self.last_terminal_title_requires_action {
+            self.refresh_terminal_title();
+        }
+        if self.should_animate_terminal_title_spinner()
+            || self.should_animate_terminal_title_action_required()
+        {
             self.refresh_terminal_title();
         }
     }
@@ -5627,6 +5611,7 @@ impl ChatWidget {
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
             last_terminal_title: None,
+            last_terminal_title_requires_action: false,
             terminal_title_setup_original_items: None,
             terminal_title_animation_origin: Instant::now(),
             status_line_project_root_name_cache: None,
