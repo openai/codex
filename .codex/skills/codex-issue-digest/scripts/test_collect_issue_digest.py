@@ -298,19 +298,19 @@ def test_parse_duration_hours_accepts_common_phrases():
 
 def test_attention_thresholds_scale_by_window_length():
     one_day = collect_issue_digest.attention_thresholds_for_window(24)
-    assert one_day["elevated"] == 10
-    assert one_day["very_high"] == 20
+    assert one_day["elevated"] == 5
+    assert one_day["very_high"] == 10
 
     half_day = collect_issue_digest.attention_thresholds_for_window(12)
-    assert half_day["elevated"] == 5
-    assert half_day["very_high"] == 10
+    assert half_day["elevated"] == 3
+    assert half_day["very_high"] == 5
 
     week = collect_issue_digest.attention_thresholds_for_window(168)
-    assert week["elevated"] == 70
-    assert week["very_high"] == 140
-    assert collect_issue_digest.attention_marker_for(69, week) == ""
-    assert collect_issue_digest.attention_marker_for(107, week) == "🔥"
-    assert collect_issue_digest.attention_marker_for(140, week) == "🔥🔥"
+    assert week["elevated"] == 35
+    assert week["very_high"] == 70
+    assert collect_issue_digest.attention_marker_for(34, week) == ""
+    assert collect_issue_digest.attention_marker_for(35, week) == "🔥"
+    assert collect_issue_digest.attention_marker_for(70, week) == "🔥🔥"
 
 
 def test_fetch_comments_uses_since_filter_and_page_cap(monkeypatch):
@@ -371,7 +371,7 @@ def test_attention_markers_count_human_user_interactions():
             "user": {"login": f"user-{idx}"},
             "body": "same here",
         }
-        for idx in range(9)
+        for idx in range(4)
     ]
     comments.append(
         {
@@ -393,8 +393,8 @@ def test_attention_markers_count_human_user_interactions():
         comment_chars=100,
     )
 
-    assert summary["user_interactions"] == 10
-    assert summary["activity"]["new_human_comments"] == 9
+    assert summary["user_interactions"] == 5
+    assert summary["activity"]["new_human_comments"] == 4
     assert summary["attention"] is True
     assert summary["attention_level"] == 1
     assert summary["attention_marker"] == "🔥"
@@ -408,7 +408,7 @@ def test_attention_markers_count_human_user_interactions():
             "user": {"login": f"extra-user-{idx}"},
             "body": "also seeing this",
         }
-        for idx in range(11)
+        for idx in range(100, 106)
     )
 
     summary = collect_issue_digest.summarize_issue(
@@ -421,7 +421,7 @@ def test_attention_markers_count_human_user_interactions():
         comment_chars=100,
     )
 
-    assert summary["user_interactions"] == 20
+    assert summary["user_interactions"] == 10
     assert summary["attention_level"] == 2
     assert summary["attention_marker"] == "🔥🔥"
 

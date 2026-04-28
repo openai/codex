@@ -53,7 +53,7 @@ Use `--window "past week"` or `--window-hours 168` when the user asks for a non-
 ## Summary
 No major issues reported by users.
 
-Source: collector v3, git `abc123def456`, window `2026-04-27T00:00:00Z` to `2026-04-28T00:00:00Z`.
+Source: collector v4, git `abc123def456`, window `2026-04-27T00:00:00Z` to `2026-04-28T00:00:00Z`.
 Want details? I can expand this into the issue table.
 ```
 
@@ -65,7 +65,7 @@ Two issues are being surfaced by users:
 🔥🔥 Terminal launch hangs on startup [1](https://github.com/openai/codex/issues/123)
 🔥 Resume switches model providers unexpectedly [2](https://github.com/openai/codex/issues/456)
 
-Source: collector v3, git `abc123def456`, window `2026-04-27T00:00:00Z` to `2026-04-28T00:00:00Z`.
+Source: collector v4, git `abc123def456`, window `2026-04-27T00:00:00Z` to `2026-04-28T00:00:00Z`.
 Want details? I can expand this into the issue table.
 ```
 5. In `## Details`, when details are requested, include a compact table only when useful:
@@ -89,7 +89,7 @@ GitHub issue search is still seeded by issue `updated_at`, so a purely reaction-
 
 ## Attention Markers
 
-The collector scales attention markers by the requested time window. The baseline is 10 human user interactions for `🔥` and 20 for `🔥🔥` over 24 hours; longer or shorter windows scale those cutoffs linearly and round up. For example, a one-week report uses 70 and 140 interactions. Human user interactions are human-authored new issue posts, human-authored new comments, and human reactions created during the window, including upvotes. Bot posts and bot reactions are excluded. In prose, explain this as high user interaction rather than naming the emoji.
+The collector scales attention markers by the requested time window. The baseline is 5 human user interactions for `🔥` and 10 for `🔥🔥` over 24 hours; longer or shorter windows scale those cutoffs linearly and round up. For example, a one-week report uses 35 and 70 interactions. Human user interactions are human-authored new issue posts, human-authored new comments, and human reactions created during the window, including upvotes. Bot posts and bot reactions are excluded. In prose, explain this as high user interaction rather than naming the emoji.
 
 ## Freshness
 

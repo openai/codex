@@ -11,12 +11,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-SCRIPT_VERSION = 3
+SCRIPT_VERSION = 4
 QUALIFYING_KIND_LABELS = ("bug", "enhancement")
 REACTION_KEYS = ("+1", "-1", "laugh", "hooray", "confused", "heart", "rocket", "eyes")
 BASE_ATTENTION_WINDOW_HOURS = 24.0
-ONE_ATTENTION_INTERACTION_THRESHOLD = 10
-TWO_ATTENTION_INTERACTION_THRESHOLD = 20
+ONE_ATTENTION_INTERACTION_THRESHOLD = 5
+TWO_ATTENTION_INTERACTION_THRESHOLD = 10
 ALL_LABEL_PHRASES = {"all", "all areas", "all labels", "all-areas", "all-labels", "*"}
 
 
