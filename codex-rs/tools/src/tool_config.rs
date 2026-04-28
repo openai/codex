@@ -118,8 +118,7 @@ pub struct ToolsConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolCapabilityBounds {
-    pub tool_search: bool,
-    pub tool_suggest: bool,
+    pub namespace_tools: bool,
     pub image_generation: bool,
     pub web_search: bool,
 }
@@ -127,8 +126,7 @@ pub struct ToolCapabilityBounds {
 impl Default for ToolCapabilityBounds {
     fn default() -> Self {
         Self {
-            tool_search: true,
-            tool_suggest: true,
+            namespace_tools: true,
             image_generation: true,
             web_search: true,
         }
