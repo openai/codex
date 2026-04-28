@@ -2859,6 +2859,15 @@ impl ChatComposer {
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
+        if self.is_bash_mode && key_event.code == KeyCode::Esc {
+            if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+                self.handle_paste(pasted);
+            }
+            if self.textarea.is_empty() {
+                self.is_bash_mode = false;
+                return (InputResult::None, true);
+            }
+        }
         if key_event.code == KeyCode::Esc {
             if self.is_empty() {
                 let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
@@ -4635,6 +4644,19 @@ mod tests {
                 composer.set_text_content("!git status".to_string(), Vec::new(), Vec::new());
             },
         );
+
+        snapshot_composer_state(
+            "footer_mode_shell_command_escape_exits_empty_mode",
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                composer.set_status_line_enabled(/*enabled*/ true);
+                composer.set_status_line(Some(Line::from(
+                    "gpt-5.4 high fast · ~/code/codex-1 · Context 0% used",
+                )));
+                composer.set_text_content("!".to_string(), Vec::new(), Vec::new());
+                let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+            },
+        );
     }
 
     #[test]
@@ -4695,6 +4717,65 @@ mod tests {
             buf[(shell_label_x as u16, footer_y)].style().fg,
             Some(Color::LightRed)
         );
+    }
+
+    #[test]
+    fn esc_exits_empty_shell_mode() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['!']);
+        assert!(composer.is_bash_mode);
+        assert_eq!(composer.current_text(), "!");
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(needs_redraw);
+        assert!(!composer.is_bash_mode);
+        assert_eq!(composer.current_text(), "");
+    }
+
+    #[test]
+    fn esc_keeps_shell_mode_when_paste_burst_flushes_pending_text() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['!']);
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert!(composer.is_in_paste_burst());
+        assert_eq!(composer.current_text(), "!");
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(needs_redraw);
+        assert!(composer.is_bash_mode);
+        assert_eq!(composer.current_text(), "!g");
     }
 
     #[test]
