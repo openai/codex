@@ -43,7 +43,7 @@ fn startup_check_uses_configured_remaining_threshold() {
 fn startup_check_skips_when_primary_or_secondary_is_too_low() {
     assert!(!snapshot_allows_startup(
         &snapshot(
-            /*primary_used_percent*/ Some(75.0),
+            /*primary_used_percent*/ Some(75.1),
             /*secondary_used_percent*/ Some(10.0),
         ),
         /*min_remaining_percent*/ 25,
@@ -51,7 +51,7 @@ fn startup_check_skips_when_primary_or_secondary_is_too_low() {
     assert!(!snapshot_allows_startup(
         &snapshot(
             /*primary_used_percent*/ Some(10.0),
-            /*secondary_used_percent*/ Some(75.0),
+            /*secondary_used_percent*/ Some(75.1),
         ),
         /*min_remaining_percent*/ 25,
     ));
