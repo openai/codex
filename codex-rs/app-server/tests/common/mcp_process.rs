@@ -54,6 +54,7 @@ use codex_app_server_protocol::McpResourceReadParams;
 use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::ModelListParams;
+use codex_app_server_protocol::ModelProviderCapabilitiesReadParams;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginReadParams;
@@ -506,6 +507,16 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("model/list", params).await
+    }
+
+    /// Send a `modelProvider/capabilities/read` JSON-RPC request.
+    pub async fn send_model_provider_capabilities_read_request(
+        &mut self,
+        params: ModelProviderCapabilitiesReadParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("modelProvider/capabilities/read", params)
+            .await
     }
 
     /// Send an `experimentalFeature/list` JSON-RPC request.

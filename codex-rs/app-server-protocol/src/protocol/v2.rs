@@ -2355,6 +2355,20 @@ pub struct GetAccountResponse {
     pub requires_openai_auth: bool,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelProviderCapabilitiesReadParams {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelProviderCapabilitiesReadResponse {
+    pub namespace_tools: bool,
+    pub image_generation: bool,
+    pub web_search: bool,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

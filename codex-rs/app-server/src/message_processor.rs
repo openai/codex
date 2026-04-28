@@ -56,6 +56,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::ModelProviderCapabilitiesReadResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
@@ -76,6 +77,7 @@ use codex_login::default_client::USER_AGENT_SUFFIX;
 use codex_login::default_client::get_codex_user_agent;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::default_client::set_default_originator;
+use codex_model_provider::create_model_provider;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
@@ -938,6 +940,13 @@ impl MessageProcessor {
                     )
                     .await;
             }
+            ClientRequest::ModelProviderCapabilitiesRead {
+                request_id,
+                params: _,
+            } => {
+                self.handle_model_provider_capabilities_read(request_id_for_connection(request_id))
+                    .await;
+            }
             other => {
                 // Box the delegated future so this wrapper's async state machine does not
                 // inline the full `CodexMessageProcessor::process_request` future, which
@@ -955,6 +964,24 @@ impl MessageProcessor {
             }
         }
         Ok(())
+    }
+
+    async fn handle_model_provider_capabilities_read(&self, request_id: ConnectionRequestId) {
+        let result = async {
+            let config = self
+                .config_api
+                .load_latest_config(/*fallback_cwd*/ None)
+                .await?;
+            let provider = create_model_provider(config.model_provider, /*auth_manager*/ None);
+            let capabilities = provider.capabilities();
+            Ok::<_, JSONRPCErrorError>(ModelProviderCapabilitiesReadResponse {
+                namespace_tools: capabilities.namespace_tools,
+                image_generation: capabilities.image_generation,
+                web_search: capabilities.web_search,
+            })
+        }
+        .await;
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn handle_config_value_write(

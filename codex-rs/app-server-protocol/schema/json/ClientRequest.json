@@ -1896,6 +1896,9 @@
       },
       "type": "object"
     },
+    "ModelProviderCapabilitiesReadParams": {
+      "type": "object"
+    },
     "NetworkAccess": {
       "enum": [
         "restricted",
@@ -5476,6 +5479,30 @@
         "params"
       ],
       "title": "Model/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "modelProvider/capabilities/read"
+          ],
+          "title": "ModelProvider/capabilities/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ModelProviderCapabilitiesReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ModelProvider/capabilities/readRequest",
       "type": "object"
     },
     {

@@ -642,6 +642,11 @@ client_request_definitions! {
         serialization: None,
         response: v2::ModelListResponse,
     },
+    ModelProviderCapabilitiesRead => "modelProvider/capabilities/read" {
+        params: v2::ModelProviderCapabilitiesReadParams,
+        serialization: None,
+        response: v2::ModelProviderCapabilitiesReadResponse,
+    },
     ExperimentalFeatureList => "experimentalFeature/list" {
         params: v2::ExperimentalFeatureListParams,
         serialization: global("config"),
@@ -2237,6 +2242,23 @@ mod tests {
                     "cursor": null,
                     "includeHidden": null
                 }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_model_provider_capabilities_read() -> Result<()> {
+        let request = ClientRequest::ModelProviderCapabilitiesRead {
+            request_id: RequestId::Integer(7),
+            params: v2::ModelProviderCapabilitiesReadParams {},
+        };
+        assert_eq!(
+            json!({
+                "method": "modelProvider/capabilities/read",
+                "id": 7,
+                "params": {}
             }),
             serde_json::to_value(&request)?,
         );

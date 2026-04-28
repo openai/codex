@@ -1273,6 +1273,30 @@
             },
             "method": {
               "enum": [
+                "modelProvider/capabilities/read"
+              ],
+              "title": "ModelProvider/capabilities/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ModelProviderCapabilitiesReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ModelProvider/capabilities/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "experimentalFeature/list"
               ],
               "title": "ExperimentalFeature/listRequestMethod",
@@ -11033,6 +11057,32 @@
           "data"
         ],
         "title": "ModelListResponse",
+        "type": "object"
+      },
+      "ModelProviderCapabilitiesReadParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ModelProviderCapabilitiesReadParams",
+        "type": "object"
+      },
+      "ModelProviderCapabilitiesReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "imageGeneration": {
+            "type": "boolean"
+          },
+          "namespaceTools": {
+            "type": "boolean"
+          },
+          "webSearch": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "imageGeneration",
+          "namespaceTools",
+          "webSearch"
+        ],
+        "title": "ModelProviderCapabilitiesReadResponse",
         "type": "object"
       },
       "ModelRerouteReason": {
