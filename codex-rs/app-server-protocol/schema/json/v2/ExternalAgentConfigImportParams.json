@@ -1,29 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "ExternalAgentConfigImportMigrationDetailsParams": {
-      "properties": {
-        "plugins": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/PluginsMigration"
-          },
-          "type": "array"
-        },
-        "sessions": {
-          "default": null,
-          "items": {
-            "$ref": "#/definitions/SessionMigration"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "ExternalAgentConfigImportMigrationItem": {
+    "ExternalAgentConfigMigrationItem": {
       "properties": {
         "cwd": {
           "description": "Null or empty means home-scoped migration; non-empty means repo-scoped migration.",
@@ -38,7 +16,7 @@
         "details": {
           "anyOf": [
             {
-              "$ref": "#/definitions/ExternalAgentConfigImportMigrationDetailsParams"
+              "$ref": "#/definitions/MigrationDetails"
             },
             {
               "type": "null"
@@ -65,6 +43,25 @@
         "SESSIONS"
       ],
       "type": "string"
+    },
+    "MigrationDetails": {
+      "properties": {
+        "plugins": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/PluginsMigration"
+          },
+          "type": "array"
+        },
+        "sessions": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/SessionMigration"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
     },
     "PluginsMigration": {
       "properties": {
@@ -109,7 +106,7 @@
   "properties": {
     "migrationItems": {
       "items": {
-        "$ref": "#/definitions/ExternalAgentConfigImportMigrationItem"
+        "$ref": "#/definitions/ExternalAgentConfigMigrationItem"
       },
       "type": "array"
     }

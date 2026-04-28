@@ -126,7 +126,7 @@ impl ExternalAgentConfigApi {
                 )
             })
             .filter_map(|item| item.details.as_ref())
-            .flat_map(|details| details.sessions.clone().unwrap_or_default())
+            .flat_map(|details| details.sessions.clone())
             .collect::<Vec<_>>();
         let detected_session_paths = if sessions.is_empty() {
             HashSet::new()
@@ -241,7 +241,6 @@ impl ExternalAgentConfigApi {
                                     .collect(),
                                 sessions: details
                                     .sessions
-                                    .unwrap_or_default()
                                     .into_iter()
                                     .map(|session| CoreSessionMigration {
                                         path: session.path,
