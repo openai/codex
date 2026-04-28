@@ -32,7 +32,7 @@ impl Host {
 /// Returns true if the host is a loopback hostname or IP literal.
 pub fn is_loopback_host(host: &Host) -> bool {
     let host = host.as_str();
-    let host = host.split_once('%').map(|(ip, _)| ip).unwrap_or(host);
+    let host = unscoped_ip_literal(host).unwrap_or(host);
     if host == "localhost" {
         return true;
     }
@@ -127,15 +127,21 @@ fn normalize_dns_host_or_ip_literal(host: &str) -> String {
     host.to_string()
 }
 
+pub(crate) fn unscoped_ip_literal(host: &str) -> Option<&str> {
+    let (ip, _) = host.split_once('%')?;
+    ip.parse::<IpAddr>().ok()?;
+    Some(ip)
+}
+
 fn normalize_ip_literal(host: &str) -> Option<String> {
     if host.parse::<IpAddr>().is_ok() {
         return Some(host.to_string());
     }
     for delimiter in ["%25", "%"] {
-        if let Some((ip, _scope)) = host.split_once(delimiter)
+        if let Some((ip, scope)) = host.split_once(delimiter)
             && ip.parse::<IpAddr>().is_ok()
         {
-            return Some(ip.to_string());
+            return Some(format!("{ip}%{scope}"));
         }
     }
     None
@@ -411,6 +417,15 @@ mod tests {
     }
 
     #[test]
+    fn compile_globset_preserves_scoped_ipv6_literals() {
+        let set = compile_denylist_globset(&["[fe80::1%25lo0]".to_string()]).unwrap();
+
+        assert_eq!(true, set.is_match("fe80::1%lo0"));
+        assert_eq!(false, set.is_match("fe80::1%lo1"));
+        assert_eq!(false, set.is_match("fe80::1"));
+    }
+
+    #[test]
     fn is_loopback_host_handles_localhost_variants() {
         assert!(is_loopback_host(&Host::parse("localhost").unwrap()));
         assert!(is_loopback_host(&Host::parse("localhost.").unwrap()));
@@ -482,9 +497,9 @@ mod tests {
     }
 
     #[test]
-    fn normalize_host_strips_ipv6_scope_ids() {
-        assert_eq!(normalize_host("fe80::1%lo0"), "fe80::1");
-        assert_eq!(normalize_host("[fe80::1%lo0]"), "fe80::1");
-        assert_eq!(normalize_host("[fe80::1%25lo0]"), "fe80::1");
+    fn normalize_host_preserves_ipv6_scope_ids() {
+        assert_eq!(normalize_host("fe80::1%lo0"), "fe80::1%lo0");
+        assert_eq!(normalize_host("[fe80::1%lo0]"), "fe80::1%lo0");
+        assert_eq!(normalize_host("[fe80::1%25lo0]"), "fe80::1%lo0");
     }
 }
