@@ -313,19 +313,6 @@ fn for_prompt_preserves_inter_agent_assistant_messages() {
 }
 
 #[test]
-fn for_prompt_drops_other_items_loaded_via_replace() {
-    let user = user_msg("hi");
-    let assistant = assistant_msg("hello");
-    let mut history = ContextManager::new();
-    history.replace(vec![user.clone(), ResponseItem::Other, assistant.clone()]);
-
-    assert_eq!(
-        history.for_prompt(&default_input_modalities()),
-        vec![user, assistant]
-    );
-}
-
-#[test]
 fn drop_last_n_user_turns_treats_inter_agent_assistant_messages_as_instruction_turns() {
     let first_turn = user_input_text_msg("first");
     let first_reply = assistant_msg("done");

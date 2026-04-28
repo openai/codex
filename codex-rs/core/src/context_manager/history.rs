@@ -119,8 +119,6 @@ impl ContextManager {
     pub(crate) fn for_prompt(mut self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
         self.normalize_history(input_modalities);
         self.items
-            .retain(|item| !matches!(item, ResponseItem::Other));
-        self.items
     }
 
     /// Returns raw items in the history.
