@@ -369,6 +369,14 @@ impl CodexThread {
         self.rollout_path.clone()
     }
 
+    pub async fn guardian_trunk_rollout_path(&self) -> Option<PathBuf> {
+        self.codex
+            .session
+            .guardian_review_session
+            .trunk_rollout_path()
+            .await
+    }
+
     pub fn state_db(&self) -> Option<StateDbHandle> {
         self.codex.state_db()
     }

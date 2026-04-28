@@ -2557,6 +2557,8 @@ impl ChatWidget {
             self.app_event_tx.clone(),
             category,
             self.current_rollout_path.clone(),
+            self.thread_id
+                .map(|thread_id| format!("auto-review-rollout-{thread_id}.jsonl")),
             snapshot.feedback_diagnostics(),
         );
         self.bottom_pane.show_selection_view(params);

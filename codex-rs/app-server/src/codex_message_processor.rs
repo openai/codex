@@ -293,6 +293,7 @@ use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::Stage;
 use codex_feedback::CodexFeedback;
+use codex_feedback::FeedbackAttachmentPath;
 use codex_feedback::FeedbackUploadOptions;
 use codex_git_utils::git_diff_to_remote;
 use codex_git_utils::resolve_root_git_project_for_trust;
@@ -7733,14 +7734,31 @@ impl CodexMessageProcessor {
                     continue;
                 };
                 if seen_attachment_paths.insert(rollout_path.clone()) {
-                    attachment_paths.push(rollout_path);
+                    attachment_paths.push(FeedbackAttachmentPath {
+                        path: rollout_path,
+                        filename: None,
+                    });
                 }
+            }
+            if let Some(conversation_id) = conversation_id
+                && let Ok(conversation) = self.thread_manager.get_thread(conversation_id).await
+                && let Some(guardian_rollout_path) =
+                    conversation.guardian_trunk_rollout_path().await
+                && seen_attachment_paths.insert(guardian_rollout_path.clone())
+            {
+                attachment_paths.push(FeedbackAttachmentPath {
+                    path: guardian_rollout_path,
+                    filename: Some(auto_review_rollout_filename(conversation_id)),
+                });
             }
         }
         if let Some(extra_log_files) = extra_log_files {
             for extra_log_file in extra_log_files {
                 if seen_attachment_paths.insert(extra_log_file.clone()) {
-                    attachment_paths.push(extra_log_file);
+                    attachment_paths.push(FeedbackAttachmentPath {
+                        path: extra_log_file,
+                        filename: None,
+                    });
                 }
             }
         }
@@ -7883,6 +7901,10 @@ impl CodexMessageProcessor {
             .send_error(request_id, internal_error(message))
             .await;
     }
+}
+
+fn auto_review_rollout_filename(thread_id: ThreadId) -> String {
+    format!("auto-review-rollout-{thread_id}.jsonl")
 }
 
 fn normalize_thread_list_cwd_filters(
