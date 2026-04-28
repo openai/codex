@@ -142,12 +142,8 @@ use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::MessagePhase;
-use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
 #[cfg(test)]
@@ -315,6 +311,17 @@ fn queued_message_edit_binding_for_terminal(terminal_info: TerminalInfo) -> KeyB
     }
 }
 
+fn queued_message_edit_hint_binding(
+    bindings: &[KeyBinding],
+    terminal_info: TerminalInfo,
+) -> Option<KeyBinding> {
+    let terminal_binding = queued_message_edit_binding_for_terminal(terminal_info);
+    bindings
+        .contains(&terminal_binding)
+        .then_some(terminal_binding)
+        .or_else(|| bindings.first().copied())
+}
+
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
@@ -365,8 +372,9 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
-#[cfg(test)]
-use crate::markdown::append_markdown;
+use crate::key_hint::KeyBindingListExt;
+use crate::keymap::ChatKeymap;
+use crate::keymap::RuntimeKeymap;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -386,6 +394,7 @@ use self::goal_status::goal_status_indicator_from_app_goal;
 mod goal_menu;
 mod interrupts;
 use self::interrupts::InterruptManager;
+mod keymap_picker;
 mod session_header;
 use self::session_header::SessionHeader;
 mod skills;
@@ -836,6 +845,7 @@ pub(crate) struct ChatWidget {
     plan_stream_controller: Option<PlanStreamController>,
     /// Holds the platform clipboard lease so copied text remains available while supported.
     clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
+    copy_last_response_binding: Vec<KeyBinding>,
     /// Raw markdown of the most recently completed agent response that
     /// survived any local thread rollback.
     last_agent_markdown: Option<String>,
@@ -969,11 +979,12 @@ pub(crate) struct ChatWidget {
     // When set, the next interrupt should resubmit all pending steers as one
     // fresh user turn instead of restoring them into the composer.
     submit_pending_steers_after_interrupt: bool,
-    /// Terminal-appropriate keybinding for popping the most-recently queued
-    /// message back into the composer.  Determined once at construction time via
-    /// [`queued_message_edit_binding_for_terminal`] and propagated to
-    /// `BottomPane` so the hint text matches the actual shortcut.
-    queued_message_edit_binding: KeyBinding,
+    /// Main chat-surface bindings resolved from `tui.keymap.chat`.
+    chat_keymap: ChatKeymap,
+    /// Keybinding to show for popping the most-recently queued message back
+    /// into the composer. This may differ from the first configured binding
+    /// when the default set includes a terminal-specific fallback.
+    queued_message_edit_hint_binding: Option<KeyBinding>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     /// When `Some`, the user has pressed a quit shortcut and the second press
@@ -1035,6 +1046,8 @@ pub(crate) struct ChatWidget {
     terminal_title_invalid_items_warned: Arc<AtomicBool>,
     // Last terminal title emitted, to avoid writing duplicate OSC updates.
     pub(crate) last_terminal_title: Option<String>,
+    // Last visible "action required" state observed by the terminal-title renderer.
+    last_terminal_title_requires_action: bool,
     // Original terminal-title config captured when the setup UI opens.
     //
     // The outer `Option` tracks whether a setup session is active (`Some`)
@@ -1618,7 +1631,6 @@ fn thread_session_state_to_legacy_event(
         service_tier: session.service_tier,
         approval_policy: session.approval_policy,
         approvals_reviewer: session.approvals_reviewer,
-        sandbox_policy: session.sandbox_policy,
         permission_profile: session.permission_profile,
         cwd: session.cwd,
         reasoning_effort: session.reasoning_effort,
@@ -2110,13 +2122,13 @@ impl ChatWidget {
                     .iter()
                     .any(|item| item == "run-state" || item == "status")
             });
-        let title_uses_spinner = self
-            .config
-            .tui_terminal_title
-            .as_ref()
-            .is_none_or(|items| items.iter().any(|item| item == "spinner"));
+        let title_uses_activity = self.config.tui_terminal_title.as_ref().is_none_or(|items| {
+            items
+                .iter()
+                .any(|item| item == "activity" || item == "spinner")
+        });
         if title_uses_status
-            || (title_uses_spinner
+            || (title_uses_activity
                 && self.terminal_title_status_kind == TerminalTitleStatusKind::Undoing)
         {
             self.refresh_status_surfaces();
@@ -2347,32 +2359,14 @@ impl ChatWidget {
             self.config.permissions.approval_policy =
                 Constrained::allow_only(event.approval_policy);
         }
-        let permission_sync = match event.permission_profile.clone() {
-            Some(permission_profile) => self
-                .config
-                .permissions
-                .set_permission_profile(permission_profile),
-            None => self
-                .config
-                .permissions
-                .set_legacy_sandbox_policy(event.sandbox_policy.clone(), event.cwd.as_path()),
-        };
+        let permission_sync = self
+            .config
+            .permissions
+            .set_permission_profile(event.permission_profile.clone());
         if let Err(err) = permission_sync {
             tracing::warn!(%err, "failed to sync permissions from SessionConfigured");
-            let permission_profile = event.permission_profile.clone().unwrap_or_else(|| {
-                let file_system_sandbox_policy =
-                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                        &event.sandbox_policy,
-                        event.cwd.as_path(),
-                    );
-                PermissionProfile::from_runtime_permissions_with_enforcement(
-                    SandboxEnforcement::from_legacy_sandbox_policy(&event.sandbox_policy),
-                    &file_system_sandbox_policy,
-                    NetworkSandboxPolicy::from(&event.sandbox_policy),
-                )
-            });
             self.config.permissions.permission_profile =
-                Constrained::allow_only(permission_profile);
+                Constrained::allow_only(event.permission_profile.clone());
         }
         self.config.approvals_reviewer = event.approvals_reviewer;
         self.status_line_project_root_name_cache = None;
@@ -4917,7 +4911,12 @@ impl ChatWidget {
         self.schedule_hook_timer_if_needed();
         self.bottom_pane.pre_draw_tick();
         self.refresh_goal_status_indicator_for_time_tick();
-        if self.should_animate_terminal_title_spinner() {
+        if self.terminal_title_shows_action_required() != self.last_terminal_title_requires_action {
+            self.refresh_terminal_title();
+        }
+        if self.should_animate_terminal_title_spinner()
+            || self.should_animate_terminal_title_action_required()
+        {
             self.refresh_terminal_title();
         }
     }
@@ -5498,7 +5497,21 @@ impl ChatWidget {
 
         let current_cwd = Some(config.cwd.to_path_buf());
         let effective_service_tier = config.service_tier;
-        let queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_info());
+        let current_terminal_info = terminal_info();
+        let runtime_keymap = RuntimeKeymap::from_config(&config.tui_keymap).ok();
+        let default_keymap = RuntimeKeymap::defaults();
+        let copy_last_response_binding = runtime_keymap
+            .as_ref()
+            .map(|keymap| keymap.app.copy.clone())
+            .unwrap_or_else(|| default_keymap.app.copy.clone());
+        let chat_keymap = runtime_keymap
+            .as_ref()
+            .map(|keymap| keymap.chat.clone())
+            .unwrap_or_else(|| default_keymap.chat.clone());
+        let queued_message_edit_hint_binding = queued_message_edit_hint_binding(
+            &chat_keymap.edit_queued_message,
+            current_terminal_info,
+        );
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -5540,6 +5553,7 @@ impl ChatWidget {
             stream_controller: None,
             plan_stream_controller: None,
             clipboard_lease: None,
+            copy_last_response_binding,
             running_commands: HashMap::new(),
             collab_agent_metadata: HashMap::new(),
             pending_collab_spawn_requests: HashMap::new(),
@@ -5599,7 +5613,8 @@ impl ChatWidget {
             rejected_steer_history_records: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
-            queued_message_edit_binding,
+            chat_keymap,
+            queued_message_edit_hint_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
             suppress_session_configured_redraw: false,
@@ -5627,6 +5642,7 @@ impl ChatWidget {
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
             last_terminal_title: None,
+            last_terminal_title_requires_action: false,
             terminal_title_setup_original_items: None,
             terminal_title_animation_origin: Instant::now(),
             status_line_project_root_name_cache: None,
@@ -5643,6 +5659,10 @@ impl ChatWidget {
             last_non_retry_error: None,
         };
 
+        widget.prefetch_rate_limits();
+        if let Some(keymap) = runtime_keymap {
+            widget.bottom_pane.set_keymap_bindings(&keymap);
+        }
         widget
             .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
@@ -5661,7 +5681,7 @@ impl ChatWidget {
         widget.sync_goal_command_enabled();
         widget
             .bottom_pane
-            .set_queued_message_edit_binding(widget.queued_message_edit_binding);
+            .set_queued_message_edit_binding(widget.queued_message_edit_hint_binding);
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
             crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -5681,6 +5701,24 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self.bottom_pane.has_active_view()
+            && !matches!(
+                key_event,
+                KeyEvent {
+                    code: KeyCode::Char(c),
+                    modifiers,
+                    kind: KeyEventKind::Press,
+                    ..
+                } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c')
+            )
+        {
+            self.bottom_pane.handle_key_event(key_event);
+            if self.bottom_pane.no_modal_or_popup_active() {
+                self.maybe_send_next_queued_input();
+            }
+            return;
+        }
+
         if self.handle_reasoning_shortcut(key_event) {
             self.bottom_pane.clear_quit_shortcut_hint();
             self.quit_shortcut_expires_at = None;
@@ -5688,20 +5726,17 @@ impl ChatWidget {
             return;
         }
 
+        if key_event.kind == KeyEventKind::Press
+            && self.copy_last_response_binding.is_pressed(key_event)
+        {
+            self.bottom_pane.clear_quit_shortcut_hint();
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            self.copy_last_agent_markdown();
+            return;
+        }
+
         match key_event {
-            // Ctrl+O - copy last agent response from the main view.
-            KeyEvent {
-                code: KeyCode::Char('o'),
-                modifiers: KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            } => {
-                self.bottom_pane.clear_quit_shortcut_hint();
-                self.quit_shortcut_expires_at = None;
-                self.quit_shortcut_key = None;
-                self.copy_last_agent_markdown();
-                return;
-            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
@@ -5760,8 +5795,9 @@ impl ChatWidget {
         }
 
         if key_event.kind == KeyEventKind::Press
-            && self.queued_message_edit_binding.is_press(key_event)
+            && self.chat_keymap.edit_queued_message.is_pressed(key_event)
             && self.has_queued_follow_up_messages()
+            && self.bottom_pane.no_modal_or_popup_active()
         {
             if let Some(user_message) = self.pop_latest_queued_user_message() {
                 self.restore_user_message_to_composer(user_message);
@@ -7888,7 +7924,7 @@ impl ChatWidget {
                 } else {
                     // Show explanation when there are no structured findings.
                     let mut rendered: Vec<ratatui::text::Line<'static>> = vec!["".into()];
-                    append_markdown(
+                    crate::markdown::append_markdown(
                         &explanation,
                         /*width*/ None,
                         Some(self.config.cwd.as_path()),
@@ -9090,7 +9126,7 @@ impl ChatWidget {
             "Access legacy models by running codex -m <model_name> or in your config.toml",
         );
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
+            footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
             items,
             header,
             ..Default::default()
@@ -11294,7 +11330,7 @@ impl ChatWidget {
         SelectionViewParams {
             view_id: Some(CONNECTORS_SELECTION_VIEW_ID),
             header: Box::new(header),
-            footer_hint: Some(Self::connectors_popup_hint_line()),
+            footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search apps".to_string()),
@@ -11322,14 +11358,6 @@ impl ChatWidget {
             CONNECTORS_SELECTION_VIEW_ID,
             self.connectors_popup_params(connectors, selected_connector_id),
         );
-    }
-
-    fn connectors_popup_hint_line() -> Line<'static> {
-        Line::from(vec![
-            "Press ".into(),
-            key_hint::plain(KeyCode::Esc).into(),
-            " to close.".into(),
-        ])
     }
 
     fn connector_brief_description(connector: &AppInfo) -> String {

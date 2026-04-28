@@ -2,7 +2,7 @@ use codex_protocol::parse_command::ParsedCommand;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_shell_command::parse_command::parse_command;
 
-pub const MEMORIES_USAGE_METRIC: &str = "codex.memories.usage";
+pub use crate::metrics::MEMORIES_USAGE_METRIC;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MemoriesUsageKind {

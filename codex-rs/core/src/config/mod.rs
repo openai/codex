@@ -47,6 +47,7 @@ use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDiscoverable;
+use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
@@ -62,7 +63,7 @@ use codex_features::MultiAgentV2ConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
-use codex_memories_write::memory_root;
+use codex_memories_read::memory_root;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
@@ -124,7 +125,27 @@ pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
 pub(crate) use permissions::resolve_permission_profile;
 
-pub use codex_git_utils::GhostSnapshotConfig;
+const DEFAULT_IGNORE_LARGE_UNTRACKED_DIRS: i64 = 200;
+const DEFAULT_IGNORE_LARGE_UNTRACKED_FILES: i64 = 10 * 1024 * 1024;
+
+/// Compatibility-only config retained so legacy `ghost_snapshot` settings
+/// continue to load even though snapshots are no longer produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GhostSnapshotConfig {
+    pub ignore_large_untracked_files: Option<i64>,
+    pub ignore_large_untracked_dirs: Option<i64>,
+    pub disable_warnings: bool,
+}
+
+impl Default for GhostSnapshotConfig {
+    fn default() -> Self {
+        Self {
+            ignore_large_untracked_files: Some(DEFAULT_IGNORE_LARGE_UNTRACKED_FILES),
+            ignore_large_untracked_dirs: Some(DEFAULT_IGNORE_LARGE_UNTRACKED_DIRS),
+            disable_warnings: false,
+        }
+    }
+}
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -447,7 +468,6 @@ pub struct Config {
     /// - `always`: Always use alternate screen (original behavior).
     /// - `never`: Never use alternate screen (inline mode, preserves scrollback).
     pub tui_alternate_screen: AltScreenMode,
-
     /// Ordered list of status line item identifiers for the TUI.
     ///
     /// When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.
@@ -455,7 +475,9 @@ pub struct Config {
 
     /// Ordered list of terminal title item identifiers for the TUI.
     ///
-    /// When unset, the TUI defaults to: `project` and `spinner`.
+    /// When unset, the TUI defaults to: `activity` and `project`.
+    /// The `activity` item spins while working and shows an action-required
+    /// message when blocked on the user.
     pub tui_terminal_title: Option<Vec<String>>,
 
     /// Syntax highlighting theme override (kebab-case name).
@@ -463,6 +485,15 @@ pub struct Config {
 
     /// Terminal resize-reflow tuning knobs.
     pub terminal_resize_reflow: TerminalResizeReflowConfig,
+
+    /// Keybinding overrides for the TUI.
+    ///
+    /// Precedence is:
+    ///
+    /// 1. context table (`tui.keymap.chat`, `tui.keymap.composer`, etc.)
+    /// 2. `tui.keymap.global`
+    /// 3. built-in defaults
+    pub tui_keymap: TuiKeymap,
 
     /// The absolute directory that should be treated as the current working
     /// directory for the session. All relative paths inside the business-logic
@@ -653,7 +684,8 @@ pub struct Config {
     /// Default: `300000` (5 minutes).
     pub background_terminal_max_timeout: u64,
 
-    /// Settings for ghost snapshots (used for undo).
+    /// Compatibility-only settings retained for legacy `ghost_snapshot`
+    /// config loading.
     pub ghost_snapshot: GhostSnapshotConfig,
 
     /// Settings specific to the task-path-based multi-agent tool surface.
@@ -708,6 +740,8 @@ pub struct MultiAgentV2Config {
     pub max_concurrent_threads_per_session: usize,
     pub usage_hint_enabled: bool,
     pub usage_hint_text: Option<String>,
+    pub root_agent_usage_hint_text: Option<String>,
+    pub subagent_usage_hint_text: Option<String>,
     pub hide_spawn_agent_metadata: bool,
 }
 
@@ -718,6 +752,8 @@ impl Default for MultiAgentV2Config {
                 DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION,
             usage_hint_enabled: true,
             usage_hint_text: None,
+            root_agent_usage_hint_text: None,
+            subagent_usage_hint_text: None,
             hide_spawn_agent_metadata: false,
         }
     }
@@ -1596,6 +1632,16 @@ fn resolve_multi_agent_v2_config(
         .or_else(|| base.and_then(|config| config.usage_hint_text.as_ref()))
         .cloned()
         .or(default.usage_hint_text);
+    let root_agent_usage_hint_text = profile
+        .and_then(|config| config.root_agent_usage_hint_text.as_ref())
+        .or_else(|| base.and_then(|config| config.root_agent_usage_hint_text.as_ref()))
+        .cloned()
+        .or(default.root_agent_usage_hint_text);
+    let subagent_usage_hint_text = profile
+        .and_then(|config| config.subagent_usage_hint_text.as_ref())
+        .or_else(|| base.and_then(|config| config.subagent_usage_hint_text.as_ref()))
+        .cloned()
+        .or(default.subagent_usage_hint_text);
     let hide_spawn_agent_metadata = profile
         .and_then(|config| config.hide_spawn_agent_metadata)
         .or_else(|| base.and_then(|config| config.hide_spawn_agent_metadata))
@@ -1605,6 +1651,8 @@ fn resolve_multi_agent_v2_config(
         max_concurrent_threads_per_session,
         usage_hint_enabled,
         usage_hint_text,
+        root_agent_usage_hint_text,
+        subagent_usage_hint_text,
         hide_spawn_agent_metadata,
     }
 }
@@ -1974,8 +2022,13 @@ impl Config {
             )
         } else {
             let configured_network_proxy_config = NetworkProxyConfig::default();
-            let mut sandbox_policy = cfg
-                .derive_sandbox_policy(
+            // No named `[permissions]` profile is active, but permissions
+            // should still flow through the canonical profile representation.
+            // Derive the old `sandbox_mode` defaults as a profile first, then
+            // keep a legacy-compatible projection only for the remaining code
+            // paths that still speak `SandboxPolicy`.
+            let mut permission_profile = cfg
+                .derive_permission_profile(
                     sandbox_mode,
                     config_profile.sandbox_mode,
                     windows_sandbox_level,
@@ -1983,24 +2036,46 @@ impl Config {
                     Some(&constrained_permission_profile),
                 )
                 .await;
-            if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
-                for path in &additional_writable_roots {
-                    if !writable_roots.iter().any(|existing| existing == path) {
-                        writable_roots.push(path.clone());
-                    }
-                }
+            // The legacy-derived profiles above are expected to be
+            // representable as `SandboxPolicy`. This guard keeps the old safe
+            // fallback behavior if future changes make this branch derive a
+            // profile with split-only filesystem semantics, such as root write
+            // with carveouts or writes that are not expressible as
+            // workspace-write roots.
+            if let Err(err) = permission_profile.to_legacy_sandbox_policy(resolved_cwd.as_path()) {
+                tracing::warn!(
+                    error = %err,
+                    "derived permission profile cannot be represented as a legacy sandbox policy; falling back to read-only"
+                );
+                permission_profile = PermissionProfile::read_only();
             }
-            let file_system_sandbox_policy =
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                &sandbox_policy,
-                resolved_cwd.as_path(),
-            );
-            let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-            let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-                SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-                &file_system_sandbox_policy,
-                network_sandbox_policy,
-            );
+            let (mut file_system_sandbox_policy, network_sandbox_policy) =
+                permission_profile.to_runtime_permissions();
+            // `additional_writable_roots` is a legacy workspace-write knob. It
+            // only applies when the derived managed profile has workspace-style
+            // write access to the project roots; read-only, disabled, external,
+            // and future non-workspace profiles must not silently grow extra
+            // write access.
+            if matches!(permission_profile.enforcement(), SandboxEnforcement::Managed)
+                && file_system_sandbox_policy.can_write_path_with_cwd(
+                    resolved_cwd.as_path(),
+                    resolved_cwd.as_path(),
+                )
+                && !file_system_sandbox_policy.has_full_disk_write_access()
+            {
+                // Keep legacy behavior for extra writable roots while storing
+                // the result as the canonical permission profile. Explicit
+                // extra roots are concrete paths, so their metadata carveouts
+                // are also concrete rather than symbolic `:project_roots`
+                // entries.
+                file_system_sandbox_policy = file_system_sandbox_policy
+                    .with_additional_legacy_workspace_writable_roots(&additional_writable_roots);
+                permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+                    permission_profile.enforcement(),
+                    &file_system_sandbox_policy,
+                    network_sandbox_policy,
+                );
+            }
             (
                 configured_network_proxy_config,
                 permission_profile,
@@ -2616,6 +2691,11 @@ impl Config {
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
             terminal_resize_reflow,
+            tui_keymap: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.keymap.clone())
+                .unwrap_or_default(),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);

@@ -131,6 +131,8 @@ mod history_cell;
 pub(crate) mod insert_history;
 pub use insert_history::insert_history_lines;
 mod key_hint;
+mod keymap;
+mod keymap_setup;
 mod line_truncation;
 pub(crate) mod live_wrap;
 pub use live_wrap::RowBuilder;
@@ -171,6 +173,8 @@ mod tui;
 mod ui_consts;
 pub(crate) mod update_action;
 pub use update_action::UpdateAction;
+#[cfg(not(debug_assertions))]
+pub use update_action::get_update_action;
 mod update_prompt;
 #[cfg(any(not(debug_assertions), test))]
 mod update_versions;
@@ -1591,7 +1595,7 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
     reason = "TUI should no longer be displayed, so we can write to stderr."
 )]
 fn restore() {
-    if let Err(err) = tui::restore() {
+    if let Err(err) = tui::restore_after_exit() {
         eprintln!(
             "failed to restore terminal. Run `reset` or restart your terminal to recover: {err}"
         );
@@ -1610,7 +1614,7 @@ impl TerminalRestoreGuard {
     #[cfg_attr(debug_assertions, allow(dead_code))]
     fn restore(&mut self) -> color_eyre::Result<()> {
         if self.active {
-            crate::tui::restore()?;
+            crate::tui::restore_after_exit()?;
             self.active = false;
         }
         Ok(())

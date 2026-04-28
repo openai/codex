@@ -1046,8 +1046,9 @@ fn session_configured_from_thread_response(
         service_tier,
         approval_policy,
         approvals_reviewer,
-        sandbox_policy,
-        permission_profile,
+        permission_profile: permission_profile.unwrap_or_else(|| {
+            PermissionProfile::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, cwd.as_path())
+        }),
         cwd,
         reasoning_effort,
         history_log_id: 0,

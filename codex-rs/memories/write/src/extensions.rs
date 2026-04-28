@@ -6,15 +6,12 @@ use chrono::Utc;
 use std::path::Path;
 use tracing::warn;
 
-const FILENAME_TS_FORMAT: &str = "%Y-%m-%dT%H-%M-%S";
-const EXTENSION_RESOURCE_RETENTION_DAYS: i64 = 7;
-
 pub async fn prune_old_extension_resources(memory_root: &Path) {
     prune_old_extension_resources_with_now(memory_root, Utc::now()).await
 }
 
 async fn prune_old_extension_resources_with_now(memory_root: &Path, now: DateTime<Utc>) {
-    let cutoff = now - Duration::days(EXTENSION_RESOURCE_RETENTION_DAYS);
+    let cutoff = now - Duration::days(crate::extension_resources::RETENTION_DAYS);
     let extensions_root = memory_extensions_root(memory_root);
     let mut extensions = match tokio::fs::read_dir(&extensions_root).await {
         Ok(extensions) => extensions,
@@ -92,7 +89,9 @@ async fn prune_old_extension_resources_with_now(memory_root: &Path, now: DateTim
 
 fn resource_timestamp(file_name: &str) -> Option<DateTime<Utc>> {
     let timestamp = file_name.get(..19)?;
-    let naive = NaiveDateTime::parse_from_str(timestamp, FILENAME_TS_FORMAT).ok()?;
+    let naive =
+        NaiveDateTime::parse_from_str(timestamp, crate::extension_resources::FILENAME_TS_FORMAT)
+            .ok()?;
     Some(DateTime::from_naive_utc_and_offset(naive, Utc))
 }
 

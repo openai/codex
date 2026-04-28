@@ -28,10 +28,22 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+pub use crate::tui_keymap::KeybindingSpec;
+pub use crate::tui_keymap::KeybindingsSpec;
+pub use crate::tui_keymap::TuiApprovalKeymap;
+pub use crate::tui_keymap::TuiChatKeymap;
+pub use crate::tui_keymap::TuiComposerKeymap;
+pub use crate::tui_keymap::TuiEditorKeymap;
+pub use crate::tui_keymap::TuiGlobalKeymap;
+pub use crate::tui_keymap::TuiKeymap;
+pub use crate::tui_keymap::TuiListKeymap;
+pub use crate::tui_keymap::TuiPagerKeymap;
+
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
-pub const DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 16;
-pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
+pub const DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 2;
+pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 10;
 pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
+pub const DEFAULT_MEMORIES_MIN_RATE_LIMIT_REMAINING_PERCENT: i64 = 25;
 pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 256;
 pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
 const MIN_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 1;
@@ -204,6 +216,9 @@ pub struct MemoriesToml {
     pub max_rollouts_per_startup: Option<usize>,
     /// Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.
     pub min_rollout_idle_hours: Option<i64>,
+    /// Minimum remaining percentage required in Codex rate-limit windows before memory startup runs.
+    #[schemars(range(min = 0, max = 100))]
+    pub min_rate_limit_remaining_percent: Option<i64>,
     /// Model used for thread summarisation.
     pub extract_model: Option<String>,
     /// Model used for memory consolidation.
@@ -221,6 +236,7 @@ pub struct MemoriesConfig {
     pub max_rollout_age_days: i64,
     pub max_rollouts_per_startup: usize,
     pub min_rollout_idle_hours: i64,
+    pub min_rate_limit_remaining_percent: i64,
     pub extract_model: Option<String>,
     pub consolidation_model: Option<String>,
 }
@@ -236,6 +252,7 @@ impl Default for MemoriesConfig {
             max_rollout_age_days: DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS,
             max_rollouts_per_startup: DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP,
             min_rollout_idle_hours: DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS,
+            min_rate_limit_remaining_percent: DEFAULT_MEMORIES_MIN_RATE_LIMIT_REMAINING_PERCENT,
             extract_model: None,
             consolidation_model: None,
         }
@@ -277,6 +294,10 @@ impl From<MemoriesToml> for MemoriesConfig {
                 .min_rollout_idle_hours
                 .unwrap_or(defaults.min_rollout_idle_hours)
                 .clamp(1, 48),
+            min_rate_limit_remaining_percent: toml
+                .min_rate_limit_remaining_percent
+                .unwrap_or(defaults.min_rate_limit_remaining_percent)
+                .clamp(0, 100),
             extract_model: toml.extract_model,
             consolidation_model: toml.consolidation_model,
         }
@@ -575,7 +596,9 @@ pub struct Tui {
     /// Ordered list of terminal title item identifiers.
     ///
     /// When set, the TUI renders the selected items into the terminal window/tab title.
-    /// When unset, the TUI defaults to: `spinner` and `project`.
+    /// When unset, the TUI defaults to: `activity` and `project`.
+    /// The `activity` item spins while working and shows an action-required
+    /// message when blocked on the user.
     #[serde(default)]
     pub terminal_title: Option<Vec<String>>,
 
@@ -585,6 +608,13 @@ pub struct Tui {
     /// Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.
     #[serde(default)]
     pub theme: Option<String>,
+
+    /// Keybinding overrides for the TUI.
+    ///
+    /// This supports rebinding selected actions globally and by context.
+    /// Context bindings take precedence over `global` bindings.
+    #[serde(default)]
+    pub keymap: TuiKeymap,
 
     /// Startup tooltip availability NUX state persisted by the TUI.
     #[serde(default)]

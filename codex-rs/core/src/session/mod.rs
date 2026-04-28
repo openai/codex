@@ -168,7 +168,6 @@ use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
-use crate::config::GhostSnapshotConfig;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
@@ -185,6 +184,7 @@ use codex_protocol::exec_output::StreamOutput;
 
 mod handlers;
 mod mcp;
+mod multi_agents;
 mod review;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
@@ -271,7 +271,6 @@ use crate::context::UserInstructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
 use crate::mcp::McpManager;
-use crate::memories;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
 use crate::rollout::map_session_init_error;
@@ -289,10 +288,7 @@ use crate::state::SessionState;
 use crate::stream_events_utils::HandleOutputCtx;
 #[cfg(test)]
 use crate::stream_events_utils::handle_output_item_done;
-use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
-use crate::tasks::SessionTask;
-use crate::tasks::SessionTaskContext;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::network_approval::build_blocked_request_observer;
 use crate::tools::network_approval::build_network_policy_decider;
@@ -358,7 +354,6 @@ use codex_protocol::user_input::UserInput;
 use codex_tools::ToolsConfig;
 use codex_tools::ToolsConfigParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
 #[cfg(test)]
 use codex_utils_stream_parser::ProposedPlanSegment;
@@ -518,9 +513,10 @@ impl Codex {
         };
 
         let config = Arc::new(config);
-        let refresh_strategy = match session_source {
-            SessionSource::SubAgent(_) => codex_models_manager::manager::RefreshStrategy::Offline,
-            _ => codex_models_manager::manager::RefreshStrategy::OnlineIfUncached,
+        let refresh_strategy = if session_source.is_non_root_agent() {
+            codex_models_manager::manager::RefreshStrategy::Offline
+        } else {
+            codex_models_manager::manager::RefreshStrategy::OnlineIfUncached
         };
         if config.model.is_none()
             || !matches!(
@@ -845,6 +841,22 @@ impl Session {
         }
     }
 
+    pub(crate) async fn configured_multi_agent_v2_usage_hint_texts(&self) -> Vec<String> {
+        if !self.features.enabled(Feature::MultiAgentV2) {
+            return Vec::new();
+        }
+
+        let state = self.state.lock().await;
+        let config = &state.session_configuration.original_config_do_not_use;
+        [
+            config.multi_agent_v2.root_agent_usage_hint_text.clone(),
+            config.multi_agent_v2.subagent_usage_hint_text.clone(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
     fn managed_network_proxy_active_for_permission_profile(
         permission_profile: &PermissionProfile,
     ) -> bool {
@@ -1130,10 +1142,10 @@ impl Session {
         let turn_context = self.new_default_turn().await;
         let is_subagent = {
             let state = self.state.lock().await;
-            matches!(
-                state.session_configuration.session_source,
-                SessionSource::SubAgent(_)
-            )
+            state
+                .session_configuration
+                .session_source
+                .is_non_root_agent()
         };
         let has_prior_user_turns = initial_history_has_prior_user_turns(&conversation_history);
         {
@@ -1687,6 +1699,7 @@ impl Session {
             .inject_response_items(vec![ResponseInputItem::Message {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText { text }],
+                phase: None,
             }])
             .await
             .is_err()
@@ -1783,6 +1796,7 @@ impl Session {
             .inject_response_items(vec![ResponseInputItem::Message {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText { text }],
+                phase: None,
             }])
             .await
             .is_err()
@@ -2659,11 +2673,22 @@ impl Session {
             );
         }
 
-        let mut items = Vec::with_capacity(3);
+        let multi_agent_v2_usage_hint_text =
+            multi_agents::usage_hint_text(turn_context, &session_source);
+
+        let mut items = Vec::with_capacity(4);
         if let Some(developer_message) =
             crate::context_manager::updates::build_developer_update_item(developer_sections)
         {
             items.push(developer_message);
+        }
+        if let Some(usage_hint_text) = multi_agent_v2_usage_hint_text
+            && let Some(usage_hint_message) =
+                crate::context_manager::updates::build_developer_update_item(vec![
+                    usage_hint_text.to_string(),
+                ])
+        {
+            items.push(usage_hint_message);
         }
         if let Some(contextual_user_message) =
             crate::context_manager::updates::build_contextual_user_message(contextual_user_sections)
@@ -2910,34 +2935,6 @@ impl Session {
             additional_details: Some(additional_details),
         });
         self.send_event(turn_context, event).await;
-    }
-
-    async fn maybe_start_ghost_snapshot(
-        self: &Arc<Self>,
-        turn_context: Arc<TurnContext>,
-        cancellation_token: CancellationToken,
-    ) {
-        if !self.enabled(Feature::GhostCommit) {
-            return;
-        }
-        let token = match turn_context.tool_call_gate.subscribe().await {
-            Ok(token) => token,
-            Err(err) => {
-                warn!("failed to subscribe to ghost snapshot readiness: {err}");
-                return;
-            }
-        };
-
-        info!("spawning ghost snapshot task");
-        let task = GhostSnapshotTask::new(token);
-        Arc::new(task)
-            .run(
-                Arc::new(SessionTaskContext::new(self.clone())),
-                turn_context.clone(),
-                Vec::new(),
-                cancellation_token,
-            )
-            .await;
     }
 
     /// Inject additional user input into the currently active turn.

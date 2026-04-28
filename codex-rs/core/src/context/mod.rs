@@ -31,7 +31,6 @@ pub(crate) use available_plugins_instructions::AvailablePluginsInstructions;
 pub(crate) use available_skills_instructions::AvailableSkillsInstructions;
 pub(crate) use collaboration_mode_instructions::CollaborationModeInstructions;
 pub(crate) use contextual_user_message::is_contextual_user_fragment;
-pub(crate) use contextual_user_message::is_memory_excluded_contextual_user_fragment;
 pub(crate) use contextual_user_message::parse_visible_hook_prompt_message;
 pub(crate) use environment_context::EnvironmentContext;
 pub use fragment::ContextualUserFragment;

@@ -20,7 +20,6 @@ use tokio::process::Command;
 
 use crate::ExecServerRuntimePaths;
 use crate::FileSystemSandboxContext;
-use crate::file_system::file_system_policy_has_cwd_dependent_entries;
 use crate::fs_helper::CODEX_FS_HELPER_ARG1;
 use crate::fs_helper::FsHelperPayload;
 use crate::fs_helper::FsHelperRequest;
@@ -115,8 +114,7 @@ fn sandbox_cwd(sandbox: &FileSystemSandboxContext) -> Result<AbsolutePathBuf, JS
         return Ok(cwd.clone());
     }
 
-    let file_system_policy = sandbox.permissions.file_system_sandbox_policy();
-    if file_system_policy_has_cwd_dependent_entries(&file_system_policy) {
+    if sandbox.has_cwd_dependent_permissions() {
         return Err(invalid_request(
             "file system sandbox context with dynamic permissions requires cwd".to_string(),
         ));

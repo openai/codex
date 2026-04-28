@@ -148,7 +148,7 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
     let auth = auth_manager.auth().await;
     if !config
         .features
-        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth))
+        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
     {
         return Some(Vec::new());
     }
@@ -220,7 +220,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     let auth = auth_manager.auth().await;
     if !config
         .features
-        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth))
+        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
     {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),

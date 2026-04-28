@@ -829,17 +829,6 @@
     "outputSchema": {
       "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
     },
-    "permissionProfile": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/PermissionProfile"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Override the full permissions profile for this turn and subsequent turns. Cannot be combined with `sandboxPolicy`."
-    },
     "personality": {
       "anyOf": [
         {

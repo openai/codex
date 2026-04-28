@@ -254,6 +254,20 @@ impl TraceReducer {
                     partial_response_payload,
                 )?;
             }
+            RawTraceEventPayload::InferenceCancelled {
+                inference_call_id,
+                partial_response_payload,
+                ..
+            } => {
+                self.complete_inference_call(
+                    event.seq,
+                    event.wall_time_unix_ms,
+                    inference_call_id,
+                    ExecutionStatus::Cancelled,
+                    /*response_id*/ None,
+                    partial_response_payload,
+                )?;
+            }
             RawTraceEventPayload::ProtocolEventObserved { .. } => {
                 // Protocol wrappers are raw debug breadcrumbs. Typed hooks own
                 // the reduced graph, so these payload refs are retained without

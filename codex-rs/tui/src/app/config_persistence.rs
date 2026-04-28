@@ -556,6 +556,7 @@ mod tests {
     use crate::app::test_support::app_enabled_in_effective_config;
     use crate::app::test_support::make_test_app;
     use crate::test_support::PathBufExt;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::SessionConfiguredEvent;
@@ -653,8 +654,7 @@ mod tests {
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                permission_profile: None,
+                permission_profile: PermissionProfile::read_only(),
                 cwd: next_cwd.clone().abs(),
                 reasoning_effort: None,
                 history_log_id: 0,

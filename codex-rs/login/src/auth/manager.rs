@@ -212,7 +212,7 @@ impl CodexAuth {
                     "agent identity auth is missing an agent identity token.",
                 ));
             };
-            return Self::from_agent_identity_jwt(&agent_identity);
+            return Self::from_agent_identity_jwt(&agent_identity).await;
         }
 
         let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
@@ -246,9 +246,9 @@ impl CodexAuth {
         .await
     }
 
-    pub fn from_agent_identity_jwt(jwt: &str) -> std::io::Result<Self> {
+    pub async fn from_agent_identity_jwt(jwt: &str) -> std::io::Result<Self> {
         let record = AgentIdentityAuthRecord::from_agent_identity_jwt(jwt)?;
-        Ok(Self::AgentIdentity(AgentIdentityAuth::new(record)))
+        Ok(Self::AgentIdentity(AgentIdentityAuth::load(record).await?))
     }
 
     pub fn auth_mode(&self) -> AuthMode {
@@ -319,16 +319,6 @@ impl CodexAuth {
             Self::AgentIdentity(_) => Err(std::io::Error::other(
                 "agent identity auth does not expose a bearer token",
             )),
-        }
-    }
-
-    pub async fn initialize_runtime(
-        &self,
-        _chatgpt_base_url: Option<String>,
-    ) -> std::io::Result<()> {
-        match self {
-            Self::AgentIdentity(auth) => auth.ensure_runtime().await,
-            Self::ApiKey(_) | Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => Ok(()),
         }
     }
 
@@ -749,7 +739,9 @@ async fn load_auth(
     }
 
     if let Some(agent_identity) = read_codex_agent_identity_from_env() {
-        return CodexAuth::from_agent_identity_jwt(&agent_identity).map(Some);
+        return CodexAuth::from_agent_identity_jwt(&agent_identity)
+            .await
+            .map(Some);
     }
 
     // Fall back to the configured persistent store (file/keyring/auto) for managed auth.
@@ -1400,12 +1392,7 @@ impl AuthManager {
             tracing::error!("Failed to refresh token: {}", err);
             return Some(auth);
         }
-        let auth = self.auth_cached()?;
-        if let Err(err) = auth.initialize_runtime(self.chatgpt_base_url.clone()).await {
-            tracing::error!("Failed to initialize auth runtime: {err}");
-            return None;
-        }
-        Some(auth)
+        self.auth_cached()
     }
 
     /// Force a reload of the auth information from auth.json. Returns

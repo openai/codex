@@ -16,9 +16,9 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 codex-app-server-protocol = { workspace = true }
-codex-exec-server = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-features = { workspace = true }
+codex-file-system = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-network-proxy = { workspace = true }
