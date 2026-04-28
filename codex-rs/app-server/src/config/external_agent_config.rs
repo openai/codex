@@ -12,10 +12,12 @@ use codex_core_plugins::marketplace_add::is_local_marketplace_source;
 use codex_external_agent_migration::build_mcp_config_from_external;
 use codex_external_agent_migration::count_missing_commands;
 use codex_external_agent_migration::count_missing_subagents;
-use codex_external_agent_migration::hooks_migration_description;
+use codex_external_agent_migration::hook_migration_event_names;
 use codex_external_agent_migration::import_commands;
 use codex_external_agent_migration::import_hooks;
 use codex_external_agent_migration::import_subagents;
+use codex_external_agent_migration::missing_command_names;
+use codex_external_agent_migration::missing_subagent_names;
 use codex_external_agent_sessions::ExternalAgentSessionMigration;
 use codex_external_agent_sessions::detect_recent_sessions;
 use codex_protocol::protocol::Product;
@@ -62,10 +64,14 @@ pub(crate) struct PluginsMigration {
     pub plugin_names: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct MigrationDetails {
     pub plugins: Vec<PluginsMigration>,
     pub sessions: Vec<ExternalAgentSessionMigration>,
+    pub mcp_server_names: Vec<String>,
+    pub hook_event_names: Vec<String>,
+    pub subagent_names: Vec<String>,
+    pub command_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,6 +295,7 @@ impl ExternalAgentConfigService {
             Some(self.external_agent_home.as_path()),
             mcp_settings.as_ref(),
         )?;
+        let mcp_server_names = migrated_mcp_server_names(&migrated_mcp);
         if !is_empty_toml_table(&migrated_mcp) {
             let mut should_include = true;
             if target_config.exists() {
@@ -312,7 +319,10 @@ impl ExternalAgentConfigService {
                         target_config.display()
                     ),
                     cwd: cwd.clone(),
-                    details: None,
+                    details: Some(MigrationDetails {
+                        mcp_server_names: mcp_server_names.clone(),
+                        ..Default::default()
+                    }),
                 });
                 emit_migration_metric(
                     EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
@@ -330,15 +340,21 @@ impl ExternalAgentConfigService {
             || self.codex_home.join("hooks.json"),
             |repo_root| repo_root.join(".codex").join("hooks.json"),
         );
-        if let Some(description) =
-            hooks_migration_description(source_external_agent_dir.as_path(), &target_hooks)?
-            && is_missing_or_empty_text_file(&target_hooks)?
-        {
+        let hook_event_names =
+            hook_migration_event_names(source_external_agent_dir.as_path(), &target_hooks)?;
+        if !hook_event_names.is_empty() && is_missing_or_empty_text_file(&target_hooks)? {
             items.push(ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Hooks,
-                description,
+                description: format!(
+                    "Migrate hooks from {} to {}",
+                    source_external_agent_dir.display(),
+                    target_hooks.display()
+                ),
                 cwd: cwd.clone(),
-                details: None,
+                details: Some(MigrationDetails {
+                    hook_event_names,
+                    ..Default::default()
+                }),
             });
             emit_migration_metric(
                 EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
@@ -381,6 +397,7 @@ impl ExternalAgentConfigService {
         );
         let commands_count = count_missing_commands(&source_commands, &target_command_skills)?;
         if commands_count > 0 {
+            let command_names = missing_command_names(&source_commands, &target_command_skills)?;
             items.push(ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Commands,
                 description: format!(
@@ -389,7 +406,10 @@ impl ExternalAgentConfigService {
                     target_command_skills.display()
                 ),
                 cwd: cwd.clone(),
-                details: None,
+                details: Some(MigrationDetails {
+                    command_names,
+                    ..Default::default()
+                }),
             });
             emit_migration_metric(
                 EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
@@ -405,6 +425,7 @@ impl ExternalAgentConfigService {
         );
         let subagents_count = count_missing_subagents(&source_subagents, &target_subagents)?;
         if subagents_count > 0 {
+            let subagent_names = missing_subagent_names(&source_subagents, &target_subagents)?;
             items.push(ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Subagents,
                 description: format!(
@@ -413,7 +434,10 @@ impl ExternalAgentConfigService {
                     target_subagents.display()
                 ),
                 cwd: cwd.clone(),
-                details: None,
+                details: Some(MigrationDetails {
+                    subagent_names,
+                    ..Default::default()
+                }),
             });
             emit_migration_metric(
                 EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
@@ -511,8 +535,8 @@ impl ExternalAgentConfigService {
                     ),
                     cwd: None,
                     details: Some(MigrationDetails {
-                        plugins: Vec::new(),
                         sessions,
+                        ..Default::default()
                     }),
                 });
                 emit_migration_metric(
@@ -623,11 +647,11 @@ impl ExternalAgentConfigService {
 
         let local_details = (!local_plugins.is_empty()).then_some(MigrationDetails {
             plugins: local_plugins,
-            sessions: Vec::new(),
+            ..Default::default()
         });
         let remote_details = (!remote_plugins.is_empty()).then_some(MigrationDetails {
             plugins: remote_plugins,
-            sessions: Vec::new(),
+            ..Default::default()
         });
 
         Ok((local_details, remote_details))
@@ -1015,7 +1039,7 @@ fn extract_plugin_migration_details(
 
     Some(MigrationDetails {
         plugins,
-        sessions: Vec::new(),
+        ..Default::default()
     })
 }
 
@@ -1450,6 +1474,14 @@ fn write_toml_file(path: &Path, value: &TomlValue) -> io::Result<()> {
     let serialized = toml::to_string_pretty(value)
         .map_err(|err| invalid_data_error(format!("failed to serialize config.toml: {err}")))?;
     fs::write(path, format!("{}\n", serialized.trim_end()))
+}
+
+fn migrated_mcp_server_names(value: &TomlValue) -> Vec<String> {
+    value
+        .get("mcp_servers")
+        .and_then(TomlValue::as_table)
+        .map(|servers| servers.keys().cloned().collect())
+        .unwrap_or_default()
 }
 
 fn is_empty_toml_table(value: &TomlValue) -> bool {

@@ -15,7 +15,7 @@ use toml::Value as TomlValue;
 const SOURCE_EXTERNAL_AGENT_NAME: &str = "claude";
 const EXTERNAL_AGENT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const EXTERNAL_AGENT_HOOKS_SUBDIR: &str = "hooks";
-const EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR: &str = "external-agent-hooks";
+const EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR: &str = "hooks";
 const COMMAND_SKILL_PREFIX: &str = "source-command";
 const MAX_SKILL_NAME_LEN: usize = 64;
 const MAX_SKILL_DESCRIPTION_LEN: usize = 1024;
@@ -87,8 +87,7 @@ pub fn hooks_migration_description(
     source_external_agent_dir: &Path,
     target_hooks: &Path,
 ) -> io::Result<Option<String>> {
-    let migration = hook_migration(source_external_agent_dir, target_hooks.parent())?;
-    if migration.is_empty() {
+    if hook_migration_event_names(source_external_agent_dir, target_hooks)?.is_empty() {
         return Ok(None);
     }
 
@@ -97,6 +96,14 @@ pub fn hooks_migration_description(
         source_external_agent_dir.display(),
         target_hooks.display()
     )))
+}
+
+pub fn hook_migration_event_names(
+    source_external_agent_dir: &Path,
+    target_hooks: &Path,
+) -> io::Result<Vec<String>> {
+    let migration = hook_migration(source_external_agent_dir, target_hooks.parent())?;
+    Ok(migration.keys().cloned().collect())
 }
 
 pub fn import_hooks(source_external_agent_dir: &Path, target_hooks: &Path) -> io::Result<bool> {
@@ -125,20 +132,27 @@ pub fn import_hooks(source_external_agent_dir: &Path, target_hooks: &Path) -> io
 }
 
 pub fn count_missing_subagents(source_agents: &Path, target_agents: &Path) -> io::Result<usize> {
-    let mut count = 0usize;
+    Ok(missing_subagent_names(source_agents, target_agents)?.len())
+}
+
+pub fn missing_subagent_names(
+    source_agents: &Path,
+    target_agents: &Path,
+) -> io::Result<Vec<String>> {
+    let mut names = Vec::new();
     for source_file in agent_source_files(source_agents)? {
         let document = parse_document(&source_file)?;
-        if agent_metadata(&document).is_none() {
+        let Some(metadata) = agent_metadata(&document) else {
             continue;
-        }
+        };
         let Some(target) = subagent_target_file(&source_file, target_agents) else {
             continue;
         };
         if !target.exists() {
-            count += 1;
+            names.push(metadata.name);
         }
     }
-    Ok(count)
+    Ok(names)
 }
 
 pub fn import_subagents(source_agents: &Path, target_agents: &Path) -> io::Result<usize> {
@@ -167,10 +181,18 @@ pub fn import_subagents(source_agents: &Path, target_agents: &Path) -> io::Resul
 }
 
 pub fn count_missing_commands(source_commands: &Path, target_skills: &Path) -> io::Result<usize> {
+    Ok(missing_command_names(source_commands, target_skills)?.len())
+}
+
+pub fn missing_command_names(
+    source_commands: &Path,
+    target_skills: &Path,
+) -> io::Result<Vec<String>> {
     Ok(unique_supported_command_sources(source_commands)?
         .into_iter()
         .filter(|(_source_file, name)| !target_skills.join(name).exists())
-        .count())
+        .map(|(_source_file, name)| name)
+        .collect())
 }
 
 pub fn import_commands(source_commands: &Path, target_skills: &Path) -> io::Result<usize> {
@@ -1723,6 +1745,26 @@ Review carefully."""
                 Some(Path::new("/repo/.codex")),
             ),
             migrated_hook_command("check.py")
+        );
+    }
+
+    #[test]
+    fn hook_script_copy_keeps_existing_target_scripts() {
+        let root = tempfile::TempDir::new().expect("tempdir");
+        let source_external_agent_dir = root.path().join(external_agent_config_dir());
+        let source_hooks = source_external_agent_dir.join(EXTERNAL_AGENT_HOOKS_SUBDIR);
+        let target_config_dir = root.path().join(".codex");
+        let target_hooks = target_config_dir.join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR);
+        fs::create_dir_all(&source_hooks).expect("create source hooks");
+        fs::create_dir_all(&target_hooks).expect("create target hooks");
+        fs::write(source_hooks.join("check.py"), "new script").expect("write source hook");
+        fs::write(target_hooks.join("check.py"), "existing script").expect("write target hook");
+
+        copy_hook_scripts(&source_external_agent_dir, &target_config_dir).expect("copy hooks");
+
+        assert_eq!(
+            fs::read_to_string(target_hooks.join("check.py")).expect("read target hook"),
+            "existing script"
         );
     }
 

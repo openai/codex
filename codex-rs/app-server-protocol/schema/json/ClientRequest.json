@@ -1782,6 +1782,27 @@
     },
     "MigrationDetails": {
       "properties": {
+        "commandNames": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "hookEventNames": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mcpServerNames": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "plugins": {
           "default": [],
           "items": {
@@ -1793,6 +1814,13 @@
           "default": [],
           "items": {
             "$ref": "#/definitions/SessionMigration"
+          },
+          "type": "array"
+        },
+        "subagentNames": {
+          "default": [],
+          "items": {
+            "type": "string"
           },
           "type": "array"
         }

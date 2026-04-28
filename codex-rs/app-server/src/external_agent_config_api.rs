@@ -99,6 +99,10 @@ impl ExternalAgentConfigApi {
                                 title: session.title,
                             })
                             .collect(),
+                        mcp_server_names: details.mcp_server_names,
+                        hook_event_names: details.hook_event_names,
+                        subagent_names: details.subagent_names,
+                        command_names: details.command_names,
                     }),
                 })
                 .collect(),
@@ -225,6 +229,10 @@ impl ExternalAgentConfigApi {
                                         title: session.title,
                                     })
                                     .collect(),
+                                mcp_server_names: details.mcp_server_names,
+                                hook_event_names: details.hook_event_names,
+                                subagent_names: details.subagent_names,
+                                command_names: details.command_names,
                             }
                         }),
                     })

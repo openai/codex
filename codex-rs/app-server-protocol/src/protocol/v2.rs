@@ -1126,7 +1126,7 @@ pub struct SessionMigration {
     pub title: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct MigrationDetails {
@@ -1134,6 +1134,14 @@ pub struct MigrationDetails {
     pub plugins: Vec<PluginsMigration>,
     #[serde(default)]
     pub sessions: Vec<SessionMigration>,
+    #[serde(default)]
+    pub mcp_server_names: Vec<String>,
+    #[serde(default)]
+    pub hook_event_names: Vec<String>,
+    #[serde(default)]
+    pub subagent_names: Vec<String>,
+    #[serde(default)]
+    pub command_names: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -7865,7 +7873,7 @@ mod tests {
                         marketplace_name: "team-marketplace".to_string(),
                         plugin_names: vec!["asana".to_string()],
                     }],
-                    sessions: Vec::new(),
+                    ..Default::default()
                 }),
             }
         );
@@ -7902,7 +7910,7 @@ mod tests {
                             marketplace_name: "team-marketplace".to_string(),
                             plugin_names: vec!["asana".to_string()],
                         }],
-                        sessions: Vec::new(),
+                        ..Default::default()
                     }),
                 }],
             }

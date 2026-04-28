@@ -23,7 +23,7 @@ fn github_plugin_details() -> MigrationDetails {
             marketplace_name: "acme-tools".to_string(),
             plugin_names: vec!["formatter".to_string()],
         }],
-        sessions: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -134,6 +134,7 @@ async fn detect_home_lists_recent_sessions() {
                     cwd: project_root,
                     title: Some("first request".to_string()),
                 }],
+                ..Default::default()
             }),
         }]
     );
@@ -313,7 +314,10 @@ async fn detect_repo_lists_mcp_hooks_commands_and_subagents() {
                     repo_root.join(".codex").join("config.toml").display()
                 ),
                 cwd: Some(repo_root.clone()),
-                details: None,
+                details: Some(MigrationDetails {
+                    mcp_server_names: vec!["docs".to_string()],
+                    ..Default::default()
+                }),
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Hooks,
@@ -323,7 +327,10 @@ async fn detect_repo_lists_mcp_hooks_commands_and_subagents() {
                     repo_root.join(".codex").join("hooks.json").display()
                 ),
                 cwd: Some(repo_root.clone()),
-                details: None,
+                details: Some(MigrationDetails {
+                    hook_event_names: vec!["PreToolUse".to_string()],
+                    ..Default::default()
+                }),
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Commands,
@@ -333,7 +340,10 @@ async fn detect_repo_lists_mcp_hooks_commands_and_subagents() {
                     repo_root.join(".agents").join("skills").display()
                 ),
                 cwd: Some(repo_root.clone()),
-                details: None,
+                details: Some(MigrationDetails {
+                    command_names: vec!["source-command-pr-review".to_string()],
+                    ..Default::default()
+                }),
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Subagents,
@@ -343,7 +353,10 @@ async fn detect_repo_lists_mcp_hooks_commands_and_subagents() {
                     repo_root.join(".codex").join("agents").display()
                 ),
                 cwd: Some(repo_root),
-                details: None,
+                details: Some(MigrationDetails {
+                    subagent_names: vec!["researcher".to_string()],
+                    ..Default::default()
+                }),
             },
         ]
     );
@@ -709,7 +722,7 @@ async fn import_local_plugins_returns_completed_status() {
                     marketplace_name: "my-plugins".to_string(),
                     plugin_names: vec!["cloudflare".to_string()],
                 }],
-                sessions: Vec::new(),
+                ..Default::default()
             }),
         }])
         .await
@@ -750,7 +763,7 @@ async fn import_git_plugins_returns_pending_async_status() {
                     marketplace_name: "acme-tools".to_string(),
                     plugin_names: vec!["formatter".to_string()],
                 }],
-                sessions: Vec::new(),
+                ..Default::default()
             }),
         }])
         .await
@@ -765,7 +778,7 @@ async fn import_git_plugins_returns_pending_async_status() {
                     marketplace_name: "acme-tools".to_string(),
                     plugin_names: vec!["formatter".to_string()],
                 }],
-                sessions: Vec::new(),
+                ..Default::default()
             },
         }]
     );
@@ -1122,7 +1135,7 @@ async fn detect_home_lists_enabled_plugins_from_settings() {
                     marketplace_name: "acme-tools".to_string(),
                     plugin_names: vec!["deployer".to_string(), "formatter".to_string()],
                 }],
-                sessions: Vec::new(),
+                ..Default::default()
             }),
         }]
     );
@@ -1183,7 +1196,7 @@ enabled = true
                     marketplace_name: "acme-tools".to_string(),
                     plugin_names: vec!["deployer".to_string()],
                 }],
-                sessions: Vec::new(),
+                ..Default::default()
             }),
         }]
     );
@@ -1342,7 +1355,7 @@ enabled = true
                     marketplace_name: "acme-tools".to_string(),
                     plugin_names: vec!["formatter".to_string()],
                 }],
-                sessions: Vec::new(),
+                ..Default::default()
             }),
         }]
     );
@@ -1523,7 +1536,7 @@ source = "owner/debug-marketplace"
                     marketplace_name: "debug".to_string(),
                     plugin_names: vec!["available".to_string()],
                 }],
-                sessions: Vec::new(),
+                ..Default::default()
             }),
         }]
     );
@@ -1557,7 +1570,7 @@ async fn import_plugins_requires_source_marketplace_details() {
                     marketplace_name: "other-tools".to_string(),
                     plugin_names: github_plugin_details().plugins[0].plugin_names.clone(),
                 }],
-                sessions: Vec::new(),
+                ..Default::default()
             }),
         )
         .await
@@ -1665,7 +1678,7 @@ async fn import_plugins_supports_external_agent_plugin_marketplace_layout() {
                     marketplace_name: "my-plugins".to_string(),
                     plugin_names: vec!["cloudflare".to_string()],
                 }],
-                sessions: Vec::new(),
+                ..Default::default()
             }),
         )
         .await
@@ -1753,7 +1766,7 @@ async fn detect_home_supports_relative_external_agent_plugin_marketplace_path() 
                     marketplace_name: "my-plugins".to_string(),
                     plugin_names: vec!["cloudflare".to_string()],
                 }],
-                sessions: Vec::new(),
+                ..Default::default()
             }),
         }]
     );
@@ -1797,7 +1810,7 @@ async fn detect_home_infers_claude_official_marketplace_when_missing_from_settin
                     marketplace_name: "claude-plugins-official".to_string(),
                     plugin_names: vec!["sample".to_string()],
                 }],
-                sessions: Vec::new(),
+                ..Default::default()
             }),
         }]
     );
@@ -1857,7 +1870,7 @@ async fn import_plugins_supports_relative_external_agent_plugin_marketplace_path
                     marketplace_name: "my-plugins".to_string(),
                     plugin_names: vec!["cloudflare".to_string()],
                 }],
-                sessions: Vec::new(),
+                ..Default::default()
             }),
         )
         .await
@@ -1901,7 +1914,7 @@ async fn import_plugins_infers_claude_official_marketplace_when_missing_from_set
                     marketplace_name: "claude-plugins-official".to_string(),
                     plugin_names: vec!["sample".to_string()],
                 }],
-                sessions: Vec::new(),
+                ..Default::default()
             }),
         )
         .await
@@ -1991,7 +2004,7 @@ async fn detect_repo_supports_project_relative_external_agent_plugin_marketplace
                     marketplace_name: "my-plugins".to_string(),
                     plugin_names: vec!["cloudflare".to_string()],
                 }],
-                sessions: Vec::new(),
+                ..Default::default()
             }),
         }]
     );
@@ -2056,7 +2069,7 @@ async fn import_plugins_supports_project_relative_external_agent_plugin_marketpl
                     marketplace_name: "my-plugins".to_string(),
                     plugin_names: vec!["cloudflare".to_string()],
                 }],
-                sessions: Vec::new(),
+                ..Default::default()
             }),
         )
         .await

@@ -4,4 +4,4 @@
 import type { PluginsMigration } from "./PluginsMigration";
 import type { SessionMigration } from "./SessionMigration";
 
-export type MigrationDetails = { plugins: Array<PluginsMigration>, sessions: Array<SessionMigration>, };
+export type MigrationDetails = { plugins: Array<PluginsMigration>, sessions: Array<SessionMigration>, mcpServerNames: Array<string>, hookEventNames: Array<string>, subagentNames: Array<string>, commandNames: Array<string>, };
