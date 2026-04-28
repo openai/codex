@@ -1,4 +1,5 @@
 use std::io;
+use std::ffi::c_void;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Threading::DeleteProcThreadAttributeList;
@@ -45,14 +46,13 @@ impl ProcThreadAttributeList {
 
     pub fn set_pseudoconsole(&mut self, hpc: isize) -> io::Result<()> {
         let list = self.as_mut_ptr();
-        let mut hpc_value = hpc;
         let ok = unsafe {
             UpdateProcThreadAttribute(
                 list,
                 0,
                 PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-                (&mut hpc_value as *mut isize).cast(),
-                std::mem::size_of::<isize>(),
+                hpc as *mut c_void,
+                std::mem::size_of::<HANDLE>(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
             )
