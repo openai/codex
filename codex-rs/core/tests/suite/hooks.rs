@@ -1853,6 +1853,150 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "plugin-pretooluse-shell-command";
+    let marker = std::env::temp_dir().join("plugin-pretooluse-shell-command-marker");
+    let command = format!("printf blocked > {}", marker.display());
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "plugin hook blocked it"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let home = Arc::new(TempDir::new()?);
+    let plugin_root = home.path().join("plugins/cache/test/sample/local");
+    let hooks_dir = plugin_root.join("hooks");
+    fs::create_dir_all(plugin_root.join(".codex-plugin"))
+        .context("create plugin manifest directory")?;
+    fs::create_dir_all(&hooks_dir).context("create plugin hooks directory")?;
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )
+    .context("write plugin manifest")?;
+    fs::write(
+        home.path().join("config.toml"),
+        r#"[plugins."sample@test"]
+enabled = true
+"#,
+    )
+    .context("write plugin config")?;
+
+    let script_path = hooks_dir.join("pre_tool_use_hook.py");
+    let log_path = hooks_dir.join("pre_tool_use_hook_log.jsonl");
+    fs::write(
+        &script_path,
+        format!(
+            r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+print(json.dumps({{
+    "hookSpecificOutput": {{
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "blocked by plugin hook"
+    }}
+}}))
+"#,
+            log_path = log_path.display(),
+        ),
+    )
+    .context("write plugin pre tool use hook script")?;
+    fs::write(
+        hooks_dir.join("hooks.json"),
+        r#"{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "^Bash$",
+      "hooks": [{
+        "type": "command",
+        "command": "python3 ${PLUGIN_ROOT}/hooks/pre_tool_use_hook.py"
+      }]
+    }]
+  }
+}"#,
+    )
+    .context("write plugin hooks config")?;
+
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Plugins)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::PluginHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    if marker.exists() {
+        fs::remove_file(&marker).context("remove leftover plugin pre tool use marker")?;
+    }
+
+    test.submit_turn_with_policy(
+        "run the shell command blocked by a plugin hook",
+        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(
+        output.contains("Command blocked by PreToolUse hook: blocked by plugin hook"),
+        "blocked tool output should surface the plugin hook reason",
+    );
+    assert!(
+        !marker.exists(),
+        "plugin hook should block shell command execution"
+    );
+
+    let hook_inputs = read_hook_inputs_from_log(&log_path)?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PreToolUse");
+    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
+    assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pre_tool_use_blocks_shell_when_defined_in_config_toml() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
