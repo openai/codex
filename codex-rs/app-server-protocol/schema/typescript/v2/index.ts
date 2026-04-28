@@ -282,7 +282,8 @@ export type { ReasoningSummaryTextDeltaNotification } from "./ReasoningSummaryTe
 export type { ReasoningTextDeltaNotification } from "./ReasoningTextDeltaNotification";
 export type { RemoteControlClientConnectionAudience } from "./RemoteControlClientConnectionAudience";
 export type { RemoteControlClientEnrollmentAudience } from "./RemoteControlClientEnrollmentAudience";
-export type { RemoteControlEnvironmentUpdatedNotification } from "./RemoteControlEnvironmentUpdatedNotification";
+export type { RemoteControlConnectionState } from "./RemoteControlConnectionState";
+export type { RemoteControlStatusChangedNotification } from "./RemoteControlStatusChangedNotification";
 export type { RequestPermissionProfile } from "./RequestPermissionProfile";
 export type { ResidencyRequirement } from "./ResidencyRequirement";
 export type { ReviewDelivery } from "./ReviewDelivery";

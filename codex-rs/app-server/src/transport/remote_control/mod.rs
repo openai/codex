@@ -4,7 +4,7 @@ mod protocol;
 mod websocket;
 
 use crate::transport::remote_control::websocket::RemoteControlChannels;
-use crate::transport::remote_control::websocket::RemoteControlEnvironmentIdPublisher;
+use crate::transport::remote_control::websocket::RemoteControlStatusPublisher;
 use crate::transport::remote_control::websocket::RemoteControlWebsocket;
 
 pub use self::protocol::ClientId;
@@ -14,6 +14,8 @@ use self::protocol::normalize_remote_control_url;
 use super::CHANNEL_CAPACITY;
 use super::TransportEvent;
 use super::next_connection_id;
+use codex_app_server_protocol::RemoteControlConnectionState;
+use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_login::AuthManager;
 use codex_state::StateRuntime;
 use std::io;
@@ -35,8 +37,8 @@ pub(super) struct QueuedServerEnvelope {
 #[derive(Clone)]
 pub(crate) struct RemoteControlHandle {
     enabled_tx: Arc<watch::Sender<bool>>,
+    status_tx: Arc<watch::Sender<RemoteControlStatusChangedNotification>>,
     state_db_available: bool,
-    environment_id_tx: Arc<watch::Sender<Option<String>>>,
 }
 
 impl RemoteControlHandle {
@@ -46,15 +48,42 @@ impl RemoteControlHandle {
         if requested_enabled && !self.state_db_available {
             warn!("remote control cannot be enabled because sqlite state db is unavailable");
         }
-        self.enabled_tx.send_if_modified(|state| {
+        let enabled_changed = self.enabled_tx.send_if_modified(|state| {
             let changed = *state != enabled;
             *state = enabled;
             changed
         });
+        if !enabled_changed {
+            return;
+        }
+
+        let state = if enabled {
+            RemoteControlConnectionState::Connecting
+        } else {
+            RemoteControlConnectionState::Disabled
+        };
+        let environment_id = if enabled {
+            self.status_tx.borrow().environment_id.clone()
+        } else {
+            None
+        };
+        self.status_tx.send_if_modified(|status| {
+            let next_status = RemoteControlStatusChangedNotification {
+                state,
+                environment_id,
+            };
+            if *status == next_status {
+                return false;
+            }
+            *status = next_status;
+            true
+        });
     }
 
-    pub(crate) fn environment_id_receiver(&self) -> watch::Receiver<Option<String>> {
-        self.environment_id_tx.subscribe()
+    pub(crate) fn status_receiver(
+        &self,
+    ) -> watch::Receiver<RemoteControlStatusChangedNotification> {
+        self.status_tx.subscribe()
     }
 }
 
@@ -80,9 +109,16 @@ pub(crate) async fn start_remote_control(
     };
 
     let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
-    let (environment_id_tx, _environment_id_rx) = watch::channel(None);
-    let environment_id_publisher =
-        RemoteControlEnvironmentIdPublisher::new(environment_id_tx.clone());
+    let initial_status = RemoteControlStatusChangedNotification {
+        state: if initial_enabled {
+            RemoteControlConnectionState::Connecting
+        } else {
+            RemoteControlConnectionState::Disabled
+        },
+        environment_id: None,
+    };
+    let (status_tx, _status_rx) = watch::channel(initial_status);
+    let status_publisher = RemoteControlStatusPublisher::new(status_tx.clone());
     let join_handle = tokio::spawn(async move {
         RemoteControlWebsocket::new(
             remote_control_url,
@@ -91,7 +127,7 @@ pub(crate) async fn start_remote_control(
             auth_manager,
             RemoteControlChannels {
                 transport_event_tx,
-                environment_id_publisher,
+                status_publisher,
             },
             shutdown_token,
             enabled_rx,
@@ -104,8 +140,8 @@ pub(crate) async fn start_remote_control(
         join_handle,
         RemoteControlHandle {
             enabled_tx: Arc::new(enabled_tx),
+            status_tx: Arc::new(status_tx),
             state_db_available,
-            environment_id_tx: Arc::new(environment_id_tx),
         },
     ))
 }

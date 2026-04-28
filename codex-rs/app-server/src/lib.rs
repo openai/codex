@@ -40,7 +40,7 @@ use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::RemoteControlEnvironmentUpdatedNotification;
+use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
@@ -748,8 +748,8 @@ pub async fn run_main_with_transport_options(
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
-        let mut remote_control_environment_id_rx = remote_control_handle.environment_id_receiver();
-        let mut remote_control_environment_id = remote_control_environment_id_rx.borrow().clone();
+        let mut remote_control_status_rx = remote_control_handle.status_receiver();
+        let mut remote_control_status = remote_control_status_rx.borrow().clone();
         let transport_shutdown_token = transport_shutdown_token.clone();
         async move {
             let mut listen_for_threads = true;
@@ -889,20 +889,14 @@ pub async fn run_main_with_transport_options(
                                                     connection_id,
                                                 )
                                                 .await;
-                                            if let Some(environment_id) =
-                                                remote_control_environment_id.clone()
-                                            {
-                                                initialize_notification_sender
-                                                    .send_server_notification_to_connections(
-                                                        &[connection_id],
-                                                        ServerNotification::RemoteControlEnvironmentUpdated(
-                                                            RemoteControlEnvironmentUpdatedNotification {
-                                                                environment_id: Some(environment_id),
-                                                            },
-                                                        ),
-                                                    )
-                                                    .await;
-                                            }
+                                            initialize_notification_sender
+                                                .send_server_notification_to_connections(
+                                                    &[connection_id],
+                                                    ServerNotification::RemoteControlStatusChanged(
+                                                        remote_control_status.clone(),
+                                                    ),
+                                                )
+                                                .await;
                                             processor.connection_initialized(connection_id).await;
                                             connection_state
                                                 .outbound_initialized
@@ -934,19 +928,20 @@ pub async fn run_main_with_transport_options(
                             }
                         }
                     }
-                    changed = remote_control_environment_id_rx.changed() => {
+                    changed = remote_control_status_rx.changed() => {
                         if changed.is_err() {
                             continue;
                         }
-                        let environment_id = remote_control_environment_id_rx.borrow().clone();
-                        if remote_control_environment_id == environment_id {
+                        let status = remote_control_status_rx.borrow().clone();
+                        if remote_control_status == status {
                             continue;
                         }
-                        remote_control_environment_id = environment_id.clone();
+                        remote_control_status = status.clone();
                         initialize_notification_sender
-                            .send_server_notification(ServerNotification::RemoteControlEnvironmentUpdated(
-                                RemoteControlEnvironmentUpdatedNotification {
-                                    environment_id,
+                            .send_server_notification(ServerNotification::RemoteControlStatusChanged(
+                                RemoteControlStatusChangedNotification {
+                                    state: status.state,
+                                    environment_id: status.environment_id,
                                 },
                             ))
                             .await;

@@ -2602,16 +2602,31 @@
       ],
       "type": "object"
     },
-    "RemoteControlEnvironmentUpdatedNotification": {
-      "description": "Current remote-control environment id exposed to remote-control clients.",
+    "RemoteControlConnectionState": {
+      "enum": [
+        "disabled",
+        "connecting",
+        "connected",
+        "errored"
+      ],
+      "type": "string"
+    },
+    "RemoteControlStatusChangedNotification": {
+      "description": "Current remote-control connection state and environment id exposed to clients.",
       "properties": {
         "environmentId": {
           "type": [
             "string",
             "null"
           ]
+        },
+        "state": {
+          "$ref": "#/definitions/RemoteControlConnectionState"
         }
       },
+      "required": [
+        "state"
+      ],
       "type": "object"
     },
     "RequestId": {
@@ -5357,20 +5372,20 @@
       "properties": {
         "method": {
           "enum": [
-            "remoteControl/environment/updated"
+            "remoteControl/status/changed"
           ],
-          "title": "RemoteControl/environment/updatedNotificationMethod",
+          "title": "RemoteControl/status/changedNotificationMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/RemoteControlEnvironmentUpdatedNotification"
+          "$ref": "#/definitions/RemoteControlStatusChangedNotification"
         }
       },
       "required": [
         "method",
         "params"
       ],
-      "title": "RemoteControl/environment/updatedNotification",
+      "title": "RemoteControl/status/changedNotification",
       "type": "object"
     },
     {

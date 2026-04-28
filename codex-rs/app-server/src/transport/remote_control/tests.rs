@@ -18,6 +18,8 @@ use base64::Engine;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::RemoteControlConnectionState;
+use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::test_support::auth_manager_from_auth;
@@ -116,18 +118,20 @@ fn remote_control_url_for_listener(listener: &TcpListener) -> String {
     format!("http://{addr}/backend-api/")
 }
 
-async fn expect_remote_control_environment_id(
-    environment_id_rx: &mut watch::Receiver<Option<String>>,
+async fn expect_remote_control_status(
+    status_rx: &mut watch::Receiver<RemoteControlStatusChangedNotification>,
+    expected_state: Option<RemoteControlConnectionState>,
     expected_environment_id: Option<&str>,
 ) {
-    timeout(Duration::from_secs(5), environment_id_rx.changed())
+    timeout(Duration::from_secs(5), status_rx.changed())
         .await
-        .expect("environment id event should arrive in time")
-        .expect("environment id watch should remain open");
-    assert_eq!(
-        environment_id_rx.borrow().as_deref(),
-        expected_environment_id
-    );
+        .expect("remote control status event should arrive in time")
+        .expect("remote control status watch should remain open");
+    let status = status_rx.borrow();
+    if let Some(expected_state) = expected_state {
+        assert_eq!(status.state, expected_state);
+    }
+    assert_eq!(status.environment_id.as_deref(), expected_environment_id);
 }
 
 #[tokio::test]
@@ -151,7 +155,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
     )
     .await
     .expect("remote control should start");
-    let mut environment_id_rx = remote_handle.environment_id_receiver();
+    let mut status_rx = remote_handle.status_receiver();
     let enroll_request = accept_http_request(&listener).await;
     assert_eq!(
         enroll_request.request_line,
@@ -163,7 +167,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
     )
     .await;
     let mut websocket = accept_remote_control_connection(&listener).await;
-    expect_remote_control_environment_id(&mut environment_id_rx, Some("env_test")).await;
+    expect_remote_control_status(&mut status_rx, None, Some("env_test")).await;
 
     let client_id = ClientId("client-1".to_string());
     send_client_event(
@@ -422,7 +426,7 @@ async fn remote_control_transport_reconnects_after_disconnect() {
     )
     .await
     .expect("remote control should start");
-    let mut environment_id_rx = remote_handle.environment_id_receiver();
+    let mut status_rx = remote_handle.status_receiver();
 
     let enroll_request = accept_http_request(&listener).await;
     assert_eq!(
@@ -442,7 +446,7 @@ async fn remote_control_transport_reconnects_after_disconnect() {
     drop(first_websocket);
 
     let mut second_websocket = accept_remote_control_connection(&listener).await;
-    expect_remote_control_environment_id(&mut environment_id_rx, Some("env_test")).await;
+    expect_remote_control_status(&mut status_rx, None, Some("env_test")).await;
     send_client_event(
         &mut second_websocket,
         ClientEnvelope {
@@ -545,7 +549,7 @@ async fn remote_control_start_allows_missing_auth_when_enabled() {
 }
 
 #[tokio::test]
-async fn remote_control_start_disables_remote_control_without_state_db() {
+async fn remote_control_start_reports_missing_state_db_as_disabled_when_enabled() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -564,6 +568,14 @@ async fn remote_control_start_disables_remote_control_without_state_db() {
     )
     .await
     .expect("remote control should start disabled without sqlite state db");
+    let mut status_rx = remote_handle.status_receiver();
+    assert_eq!(
+        status_rx.borrow().clone(),
+        RemoteControlStatusChangedNotification {
+            state: RemoteControlConnectionState::Disabled,
+            environment_id: None,
+        }
+    );
 
     timeout(Duration::from_millis(100), listener.accept())
         .await
@@ -573,6 +585,9 @@ async fn remote_control_start_disables_remote_control_without_state_db() {
     timeout(Duration::from_millis(100), listener.accept())
         .await
         .expect_err("remote control should remain disabled without sqlite state db");
+    timeout(Duration::from_millis(20), status_rx.changed())
+        .await
+        .expect_err("status should remain disabled without sqlite state db");
 
     shutdown_token.cancel();
     timeout(Duration::from_secs(1), remote_task)
@@ -655,7 +670,7 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
     )
     .await
     .expect("remote control should start");
-    let mut environment_id_rx = remote_handle.environment_id_receiver();
+    let mut status_rx = remote_handle.status_receiver();
 
     let enroll_request = accept_http_request(&listener).await;
     respond_with_json(
@@ -664,7 +679,7 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
     )
     .await;
     let mut first_websocket = accept_remote_control_connection(&listener).await;
-    expect_remote_control_environment_id(&mut environment_id_rx, Some("env_test")).await;
+    expect_remote_control_status(&mut status_rx, None, Some("env_test")).await;
 
     let client_id = ClientId("client-1".to_string());
     let initialize_message = JSONRPCMessage::Request(codex_app_server_protocol::JSONRPCRequest {
@@ -825,7 +840,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
     )
     .await
     .expect("remote control should start");
-    let mut environment_id_rx = remote_handle.environment_id_receiver();
+    let mut status_rx = remote_handle.status_receiver();
 
     let enroll_request = accept_http_request(&listener).await;
     assert_eq!(
@@ -858,7 +873,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
 
     let (handshake_request, mut websocket) =
         accept_remote_control_backend_connection(&listener).await;
-    expect_remote_control_environment_id(&mut environment_id_rx, Some("env_test")).await;
+    expect_remote_control_status(&mut status_rx, None, Some("env_test")).await;
     assert_eq!(
         handshake_request.path,
         "/backend-api/wham/remote/control/server"
@@ -1254,7 +1269,7 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     )
     .await
     .expect("remote control should start");
-    let mut environment_id_rx = remote_handle.environment_id_receiver();
+    let mut status_rx = remote_handle.status_receiver();
 
     let websocket_request = accept_http_request(&listener).await;
     assert_eq!(
@@ -1265,13 +1280,9 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
         websocket_request.headers.get("x-codex-server-id"),
         Some(&stale_enrollment.server_id)
     );
-    expect_remote_control_environment_id(&mut environment_id_rx, Some("env_stale")).await;
+    expect_remote_control_status(&mut status_rx, None, Some("env_stale")).await;
     respond_with_status(websocket_request.stream, "404 Not Found", "").await;
-    expect_remote_control_environment_id(
-        &mut environment_id_rx,
-        /*expected_environment_id*/ None,
-    )
-    .await;
+    expect_remote_control_status(&mut status_rx, None, /*expected_environment_id*/ None).await;
 
     let enroll_request = accept_http_request(&listener).await;
     assert_eq!(
@@ -1288,7 +1299,7 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     .await;
 
     let (handshake_request, _websocket) = accept_remote_control_backend_connection(&listener).await;
-    expect_remote_control_environment_id(&mut environment_id_rx, Some("env_refreshed")).await;
+    expect_remote_control_status(&mut status_rx, None, Some("env_refreshed")).await;
     assert_eq!(
         handshake_request.headers.get("x-codex-server-id"),
         Some(&refreshed_enrollment.server_id)
