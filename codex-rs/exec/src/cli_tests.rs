@@ -70,3 +70,10 @@ fn parses_config_isolation_flags() {
     assert!(cli.ignore_user_config);
     assert!(cli.ignore_rules);
 }
+
+#[test]
+fn rejects_removed_full_auto_flag() {
+    let result = Cli::try_parse_from(["codex-exec", "--full-auto", "summarize"]);
+
+    assert!(result.is_err());
+}

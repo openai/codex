@@ -21,10 +21,6 @@ pub use login::run_logout;
 
 #[derive(Debug, Parser)]
 pub struct SeatbeltCommand {
-    /// Convenience alias for low-friction sandboxed automatic execution (network-disabled sandbox that can write to cwd and TMPDIR)
-    #[arg(long = "full-auto", default_value_t = false)]
-    pub full_auto: bool,
-
     /// Allow the sandboxed command to bind/connect AF_UNIX sockets rooted at this path. Relative paths are resolved against the current directory. Repeat to allow multiple paths.
     #[arg(long = "allow-unix-socket", value_parser = parse_allow_unix_socket_path)]
     pub allow_unix_sockets: Vec<AbsolutePathBuf>,
@@ -48,10 +44,6 @@ fn parse_allow_unix_socket_path(raw: &str) -> Result<AbsolutePathBuf, String> {
 
 #[derive(Debug, Parser)]
 pub struct LandlockCommand {
-    /// Convenience alias for low-friction sandboxed automatic execution (network-disabled sandbox that can write to cwd and TMPDIR)
-    #[arg(long = "full-auto", default_value_t = false)]
-    pub full_auto: bool,
-
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 
@@ -62,10 +54,6 @@ pub struct LandlockCommand {
 
 #[derive(Debug, Parser)]
 pub struct WindowsCommand {
-    /// Convenience alias for low-friction sandboxed automatic execution (network-disabled sandbox that can write to cwd and TMPDIR)
-    #[arg(long = "full-auto", default_value_t = false)]
-    pub full_auto: bool,
-
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 
