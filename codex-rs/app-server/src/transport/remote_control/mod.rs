@@ -48,30 +48,10 @@ impl RemoteControlHandle {
         if requested_enabled && !self.state_db_available {
             warn!("remote control cannot be enabled because sqlite state db is unavailable");
         }
-        let enabled_changed = self.enabled_tx.send_if_modified(|state| {
+        self.enabled_tx.send_if_modified(|state| {
             let changed = *state != enabled;
             *state = enabled;
             changed
-        });
-        if !enabled_changed {
-            return;
-        }
-
-        let connection_status = if enabled {
-            RemoteControlConnectionStatus::Connecting
-        } else {
-            RemoteControlConnectionStatus::Disabled
-        };
-        self.status_tx.send_if_modified(|status| {
-            let next_status = RemoteControlStatusChangedNotification {
-                status: connection_status,
-                environment_id: None,
-            };
-            if *status == next_status {
-                return false;
-            }
-            *status = next_status;
-            true
         });
     }
 

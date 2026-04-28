@@ -268,7 +268,11 @@ impl RemoteControlWebsocket {
                 .await
             {
                 ConnectOutcome::Connected(websocket_connection) => *websocket_connection,
-                ConnectOutcome::Disabled => continue,
+                ConnectOutcome::Disabled => {
+                    self.status_publisher
+                        .publish_status(RemoteControlConnectionStatus::Disabled);
+                    continue;
+                }
                 ConnectOutcome::Shutdown => break,
             };
 
@@ -435,9 +439,15 @@ impl RemoteControlWebsocket {
         let mut enabled_rx = self.enabled_rx.clone();
         tokio::select! {
             _ = shutdown_token.cancelled() => {}
-            _ = enabled_rx.wait_for(|enabled| !*enabled) => shutdown_token.cancel(),
-            _ = join_set.join_next() => shutdown_token.cancel(),
-        }
+            changed = enabled_rx.wait_for(|enabled| !*enabled) => {
+                if changed.is_ok() {
+                    self.status_publisher
+                        .publish_status(RemoteControlConnectionStatus::Disabled);
+                }
+            }
+            _ = join_set.join_next() => {}
+        };
+        shutdown_token.cancel();
 
         join_set.join_all().await;
     }

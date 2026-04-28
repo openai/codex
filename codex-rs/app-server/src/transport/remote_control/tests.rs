@@ -134,6 +134,34 @@ async fn expect_remote_control_status(
     assert_eq!(status.environment_id.as_deref(), expected_environment_id);
 }
 
+async fn expect_remote_control_status_snapshot(
+    status_rx: &mut watch::Receiver<RemoteControlStatusChangedNotification>,
+    expected_status: RemoteControlStatusChangedNotification,
+) {
+    if *status_rx.borrow() == expected_status {
+        return;
+    }
+
+    let expected_status_for_wait = expected_status.clone();
+    let result = timeout(Duration::from_secs(5), async {
+        loop {
+            status_rx
+                .changed()
+                .await
+                .expect("remote control status watch should remain open");
+            if *status_rx.borrow() == expected_status_for_wait {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "remote control status snapshot should arrive in time; expected {expected_status:?}, latest {:?}",
+        status_rx.borrow().clone()
+    );
+}
+
 #[tokio::test]
 async fn remote_control_transport_manages_virtual_clients_and_routes_messages() {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -640,18 +668,22 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
     )
     .await;
     let mut first_websocket = accept_remote_control_connection(&listener).await;
-    expect_remote_control_status(
+    expect_remote_control_status_snapshot(
         &mut status_rx,
-        /*expected_status*/ None,
-        Some("env_test"),
+        RemoteControlStatusChangedNotification {
+            status: RemoteControlConnectionStatus::Connected,
+            environment_id: Some("env_test".to_string()),
+        },
     )
     .await;
 
     remote_handle.set_enabled(/*enabled*/ false);
-    expect_remote_control_status(
+    expect_remote_control_status_snapshot(
         &mut status_rx,
-        Some(RemoteControlConnectionStatus::Disabled),
-        /*expected_environment_id*/ None,
+        RemoteControlStatusChangedNotification {
+            status: RemoteControlConnectionStatus::Disabled,
+            environment_id: None,
+        },
     )
     .await;
     timeout(Duration::from_secs(1), first_websocket.next())
@@ -662,10 +694,12 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
         .expect_err("disabled remote control should not reconnect");
 
     remote_handle.set_enabled(/*enabled*/ true);
-    expect_remote_control_status(
+    expect_remote_control_status_snapshot(
         &mut status_rx,
-        Some(RemoteControlConnectionStatus::Connecting),
-        /*expected_environment_id*/ None,
+        RemoteControlStatusChangedNotification {
+            status: RemoteControlConnectionStatus::Connecting,
+            environment_id: Some("env_test".to_string()),
+        },
     )
     .await;
     let mut second_websocket = accept_remote_control_connection(&listener).await;
