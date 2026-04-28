@@ -2029,14 +2029,17 @@ mod tests {
     #[tokio::test]
     async fn runtime_start_args_forward_environment_manager() {
         let config = Arc::new(build_test_config().await);
-        let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs {
-            exec_server_url: Some("ws://127.0.0.1:8765".to_string()),
-            local_runtime_paths: ExecServerRuntimePaths::new(
-                std::env::current_exe().expect("current exe"),
-                /*codex_linux_sandbox_exe*/ None,
+        let environment_manager = Arc::new(
+            EnvironmentManager::create_for_tests(
+                Some("ws://127.0.0.1:8765".to_string()),
+                ExecServerRuntimePaths::new(
+                    std::env::current_exe().expect("current exe"),
+                    /*codex_linux_sandbox_exe*/ None,
+                )
+                .expect("runtime paths"),
             )
-            .expect("runtime paths"),
-        }));
+            .await,
+        );
 
         let runtime_args = InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
