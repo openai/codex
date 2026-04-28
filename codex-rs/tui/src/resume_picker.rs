@@ -215,9 +215,9 @@ async fn run_session_picker_with_loader(
     } else {
         ProviderFilter::MatchDefault(config.model_provider_id.to_string())
     };
-        // Remote sessions live in the server's filesystem namespace, so the client
-        // process cwd is not a meaningful row filter. Local cwd filtering and explicit
-        // remote --cd filtering are handled server-side in thread/list.
+    // Remote sessions live in the server's filesystem namespace, so the client
+    // process cwd is not a meaningful row filter. Local cwd filtering and explicit
+    // remote --cd filtering are handled server-side in thread/list.
     let filter_cwd = None;
 
     let mut state = PickerState::new(
