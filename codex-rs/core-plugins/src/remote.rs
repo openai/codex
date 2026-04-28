@@ -49,6 +49,8 @@ pub struct RemotePluginDetail {
     pub marketplace_display_name: String,
     pub summary: RemotePluginSummary,
     pub description: Option<String>,
+    pub release_version: Option<String>,
+    pub bundle_download_url: Option<String>,
     pub skills: Vec<RemotePluginSkill>,
     pub app_ids: Vec<String>,
 }
@@ -227,9 +229,13 @@ struct RemotePluginReleaseInterfaceResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RemotePluginReleaseResponse {
+    #[serde(default)]
+    version: Option<String>,
     #[serde(alias = "displayName")]
     display_name: String,
     description: String,
+    #[serde(default)]
+    bundle_download_url: Option<String>,
     #[serde(default)]
     #[serde(alias = "appIds")]
     app_ids: Vec<String>,
@@ -382,13 +388,46 @@ pub async fn fetch_remote_plugin_detail(
     marketplace_name: &str,
     plugin_id: &str,
 ) -> Result<RemotePluginDetail, RemotePluginCatalogError> {
+    fetch_remote_plugin_detail_with_download_url_option(
+        config,
+        auth,
+        marketplace_name,
+        plugin_id,
+        /*include_download_urls*/ false,
+    )
+    .await
+}
+
+pub async fn fetch_remote_plugin_detail_with_download_urls(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    marketplace_name: &str,
+    plugin_id: &str,
+) -> Result<RemotePluginDetail, RemotePluginCatalogError> {
+    fetch_remote_plugin_detail_with_download_url_option(
+        config,
+        auth,
+        marketplace_name,
+        plugin_id,
+        /*include_download_urls*/ true,
+    )
+    .await
+}
+
+async fn fetch_remote_plugin_detail_with_download_url_option(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    marketplace_name: &str,
+    plugin_id: &str,
+    include_download_urls: bool,
+) -> Result<RemotePluginDetail, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
     let scope = RemotePluginScope::from_marketplace_name(marketplace_name).ok_or_else(|| {
         RemotePluginCatalogError::UnknownMarketplace {
             marketplace_name: marketplace_name.to_string(),
         }
     })?;
-    let plugin = fetch_plugin_detail(config, auth, plugin_id).await?;
+    let plugin = fetch_plugin_detail(config, auth, plugin_id, include_download_urls).await?;
     let actual_marketplace_name = plugin.scope.marketplace_name();
     if actual_marketplace_name != marketplace_name {
         return Err(RemotePluginCatalogError::MarketplaceMismatch {
@@ -433,6 +472,8 @@ pub async fn fetch_remote_plugin_detail(
         marketplace_display_name: scope.marketplace_display_name().to_string(),
         summary: build_remote_plugin_summary(&plugin, installed_plugin.as_ref()),
         description: non_empty_string(Some(&plugin.release.description)),
+        release_version: plugin.release.version,
+        bundle_download_url: plugin.release.bundle_download_url,
         skills,
         app_ids: plugin.release.app_ids,
     })
@@ -651,11 +692,15 @@ async fn fetch_plugin_detail(
     config: &RemotePluginServiceConfig,
     auth: &CodexAuth,
     plugin_id: &str,
+    include_download_urls: bool,
 ) -> Result<RemotePluginDirectoryItem, RemotePluginCatalogError> {
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/{plugin_id}");
     let client = build_reqwest_client();
-    let request = authenticated_request(client.get(&url), auth)?;
+    let mut request = authenticated_request(client.get(&url), auth)?;
+    if include_download_urls {
+        request = request.query(&[("includeDownloadUrls", true)]);
+    }
     send_and_decode(request, &url).await
 }
 
