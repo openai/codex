@@ -26,7 +26,6 @@ const CODEX_HOOK_MATCHER_EVENTS: [&str; 4] = [
     "SessionStart",
 ];
 const COMMAND_SKILL_PREFIX: &str = "source-command";
-const MANUAL_MIGRATION_HEADER: &str = "## MANUAL MIGRATION REQUIRED";
 const MAX_SKILL_NAME_LEN: usize = 64;
 const MAX_SKILL_DESCRIPTION_LEN: usize = 1024;
 
@@ -283,8 +282,12 @@ fn mcp_server_toml_table(
 ) -> Option<toml::map::Map<String, TomlValue>> {
     let mut table = toml::map::Map::new();
     let server_config = server_config?;
+    let transport_type = server_config.get("type").and_then(JsonValue::as_str);
 
     if let Some(command) = server_config.get("command").and_then(json_string) {
+        if !matches!(transport_type, None | Some("stdio")) {
+            return None;
+        }
         if contains_env_placeholder(&command) {
             return None;
         }
@@ -300,15 +303,21 @@ fn mcp_server_toml_table(
             }
         }
         if let Some(env) = server_config.get("env").and_then(JsonValue::as_object) {
-            append_env_config(&mut table, env);
+            append_env_config(&mut table, env)?;
         }
     } else if let Some(url) = server_config.get("url").and_then(json_string) {
+        if !matches!(
+            transport_type,
+            None | Some("http") | Some("streamable_http")
+        ) {
+            return None;
+        }
         if contains_env_placeholder(&url) {
             return None;
         }
         table.insert("url".to_string(), TomlValue::String(url));
         if let Some(headers) = server_config.get("headers").and_then(JsonValue::as_object) {
-            append_header_config(&mut table, headers);
+            append_header_config(&mut table, headers)?;
         }
     } else {
         return None;
@@ -335,7 +344,7 @@ fn mcp_server_toml_table(
 fn append_header_config(
     table: &mut toml::map::Map<String, TomlValue>,
     headers: &serde_json::Map<String, JsonValue>,
-) {
+) -> Option<()> {
     let mut static_headers = toml::map::Map::new();
     let mut env_headers = toml::map::Map::new();
 
@@ -356,7 +365,7 @@ fn append_header_config(
         if let Some(env_var) = parse_env_placeholder(&header_value) {
             env_headers.insert(key.clone(), TomlValue::String(env_var));
         } else if contains_env_placeholder(&header_value) {
-            continue;
+            return None;
         } else {
             static_headers.insert(key.clone(), TomlValue::String(header_value));
         }
@@ -371,12 +380,13 @@ fn append_header_config(
             TomlValue::Table(env_headers),
         );
     }
+    Some(())
 }
 
 fn append_env_config(
     table: &mut toml::map::Map<String, TomlValue>,
     env: &serde_json::Map<String, JsonValue>,
-) {
+) -> Option<()> {
     let mut static_env = toml::map::Map::new();
     let mut env_vars = Vec::new();
 
@@ -385,7 +395,7 @@ fn append_env_config(
         if parse_env_placeholder(&env_value).as_deref() == Some(key.as_str()) {
             env_vars.push(TomlValue::String(key.clone()));
         } else if contains_env_placeholder(&env_value) {
-            continue;
+            return None;
         } else {
             static_env.insert(key.clone(), TomlValue::String(env_value));
         }
@@ -397,6 +407,7 @@ fn append_env_config(
     if !static_env.is_empty() {
         table.insert("env".to_string(), TomlValue::Table(static_env));
     }
+    Some(())
 }
 
 fn parse_env_placeholder(value: &str) -> Option<String> {
@@ -449,6 +460,13 @@ fn append_convertible_hook_groups(settings: &JsonValue, migration: &mut HookMigr
             let Some(group_object) = group.as_object() else {
                 continue;
             };
+            if group_object.contains_key("if")
+                || group_object
+                    .keys()
+                    .any(|key| !matches!(key.as_str(), "matcher" | "hooks"))
+            {
+                continue;
+            }
             let mut hook_commands = Vec::new();
             if let Some(hooks) = group_object.get("hooks").and_then(JsonValue::as_array) {
                 for hook in hooks {
@@ -462,7 +480,17 @@ fn append_convertible_hook_groups(settings: &JsonValue, migration: &mut HookMigr
                     if hook_type != "command" {
                         continue;
                     }
-                    if hook_object.get("if").is_some() {
+                    if hook_object.keys().any(|key| {
+                        !matches!(
+                            key.as_str(),
+                            "type"
+                                | "command"
+                                | "timeout"
+                                | "timeoutSec"
+                                | "statusMessage"
+                                | "async"
+                        )
+                    }) {
                         continue;
                     }
                     if hook_object
@@ -791,6 +819,9 @@ fn command_skill_name_if_supported(
     if description.chars().count() > MAX_SKILL_DESCRIPTION_LEN {
         return None;
     }
+    if has_unsupported_command_template_features(&document.body) {
+        return None;
+    }
     Some(name)
 }
 
@@ -822,48 +853,22 @@ fn render_command_skill(body: &str, name: &str, description: &str, source_name: 
     } else {
         body
     };
-    let mut manual_notes = vec![format!(
-        "Migrated from source command `{source_name}` into a Codex skill. Invoke it as `${name}` and manually rewrite any slash-command behavior that depended on provider-specific runtime expansion."
-    )];
-    manual_notes.extend(command_caveats(&template_body));
     format!(
-        "---\nname: {}\ndescription: {}\n---\n\n# {name}\n\nUse this skill when the user asks to run the migrated source command `{source_name}`.\n\n## Command Template\n\n{template_body}\n\n{}\n",
+        "---\nname: {}\ndescription: {}\n---\n\n# {name}\n\nUse this skill when the user asks to run the migrated source command `{source_name}`.\n\n## Command Template\n\n{template_body}\n",
         yaml_string(name),
         yaml_string(&rewrite_external_agent_terms(description)),
-        format_manual_migration_block(&manual_notes)
     )
 }
 
-fn command_caveats(template: &str) -> Vec<String> {
-    let mut caveats = Vec::new();
-    if template.contains("$ARGUMENTS") || contains_numbered_argument_placeholder(template) {
-        caveats.push(
-            "Provider argument placeholders like `$ARGUMENTS` or `$1` were preserved as text; rewrite them into natural-language instructions for Codex."
-                .to_string(),
-        );
-    }
-    if template.contains("{{") && template.contains("}}") {
-        caveats.push(
-            "Provider template variables like `{{name}}` were preserved as text; rewrite them into natural-language instructions for Codex."
-                .to_string(),
-        );
-    }
-    if template.contains("!`") || template.contains("! `") {
-        caveats.push(
-            "Provider shell-output interpolation like ``!`command` `` was preserved as text; replace it with explicit Codex instructions to run the command when needed."
-                .to_string(),
-        );
-    }
-    if template
-        .split_whitespace()
-        .any(|token| token.strip_prefix('@').is_some_and(|rest| !rest.is_empty()))
-    {
-        caveats.push(
-            "Provider automatic file-reference expansion was preserved as text; verify Codex should read those files explicitly."
-                .to_string(),
-        );
-    }
-    caveats
+fn has_unsupported_command_template_features(template: &str) -> bool {
+    template.contains("$ARGUMENTS")
+        || contains_numbered_argument_placeholder(template)
+        || (template.contains("{{") && template.contains("}}"))
+        || template.contains("!`")
+        || template.contains("! `")
+        || template
+            .split_whitespace()
+            .any(|token| token.strip_prefix('@').is_some_and(|rest| !rest.is_empty()))
 }
 
 fn contains_numbered_argument_placeholder(template: &str) -> bool {
@@ -881,18 +886,6 @@ fn frontmatter_string(
         .get(key)
         .and_then(FrontmatterValue::as_scalar)
         .map(ToOwned::to_owned)
-}
-
-fn format_manual_migration_block(notes: &[String]) -> String {
-    format!(
-        "{MANUAL_MIGRATION_HEADER}\n\n{}",
-        notes
-            .iter()
-            .filter(|note| !note.trim().is_empty())
-            .map(|note| note.trim())
-            .collect::<Vec<_>>()
-            .join("\n\n")
-    )
 }
 
 fn map_model_name(model: &str) -> String {
@@ -1017,6 +1010,29 @@ mod tests {
     }
 
     #[test]
+    fn mcp_migration_skips_unsupported_transports_and_placeholders() {
+        let root = tempfile::TempDir::new().expect("tempdir");
+        fs::write(
+            root.path().join(".mcp.json"),
+            r#"{
+              "mcpServers": {
+                "legacy-sse": {"type": "sse", "url": "https://example.invalid/sse"},
+                "vault": {
+                  "url": "https://example.invalid/vault",
+                  "headers": {"Authorization": "Bearer ${VAULT_TOKEN:-dev-token}"}
+                }
+              }
+            }"#,
+        )
+        .expect("write mcp");
+
+        assert_eq!(
+            build_mcp_config_from_external(root.path(), /*settings*/ None).unwrap(),
+            TomlValue::Table(Default::default())
+        );
+    }
+
+    #[test]
     fn command_skill_names_include_nested_paths() {
         let root = Path::new("/repo/.claude/commands");
         let file = Path::new("/repo/.claude/commands/pr/review.md");
@@ -1031,6 +1047,17 @@ mod tests {
             "/repo/.claude/commands/this/is/a/deeply/nested/command/with/a/very/long/name.md",
         );
         let document = parse_document_content("---\ndescription: Review PR\n---\nReview\n");
+
+        assert!(command_skill_name_if_supported(root, file, &document).is_none());
+    }
+
+    #[test]
+    fn commands_with_provider_runtime_expansion_are_skipped() {
+        let root = Path::new("/repo/.claude/commands");
+        let file = Path::new("/repo/.claude/commands/deploy.md");
+        let document = parse_document_content(
+            "---\ndescription: Deploy\n---\nDeploy $ARGUMENTS from @release.yaml\n",
+        );
 
         assert!(command_skill_name_if_supported(root, file, &document).is_none());
     }
@@ -1074,6 +1101,13 @@ mod tests {
             "hooks": {
                 "PreToolUse": [{
                     "matcher": "Bash",
+                    "if": "tool_input.command contains 'rm'",
+                    "hooks": [{
+                        "type": "command",
+                        "command": "python3 .claude/hooks/policy_gate.py"
+                    }]
+                }, {
+                    "matcher": "Edit",
                     "hooks": [
                         {
                             "type": "command",

@@ -229,7 +229,7 @@ async fn detect_repo_lists_mcp_hooks_commands_and_subagents() {
             .join("commands")
             .join("pr")
             .join("review.md"),
-        "---\ndescription: Review PR\n---\nReview $ARGUMENTS\n",
+        "---\ndescription: Review PR\n---\nReview the pull request carefully.\n",
     )
     .expect("write command");
     fs::write(
@@ -361,7 +361,7 @@ async fn import_repo_migrates_mcp_hooks_commands_and_subagents() {
             .join("commands")
             .join("pr")
             .join("review.md"),
-        "---\ndescription: Review PR\n---\nReview $ARGUMENTS and @README.md\n",
+        "---\ndescription: Review PR\n---\nReview the pull request carefully.\n",
     )
     .expect("write command");
     fs::write(
@@ -485,7 +485,7 @@ codex_hooks = true
                 .join("SKILL.md")
         )
         .expect("read command skill"),
-        "---\nname: \"source-command-pr-review\"\ndescription: \"Review PR\"\n---\n\n# source-command-pr-review\n\nUse this skill when the user asks to run the migrated source command `pr-review`.\n\n## Command Template\n\nReview $ARGUMENTS and @README.md\n\n## MANUAL MIGRATION REQUIRED\n\nMigrated from source command `pr-review` into a Codex skill. Invoke it as `$source-command-pr-review` and manually rewrite any slash-command behavior that depended on provider-specific runtime expansion.\n\nProvider argument placeholders like `$ARGUMENTS` or `$1` were preserved as text; rewrite them into natural-language instructions for Codex.\n\nProvider automatic file-reference expansion was preserved as text; verify Codex should read those files explicitly.\n"
+        "---\nname: \"source-command-pr-review\"\ndescription: \"Review PR\"\n---\n\n# source-command-pr-review\n\nUse this skill when the user asks to run the migrated source command `pr-review`.\n\n## Command Template\n\nReview the pull request carefully.\n"
     );
 
     let agent: TomlValue = toml::from_str(
