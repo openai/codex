@@ -1399,7 +1399,10 @@ pub struct AgentRoleConfig {
     pub nickname_candidates: Option<Vec<String>>,
 }
 
-fn resolve_tool_suggest_config(config_toml: &ConfigToml) -> ToolSuggestConfig {
+fn resolve_tool_suggest_config(
+    config_toml: &ConfigToml,
+    config_layer_stack: &ConfigLayerStack,
+) -> ToolSuggestConfig {
     let discoverables = config_toml
         .tool_suggest
         .as_ref()
@@ -1418,14 +1421,43 @@ fn resolve_tool_suggest_config(config_toml: &ConfigToml) -> ToolSuggestConfig {
         })
         .collect();
     let mut seen_disabled_tools = HashSet::new();
-    let disabled_tools = config_toml
-        .tool_suggest
-        .as_ref()
-        .into_iter()
-        .flat_map(|tool_suggest| tool_suggest.disabled_tools.iter())
-        .filter_map(ToolSuggestDisabledTool::normalized)
-        .filter(|disabled_tool| seen_disabled_tools.insert(disabled_tool.clone()))
-        .collect();
+    let mut disabled_tools = Vec::new();
+    let mut add_disabled_tool = |disabled_tool: ToolSuggestDisabledTool| {
+        if let Some(disabled_tool) = disabled_tool.normalized()
+            && seen_disabled_tools.insert(disabled_tool.clone())
+        {
+            disabled_tools.push(disabled_tool);
+        }
+    };
+
+    let layers = config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    );
+    if layers.is_empty() {
+        for disabled_tool in config_toml
+            .tool_suggest
+            .as_ref()
+            .into_iter()
+            .flat_map(|tool_suggest| tool_suggest.disabled_tools.iter().cloned())
+        {
+            add_disabled_tool(disabled_tool);
+        }
+    } else {
+        for layer in layers {
+            let Some(tool_suggest) = layer
+                .config
+                .get("tool_suggest")
+                .cloned()
+                .and_then(|value| value.try_into::<ToolSuggestConfig>().ok())
+            else {
+                continue;
+            };
+            for disabled_tool in tool_suggest.disabled_tools {
+                add_disabled_tool(disabled_tool);
+            }
+        }
+    }
 
     ToolSuggestConfig {
         discoverables,
@@ -1830,7 +1862,7 @@ impl Config {
                 .clone(),
             None => ConfigProfile::default(),
         };
-        let tool_suggest = resolve_tool_suggest_config(&cfg);
+        let tool_suggest = resolve_tool_suggest_config(&cfg, &config_layer_stack);
         let feature_overrides = FeatureOverrides {
             include_apply_patch_tool: include_apply_patch_tool_override,
             web_search_request: override_tools_web_search_request,
