@@ -36,6 +36,7 @@ members = [
     "hooks",
     "secrets",
     "exec",
+    "file-system",
     "exec-server",
     "execpolicy",
     "execpolicy-legacy",
@@ -142,6 +143,7 @@ codex-core-plugins = { path = "core-plugins" }
 codex-core-skills = { path = "core-skills" }
 codex-device-key = { path = "device-key" }
 codex-exec = { path = "exec" }
+codex-file-system = { path = "file-system" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }

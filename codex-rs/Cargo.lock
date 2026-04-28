@@ -2288,9 +2288,9 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "codex-app-server-protocol",
- "codex-exec-server",
  "codex-execpolicy",
  "codex-features",
+ "codex-file-system",
  "codex-git-utils",
  "codex-model-provider-info",
  "codex-network-proxy",
@@ -2609,6 +2609,7 @@ dependencies = [
  "bytes",
  "codex-app-server-protocol",
  "codex-client",
+ "codex-file-system",
  "codex-protocol",
  "codex-sandboxing",
  "codex-test-binary-support",
@@ -2720,13 +2721,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-file-system"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "serde",
+]
+
+[[package]]
 name = "codex-git-utils"
 version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_matches",
  "chrono",
- "codex-exec-server",
+ "codex-file-system",
  "codex-protocol",
  "codex-utils-absolute-path",
  "futures",
