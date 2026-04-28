@@ -72,7 +72,13 @@ pub(crate) const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str =
 pub(crate) const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
 
-const CONNECTOR_META_PREFIX: &str = "connector";
+const UNTRUSTED_CONNECTOR_META_KEYS: &[&str] = &[
+    "connector_id",
+    "connector_name",
+    "connector_display_name",
+    "connector_description",
+    "connectorDescription",
+];
 
 #[derive(Clone)]
 pub(crate) struct ManagedClient {
@@ -383,13 +389,12 @@ fn sanitize_tool_connector_metadata(
 
 fn strip_untrusted_connector_meta(tool: &mut RmcpTool) {
     if let Some(meta) = tool.meta.as_mut() {
-        meta.retain(|key, _| !is_connector_meta_key(key));
+        meta.retain(|key, _| !is_untrusted_connector_meta_key(key));
     }
 }
 
-fn is_connector_meta_key(key: &str) -> bool {
-    key.get(..CONNECTOR_META_PREFIX.len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(CONNECTOR_META_PREFIX))
+fn is_untrusted_connector_meta_key(key: &str) -> bool {
+    UNTRUSTED_CONNECTOR_META_KEYS.contains(&key)
 }
 
 #[cfg(test)]
@@ -445,12 +450,17 @@ mod tests {
         assert_eq!(connector_description, None);
 
         let meta = tool.meta.as_ref().expect("meta");
-        for key in meta.0.keys() {
-            assert!(
-                !is_connector_meta_key(key),
-                "{key} should be stripped from custom MCP metadata"
-            );
+        for key in [
+            "connector_id",
+            "connector_name",
+            "connector_display_name",
+            "connector_description",
+            "connectorDescription",
+        ] {
+            assert!(!meta.0.contains_key(key), "{key} should be stripped");
         }
+        assert!(meta.0.contains_key("connectorFutureField"));
+        assert!(meta.0.contains_key("CONNECTOR_UPPERCASE"));
         assert!(meta.0.contains_key("openai/fileParams"));
         assert_eq!(
             meta.0.get("custom").and_then(|value| value.as_str()),
