@@ -1142,6 +1142,9 @@ impl MessageProcessor {
             .external_agent_config_api
             .prepare_pending_session_imports(&params)?;
         let pending_plugin_imports = self.external_agent_config_api.import(params).await?;
+        if has_plugin_imports {
+            self.handle_config_mutation().await;
+        }
         for pending_session_import in pending_session_imports {
             let imported_thread_id = self
                 .codex_message_processor
@@ -1149,9 +1152,6 @@ impl MessageProcessor {
                 .await?;
             self.external_agent_config_api
                 .record_imported_session(&pending_session_import.source_path, imported_thread_id);
-        }
-        if has_plugin_imports {
-            self.handle_config_mutation().await;
         }
         self.outgoing
             .send_response(request_id, ExternalAgentConfigImportResponse {})
