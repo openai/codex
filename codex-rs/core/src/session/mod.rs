@@ -375,8 +375,7 @@ pub struct Codex {
 
 fn tool_capability_bounds(capabilities: ProviderCapabilities) -> ToolCapabilityBounds {
     ToolCapabilityBounds {
-        tool_search: capabilities.tool_search,
-        tool_suggest: capabilities.tool_suggest,
+        namespace_tools: capabilities.namespace_tools,
         image_generation: capabilities.image_generation,
         web_search: capabilities.web_search,
     }
@@ -2589,10 +2588,7 @@ impl Session {
                     .push(PersonalitySpecInstructions::new(personality_message).render());
             }
         }
-        if turn_context.provider.capabilities().app_connectors
-            && turn_context.config.include_apps_instructions
-            && turn_context.apps_enabled()
-        {
+        if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             let accessible_and_enabled_connectors =
                 connectors::list_accessible_and_enabled_connectors_from_manager(

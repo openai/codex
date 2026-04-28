@@ -58,10 +58,7 @@ impl ModelProvider for AmazonBedrockModelProvider {
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
-            app_connectors: false,
-            mcp_servers: false,
-            tool_search: false,
-            tool_suggest: false,
+            namespace_tools: false,
             image_generation: false,
             web_search: false,
         }
@@ -125,7 +122,7 @@ mod tests {
 
         assert_eq!(
             api_provider.base_url,
-            "https://bedrock-mantle.eu-central-1.api.aws/v1"
+            "https://bedrock-mantle.eu-central-1.api.aws/api/openai"
         );
     }
 
@@ -138,12 +135,9 @@ mod tests {
         assert_eq!(
             provider.capabilities(),
             ProviderCapabilities {
-                app_connectors: false,
-                mcp_servers: false,
-                tool_search: false,
-                tool_suggest: false,
-                image_generation: false,
-                web_search: false,
+                namespace_tools: false,
+                image_generation: true,
+                web_search: true,
             }
         );
     }

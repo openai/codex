@@ -26,10 +26,7 @@ use crate::models_endpoint::OpenAiModelsEndpoint;
 /// that the active provider marks unsupported here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderCapabilities {
-    pub app_connectors: bool,
-    pub mcp_servers: bool,
-    pub tool_search: bool,
-    pub tool_suggest: bool,
+    pub namespace_tools: bool,
     pub image_generation: bool,
     pub web_search: bool,
 }
@@ -37,10 +34,7 @@ pub struct ProviderCapabilities {
 impl Default for ProviderCapabilities {
     fn default() -> Self {
         Self {
-            app_connectors: true,
-            mcp_servers: true,
-            tool_search: true,
-            tool_suggest: true,
+            namespace_tools: true,
             image_generation: true,
             web_search: true,
         }
@@ -461,7 +455,7 @@ mod tests {
         assert_eq!(
             model_ids,
             vec![
-                "openai.gpt-5.4-cmb",
+                "openai.gpt-5.4",
                 "openai.gpt-oss-120b",
                 "openai.gpt-oss-20b"
             ]
@@ -474,7 +468,7 @@ mod tests {
             .find(|preset| preset.is_default)
             .expect("Bedrock catalog should have a default model");
 
-        assert_eq!(default_model.model, "openai.gpt-5.4-cmb");
+        assert_eq!(default_model.model, "openai.gpt-5.4");
     }
 
     #[tokio::test]

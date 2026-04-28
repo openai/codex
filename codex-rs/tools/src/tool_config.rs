@@ -94,6 +94,7 @@ pub struct ToolsConfig {
     pub web_search_tool_type: WebSearchToolType,
     pub image_gen_tool: bool,
     pub search_tool: bool,
+    pub namespace_tools: bool,
     pub tool_suggest: bool,
     pub exec_permission_approvals_enabled: bool,
     pub request_permissions_tool_enabled: bool,
@@ -116,8 +117,7 @@ pub struct ToolsConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolCapabilityBounds {
-    pub tool_search: bool,
-    pub tool_suggest: bool,
+    pub namespace_tools: bool,
     pub image_generation: bool,
     pub web_search: bool,
 }
@@ -125,8 +125,7 @@ pub struct ToolCapabilityBounds {
 impl Default for ToolCapabilityBounds {
     fn default() -> Self {
         Self {
-            tool_search: true,
-            tool_suggest: true,
+            namespace_tools: true,
             image_generation: true,
             web_search: true,
         }
@@ -232,6 +231,7 @@ impl ToolsConfig {
             web_search_tool_type: model_info.web_search_tool_type,
             image_gen_tool: include_image_gen_tool,
             search_tool: include_search_tool,
+            namespace_tools: true,
             tool_suggest: include_tool_suggest,
             exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
@@ -259,11 +259,8 @@ impl ToolsConfig {
     }
 
     pub fn with_capability_bounds(mut self, bounds: ToolCapabilityBounds) -> Self {
-        if !bounds.tool_search {
-            self.search_tool = false;
-        }
-        if !bounds.tool_suggest {
-            self.tool_suggest = false;
+        if !bounds.namespace_tools {
+            self.namespace_tools = false;
         }
         if !bounds.image_generation {
             self.image_gen_tool = false;

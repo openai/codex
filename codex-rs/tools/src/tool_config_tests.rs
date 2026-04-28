@@ -233,7 +233,7 @@ fn image_generation_requires_feature_and_supported_model() {
 }
 
 #[test]
-fn capability_bounds_disable_optional_tool_surfaces() {
+fn capability_bounds_disable_provider_bound_tool_surfaces() {
     let model_info = model_info();
     let features = Features::with_defaults();
     let available_models = Vec::new();
@@ -250,16 +250,17 @@ fn capability_bounds_disable_optional_tool_surfaces() {
     tools_config.search_tool = true;
     tools_config.tool_suggest = true;
     tools_config.image_gen_tool = true;
+    tools_config.namespace_tools = true;
 
     let tools_config = tools_config.with_capability_bounds(ToolCapabilityBounds {
-        tool_search: false,
-        tool_suggest: false,
+        namespace_tools: false,
         image_generation: false,
         web_search: false,
     });
 
-    assert!(!tools_config.search_tool);
-    assert!(!tools_config.tool_suggest);
+    assert!(tools_config.search_tool);
+    assert!(tools_config.tool_suggest);
     assert!(!tools_config.image_gen_tool);
+    assert!(!tools_config.namespace_tools);
     assert_eq!(tools_config.web_search_mode, None);
 }

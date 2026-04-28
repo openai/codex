@@ -17,7 +17,6 @@ use codex_connectors::DirectoryListResponse;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
-use codex_model_provider::create_model_provider;
 use codex_protocol::models::PermissionProfile;
 use codex_tools::DiscoverableTool;
 use rmcp::model::ToolAnnotations;
@@ -232,15 +231,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = McpManager::new(Arc::clone(&plugins_manager));
     let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config).await;
-    let capabilities =
-        create_model_provider(config.model_provider.clone(), /*auth_manager*/ None).capabilities();
-    if !capabilities.app_connectors {
-        return Ok(AccessibleConnectorsStatus {
-            connectors: Vec::new(),
-            codex_apps_ready: true,
-        });
-    }
-
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
         let cached_connectors = codex_connectors::filter::filter_disallowed_connectors(

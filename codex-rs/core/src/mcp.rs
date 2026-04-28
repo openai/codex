@@ -10,7 +10,6 @@ use codex_mcp::ToolPluginProvenance;
 use codex_mcp::configured_mcp_servers;
 use codex_mcp::effective_mcp_servers;
 use codex_mcp::tool_plugin_provenance as collect_tool_plugin_provenance;
-use codex_model_provider::create_model_provider;
 
 #[derive(Clone)]
 pub struct McpManager {
@@ -23,17 +22,7 @@ impl McpManager {
     }
 
     pub async fn mcp_config(&self, config: &Config) -> McpConfig {
-        let mut mcp_config = config.to_mcp_config(self.plugins_manager.as_ref()).await;
-        let capabilities =
-            create_model_provider(config.model_provider.clone(), /*auth_manager*/ None)
-                .capabilities();
-        if !capabilities.mcp_servers {
-            mcp_config.configured_mcp_servers.clear();
-        }
-        if !capabilities.app_connectors {
-            mcp_config.apps_enabled = false;
-        }
-        mcp_config
+        config.to_mcp_config(self.plugins_manager.as_ref()).await
     }
 
     pub async fn configured_servers(&self, config: &Config) -> HashMap<String, McpServerConfig> {
