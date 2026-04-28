@@ -37,7 +37,12 @@ impl CodexMessageProcessor {
         {
             return Ok(empty_response());
         }
-        plugins_manager.maybe_start_non_curated_plugin_cache_refresh(&roots);
+        plugins_manager.maybe_start_plugin_list_background_tasks_for_config(
+            &config,
+            auth.clone(),
+            &roots,
+            Some(self.effective_plugins_changed_callback(config.clone())),
+        );
 
         let config_for_marketplace_listing = config.clone();
         let plugins_manager_for_marketplace_listing = plugins_manager.clone();
@@ -362,17 +367,10 @@ impl CodexMessageProcessor {
             }
         };
 
-        self.clear_plugin_related_caches();
+        self.on_effective_plugins_changed(config.clone());
 
         let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
-
         if !plugin_mcp_servers.is_empty() {
-            if let Err(err) = self.queue_mcp_server_refresh_for_config(&config).await {
-                warn!(
-                    plugin = result.plugin_id.as_key(),
-                    "failed to queue MCP refresh after plugin install: {err:?}"
-                );
-            }
             self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
                 .await;
         }
@@ -464,19 +462,16 @@ impl CodexMessageProcessor {
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "install remote plugin"))?;
 
-        // TODO(remote plugins): remote marketplaces do not yet have a local
-        // marketplace/read-path sync, so this install path reads MCP/apps directly
-        // from the just-cached bundle.
-        self.clear_plugin_related_caches();
+        self.thread_manager
+            .plugins_manager()
+            .maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
+                &config,
+                auth.clone(),
+                Some(self.effective_plugins_changed_callback(config.clone())),
+            );
 
         let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
         if !plugin_mcp_servers.is_empty() {
-            if let Err(err) = self.queue_mcp_server_refresh_for_config(&config).await {
-                warn!(
-                    plugin = result.plugin_id.as_key(),
-                    "failed to queue MCP refresh after remote plugin install: {err:?}"
-                );
-            }
             self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
                 .await;
         }
@@ -591,7 +586,15 @@ impl CodexMessageProcessor {
             .uninstall_plugin(plugin_id)
             .await
             .map_err(Self::plugin_uninstall_error)?;
-        self.clear_plugin_related_caches();
+        match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(config) => self.on_effective_plugins_changed(config),
+            Err(err) => {
+                warn!(
+                    "failed to reload config after plugin uninstall, clearing plugin-related caches only: {err:?}"
+                );
+                self.clear_plugin_related_caches();
+            }
+        }
         Ok(PluginUninstallResponse {})
     }
 
@@ -675,16 +678,32 @@ impl CodexMessageProcessor {
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
-        codex_core_plugins::remote::uninstall_remote_plugin(
+        let uninstall_result = codex_core_plugins::remote::uninstall_remote_plugin(
             &remote_plugin_service_config,
             auth.as_ref(),
             config.codex_home.to_path_buf(),
             &plugin_id,
         )
-        .await
-        .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "uninstall remote plugin"))?;
+        .await;
 
-        self.clear_plugin_related_caches();
+        if matches!(
+            &uninstall_result,
+            Ok(()) | Err(RemotePluginCatalogError::CacheRemove(_))
+        ) {
+            let plugins_manager = self.thread_manager.plugins_manager();
+            if plugins_manager.clear_remote_installed_plugins_cache() {
+                self.on_effective_plugins_changed(config.clone());
+            }
+            plugins_manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
+                &config,
+                auth.clone(),
+                Some(self.effective_plugins_changed_callback(config.clone())),
+            );
+        }
+
+        uninstall_result.map_err(|err| {
+            remote_plugin_catalog_error_to_jsonrpc(err, "uninstall remote plugin")
+        })?;
         Ok(PluginUninstallResponse {})
     }
 }

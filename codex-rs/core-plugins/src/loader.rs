@@ -5,6 +5,7 @@ use crate::manifest::load_plugin_manifest;
 use crate::marketplace::MarketplacePluginSource;
 use crate::marketplace::list_marketplaces;
 use crate::marketplace::load_marketplace;
+use crate::remote::RemoteInstalledPlugin;
 use crate::store::PluginStore;
 use crate::store::plugin_version_for_source;
 use codex_config::ConfigLayerStack;
@@ -107,13 +108,14 @@ struct PluginAppConfig {
 
 pub async fn load_plugins_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
+    extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
     restriction_product: Option<Product>,
 ) -> PluginLoadOutcome<McpServerConfig> {
     let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
-    let mut configured_plugins: Vec<_> = configured_plugins_from_stack(config_layer_stack)
-        .into_iter()
-        .collect();
+    let mut configured_plugins = configured_plugins_from_stack(config_layer_stack);
+    configured_plugins.extend(extra_plugins);
+    let mut configured_plugins: Vec<_> = configured_plugins.into_iter().collect();
     configured_plugins.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
     let mut plugins = Vec::with_capacity(configured_plugins.len());
@@ -143,6 +145,40 @@ pub async fn load_plugins_from_layer_stack(
     }
 
     PluginLoadOutcome::from_plugins(plugins)
+}
+
+pub fn remote_installed_plugins_to_config(
+    plugins: &[RemoteInstalledPlugin],
+    store: &PluginStore,
+) -> HashMap<String, PluginConfig> {
+    plugins
+        .iter()
+        .filter_map(|plugin| {
+            let plugin_id =
+                match PluginId::new(plugin.name.clone(), plugin.marketplace_name.clone()) {
+                    Ok(plugin_id) => plugin_id,
+                    Err(err) => {
+                        warn!(
+                            plugin = %plugin.name,
+                            remote_id = %plugin.id,
+                            error = %err,
+                            "ignoring invalid remote installed plugin name"
+                        );
+                        return None;
+                    }
+                };
+            // TODO(remote plugins): download or update missing local bundles during remote
+            // installed reconciliation. Until then, only publish remote installed state for
+            // bundles already present in the local plugin cache.
+            store.active_plugin_root(&plugin_id)?;
+            Some((
+                plugin_id.as_key(),
+                PluginConfig {
+                    enabled: plugin.enabled,
+                },
+            ))
+        })
+        .collect()
 }
 
 pub fn refresh_curated_plugin_cache(

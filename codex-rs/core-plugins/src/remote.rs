@@ -40,6 +40,14 @@ pub struct RemoteMarketplace {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct RemoteInstalledPlugin {
+    pub marketplace_name: String,
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct RemotePluginSummary {
     pub id: String,
     pub name: String,
@@ -369,6 +377,39 @@ pub async fn fetch_remote_marketplaces(
     Ok(marketplaces)
 }
 
+pub async fn fetch_remote_installed_plugins(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+) -> Result<Vec<RemoteInstalledPlugin>, RemotePluginCatalogError> {
+    let auth = ensure_chatgpt_auth(auth)?;
+    let global = async {
+        let scope = RemotePluginScope::Global;
+        let installed_plugins = fetch_installed_plugins_for_scope(config, auth, scope).await?;
+        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
+    };
+    let workspace = async {
+        let scope = RemotePluginScope::Workspace;
+        let installed_plugins = fetch_installed_plugins_for_scope(config, auth, scope).await?;
+        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
+    };
+
+    let (global, workspace) = tokio::try_join!(global, workspace)?;
+    let mut installed_plugins = [global, workspace]
+        .into_iter()
+        .flat_map(|(scope, plugins)| {
+            plugins
+                .into_iter()
+                .map(move |plugin| remote_installed_plugin_to_info(scope, &plugin))
+        })
+        .collect::<Vec<_>>();
+    installed_plugins.sort_by(|left, right| {
+        left.marketplace_name
+            .cmp(&right.marketplace_name)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(installed_plugins)
+}
+
 pub async fn fetch_remote_plugin_detail(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
@@ -668,6 +709,22 @@ fn build_remote_plugin_summary(
         install_policy: plugin.installation_policy,
         auth_policy: plugin.authentication_policy,
         interface: remote_plugin_interface_to_info(plugin),
+    }
+}
+
+fn remote_installed_plugin_to_info(
+    scope: RemotePluginScope,
+    installed_plugin: &RemotePluginInstalledItem,
+) -> RemoteInstalledPlugin {
+    let plugin = &installed_plugin.plugin;
+    // Remote per-skill disabled state (`disabled_skill_names`) is intentionally
+    // not projected into skills/list yet; local skills.config remains the
+    // supported source for skill enablement.
+    RemoteInstalledPlugin {
+        marketplace_name: scope.marketplace_name().to_string(),
+        id: plugin.id.clone(),
+        name: plugin.name.clone(),
+        enabled: installed_plugin.enabled,
     }
 }
 

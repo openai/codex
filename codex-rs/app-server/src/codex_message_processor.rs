@@ -722,6 +722,35 @@ impl CodexMessageProcessor {
         self.clear_plugin_related_caches();
     }
 
+    pub(crate) fn effective_plugins_changed_callback(
+        &self,
+        config: Config,
+    ) -> Arc<dyn Fn() + Send + Sync> {
+        let thread_manager = Arc::clone(&self.thread_manager);
+        Arc::new(move || {
+            Self::spawn_effective_plugins_changed_task(Arc::clone(&thread_manager), config.clone());
+        })
+    }
+
+    fn on_effective_plugins_changed(&self, config: Config) {
+        Self::spawn_effective_plugins_changed_task(Arc::clone(&self.thread_manager), config);
+    }
+
+    fn spawn_effective_plugins_changed_task(thread_manager: Arc<ThreadManager>, config: Config) {
+        tokio::spawn(async move {
+            thread_manager.plugins_manager().clear_cache();
+            thread_manager.skills_manager().clear_cache();
+            if thread_manager.list_thread_ids().await.is_empty() {
+                return;
+            }
+            if let Err(err) =
+                Self::queue_mcp_server_refresh_for_config(&thread_manager, &config).await
+            {
+                warn!("failed to queue MCP refresh after effective plugins changed: {err:?}");
+            }
+        });
+    }
+
     fn clear_plugin_related_caches(&self) {
         self.thread_manager.plugins_manager().clear_cache();
         self.thread_manager.skills_manager().clear_cache();
@@ -5362,7 +5391,7 @@ impl CodexMessageProcessor {
     async fn mcp_server_refresh(&self, request_id: ConnectionRequestId, _params: Option<()>) {
         let result = async {
             let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-            self.queue_mcp_server_refresh_for_config(&config).await?;
+            Self::queue_mcp_server_refresh_for_config(&self.thread_manager, &config).await?;
             Ok::<_, JSONRPCErrorError>(McpServerRefreshResponse {})
         }
         .await;
@@ -5370,11 +5399,10 @@ impl CodexMessageProcessor {
     }
 
     async fn queue_mcp_server_refresh_for_config(
-        &self,
+        thread_manager: &Arc<ThreadManager>,
         config: &Config,
     ) -> Result<(), JSONRPCErrorError> {
-        let configured_servers = self
-            .thread_manager
+        let configured_servers = thread_manager
             .mcp_manager()
             .configured_servers(config)
             .await;
@@ -5410,7 +5438,6 @@ impl CodexMessageProcessor {
 
         // Refresh requests are queued per thread; each thread rebuilds MCP connections on its next
         // active turn to avoid work for threads that never resume.
-        let thread_manager = Arc::clone(&self.thread_manager);
         thread_manager.refresh_mcp_servers(refresh_config).await;
         Ok(())
     }
@@ -6259,12 +6286,13 @@ impl CodexMessageProcessor {
                     continue;
                 }
             };
-            let effective_skill_roots = plugins_manager
-                .effective_skill_roots_for_layer_stack(
-                    &config_layer_stack,
-                    config.features.enabled(Feature::Plugins) && workspace_codex_plugins_enabled,
-                )
-                .await;
+            let effective_skill_roots = if workspace_codex_plugins_enabled {
+                plugins_manager
+                    .effective_skill_roots_for_layer_stack(&config_layer_stack, &config)
+                    .await
+            } else {
+                Vec::new()
+            };
             let skills_input = codex_core::skills::SkillsLoadInput::new(
                 cwd_abs.clone(),
                 effective_skill_roots,
