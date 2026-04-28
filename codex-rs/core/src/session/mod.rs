@@ -1371,6 +1371,11 @@ impl Session {
             .clone()
     }
 
+    pub(crate) async fn is_next_turn_first(&self) -> bool {
+        let state = self.state.lock().await;
+        state.is_next_turn_first()
+    }
+
     pub(crate) async fn provider(&self) -> ModelProviderInfo {
         let state = self.state.lock().await;
         state.session_configuration.provider.clone()

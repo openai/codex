@@ -34,6 +34,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
@@ -374,6 +375,14 @@ impl CodexThread {
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
+    }
+
+    pub async fn config(&self) -> Arc<crate::config::Config> {
+        self.codex.session.get_config().await
+    }
+
+    pub async fn is_next_turn_first(&self) -> bool {
+        self.codex.session.is_next_turn_first().await
     }
 
     pub async fn read_mcp_resource(

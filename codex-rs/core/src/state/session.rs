@@ -79,6 +79,10 @@ impl SessionState {
         self.next_turn_is_first = value;
     }
 
+    pub(crate) fn is_next_turn_first(&self) -> bool {
+        self.next_turn_is_first
+    }
+
     pub(crate) fn take_next_turn_is_first(&mut self) -> bool {
         let is_first_turn = self.next_turn_is_first;
         self.next_turn_is_first = false;

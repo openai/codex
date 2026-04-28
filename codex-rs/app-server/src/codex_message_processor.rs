@@ -351,6 +351,7 @@ use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::protocol::W3cTraceContext;
@@ -521,6 +522,7 @@ pub(crate) struct CodexMessageProcessor {
     config_manager: ConfigManager,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
+    memories_started_thread_ids: Arc<Mutex<HashSet<ThreadId>>>,
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
     command_exec_manager: CommandExecManager,
@@ -542,7 +544,6 @@ pub(crate) enum ApiVersion {
 
 #[derive(Clone)]
 struct ListenerTaskContext {
-    auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     thread_state_manager: ThreadStateManager,
     outgoing: Arc<OutgoingMessageSender>,
@@ -788,6 +789,7 @@ impl CodexMessageProcessor {
             config_manager,
             active_login: Arc::new(Mutex::new(None)),
             pending_thread_unloads: Arc::new(Mutex::new(HashSet::new())),
+            memories_started_thread_ids: Arc::new(Mutex::new(HashSet::new())),
             thread_state_manager: ThreadStateManager::new(),
             thread_watch_manager: ThreadWatchManager::new_with_outgoing(outgoing),
             command_exec_manager: CommandExecManager::default(),
@@ -2415,7 +2417,6 @@ impl CodexMessageProcessor {
         );
         typesafe_overrides.ephemeral = ephemeral;
         let listener_task_context = ListenerTaskContext {
-            auth_manager: Arc::clone(&self.auth_manager),
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
@@ -2500,6 +2501,31 @@ impl CodexMessageProcessor {
         thread
             .submit_with_trace(op, self.request_trace_context(request_id).await)
             .await
+    }
+
+    async fn first_root_turn_memory_startup_candidate(
+        &self,
+        thread: &CodexThread,
+        turn_has_input: bool,
+    ) -> Option<(Arc<Config>, SessionSource)> {
+        if !turn_has_input || !thread.is_next_turn_first().await {
+            return None;
+        }
+
+        let config_snapshot = thread.config_snapshot().await;
+        let session_source = config_snapshot.session_source;
+        if session_source.is_non_root_agent() {
+            return None;
+        }
+
+        Some((thread.config().await, session_source))
+    }
+
+    async fn claim_memory_startup_for_thread(&self, thread_id: ThreadId) -> bool {
+        self.memories_started_thread_ids
+            .lock()
+            .await
+            .insert(thread_id)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2615,7 +2641,6 @@ impl CodexMessageProcessor {
                     .collect()
             };
             let core_dynamic_tool_count = core_dynamic_tools.len();
-            let memory_config = Arc::new(config.clone());
 
             let NewThread {
                 thread_id,
@@ -2669,14 +2694,6 @@ impl CodexMessageProcessor {
                     otel.name = "app_server.thread_start.config_snapshot",
                 ))
                 .await;
-            codex_memories_write::start_memories_startup_task(
-                Arc::clone(&listener_task_context.thread_manager),
-                Arc::clone(&listener_task_context.auth_manager),
-                thread_id,
-                Arc::clone(&thread),
-                Arc::clone(&memory_config),
-                &config_snapshot.session_source,
-            );
             let mut thread = build_thread_from_snapshot(
                 thread_id,
                 &config_snapshot,
@@ -4178,7 +4195,6 @@ impl CodexMessageProcessor {
 
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let response_history = thread_history.clone();
-        let memory_config = Arc::new(config.clone());
 
         match self
             .thread_manager
@@ -4253,14 +4269,6 @@ impl CodexMessageProcessor {
                     /*has_live_in_progress_turn*/ false,
                 );
                 let config_snapshot = codex_thread.config_snapshot().await;
-                codex_memories_write::start_memories_startup_task(
-                    Arc::clone(&self.thread_manager),
-                    Arc::clone(&self.auth_manager),
-                    thread_id,
-                    Arc::clone(&codex_thread),
-                    Arc::clone(&memory_config),
-                    &config_snapshot.session_source,
-                );
                 let sandbox = thread_response_sandbox_policy(
                     &config_snapshot.permission_profile,
                     config_snapshot.cwd.as_path(),
@@ -4766,7 +4774,6 @@ impl CodexMessageProcessor {
             let fallback_model_provider = config.model_provider_id.clone();
             let instruction_sources = Self::instruction_sources_from_config(&config).await;
             let fork_thread_store = configured_thread_store(&config);
-            let memory_config = Arc::new(config.clone());
 
             let NewThread {
                 thread_id,
@@ -4862,14 +4869,6 @@ impl CodexMessageProcessor {
                 /*has_in_progress_turn*/ false,
             );
             let config_snapshot = forked_thread.config_snapshot().await;
-            codex_memories_write::start_memories_startup_task(
-                Arc::clone(&self.thread_manager),
-                Arc::clone(&self.auth_manager),
-                thread_id,
-                Arc::clone(&forked_thread),
-                Arc::clone(&memory_config),
-                &config_snapshot.session_source,
-            );
             let sandbox = thread_response_sandbox_policy(
                 &config_snapshot.permission_profile,
                 config_snapshot.cwd.as_path(),
@@ -6363,12 +6362,12 @@ impl CodexMessageProcessor {
                 );
                 return Err(error);
             }
-            let (_, thread) = self
-                .load_thread(&params.thread_id)
-                .await
-                .inspect_err(|error| {
-                    self.track_error_response(&request_id, error, /*error_type*/ None);
-                })?;
+            let (thread_id, thread) =
+                self.load_thread(&params.thread_id)
+                    .await
+                    .inspect_err(|error| {
+                        self.track_error_response(&request_id, error, /*error_type*/ None);
+                    })?;
             Self::set_app_server_client_info(
                 thread.as_ref(),
                 app_server_client_name,
@@ -6408,6 +6407,7 @@ impl CodexMessageProcessor {
                 .into_iter()
                 .map(V2UserInput::into_core)
                 .collect();
+            let turn_has_input = !mapped_items.is_empty();
 
             let has_any_overrides = params.cwd.is_some()
                 || params.approval_policy.is_some()
@@ -6493,6 +6493,9 @@ impl CodexMessageProcessor {
                     responsesapi_client_metadata: params.responsesapi_client_metadata,
                 }
             };
+            let memory_startup = self
+                .first_root_turn_memory_startup_candidate(thread.as_ref(), turn_has_input)
+                .await;
             let turn_id = self
                 .submit_core_op(&request_id, thread.as_ref(), turn_op)
                 .await
@@ -6501,6 +6504,19 @@ impl CodexMessageProcessor {
                     self.track_error_response(&request_id, &error, /*error_type*/ None);
                     error
                 })?;
+
+            if let Some((memory_config, session_source)) = memory_startup
+                && self.claim_memory_startup_for_thread(thread_id).await
+            {
+                codex_memories_write::start_memories_startup_task(
+                    Arc::clone(&self.thread_manager),
+                    Arc::clone(&self.auth_manager),
+                    thread_id,
+                    Arc::clone(&thread),
+                    memory_config,
+                    &session_source,
+                );
+            }
 
             self.outgoing
                 .record_request_turn_id(&request_id, &turn_id)
@@ -7188,7 +7204,6 @@ impl CodexMessageProcessor {
     ) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
         Self::ensure_conversation_listener_task(
             ListenerTaskContext {
-                auth_manager: Arc::clone(&self.auth_manager),
                 thread_manager: Arc::clone(&self.thread_manager),
                 thread_state_manager: self.thread_state_manager.clone(),
                 outgoing: Arc::clone(&self.outgoing),
@@ -7306,7 +7321,6 @@ impl CodexMessageProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         Self::ensure_listener_task_running_task(
             ListenerTaskContext {
-                auth_manager: Arc::clone(&self.auth_manager),
                 thread_manager: Arc::clone(&self.thread_manager),
                 thread_state_manager: self.thread_state_manager.clone(),
                 outgoing: Arc::clone(&self.outgoing),
@@ -7355,7 +7369,6 @@ impl CodexMessageProcessor {
             thread_state.set_listener(cancel_tx, &conversation)
         };
         let ListenerTaskContext {
-            auth_manager: _,
             outgoing,
             thread_manager,
             thread_state_manager,
