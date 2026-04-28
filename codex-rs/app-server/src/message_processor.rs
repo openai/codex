@@ -724,7 +724,7 @@ impl MessageProcessor {
         self.analytics_events_client.track_request(
             connection_id.0,
             connection_request_id.request_id.clone(),
-            codex_request.clone(),
+            &codex_request,
         );
 
         let app_server_client_name = session.app_server_client_name().map(str::to_string);

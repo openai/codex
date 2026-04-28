@@ -22,7 +22,7 @@ use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::ClientResponse;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
@@ -223,11 +223,22 @@ impl AnalyticsEventsClient {
         )));
     }
 
-    pub fn track_request(&self, connection_id: u64, request_id: RequestId, request: ClientRequest) {
+    pub fn track_request(
+        &self,
+        connection_id: u64,
+        request_id: RequestId,
+        request: &ClientRequest,
+    ) {
+        if !matches!(
+            request,
+            ClientRequest::TurnStart { .. } | ClientRequest::TurnSteer { .. }
+        ) {
+            return;
+        }
         self.record_fact(AnalyticsFact::ClientRequest {
             connection_id,
             request_id,
-            request: Box::new(request),
+            request: Box::new(request.clone()),
         });
     }
 
@@ -321,9 +332,25 @@ impl AnalyticsEventsClient {
         }
     }
 
-    pub fn track_response(&self, connection_id: u64, response: ClientResponse) {
+    pub fn track_response(
+        &self,
+        connection_id: u64,
+        request_id: RequestId,
+        response: ClientResponsePayload,
+    ) {
+        if !matches!(
+            response,
+            ClientResponsePayload::ThreadStart(_)
+                | ClientResponsePayload::ThreadResume(_)
+                | ClientResponsePayload::ThreadFork(_)
+                | ClientResponsePayload::TurnStart(_)
+                | ClientResponsePayload::TurnSteer(_)
+        ) {
+            return;
+        }
         self.record_fact(AnalyticsFact::ClientResponse {
             connection_id,
+            request_id,
             response: Box::new(response),
         });
     }
@@ -402,3 +429,7 @@ async fn send_track_events(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;
