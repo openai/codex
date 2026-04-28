@@ -340,6 +340,7 @@ pub struct FeedbackSnapshot {
 
 pub struct FeedbackAttachmentPath {
     pub path: PathBuf,
+    /// Optional filename to use for the uploaded attachment instead of `path`'s basename.
     pub attachment_filename_override: Option<String>,
 }
 
