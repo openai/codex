@@ -2,7 +2,7 @@ use crate::events::AppServerRpcTransport;
 use crate::events::CodexRuntimeMetadata;
 use crate::events::GuardianReviewEventParams;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::ClientResponse;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
@@ -281,7 +281,8 @@ pub(crate) enum AnalyticsFact {
     },
     ClientResponse {
         connection_id: u64,
-        response: Box<ClientResponse>,
+        request_id: RequestId,
+        response: Box<ClientResponsePayload>,
     },
     ErrorResponse {
         connection_id: u64,

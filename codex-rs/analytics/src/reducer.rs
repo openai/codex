@@ -181,9 +181,12 @@ impl AnalyticsReducer {
             }
             AnalyticsFact::ClientResponse {
                 connection_id,
+                request_id,
                 response,
             } => {
-                self.ingest_response(connection_id, *response, out);
+                if let Some(response) = response.into_client_response(request_id) {
+                    self.ingest_response(connection_id, response, out);
+                }
             }
             AnalyticsFact::ErrorResponse {
                 connection_id,

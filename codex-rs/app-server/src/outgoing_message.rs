@@ -495,7 +495,19 @@ impl OutgoingMessageSender {
         response: ClientResponsePayload,
     ) {
         let connection_id = request_id.connection_id;
-        let serialized_response = response.into_jsonrpc_parts(request_id.request_id.clone());
+        let request_id_for_analytics = request_id.request_id.clone();
+        let serialized_response = response
+            .into_jsonrpc_parts_and_payload(request_id.request_id.clone())
+            .map(|(id, result, response)| {
+                if let Some(response) = response {
+                    self.analytics_events_client.track_response(
+                        connection_id.0,
+                        request_id_for_analytics,
+                        response,
+                    );
+                }
+                (id, result)
+            });
         let request_context = self.take_request_context(&request_id).await;
 
         match serialized_response {

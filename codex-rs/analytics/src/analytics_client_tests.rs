@@ -59,7 +59,7 @@ use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::ClientResponse;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
@@ -71,6 +71,8 @@ use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionSource as AppServerSessionSource;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
@@ -141,23 +143,24 @@ fn sample_thread_with_source(
     }
 }
 
-fn sample_thread_start_response(thread_id: &str, ephemeral: bool, model: &str) -> ClientResponse {
-    ClientResponse::ThreadStart {
-        request_id: RequestId::Integer(1),
-        response: ThreadStartResponse {
-            thread: sample_thread(thread_id, ephemeral),
-            model: model.to_string(),
-            model_provider: "openai".to_string(),
-            service_tier: None,
-            cwd: test_path_buf("/tmp").abs(),
-            instruction_sources: Vec::new(),
-            approval_policy: AppServerAskForApproval::OnFailure,
-            approvals_reviewer: AppServerApprovalsReviewer::User,
-            sandbox: AppServerSandboxPolicy::DangerFullAccess,
-            permission_profile: Some(sample_permission_profile()),
-            reasoning_effort: None,
-        },
-    }
+fn sample_thread_start_response(
+    thread_id: &str,
+    ephemeral: bool,
+    model: &str,
+) -> ClientResponsePayload {
+    ClientResponsePayload::ThreadStart(ThreadStartResponse {
+        thread: sample_thread(thread_id, ephemeral),
+        model: model.to_string(),
+        model_provider: "openai".to_string(),
+        service_tier: None,
+        cwd: test_path_buf("/tmp").abs(),
+        instruction_sources: Vec::new(),
+        approval_policy: AppServerAskForApproval::OnFailure,
+        approvals_reviewer: AppServerApprovalsReviewer::User,
+        sandbox: AppServerSandboxPolicy::DangerFullAccess,
+        permission_profile: Some(sample_permission_profile()),
+        reasoning_effort: None,
+    })
 }
 
 fn sample_permission_profile() -> AppServerPermissionProfile {
@@ -183,7 +186,11 @@ fn sample_runtime_metadata() -> CodexRuntimeMetadata {
     }
 }
 
-fn sample_thread_resume_response(thread_id: &str, ephemeral: bool, model: &str) -> ClientResponse {
+fn sample_thread_resume_response(
+    thread_id: &str,
+    ephemeral: bool,
+    model: &str,
+) -> ClientResponsePayload {
     sample_thread_resume_response_with_source(
         thread_id,
         ephemeral,
@@ -197,23 +204,20 @@ fn sample_thread_resume_response_with_source(
     ephemeral: bool,
     model: &str,
     source: AppServerSessionSource,
-) -> ClientResponse {
-    ClientResponse::ThreadResume {
-        request_id: RequestId::Integer(2),
-        response: ThreadResumeResponse {
-            thread: sample_thread_with_source(thread_id, ephemeral, source),
-            model: model.to_string(),
-            model_provider: "openai".to_string(),
-            service_tier: None,
-            cwd: test_path_buf("/tmp").abs(),
-            instruction_sources: Vec::new(),
-            approval_policy: AppServerAskForApproval::OnFailure,
-            approvals_reviewer: AppServerApprovalsReviewer::User,
-            sandbox: AppServerSandboxPolicy::DangerFullAccess,
-            permission_profile: Some(sample_permission_profile()),
-            reasoning_effort: None,
-        },
-    }
+) -> ClientResponsePayload {
+    ClientResponsePayload::ThreadResume(ThreadResumeResponse {
+        thread: sample_thread_with_source(thread_id, ephemeral, source),
+        model: model.to_string(),
+        model_provider: "openai".to_string(),
+        service_tier: None,
+        cwd: test_path_buf("/tmp").abs(),
+        instruction_sources: Vec::new(),
+        approval_policy: AppServerAskForApproval::OnFailure,
+        approvals_reviewer: AppServerApprovalsReviewer::User,
+        sandbox: AppServerSandboxPolicy::DangerFullAccess,
+        permission_profile: Some(sample_permission_profile()),
+        reasoning_effort: None,
+    })
 }
 
 fn sample_turn_start_request(thread_id: &str, request_id: i64) -> ClientRequest {
@@ -235,21 +239,18 @@ fn sample_turn_start_request(thread_id: &str, request_id: i64) -> ClientRequest 
     }
 }
 
-fn sample_turn_start_response(turn_id: &str, request_id: i64) -> ClientResponse {
-    ClientResponse::TurnStart {
-        request_id: RequestId::Integer(request_id),
-        response: codex_app_server_protocol::TurnStartResponse {
-            turn: Turn {
-                id: turn_id.to_string(),
-                items: vec![],
-                status: AppServerTurnStatus::InProgress,
-                error: None,
-                started_at: None,
-                completed_at: None,
-                duration_ms: None,
-            },
+fn sample_turn_start_response(turn_id: &str) -> ClientResponsePayload {
+    ClientResponsePayload::TurnStart(codex_app_server_protocol::TurnStartResponse {
+        turn: Turn {
+            id: turn_id.to_string(),
+            items: vec![],
+            status: AppServerTurnStatus::InProgress,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
         },
-    }
+    })
 }
 
 fn sample_turn_started_notification(thread_id: &str, turn_id: &str) -> ServerNotification {
@@ -355,13 +356,10 @@ fn sample_turn_steer_request(
     }
 }
 
-fn sample_turn_steer_response(turn_id: &str, request_id: i64) -> ClientResponse {
-    ClientResponse::TurnSteer {
-        request_id: RequestId::Integer(request_id),
-        response: TurnSteerResponse {
-            turn_id: turn_id.to_string(),
-        },
-    }
+fn sample_turn_steer_response(turn_id: &str) -> ClientResponsePayload {
+    ClientResponsePayload::TurnSteer(TurnSteerResponse {
+        turn_id: turn_id.to_string(),
+    })
 }
 
 fn no_active_turn_steer_error() -> JSONRPCErrorError {
@@ -488,6 +486,7 @@ async fn ingest_turn_prerequisites(
             .ingest(
                 AnalyticsFact::ClientResponse {
                     connection_id: 7,
+                    request_id: RequestId::Integer(1),
                     response: Box::new(sample_thread_start_response(
                         "thread-2", /*ephemeral*/ false, "gpt-5",
                     )),
@@ -512,7 +511,8 @@ async fn ingest_turn_prerequisites(
         .ingest(
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
-                response: Box::new(sample_turn_start_response("turn-2", /*request_id*/ 3)),
+                request_id: RequestId::Integer(3),
+                response: Box::new(sample_turn_start_response("turn-2")),
             },
             out,
         )
@@ -864,6 +864,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
         .ingest(
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
+                request_id: RequestId::Integer(1),
                 response: Box::new(sample_thread_start_response(
                     "thread-no-client",
                     /*ephemeral*/ false,
@@ -908,6 +909,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
         .ingest(
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
+                request_id: RequestId::Integer(2),
                 response: Box::new(sample_thread_resume_response(
                     "thread-1", /*ephemeral*/ true, "gpt-5",
                 )),
@@ -955,6 +957,65 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 }
 
 #[tokio::test]
+async fn unrelated_client_requests_are_ignored_by_reducer() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::ClientRequest {
+                connection_id: 7,
+                request_id: RequestId::Integer(3),
+                request: Box::new(ClientRequest::ThreadArchive {
+                    request_id: RequestId::Integer(3),
+                    params: ThreadArchiveParams {
+                        thread_id: "thread-2".to_string(),
+                    },
+                }),
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(3),
+                response: Box::new(sample_turn_start_response("turn-2")),
+            },
+            &mut events,
+        )
+        .await;
+
+    assert!(
+        events.is_empty(),
+        "unrelated requests must not create pending turn state"
+    );
+}
+
+#[tokio::test]
+async fn unrelated_client_responses_are_ignored_by_reducer() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_initialize(&mut reducer, &mut events).await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(9),
+                response: Box::new(ClientResponsePayload::ThreadArchive(
+                    ThreadArchiveResponse {},
+                )),
+            },
+            &mut events,
+        )
+        .await;
+
+    assert!(events.is_empty());
+}
+
+#[tokio::test]
 async fn compaction_event_ingests_custom_fact() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
@@ -988,6 +1049,7 @@ async fn compaction_event_ingests_custom_fact() {
         .ingest(
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
+                request_id: RequestId::Integer(2),
                 response: Box::new(sample_thread_resume_response_with_source(
                     "thread-1",
                     /*ephemeral*/ false,
@@ -1099,6 +1161,7 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
         .ingest(
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
+                request_id: RequestId::Integer(1),
                 response: Box::new(sample_thread_start_response(
                     "thread-guardian",
                     /*ephemeral*/ false,
@@ -1881,7 +1944,8 @@ async fn accepted_turn_steer_emits_expected_event() {
         .ingest(
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
-                response: Box::new(sample_turn_steer_response("turn-2", /*request_id*/ 4)),
+                request_id: RequestId::Integer(4),
+                response: Box::new(sample_turn_steer_response("turn-2")),
             },
             &mut out,
         )
@@ -2047,7 +2111,8 @@ async fn turn_start_error_response_discards_pending_start_request() {
         .ingest(
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
-                response: Box::new(sample_turn_start_response("turn-2", /*request_id*/ 3)),
+                request_id: RequestId::Integer(3),
+                response: Box::new(sample_turn_start_response("turn-2")),
             },
             &mut out,
         )
@@ -2176,7 +2241,8 @@ async fn accepted_steers_increment_turn_steer_count() {
         .ingest(
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
-                response: Box::new(sample_turn_steer_response("turn-2", /*request_id*/ 4)),
+                request_id: RequestId::Integer(4),
+                response: Box::new(sample_turn_steer_response("turn-2")),
             },
             &mut out,
         )
@@ -2222,7 +2288,8 @@ async fn accepted_steers_increment_turn_steer_count() {
         .ingest(
             AnalyticsFact::ClientResponse {
                 connection_id: 7,
-                response: Box::new(sample_turn_steer_response("turn-2", /*request_id*/ 6)),
+                request_id: RequestId::Integer(6),
+                response: Box::new(sample_turn_steer_response("turn-2")),
             },
             &mut out,
         )
