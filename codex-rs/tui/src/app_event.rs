@@ -219,7 +219,7 @@ pub(crate) enum AppEvent {
         mode: ThreadGoalSetMode,
     },
 
-    /// Pause or unpause the current thread goal.
+    /// Pause or resume the current thread goal.
     SetThreadGoalStatus {
         thread_id: ThreadId,
         status: ThreadGoalStatus,

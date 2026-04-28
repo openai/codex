@@ -548,7 +548,7 @@ pub(crate) fn goal_status_indicator_line(
                 "Pursuing goal".to_string()
             }
         }
-        GoalStatusIndicator::Paused => "Goal paused (/goal to unpause)".to_string(),
+        GoalStatusIndicator::Paused => "Goal paused (/goal resume)".to_string(),
         GoalStatusIndicator::BudgetLimited { usage } => {
             if let Some(usage) = usage {
                 format!("Goal unmet ({usage})")

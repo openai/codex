@@ -810,7 +810,7 @@ async fn goal_control_slash_commands_emit_goal_events() {
     let cases = [
         ("/goal clear", None),
         ("/goal pause", Some(AppThreadGoalStatus::Paused)),
-        ("/goal unpause", Some(AppThreadGoalStatus::Active)),
+        ("/goal resume", Some(AppThreadGoalStatus::Active)),
     ];
 
     for (command, status) in cases {
