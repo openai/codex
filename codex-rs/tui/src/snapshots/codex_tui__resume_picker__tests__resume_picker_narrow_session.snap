@@ -1,0 +1,7 @@
+---
+source: tui/src/resume_picker.rs
+expression: terminal.backend().to_string()
+---
+▸ Investigate picker expansion
+  15m ago       ⌁ /tmp/codex
+   fcoury/session-picker

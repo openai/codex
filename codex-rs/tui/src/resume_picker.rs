@@ -1,13 +1,17 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app_server_session::AppServerSession;
-use crate::diff_render::display_path_for;
+use crate::color::is_light;
 use crate::key_hint;
 use crate::legacy_core::config::Config;
+use crate::markdown::append_markdown;
 use crate::session_resume::resolve_session_thread_id;
+use crate::status::format_directory_display;
+use crate::terminal_palette::default_bg;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -15,6 +19,7 @@ use crate::tui::TuiEvent;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey;
@@ -29,6 +34,7 @@ use crossterm::event::KeyModifiers;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -40,6 +46,13 @@ use unicode_width::UnicodeWidthStr;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
+const SESSION_META_INDENT_WIDTH: usize = 2;
+const SESSION_META_DATE_WIDTH: usize = 12;
+const SESSION_META_FIELD_GAP_WIDTH: usize = 2;
+const SESSION_META_MIN_CWD_WIDTH: usize = 30;
+const SESSION_META_MAX_CWD_WIDTH: usize = 72;
+const SESSION_META_BRANCH_ICON: &str = "";
+const SESSION_META_CWD_ICON: &str = "⌁";
 
 #[derive(Debug, Clone)]
 pub struct SessionTarget {
@@ -103,19 +116,28 @@ struct PageLoadRequest {
     sort_key: ThreadSortKey,
 }
 
+enum PickerLoadRequest {
+    Page(PageLoadRequest),
+    Preview { thread_id: ThreadId },
+}
+
 #[derive(Clone)]
 enum ProviderFilter {
     Any,
     MatchDefault(String),
 }
 
-type PageLoader = Arc<dyn Fn(PageLoadRequest) + Send + Sync>;
+type PickerLoader = Arc<dyn Fn(PickerLoadRequest) + Send + Sync>;
 
 enum BackgroundEvent {
     PageLoaded {
         request_token: usize,
         search_token: Option<usize>,
         page: std::io::Result<PickerPage>,
+    },
+    PreviewLoaded {
+        thread_id: ThreadId,
+        preview: std::io::Result<Vec<TranscriptPreviewLine>>,
     },
 }
 
@@ -131,12 +153,13 @@ struct PickerPage {
     reached_scan_cap: bool,
 }
 
-/// Interactive session picker that lists app-server threads with simple search
-/// and pagination.
+/// Interactive session picker that lists app-server threads with simple search,
+/// lazy transcript previews, and pagination.
 ///
-/// The picker displays sessions in a table with timestamp columns (created/updated),
-/// git branch, working directory, and conversation preview. Users can toggle
-/// between sorting by creation time and last-updated time using the Tab key.
+/// Sessions render as compact multi-line records with stable metadata first and
+/// the conversation preview last. Users can toggle between sorting by creation
+/// time and last-updated time using Tab, and can expand the selected session with
+/// Space to load recent transcript context on demand.
 ///
 /// Sessions are loaded on-demand via cursor-based pagination. The backend
 /// `thread/list` API returns pages ordered by the selected sort key, and the
@@ -207,7 +230,7 @@ async fn run_session_picker_with_loader(
     show_all: bool,
     action: SessionPickerAction,
     is_remote: bool,
-    page_loader: PageLoader,
+    picker_loader: PickerLoader,
     bg_rx: mpsc::UnboundedReceiver<BackgroundEvent>,
 ) -> Result<SessionSelection> {
     let alt = AltScreenGuard::enter(tui);
@@ -223,7 +246,7 @@ async fn run_session_picker_with_loader(
 
     let mut state = PickerState::new(
         alt.tui.frame_requester(),
-        page_loader,
+        picker_loader,
         provider_filter,
         show_all,
         filter_cwd,
@@ -249,8 +272,8 @@ async fn run_session_picker_with_loader(
                     }
                     TuiEvent::Draw | TuiEvent::Resize => {
                         if let Ok(size) = alt.tui.terminal.size() {
-                            let list_height = size.height.saturating_sub(4) as usize;
-                            state.update_view_rows(list_height);
+                            let list_height = size.height.saturating_sub(6) as usize;
+                            state.update_viewport(list_height, size.width);
                             state.ensure_minimum_rows_for_view(list_height);
                         }
                         draw_picker(alt.tui, &state)?;
@@ -289,34 +312,42 @@ fn spawn_app_server_page_loader(
     cwd_filter: Option<PathBuf>,
     include_non_interactive: bool,
     bg_tx: mpsc::UnboundedSender<BackgroundEvent>,
-) -> PageLoader {
-    let (request_tx, mut request_rx) = mpsc::unbounded_channel::<PageLoadRequest>();
+) -> PickerLoader {
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel::<PickerLoadRequest>();
 
     tokio::spawn(async move {
         let mut app_server = app_server;
         while let Some(request) = request_rx.recv().await {
-            let cursor = request.cursor.map(|PageCursor::AppServer(cursor)| cursor);
-            let page = load_app_server_page(
-                &mut app_server,
-                cursor,
-                cwd_filter.as_deref(),
-                request.provider_filter,
-                request.sort_key,
-                include_non_interactive,
-            )
-            .await;
-            let _ = bg_tx.send(BackgroundEvent::PageLoaded {
-                request_token: request.request_token,
-                search_token: request.search_token,
-                page,
-            });
+            match request {
+                PickerLoadRequest::Page(request) => {
+                    let cursor = request.cursor.map(|PageCursor::AppServer(cursor)| cursor);
+                    let page = load_app_server_page(
+                        &mut app_server,
+                        cursor,
+                        cwd_filter.as_deref(),
+                        request.provider_filter,
+                        request.sort_key,
+                        include_non_interactive,
+                    )
+                    .await;
+                    let _ = bg_tx.send(BackgroundEvent::PageLoaded {
+                        request_token: request.request_token,
+                        search_token: request.search_token,
+                        page,
+                    });
+                }
+                PickerLoadRequest::Preview { thread_id } => {
+                    let preview = load_transcript_preview(&mut app_server, thread_id).await;
+                    let _ = bg_tx.send(BackgroundEvent::PreviewLoaded { thread_id, preview });
+                }
+            }
         }
         if let Err(err) = app_server.shutdown().await {
             warn!(%err, "Failed to shut down app-server picker session");
         }
     });
 
-    Arc::new(move |request: PageLoadRequest| {
+    Arc::new(move |request: PickerLoadRequest| {
         let _ = request_tx.send(request);
     })
 }
@@ -328,9 +359,6 @@ fn sort_key_label(sort_key: ThreadSortKey) -> &'static str {
         ThreadSortKey::UpdatedAt => "Updated",
     }
 }
-
-const CREATED_COLUMN_LABEL: &str = "Created";
-const UPDATED_COLUMN_LABEL: &str = "Updated";
 
 /// RAII guard that ensures we leave the alt-screen on scope exit.
 struct AltScreenGuard<'a> {
@@ -363,14 +391,17 @@ struct PickerState {
     search_state: SearchState,
     next_request_token: usize,
     next_search_token: usize,
-    page_loader: PageLoader,
+    picker_loader: PickerLoader,
     view_rows: Option<usize>,
+    view_width: Option<u16>,
     provider_filter: ProviderFilter,
     show_all: bool,
     filter_cwd: Option<PathBuf>,
     action: SessionPickerAction,
     sort_key: ThreadSortKey,
     inline_error: Option<String>,
+    expanded_thread_id: Option<ThreadId>,
+    transcript_previews: HashMap<ThreadId, TranscriptPreviewState>,
 }
 
 struct PaginationState {
@@ -396,6 +427,25 @@ struct PendingLoad {
 enum SearchState {
     Idle,
     Active { token: usize },
+}
+
+#[derive(Clone)]
+enum TranscriptPreviewState {
+    Loading,
+    Loaded(Vec<TranscriptPreviewLine>),
+    Failed,
+}
+
+#[derive(Clone)]
+struct TranscriptPreviewLine {
+    speaker: TranscriptPreviewSpeaker,
+    text: String,
+}
+
+#[derive(Clone, Copy)]
+enum TranscriptPreviewSpeaker {
+    User,
+    Assistant,
 }
 
 enum LoadTrigger {
@@ -439,6 +489,57 @@ async fn load_app_server_page(
         num_scanned_files,
         reached_scan_cap: false,
     })
+}
+
+async fn load_transcript_preview(
+    app_server: &mut AppServerSession,
+    thread_id: ThreadId,
+) -> std::io::Result<Vec<TranscriptPreviewLine>> {
+    const MAX_PREVIEW_LINES: usize = 6;
+
+    let thread = app_server
+        .thread_read(thread_id, /*include_turns*/ true)
+        .await
+        .map_err(std::io::Error::other)?;
+    let mut lines = thread
+        .turns
+        .iter()
+        .flat_map(|turn| turn.items.iter())
+        .filter_map(|item| match item {
+            ThreadItem::UserMessage { content, .. } => Some(TranscriptPreviewLine {
+                speaker: TranscriptPreviewSpeaker::User,
+                text: content
+                    .iter()
+                    .filter_map(|input| match input {
+                        codex_app_server_protocol::UserInput::Text { text, .. } => {
+                            Some(text.as_str())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            }),
+            ThreadItem::AgentMessage { text, .. } => Some(TranscriptPreviewLine {
+                speaker: TranscriptPreviewSpeaker::Assistant,
+                text: text.clone(),
+            }),
+            _ => None,
+        })
+        .flat_map(|line| {
+            line.text
+                .lines()
+                .filter(|text| !text.trim().is_empty())
+                .map(move |text| TranscriptPreviewLine {
+                    speaker: line.speaker,
+                    text: text.trim().to_string(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    if lines.len() > MAX_PREVIEW_LINES {
+        lines.drain(..lines.len() - MAX_PREVIEW_LINES);
+    }
+    Ok(lines)
 }
 
 impl SearchState {
@@ -493,6 +594,26 @@ impl Row {
         {
             return true;
         }
+        if self
+            .thread_id
+            .is_some_and(|thread_id| thread_id.to_string().to_lowercase().contains(query))
+        {
+            return true;
+        }
+        if self
+            .git_branch
+            .as_ref()
+            .is_some_and(|branch| branch.to_lowercase().contains(query))
+        {
+            return true;
+        }
+        if self
+            .cwd
+            .as_ref()
+            .is_some_and(|cwd| cwd.to_string_lossy().to_lowercase().contains(query))
+        {
+            return true;
+        }
         false
     }
 }
@@ -500,7 +621,7 @@ impl Row {
 impl PickerState {
     fn new(
         requester: FrameRequester,
-        page_loader: PageLoader,
+        picker_loader: PickerLoader,
         provider_filter: ProviderFilter,
         show_all: bool,
         filter_cwd: Option<PathBuf>,
@@ -524,14 +645,17 @@ impl PickerState {
             search_state: SearchState::Idle,
             next_request_token: 0,
             next_search_token: 0,
-            page_loader,
+            picker_loader,
             view_rows: None,
+            view_width: None,
             provider_filter,
             show_all,
             filter_cwd,
             action,
             sort_key: ThreadSortKey::UpdatedAt,
             inline_error: None,
+            expanded_thread_id: None,
+            transcript_previews: HashMap::new(),
         }
     }
 
@@ -544,7 +668,12 @@ impl PickerState {
         match key {
             KeyEvent {
                 code: KeyCode::Esc, ..
-            } => return Ok(Some(SessionSelection::StartFresh)),
+            } => {
+                if self.query.is_empty() {
+                    return Ok(Some(SessionSelection::StartFresh));
+                }
+                self.clear_query_preserving_selection();
+            }
             KeyEvent {
                 code: KeyCode::Char('c'),
                 modifiers,
@@ -653,6 +782,12 @@ impl PickerState {
                 self.request_frame();
             }
             KeyEvent {
+                code: KeyCode::Char(' '),
+                ..
+            } => {
+                self.toggle_selected_expansion();
+            }
+            KeyEvent {
                 code: KeyCode::Backspace,
                 ..
             } => {
@@ -703,13 +838,13 @@ impl PickerState {
         });
         self.request_frame();
 
-        (self.page_loader)(PageLoadRequest {
+        (self.picker_loader)(PickerLoadRequest::Page(PageLoadRequest {
             cursor: None,
             request_token,
             search_token,
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
-        });
+        }));
     }
 
     async fn handle_background_event(&mut self, event: BackgroundEvent) -> Result<()> {
@@ -731,6 +866,16 @@ impl PickerState {
                 self.ingest_page(page);
                 let completed_token = pending.search_token.or(search_token);
                 self.continue_search_if_token_matches(completed_token);
+            }
+            BackgroundEvent::PreviewLoaded { thread_id, preview } => {
+                self.transcript_previews.insert(
+                    thread_id,
+                    match preview {
+                        Ok(lines) => TranscriptPreviewState::Loaded(lines),
+                        Err(_) => TranscriptPreviewState::Failed,
+                    },
+                );
+                self.request_frame();
             }
         }
         Ok(())
@@ -828,6 +973,26 @@ impl PickerState {
         self.load_more_if_needed(LoadTrigger::Search { token });
     }
 
+    fn clear_query_preserving_selection(&mut self) {
+        let selected_key = self
+            .filtered_rows
+            .get(self.selected)
+            .and_then(Row::seen_key);
+        self.query.clear();
+        self.search_state = SearchState::Idle;
+        self.apply_filter();
+        if let Some(selected_key) = selected_key
+            && let Some(index) = self
+                .filtered_rows
+                .iter()
+                .position(|row| row.seen_key().as_ref() == Some(&selected_key))
+        {
+            self.selected = index;
+            self.ensure_selected_visible();
+            self.request_frame();
+        }
+    }
+
     fn continue_search_if_needed(&mut self) {
         let Some(token) = self.search_state.active_token() else {
             return;
@@ -860,20 +1025,15 @@ impl PickerState {
             self.scroll_top = 0;
             return;
         }
-        let capacity = self.view_rows.unwrap_or(self.filtered_rows.len()).max(1);
-
+        let viewport_rows = self.view_rows.unwrap_or(usize::MAX).max(1);
         if self.selected < self.scroll_top {
             self.scroll_top = self.selected;
-        } else {
-            let last_visible = self.scroll_top.saturating_add(capacity - 1);
-            if self.selected > last_visible {
-                self.scroll_top = self.selected.saturating_sub(capacity - 1);
-            }
         }
-
-        let max_start = self.filtered_rows.len().saturating_sub(capacity);
-        if self.scroll_top > max_start {
-            self.scroll_top = max_start;
+        while self.rendered_height_between(self.scroll_top, self.selected)
+            > self.available_content_rows(viewport_rows)
+            && self.scroll_top < self.selected
+        {
+            self.scroll_top += 1;
         }
     }
 
@@ -894,8 +1054,9 @@ impl PickerState {
         }
     }
 
-    fn update_view_rows(&mut self, rows: usize) {
+    fn update_viewport(&mut self, rows: usize, width: u16) {
         self.view_rows = if rows == 0 { None } else { Some(rows) };
+        self.view_width = Some(width);
         self.ensure_selected_visible();
     }
 
@@ -933,13 +1094,13 @@ impl PickerState {
         });
         self.request_frame();
 
-        (self.page_loader)(PageLoadRequest {
+        (self.picker_loader)(PickerLoadRequest::Page(PageLoadRequest {
             cursor: Some(cursor),
             request_token,
             search_token,
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
-        });
+        }));
     }
 
     fn allocate_request_token(&mut self) -> usize {
@@ -965,6 +1126,98 @@ impl PickerState {
             ThreadSortKey::UpdatedAt => ThreadSortKey::CreatedAt,
         };
         self.start_initial_load();
+    }
+
+    fn toggle_selected_expansion(&mut self) {
+        let Some(row) = self.filtered_rows.get(self.selected) else {
+            return;
+        };
+        let Some(thread_id) = row.thread_id else {
+            return;
+        };
+        if self.expanded_thread_id == Some(thread_id) {
+            self.expanded_thread_id = None;
+            self.request_frame();
+            return;
+        }
+        self.expanded_thread_id = Some(thread_id);
+        if let std::collections::hash_map::Entry::Vacant(e) =
+            self.transcript_previews.entry(thread_id)
+        {
+            e.insert(TranscriptPreviewState::Loading);
+            (self.picker_loader)(PickerLoadRequest::Preview { thread_id });
+        }
+        self.request_frame();
+    }
+
+    fn rendered_height_between(&self, start: usize, end_inclusive: usize) -> usize {
+        self.filtered_rows
+            .get(start..=end_inclusive)
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+            .map(|(offset, row)| {
+                let row_idx = start + offset;
+                let is_selected = row_idx == self.selected;
+                let is_expanded = is_selected
+                    && row.thread_id.is_some()
+                    && self.expanded_thread_id == row.thread_id;
+                render_session_lines(
+                    row,
+                    self,
+                    is_selected,
+                    is_expanded,
+                    self.view_width.unwrap_or(u16::MAX),
+                )
+                .len()
+            })
+            .sum::<usize>()
+            + end_inclusive.saturating_sub(start)
+    }
+
+    fn has_more_above(&self) -> bool {
+        self.scroll_top > 0
+    }
+
+    fn has_more_below(&self, viewport_height: usize) -> bool {
+        if self.filtered_rows.is_empty() {
+            return false;
+        }
+        if self.pagination.next_cursor.is_some() {
+            return true;
+        }
+        let capacity = self.available_content_rows(viewport_height);
+        let mut used = 0usize;
+        for (offset, row) in self.filtered_rows[self.scroll_top..].iter().enumerate() {
+            let row_idx = self.scroll_top + offset;
+            let is_selected = row_idx == self.selected;
+            let is_expanded =
+                is_selected && row.thread_id.is_some() && self.expanded_thread_id == row.thread_id;
+            let row_height = render_session_lines(
+                row,
+                self,
+                is_selected,
+                is_expanded,
+                self.view_width.unwrap_or(u16::MAX),
+            )
+            .len();
+            let separator_height = usize::from(offset > 0);
+            if used + separator_height + row_height > capacity {
+                return true;
+            }
+            used += separator_height + row_height;
+        }
+        false
+    }
+
+    fn available_content_rows(&self, viewport_height: usize) -> usize {
+        viewport_height
+            .saturating_sub(usize::from(self.has_more_above()))
+            .saturating_sub(usize::from(
+                self.pagination.next_cursor.is_some()
+                    || self.selected + 1 < self.filtered_rows.len(),
+            ))
+            .max(1)
     }
 }
 
@@ -1036,80 +1289,117 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
     let height = tui.terminal.size()?.height;
     tui.draw(height, |frame| {
         let area = frame.area();
-        let [header, search, columns, list, hint] = Layout::vertical([
+        let [
+            header,
+            _header_gap,
+            search,
+            _search_gap,
+            list,
+            _footer_gap,
+            hint,
+        ] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
-            Constraint::Min(area.height.saturating_sub(4)),
+            Constraint::Length(1),
+            Constraint::Min(area.height.saturating_sub(6)),
+            Constraint::Length(1),
             Constraint::Length(1),
         ])
         .areas(area);
 
+        let chrome = |area: Rect| {
+            Rect::new(
+                area.x.saturating_add(1),
+                area.y,
+                area.width.saturating_sub(2),
+                area.height,
+            )
+        };
+
         // Header
-        let header_line: Line = vec![
-            state.action.title().bold().cyan(),
-            "  ".into(),
-            "Sort:".dim(),
-            " ".into(),
-            sort_key_label(state.sort_key).magenta(),
-        ]
-        .into();
-        frame.render_widget_ref(header_line, header);
+        let header_title = if default_bg().is_some_and(is_light) {
+            state.action.title().bold().fg(Color::Indexed(22))
+        } else {
+            state.action.title().bold().cyan()
+        };
+        let header_line: Line = vec![header_title].into();
+        frame.render_widget_ref(header_line, chrome(header));
 
         // Search line
-        frame.render_widget_ref(search_line(state), search);
+        let search = chrome(search);
+        frame.render_widget_ref(search_line(state, search.width), search);
 
-        let metrics = calculate_column_metrics(
-            &state.filtered_rows,
-            state.show_all,
-            state.relative_time_reference.unwrap_or_else(Utc::now),
+        let list = Rect::new(
+            list.x.saturating_add(2),
+            list.y,
+            list.width.saturating_sub(4),
+            list.height,
         );
-
-        // Column headers and list
-        render_column_headers(frame, columns, &metrics, state.sort_key);
-        render_list(frame, list, state, &metrics);
+        render_list(frame, list, state);
 
         // Hint line
-        let action_label = state.action.action_label();
-        let hint_line: Line = vec![
-            key_hint::plain(KeyCode::Enter).into(),
-            format!(" to {action_label} ").dim(),
-            "    ".dim(),
-            key_hint::plain(KeyCode::Esc).into(),
-            " to start new ".dim(),
-            "    ".dim(),
-            key_hint::ctrl(KeyCode::Char('c')).into(),
-            " to quit ".dim(),
-            "    ".dim(),
-            key_hint::plain(KeyCode::Tab).into(),
-            " to toggle sort ".dim(),
-            "    ".dim(),
-            key_hint::plain(KeyCode::Up).into(),
-            "/".dim(),
-            key_hint::plain(KeyCode::Down).into(),
-            " to browse".dim(),
-        ]
-        .into();
-        frame.render_widget_ref(hint_line, hint);
+        frame.render_widget_ref(hint_line(state), hint);
     })
 }
 
-fn search_line(state: &PickerState) -> Line<'_> {
+fn search_line(state: &PickerState, width: u16) -> Line<'_> {
     if let Some(error) = state.inline_error.as_deref() {
         return Line::from(error.red());
     }
-    if state.query.is_empty() {
-        return Line::from("Type to search".dim());
-    }
-    Line::from(format!("Search: {}", state.query))
+    let search = if state.query.is_empty() {
+        "Type to search".dim()
+    } else {
+        format!("Search: {}", state.query).into()
+    };
+    let sort_prefix = "Sort: ";
+    let sort_value = sort_key_label(state.sort_key);
+    let search_width = search.content.chars().count();
+    let sort_width = sort_prefix.chars().count() + sort_value.chars().count();
+    let spacer_width = width
+        .saturating_sub((search_width + sort_width) as u16)
+        .max(2) as usize;
+    vec![
+        search,
+        " ".repeat(spacer_width).into(),
+        sort_prefix.dim(),
+        sort_value.magenta(),
+    ]
+    .into()
 }
 
-fn render_list(
-    frame: &mut crate::custom_terminal::Frame,
-    area: Rect,
-    state: &PickerState,
-    metrics: &ColumnMetrics,
-) {
+fn hint_line(state: &PickerState) -> Line<'_> {
+    let action_label = state.action.action_label();
+    let esc_label = if state.query.is_empty() {
+        " to start new "
+    } else {
+        " to clear search "
+    };
+    vec![
+        key_hint::plain(KeyCode::Enter).into(),
+        format!(" to {action_label} ").dim(),
+        "    ".dim(),
+        key_hint::plain(KeyCode::Esc).into(),
+        esc_label.dim(),
+        "    ".dim(),
+        key_hint::ctrl(KeyCode::Char('c')).into(),
+        " to quit ".dim(),
+        "    ".dim(),
+        key_hint::plain(KeyCode::Tab).into(),
+        " to toggle sort ".dim(),
+        "    ".dim(),
+        key_hint::plain(KeyCode::Char(' ')).into(),
+        " to expand ".dim(),
+        "    ".dim(),
+        key_hint::plain(KeyCode::Up).into(),
+        "/".dim(),
+        key_hint::plain(KeyCode::Down).into(),
+        " to browse".dim(),
+    ]
+    .into()
+}
+
+fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &PickerState) {
     if area.height == 0 {
         return;
     }
@@ -1121,120 +1411,394 @@ fn render_list(
         return;
     }
 
-    let capacity = area.height as usize;
-    let start = state.scroll_top.min(rows.len().saturating_sub(1));
-    let end = rows.len().min(start + capacity);
-    let labels = &metrics.labels;
-    let mut y = area.y;
-
-    let visibility = column_visibility(area.width, metrics, state.sort_key);
-    let max_created_width = metrics.max_created_width;
-    let max_updated_width = metrics.max_updated_width;
-    let max_branch_width = metrics.max_branch_width;
-    let max_cwd_width = metrics.max_cwd_width;
-
-    for (idx, (row, (created_label, updated_label, branch_label, cwd_label))) in rows[start..end]
-        .iter()
-        .zip(labels[start..end].iter())
-        .enumerate()
-    {
-        let is_sel = start + idx == state.selected;
-        let marker = if is_sel { "> ".bold() } else { "  ".into() };
-        let marker_width = 2usize;
-        let created_span = if visibility.show_created {
-            Some(Span::from(format!("{created_label:<max_created_width$}")).dim())
-        } else {
-            None
-        };
-        let updated_span = if visibility.show_updated {
-            Some(Span::from(format!("{updated_label:<max_updated_width$}")).dim())
-        } else {
-            None
-        };
-        let branch_span = if !visibility.show_branch {
-            None
-        } else if branch_label.is_empty() {
-            Some(
-                Span::from(format!(
-                    "{empty:<width$}",
-                    empty = "-",
-                    width = max_branch_width
-                ))
-                .dim(),
-            )
-        } else {
-            Some(Span::from(format!("{branch_label:<max_branch_width$}")).cyan())
-        };
-        let cwd_span = if !visibility.show_cwd {
-            None
-        } else if cwd_label.is_empty() {
-            Some(
-                Span::from(format!(
-                    "{empty:<width$}",
-                    empty = "-",
-                    width = max_cwd_width
-                ))
-                .dim(),
-            )
-        } else {
-            Some(Span::from(format!("{cwd_label:<max_cwd_width$}")).dim())
-        };
-
-        let mut preview_width = area.width as usize;
-        preview_width = preview_width.saturating_sub(marker_width);
-        if visibility.show_created {
-            preview_width = preview_width.saturating_sub(max_created_width + 2);
-        }
-        if visibility.show_updated {
-            preview_width = preview_width.saturating_sub(max_updated_width + 2);
-        }
-        if visibility.show_branch {
-            preview_width = preview_width.saturating_sub(max_branch_width + 2);
-        }
-        if visibility.show_cwd {
-            preview_width = preview_width.saturating_sub(max_cwd_width + 2);
-        }
-        let add_leading_gap = !visibility.show_created
-            && !visibility.show_updated
-            && !visibility.show_branch
-            && !visibility.show_cwd;
-        if add_leading_gap {
-            preview_width = preview_width.saturating_sub(2);
-        }
-        let preview = truncate_text(row.display_preview(), preview_width);
-        let mut spans: Vec<Span> = vec![marker];
-        if let Some(created) = created_span {
-            spans.push(created);
-            spans.push("  ".into());
-        }
-        if let Some(updated) = updated_span {
-            spans.push(updated);
-            spans.push("  ".into());
-        }
-        if let Some(branch) = branch_span {
-            spans.push(branch);
-            spans.push("  ".into());
-        }
-        if let Some(cwd) = cwd_span {
-            spans.push(cwd);
-            spans.push("  ".into());
-        }
-        if add_leading_gap {
-            spans.push("  ".into());
-        }
-        spans.push(preview.into());
-
-        let line: Line = spans.into();
-        let rect = Rect::new(area.x, y, area.width, 1);
-        frame.render_widget_ref(line, rect);
-        y = y.saturating_add(1);
+    let show_more_above = state.has_more_above();
+    let show_more_below = state.has_more_below(area.height as usize);
+    let content_area = Rect::new(
+        area.x,
+        area.y.saturating_add(u16::from(show_more_above)),
+        area.width,
+        area.height
+            .saturating_sub(u16::from(show_more_above))
+            .saturating_sub(u16::from(show_more_below)),
+    );
+    if show_more_above {
+        frame.render_widget_ref(
+            more_line("↑ more"),
+            Rect::new(area.x, area.y, area.width, 1),
+        );
     }
 
-    if state.pagination.loading.is_pending() && y < area.y.saturating_add(area.height) {
+    let start = state.scroll_top.min(rows.len().saturating_sub(1));
+    let mut y = content_area.y;
+    for (idx, row) in rows[start..].iter().enumerate() {
+        if y >= content_area.y.saturating_add(content_area.height) {
+            break;
+        }
+        let row_idx = start + idx;
+        let is_selected = row_idx == state.selected;
+        let is_expanded =
+            is_selected && row.thread_id.is_some() && state.expanded_thread_id == row.thread_id;
+        for line in render_session_lines(row, state, is_selected, is_expanded, area.width) {
+            if y >= content_area.y.saturating_add(content_area.height) {
+                break;
+            }
+            frame.render_widget_ref(line, Rect::new(area.x, y, area.width, 1));
+            y = y.saturating_add(1);
+        }
+        if y < content_area.y.saturating_add(content_area.height) && start + idx + 1 < rows.len() {
+            y = y.saturating_add(1);
+        }
+    }
+
+    if state.pagination.loading.is_pending()
+        && y < content_area.y.saturating_add(content_area.height)
+    {
         let loading_line: Line = vec!["  ".into(), "Loading older sessions…".italic().dim()].into();
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(loading_line, rect);
     }
+    if show_more_below {
+        let label = if state.pagination.loading.is_pending() {
+            "↓ loading more"
+        } else {
+            "↓ more"
+        };
+        frame.render_widget_ref(
+            more_line(label),
+            Rect::new(
+                area.x,
+                area.y.saturating_add(area.height.saturating_sub(1)),
+                area.width,
+                1,
+            ),
+        );
+    }
+}
+
+fn more_line(label: &'static str) -> Line<'static> {
+    vec![label.dim()].into()
+}
+
+fn render_session_lines(
+    row: &Row,
+    state: &PickerState,
+    is_selected: bool,
+    is_expanded: bool,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let marker = match (is_selected, is_expanded) {
+        (true, true) => "▾ ".bold().cyan(),
+        (true, false) => "▸ ".bold().cyan(),
+        (false, _) => "  ".into(),
+    };
+    let reference = state.relative_time_reference.unwrap_or_else(Utc::now);
+    let created = format_relative_time(reference, row.created_at);
+    let updated = format_relative_time(reference, row.updated_at.or(row.created_at));
+    let branch = row.git_branch.as_deref();
+    let cwd = row
+        .cwd
+        .as_ref()
+        .map(|path| format_directory_display(path, /*max_width*/ None));
+    let title = truncate_text(row.display_preview(), width.saturating_sub(2) as usize);
+    let title = if is_selected {
+        if default_bg().is_some_and(is_light) {
+            title.magenta()
+        } else {
+            title.yellow()
+        }
+    } else {
+        title.into()
+    };
+    let mut lines = vec![vec![marker, title].into()];
+    if is_expanded {
+        lines.extend(render_transcript_preview_lines(row, state, width));
+    }
+    lines.extend(render_footer_lines(
+        state.sort_key,
+        &created,
+        &updated,
+        branch,
+        cwd.as_deref(),
+        width,
+    ));
+    lines
+}
+
+fn render_footer_lines(
+    sort_key: ThreadSortKey,
+    created: &str,
+    updated: &str,
+    branch: Option<&str>,
+    cwd: Option<&str>,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let date = match sort_key {
+        ThreadSortKey::CreatedAt => created,
+        ThreadSortKey::UpdatedAt => updated,
+    };
+    let parts = vec![
+        FooterPart::Date(date.to_string()),
+        FooterPart::Cwd(cwd.map(str::to_string)),
+        FooterPart::Branch(branch.map(str::to_string)),
+    ];
+    pack_footer_parts(parts, width)
+}
+
+enum FooterPart {
+    Date(String),
+    Branch(Option<String>),
+    Cwd(Option<String>),
+}
+
+impl FooterPart {
+    fn text(&self) -> &str {
+        match self {
+            FooterPart::Date(text) => text,
+            FooterPart::Branch(Some(text)) | FooterPart::Cwd(Some(text)) => text,
+            FooterPart::Branch(None) => "no branch",
+            FooterPart::Cwd(None) => "no cwd",
+        }
+    }
+
+    fn prefix(&self) -> Option<&'static str> {
+        match self {
+            FooterPart::Date(_) => None,
+            FooterPart::Branch(_) => Some(SESSION_META_BRANCH_ICON),
+            FooterPart::Cwd(_) => Some(SESSION_META_CWD_ICON),
+        }
+    }
+}
+
+fn pack_footer_parts(parts: Vec<FooterPart>, width: u16) -> Vec<Line<'static>> {
+    let available_width = width as usize;
+    if available_width <= SESSION_META_INDENT_WIDTH {
+        return Vec::new();
+    }
+    let cwd_width = cwd_column_width(available_width);
+    let all_parts_width = footer_parts_width(&parts, cwd_width);
+    if all_parts_width <= available_width {
+        return vec![footer_line(parts, available_width, cwd_width)];
+    }
+
+    let mut lines = Vec::with_capacity(parts.len());
+    let mut current_parts = Vec::new();
+    for part in parts {
+        let mut candidate_parts = std::mem::take(&mut current_parts);
+        candidate_parts.push(part);
+        if candidate_parts.len() > 1
+            && footer_parts_width(&candidate_parts, cwd_width) > available_width
+        {
+            let previous_parts = candidate_parts
+                .drain(..candidate_parts.len().saturating_sub(1))
+                .collect();
+            lines.push(footer_line(previous_parts, available_width, cwd_width));
+        }
+        current_parts = candidate_parts;
+    }
+    if !current_parts.is_empty() {
+        lines.push(footer_line(current_parts, available_width, cwd_width));
+    }
+    lines
+}
+
+fn cwd_column_width(width: usize) -> usize {
+    let available = width.saturating_sub(
+        SESSION_META_INDENT_WIDTH + SESSION_META_DATE_WIDTH + 2 * SESSION_META_FIELD_GAP_WIDTH,
+    );
+    (available / 2).clamp(SESSION_META_MIN_CWD_WIDTH, SESSION_META_MAX_CWD_WIDTH)
+}
+
+fn footer_parts_width(parts: &[FooterPart], cwd_width: usize) -> usize {
+    let content_width: usize = parts
+        .iter()
+        .enumerate()
+        .map(|(idx, part)| footer_part_width(part, idx + 1 < parts.len(), cwd_width))
+        .sum();
+    SESSION_META_INDENT_WIDTH + content_width
+}
+
+fn footer_part_width(part: &FooterPart, padded: bool, cwd_width: usize) -> usize {
+    let prefix_width = part.prefix().map_or(0, UnicodeWidthStr::width);
+    let prefix_gap_width = usize::from(part.prefix().is_some() && !part.text().is_empty());
+    let text_width = UnicodeWidthStr::width(part.text());
+    let actual_width = prefix_width + prefix_gap_width + text_width;
+    match part {
+        FooterPart::Date(_) if padded => SESSION_META_DATE_WIDTH.max(actual_width),
+        FooterPart::Cwd(_) if padded => cwd_width,
+        _ => actual_width,
+    }
+}
+
+fn footer_line(parts: Vec<FooterPart>, width: usize, cwd_width: usize) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = vec!["  ".into()];
+    let mut remaining_width = width.saturating_sub(SESSION_META_INDENT_WIDTH);
+    let part_count = parts.len();
+    for (idx, part) in parts.into_iter().enumerate() {
+        if idx > 0 {
+            let gap_width = SESSION_META_FIELD_GAP_WIDTH.min(remaining_width);
+            if gap_width > 0 {
+                spans.push(" ".repeat(gap_width).dim());
+                remaining_width = remaining_width.saturating_sub(gap_width);
+            }
+        }
+        let padded = idx + 1 < part_count;
+        let target_width = match part {
+            FooterPart::Date(_) if padded => Some(SESSION_META_DATE_WIDTH),
+            FooterPart::Cwd(_) if padded => Some(cwd_width),
+            FooterPart::Date(_) | FooterPart::Branch(_) | FooterPart::Cwd(_) => None,
+        };
+        let used_width = push_footer_part(&mut spans, part, target_width, remaining_width);
+        remaining_width = remaining_width.saturating_sub(used_width);
+        if let Some(target_width) = target_width {
+            let padding = target_width.saturating_sub(used_width);
+            if padding > 0 {
+                spans.push(" ".repeat(padding).dim());
+                remaining_width = remaining_width.saturating_sub(padding);
+            }
+        }
+    }
+    spans.into()
+}
+
+fn push_footer_part(
+    spans: &mut Vec<Span<'static>>,
+    part: FooterPart,
+    target_width: Option<usize>,
+    available_width: usize,
+) -> usize {
+    let text = part.text().to_string();
+    let Some(prefix) = part.prefix() else {
+        let text = truncate_text(&text, available_width);
+        let width = UnicodeWidthStr::width(text.as_str());
+        spans.push(text.dim());
+        return width;
+    };
+
+    let prefix_width = UnicodeWidthStr::width(prefix);
+    if available_width <= prefix_width {
+        let prefix = truncate_text(prefix, available_width);
+        let width = UnicodeWidthStr::width(prefix.as_str());
+        spans.push(prefix.dim());
+        return width;
+    }
+
+    spans.push(prefix.dim());
+    let mut used_width = prefix_width;
+    if !text.is_empty() && used_width < available_width {
+        spans.push(" ".dim());
+        used_width += 1;
+    }
+    let text_width = target_width
+        .unwrap_or(available_width)
+        .saturating_sub(used_width)
+        .min(available_width.saturating_sub(used_width));
+    let text = truncate_text(&text, text_width);
+    let rendered_text_width = UnicodeWidthStr::width(text.as_str());
+    match part {
+        FooterPart::Branch(None) | FooterPart::Cwd(None) => spans.push(text.dim().italic()),
+        _ => spans.push(text.dim()),
+    }
+    used_width + rendered_text_width
+}
+
+fn render_transcript_preview_lines(
+    row: &Row,
+    state: &PickerState,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let Some(thread_id) = row.thread_id else {
+        return Vec::new();
+    };
+    match state.transcript_previews.get(&thread_id) {
+        Some(TranscriptPreviewState::Loading) => {
+            vec![vec!["  │ ".dim(), "Loading recent transcript...".italic().dim()].into()]
+        }
+        Some(TranscriptPreviewState::Failed) => vec![
+            vec![
+                "  │ ".dim(),
+                "Could not load transcript preview".italic().red(),
+            ]
+            .into(),
+        ],
+        Some(TranscriptPreviewState::Loaded(lines)) if lines.is_empty() => vec![
+            vec![
+                "  └ ".dim(),
+                "No transcript preview available".italic().dim(),
+            ]
+            .into(),
+        ],
+        Some(TranscriptPreviewState::Loaded(lines)) => {
+            let mut rendered = Vec::new();
+            for line in lines {
+                rendered.extend(render_transcript_content_lines(line, width));
+            }
+            let rendered_len = rendered.len();
+            rendered
+                .into_iter()
+                .enumerate()
+                .map(|(idx, line)| {
+                    let prefix = if idx + 1 == rendered_len {
+                        "  └ "
+                    } else {
+                        "  │ "
+                    };
+                    prefix_transcript_line(prefix, line)
+                })
+                .collect()
+        }
+        None => Vec::new(),
+    }
+}
+
+fn render_transcript_content_lines(line: &TranscriptPreviewLine, width: u16) -> Vec<Line<'static>> {
+    let content_width = width.saturating_sub(4) as usize;
+    match line.speaker {
+        TranscriptPreviewSpeaker::User => vec![
+            Line::from(truncate_text(&line.text, content_width))
+                .cyan()
+                .dim()
+                .italic(),
+        ],
+        TranscriptPreviewSpeaker::Assistant => {
+            let mut lines = Vec::new();
+            append_markdown(
+                &line.text,
+                Some(content_width),
+                /*cwd*/ None,
+                &mut lines,
+            );
+            for line in &mut lines {
+                *line = line.clone().dim();
+            }
+            lines
+        }
+    }
+}
+
+fn prefix_transcript_line(prefix: &'static str, line: Line<'static>) -> Line<'static> {
+    let mut spans = vec![prefix.dim()];
+    spans.extend(line.spans);
+    Line::from(spans).style(line.style)
+}
+
+fn format_relative_time(reference: DateTime<Utc>, ts: Option<DateTime<Utc>>) -> String {
+    let Some(ts) = ts else {
+        return "-".to_string();
+    };
+    let seconds = (reference - ts).num_seconds().max(0);
+    if seconds < 60 {
+        return format!("{seconds}s ago");
+    }
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return format!("{minutes}m ago");
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        return format!("{hours}h ago");
+    }
+    let days = hours / 24;
+    format!("{days}d ago")
 }
 
 fn render_empty_state_line(state: &PickerState) -> Line<'static> {
@@ -1262,250 +1826,6 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
     }
 
     vec!["No sessions yet".italic().dim()].into()
-}
-
-fn human_time_ago(ts: DateTime<Utc>, reference_now: DateTime<Utc>) -> String {
-    let delta = reference_now - ts;
-    let secs = delta.num_seconds();
-    if secs < 60 {
-        let n = secs.max(0);
-        if n == 1 {
-            format!("{n} second ago")
-        } else {
-            format!("{n} seconds ago")
-        }
-    } else if secs < 60 * 60 {
-        let m = secs / 60;
-        if m == 1 {
-            format!("{m} minute ago")
-        } else {
-            format!("{m} minutes ago")
-        }
-    } else if secs < 60 * 60 * 24 {
-        let h = secs / 3600;
-        if h == 1 {
-            format!("{h} hour ago")
-        } else {
-            format!("{h} hours ago")
-        }
-    } else {
-        let d = secs / (60 * 60 * 24);
-        if d == 1 {
-            format!("{d} day ago")
-        } else {
-            format!("{d} days ago")
-        }
-    }
-}
-
-fn format_updated_label_at(row: &Row, reference_now: DateTime<Utc>) -> String {
-    match (row.updated_at, row.created_at) {
-        (Some(updated), _) => human_time_ago(updated, reference_now),
-        (None, Some(created)) => human_time_ago(created, reference_now),
-        (None, None) => "-".to_string(),
-    }
-}
-
-fn format_created_label_at(row: &Row, reference_now: DateTime<Utc>) -> String {
-    match row.created_at {
-        Some(created) => human_time_ago(created, reference_now),
-        None => "-".to_string(),
-    }
-}
-
-fn render_column_headers(
-    frame: &mut crate::custom_terminal::Frame,
-    area: Rect,
-    metrics: &ColumnMetrics,
-    sort_key: ThreadSortKey,
-) {
-    if area.height == 0 {
-        return;
-    }
-
-    let mut spans: Vec<Span> = vec!["  ".into()];
-    let visibility = column_visibility(area.width, metrics, sort_key);
-    if visibility.show_created {
-        let label = format!(
-            "{text:<width$}",
-            text = CREATED_COLUMN_LABEL,
-            width = metrics.max_created_width
-        );
-        spans.push(Span::from(label).bold());
-        spans.push("  ".into());
-    }
-    if visibility.show_updated {
-        let label = format!(
-            "{text:<width$}",
-            text = UPDATED_COLUMN_LABEL,
-            width = metrics.max_updated_width
-        );
-        spans.push(Span::from(label).bold());
-        spans.push("  ".into());
-    }
-    if visibility.show_branch {
-        let label = format!(
-            "{text:<width$}",
-            text = "Branch",
-            width = metrics.max_branch_width
-        );
-        spans.push(Span::from(label).bold());
-        spans.push("  ".into());
-    }
-    if visibility.show_cwd {
-        let label = format!(
-            "{text:<width$}",
-            text = "CWD",
-            width = metrics.max_cwd_width
-        );
-        spans.push(Span::from(label).bold());
-        spans.push("  ".into());
-    }
-    spans.push("Conversation".bold());
-    frame.render_widget_ref(Line::from(spans), area);
-}
-
-/// Pre-computed column widths and formatted labels for all visible rows.
-///
-/// Widths are measured in Unicode display width (not byte length) so columns
-/// align correctly when labels contain non-ASCII characters.
-struct ColumnMetrics {
-    max_created_width: usize,
-    max_updated_width: usize,
-    max_branch_width: usize,
-    max_cwd_width: usize,
-    /// (created_label, updated_label, branch_label, cwd_label) per row.
-    labels: Vec<(String, String, String, String)>,
-}
-
-/// Determines which columns to render given available terminal width.
-///
-/// When the terminal is narrow, only one timestamp column is shown (whichever
-/// matches the current sort key). Branch and CWD are hidden if their max
-/// widths are zero (no data to show).
-#[derive(Debug, PartialEq, Eq)]
-struct ColumnVisibility {
-    show_created: bool,
-    show_updated: bool,
-    show_branch: bool,
-    show_cwd: bool,
-}
-
-fn calculate_column_metrics(
-    rows: &[Row],
-    include_cwd: bool,
-    reference_now: DateTime<Utc>,
-) -> ColumnMetrics {
-    fn right_elide(s: &str, max: usize) -> String {
-        if s.chars().count() <= max {
-            return s.to_string();
-        }
-        if max <= 1 {
-            return "…".to_string();
-        }
-        let tail_len = max - 1;
-        let tail: String = s
-            .chars()
-            .rev()
-            .take(tail_len)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect();
-        format!("…{tail}")
-    }
-
-    let mut labels: Vec<(String, String, String, String)> = Vec::with_capacity(rows.len());
-    let mut max_created_width = UnicodeWidthStr::width(CREATED_COLUMN_LABEL);
-    let mut max_updated_width = UnicodeWidthStr::width(UPDATED_COLUMN_LABEL);
-    let mut max_branch_width = UnicodeWidthStr::width("Branch");
-    let mut max_cwd_width = if include_cwd {
-        UnicodeWidthStr::width("CWD")
-    } else {
-        0
-    };
-
-    for row in rows {
-        let created = format_created_label_at(row, reference_now);
-        let updated = format_updated_label_at(row, reference_now);
-        let branch_raw = row.git_branch.clone().unwrap_or_default();
-        let branch = right_elide(&branch_raw, /*max*/ 24);
-        let cwd = if include_cwd {
-            let cwd_raw = row
-                .cwd
-                .as_ref()
-                .map(|p| display_path_for(p, std::path::Path::new("/")))
-                .unwrap_or_default();
-            right_elide(&cwd_raw, /*max*/ 24)
-        } else {
-            String::new()
-        };
-        max_created_width = max_created_width.max(UnicodeWidthStr::width(created.as_str()));
-        max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
-        max_branch_width = max_branch_width.max(UnicodeWidthStr::width(branch.as_str()));
-        max_cwd_width = max_cwd_width.max(UnicodeWidthStr::width(cwd.as_str()));
-        labels.push((created, updated, branch, cwd));
-    }
-
-    ColumnMetrics {
-        max_created_width,
-        max_updated_width,
-        max_branch_width,
-        max_cwd_width,
-        labels,
-    }
-}
-
-/// Computes which columns fit in the available width.
-///
-/// The algorithm reserves at least `MIN_PREVIEW_WIDTH` characters for the
-/// conversation preview. If both timestamp columns don't fit, only the one
-/// matching the current sort key is shown.
-fn column_visibility(
-    area_width: u16,
-    metrics: &ColumnMetrics,
-    sort_key: ThreadSortKey,
-) -> ColumnVisibility {
-    const MIN_PREVIEW_WIDTH: usize = 10;
-
-    let show_branch = metrics.max_branch_width > 0;
-    let show_cwd = metrics.max_cwd_width > 0;
-
-    // Calculate remaining width after all optional columns.
-    let mut preview_width = area_width as usize;
-    preview_width = preview_width.saturating_sub(2); // marker
-    if metrics.max_created_width > 0 {
-        preview_width = preview_width.saturating_sub(metrics.max_created_width + 2);
-    }
-    if metrics.max_updated_width > 0 {
-        preview_width = preview_width.saturating_sub(metrics.max_updated_width + 2);
-    }
-    if show_branch {
-        preview_width = preview_width.saturating_sub(metrics.max_branch_width + 2);
-    }
-    if show_cwd {
-        preview_width = preview_width.saturating_sub(metrics.max_cwd_width + 2);
-    }
-
-    // If preview would be too narrow, hide the non-active timestamp column.
-    let show_both = preview_width >= MIN_PREVIEW_WIDTH;
-    let show_created = if show_both {
-        metrics.max_created_width > 0
-    } else {
-        sort_key == ThreadSortKey::CreatedAt
-    };
-    let show_updated = if show_both {
-        metrics.max_updated_width > 0
-    } else {
-        sort_key == ThreadSortKey::UpdatedAt
-    };
-
-    ColumnVisibility {
-        show_created,
-        show_updated,
-        show_branch,
-        show_cwd,
-    }
 }
 
 #[cfg(test)]
@@ -1538,6 +1858,14 @@ mod tests {
             num_scanned_files,
             reached_scan_cap,
         }
+    }
+
+    fn page_only_loader(loader: impl Fn(PageLoadRequest) + Send + Sync + 'static) -> PickerLoader {
+        Arc::new(move |request| {
+            if let PickerLoadRequest::Page(request) = request {
+                loader(request);
+            }
+        })
     }
 
     fn make_row(path: &str, ts: &str, preview: &str) -> Row {
@@ -1593,6 +1921,117 @@ mod tests {
     }
 
     #[test]
+    fn row_search_matches_metadata_fields() {
+        let thread_id =
+            ThreadId::from_string("019dabc1-0ef5-7431-b81c-03037f51f62c").expect("thread id");
+        let row = Row {
+            path: Some(PathBuf::from("/tmp/a.jsonl")),
+            preview: String::from("first message"),
+            thread_id: Some(thread_id),
+            thread_name: Some(String::from("My session")),
+            created_at: None,
+            updated_at: None,
+            cwd: Some(PathBuf::from("/tmp/codex-session-picker")),
+            git_branch: Some(String::from("fcoury/session-picker")),
+        };
+
+        assert!(row.matches_query("session-picker"));
+        assert!(row.matches_query("fcoury"));
+        assert!(row.matches_query(&thread_id.to_string()[..8]));
+    }
+
+    #[test]
+    fn footer_prioritizes_active_sort_timestamp() {
+        let updated = render_footer_lines(
+            ThreadSortKey::UpdatedAt,
+            "5h ago",
+            "3h ago",
+            Some("main"),
+            Some("tmp/codex"),
+            /*width*/ 80,
+        );
+        let created = render_footer_lines(
+            ThreadSortKey::CreatedAt,
+            "5h ago",
+            "3h ago",
+            Some("main"),
+            Some("tmp/codex"),
+            /*width*/ 80,
+        );
+
+        assert_eq!(updated.len(), 1);
+        assert_eq!(created.len(), 1);
+        assert!(updated[0].to_string().starts_with("  3h ago"));
+        assert!(created[0].to_string().starts_with("  5h ago"));
+        assert!(!updated[0].to_string().contains("created 5h ago"));
+        assert!(!created[0].to_string().contains("updated 3h ago"));
+        assert_metadata_order(&updated[0], "⌁ tmp/codex", " main");
+        assert_metadata_order(&created[0], "⌁ tmp/codex", " main");
+    }
+
+    #[test]
+    fn footer_marks_missing_branch() {
+        let footer = render_footer_lines(
+            ThreadSortKey::UpdatedAt,
+            "5h ago",
+            "3h ago",
+            /*branch*/ None,
+            Some("/tmp/codex"),
+            /*width*/ 80,
+        );
+
+        assert_eq!(footer.len(), 1);
+        let rendered = footer[0].to_string();
+        assert!(rendered.contains("⌁ /tmp/codex"));
+        assert!(rendered.contains(" no branch"));
+        assert_metadata_order(&footer[0], "⌁ /tmp/codex", " no branch");
+    }
+
+    #[test]
+    fn footer_branch_expands_when_line_has_room() {
+        let branch = "etraut/animations-false-improvements";
+        let footer = render_footer_lines(
+            ThreadSortKey::UpdatedAt,
+            "5h ago",
+            "4h ago",
+            Some(branch),
+            Some("~/code/codex.etraut-animations-false-improvements/codex-rs"),
+            /*width*/ 140,
+        );
+
+        assert_eq!(footer.len(), 1);
+        assert!(footer[0].to_string().contains(branch));
+    }
+
+    #[test]
+    fn footer_cwd_truncates_to_responsive_column() {
+        let cwd = "~/code/codex.owner-extremely-long-worktree-name-that-needs-truncating/codex-rs";
+        let branch = "owner/branch";
+        let footer = render_footer_lines(
+            ThreadSortKey::UpdatedAt,
+            "5h ago",
+            "4h ago",
+            Some(branch),
+            Some(cwd),
+            /*width*/ 80,
+        );
+
+        assert_eq!(footer.len(), 1);
+        let footer = footer[0].to_string();
+        assert!(!footer.contains(cwd));
+        assert!(footer.contains("⌁ ~/code/codex."));
+        assert!(footer.contains("..."));
+        assert!(footer.contains(" owner/branch"));
+    }
+
+    fn assert_metadata_order(line: &Line<'_>, first: &str, second: &str) {
+        let rendered = line.to_string();
+        let first_index = rendered.find(first).expect("first metadata item");
+        let second_index = rendered.find(second).expect("second metadata item");
+        assert!(first_index < second_index);
+    }
+
+    #[test]
     fn remote_thread_list_params_omit_provider_filter() {
         let params = thread_list_params(
             Some(String::from("cursor-1")),
@@ -1631,7 +2070,7 @@ mod tests {
 
     #[test]
     fn remote_picker_does_not_filter_rows_by_local_cwd() {
-        let loader: PageLoader = Arc::new(|_| {});
+        let loader = page_only_loader(|_| {});
         let state = PickerState::new(
             FrameRequester::test_dummy(),
             loader,
@@ -1658,10 +2097,8 @@ mod tests {
     fn resume_table_snapshot() {
         use crate::custom_terminal::Terminal;
         use crate::test_backend::VT100Backend;
-        use ratatui::layout::Constraint;
-        use ratatui::layout::Layout;
 
-        let loader: PageLoader = Arc::new(|_| {});
+        let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
             loader,
@@ -1671,7 +2108,7 @@ mod tests {
             SessionPickerAction::Resume,
         );
 
-        let now = Utc::now();
+        let now = parse_timestamp_str("2026-04-28T16:30:00Z").expect("timestamp");
         let rows = vec![
             Row {
                 path: Some(PathBuf::from("/tmp/a.jsonl")),
@@ -1706,16 +2143,13 @@ mod tests {
         ];
         state.all_rows = rows.clone();
         state.filtered_rows = rows;
-        state.view_rows = Some(3);
+        state.relative_time_reference = Some(now);
         state.selected = 1;
         state.scroll_top = 0;
-        state.update_view_rows(/*rows*/ 3);
-
-        state.relative_time_reference = Some(now);
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all, now);
+        state.update_viewport(/*rows*/ 12, /*width*/ 80);
 
         let width: u16 = 80;
-        let height: u16 = 6;
+        let height: u16 = 12;
         let backend = VT100Backend::new(width, height);
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, width, height));
@@ -1723,10 +2157,7 @@ mod tests {
         {
             let mut frame = terminal.get_frame();
             let area = frame.area();
-            let segments =
-                Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
-            render_column_headers(&mut frame, segments[0], &metrics, state.sort_key);
-            render_list(&mut frame, segments[1], &state, &metrics);
+            render_list(&mut frame, area, &state);
         }
         terminal.flush().expect("flush");
 
@@ -1739,7 +2170,7 @@ mod tests {
         use crate::custom_terminal::Terminal;
         use crate::test_backend::VT100Backend;
 
-        let loader: PageLoader = Arc::new(|_| {});
+        let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
             loader,
@@ -1760,7 +2191,7 @@ mod tests {
 
         {
             let mut frame = terminal.get_frame();
-            let line = search_line(&state);
+            let line = search_line(&state, frame.area().width);
             frame.render_widget_ref(line, frame.area());
         }
         terminal.flush().expect("flush");
@@ -1770,8 +2201,197 @@ mod tests {
     }
 
     #[test]
+    fn hint_line_switches_esc_label_for_search_mode() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+
+        assert!(hint_line(&state).to_string().contains("esc to start new"));
+
+        state.query = String::from("picker");
+
+        assert!(
+            hint_line(&state)
+                .to_string()
+                .contains("esc to clear search")
+        );
+    }
+
+    #[test]
+    fn expanded_session_snapshot() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+
+        let loader = page_only_loader(|_| {});
+        let thread_id =
+            ThreadId::from_string("019dabc1-0ef5-7431-b81c-03037f51f62c").expect("thread id");
+        let row = Row {
+            path: Some(PathBuf::from("/tmp/a.jsonl")),
+            preview: String::from("Investigate picker expansion"),
+            thread_id: Some(thread_id),
+            thread_name: None,
+            created_at: parse_timestamp_str("2026-04-28T16:30:00Z"),
+            updated_at: parse_timestamp_str("2026-04-28T17:45:00Z"),
+            cwd: Some(PathBuf::from("/tmp/codex")),
+            git_branch: Some(String::from("fcoury/session-picker")),
+        };
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.all_rows = vec![row.clone()];
+        state.filtered_rows = vec![row];
+        state.relative_time_reference =
+            Some(parse_timestamp_str("2026-04-28T18:00:00Z").expect("timestamp"));
+        state.expanded_thread_id = Some(thread_id);
+        state.transcript_previews.insert(
+            thread_id,
+            TranscriptPreviewState::Loaded(vec![
+                TranscriptPreviewLine {
+                    speaker: TranscriptPreviewSpeaker::User,
+                    text: String::from("Show me the recent transcript"),
+                },
+                TranscriptPreviewLine {
+                    speaker: TranscriptPreviewSpeaker::Assistant,
+                    text: String::from("Here are the *last* few lines."),
+                },
+            ]),
+        );
+
+        let width: u16 = 90;
+        let height: u16 = 6;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            render_list(&mut frame, area, &state);
+        }
+        terminal.flush().expect("flush");
+
+        assert_snapshot!(
+            "resume_picker_expanded_session",
+            terminal.backend().to_string()
+        );
+    }
+
+    #[test]
+    fn narrow_session_snapshot() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+
+        let loader = page_only_loader(|_| {});
+        let row = Row {
+            path: Some(PathBuf::from("/tmp/a.jsonl")),
+            preview: String::from("Investigate picker expansion"),
+            thread_id: Some(
+                ThreadId::from_string("019dabc1-0ef5-7431-b81c-03037f51f62c").expect("thread id"),
+            ),
+            thread_name: None,
+            created_at: parse_timestamp_str("2026-04-28T16:30:00Z"),
+            updated_at: parse_timestamp_str("2026-04-28T17:45:00Z"),
+            cwd: Some(PathBuf::from("/tmp/codex")),
+            git_branch: Some(String::from("fcoury/session-picker")),
+        };
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.all_rows = vec![row.clone()];
+        state.filtered_rows = vec![row];
+        state.relative_time_reference =
+            Some(parse_timestamp_str("2026-04-28T18:00:00Z").expect("timestamp"));
+
+        let width: u16 = 58;
+        let height: u16 = 6;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            render_list(&mut frame, area, &state);
+        }
+        terminal.flush().expect("flush");
+
+        assert_snapshot!(
+            "resume_picker_narrow_session",
+            terminal.backend().to_string()
+        );
+    }
+
+    #[test]
+    fn session_list_more_indicators_snapshot() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        let now = parse_timestamp_str("2026-04-28T16:30:00Z").expect("timestamp");
+        state.all_rows = (0..5)
+            .map(|idx| Row {
+                path: Some(PathBuf::from(format!("/tmp/{idx}.jsonl"))),
+                preview: format!("item-{idx}"),
+                thread_id: None,
+                thread_name: None,
+                created_at: Some(now - Duration::hours(idx)),
+                updated_at: Some(now - Duration::minutes(idx * 5)),
+                cwd: None,
+                git_branch: None,
+            })
+            .collect();
+        state.filtered_rows = state.all_rows.clone();
+        state.relative_time_reference = Some(now);
+        state.selected = 2;
+        state.scroll_top = 1;
+        state.update_viewport(/*rows*/ 6, /*width*/ 80);
+
+        let width: u16 = 80;
+        let height: u16 = 6;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            render_list(&mut frame, area, &state);
+        }
+        terminal.flush().expect("flush");
+
+        assert_snapshot!(
+            "resume_picker_more_indicators",
+            terminal.backend().to_string()
+        );
+    }
+
+    #[test]
     fn pageless_scrolling_deduplicates_and_keeps_order() {
-        let loader: PageLoader = Arc::new(|_| {});
+        let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
             loader,
@@ -1828,7 +2448,7 @@ mod tests {
     fn ensure_minimum_rows_prefetches_when_underfilled() {
         let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let request_sink = recorded_requests.clone();
-        let loader: PageLoader = Arc::new(move |req: PageLoadRequest| {
+        let loader = page_only_loader(move |req: PageLoadRequest| {
             request_sink.lock().unwrap().push(req);
         });
 
@@ -1858,55 +2478,11 @@ mod tests {
         assert!(guard[0].search_token.is_none());
     }
 
-    #[test]
-    fn column_visibility_hides_extra_date_column_when_narrow() {
-        let metrics = ColumnMetrics {
-            max_created_width: 8,
-            max_updated_width: 12,
-            max_branch_width: 0,
-            max_cwd_width: 0,
-            labels: Vec::new(),
-        };
-
-        let created = column_visibility(/*area_width*/ 30, &metrics, ThreadSortKey::CreatedAt);
-        assert_eq!(
-            created,
-            ColumnVisibility {
-                show_created: true,
-                show_updated: false,
-                show_branch: false,
-                show_cwd: false,
-            }
-        );
-
-        let updated = column_visibility(/*area_width*/ 30, &metrics, ThreadSortKey::UpdatedAt);
-        assert_eq!(
-            updated,
-            ColumnVisibility {
-                show_created: false,
-                show_updated: true,
-                show_branch: false,
-                show_cwd: false,
-            }
-        );
-
-        let wide = column_visibility(/*area_width*/ 40, &metrics, ThreadSortKey::CreatedAt);
-        assert_eq!(
-            wide,
-            ColumnVisibility {
-                show_created: true,
-                show_updated: true,
-                show_branch: false,
-                show_cwd: false,
-            }
-        );
-    }
-
     #[tokio::test]
     async fn toggle_sort_key_reloads_with_new_sort() {
         let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let request_sink = recorded_requests.clone();
-        let loader: PageLoader = Arc::new(move |req: PageLoadRequest| {
+        let loader = page_only_loader(move |req: PageLoadRequest| {
             request_sink.lock().unwrap().push(req);
         });
 
@@ -1938,7 +2514,7 @@ mod tests {
 
     #[tokio::test]
     async fn page_navigation_uses_view_rows() {
-        let loader: PageLoader = Arc::new(|_| {});
+        let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
             loader,
@@ -1961,7 +2537,7 @@ mod tests {
             items, /*next_cursor*/ None, /*num_scanned_files*/ 20,
             /*reached_scan_cap*/ false,
         ));
-        state.update_view_rows(/*rows*/ 5);
+        state.update_viewport(/*rows*/ 5, /*width*/ 80);
 
         assert_eq!(state.selected, 0);
         state
@@ -1985,7 +2561,7 @@ mod tests {
 
     #[tokio::test]
     async fn enter_on_row_without_resolvable_thread_id_shows_inline_error() {
-        let loader: PageLoader = Arc::new(|_| {});
+        let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
             loader,
@@ -2024,7 +2600,7 @@ mod tests {
 
     #[tokio::test]
     async fn enter_on_pathless_thread_uses_thread_id() {
-        let loader: PageLoader = Arc::new(|_| {});
+        let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
             loader,
@@ -2092,8 +2668,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn up_at_bottom_does_not_scroll_when_visible() {
-        let loader: PageLoader = Arc::new(|_| {});
+    async fn moving_to_last_card_scrolls_when_cards_exceed_viewport() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+
+        let mut items = Vec::new();
+        for idx in 0..3 {
+            let ts = format!("2025-02-{:02}T00:00:00Z", idx + 1);
+            let preview = format!("item-{idx}");
+            let path = format!("/tmp/item-{idx}.jsonl");
+            items.push(make_row(&path, &ts, &preview));
+        }
+
+        state.reset_pagination();
+        state.ingest_page(page(
+            items, /*next_cursor*/ None, /*num_scanned_files*/ 3,
+            /*reached_scan_cap*/ false,
+        ));
+        state.update_viewport(/*rows*/ 5, /*width*/ 80);
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(state.scroll_top, 1);
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .unwrap();
+
+        assert_eq!(state.selected, 2);
+        assert_eq!(state.scroll_top, 2);
+    }
+
+    #[tokio::test]
+    async fn up_from_bottom_keeps_viewport_stable_when_card_remains_visible() {
+        let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
             loader,
@@ -2116,28 +2734,102 @@ mod tests {
             items, /*next_cursor*/ None, /*num_scanned_files*/ 10,
             /*reached_scan_cap*/ false,
         ));
-        state.update_view_rows(/*rows*/ 5);
+        state.update_viewport(/*rows*/ 5, /*width*/ 80);
 
         state.selected = state.filtered_rows.len().saturating_sub(1);
         state.ensure_selected_visible();
 
         let initial_top = state.scroll_top;
-        assert_eq!(initial_top, state.filtered_rows.len().saturating_sub(5));
+        assert_eq!(initial_top, state.filtered_rows.len().saturating_sub(1));
 
         state
             .handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
             .await
             .unwrap();
 
-        assert_eq!(state.scroll_top, initial_top);
+        assert_eq!(state.scroll_top, initial_top.saturating_sub(1));
         assert_eq!(state.selected, state.filtered_rows.len().saturating_sub(2));
+    }
+
+    #[tokio::test]
+    async fn up_scrolls_only_after_crossing_top_edge() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+
+        let mut items = Vec::new();
+        for idx in 0..10 {
+            let ts = format!("2025-02-{:02}T00:00:00Z", idx + 1);
+            let preview = format!("item-{idx}");
+            let path = format!("/tmp/item-{idx}.jsonl");
+            items.push(make_row(&path, &ts, &preview));
+        }
+
+        state.reset_pagination();
+        state.ingest_page(page(
+            items, /*next_cursor*/ None, /*num_scanned_files*/ 10,
+            /*reached_scan_cap*/ false,
+        ));
+        state.update_viewport(/*rows*/ 5, /*width*/ 80);
+        state.selected = 8;
+        state.scroll_top = 8;
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
+            .await
+            .unwrap();
+
+        assert_eq!(state.selected, 7);
+        assert_eq!(state.scroll_top, 7);
+    }
+
+    #[test]
+    fn list_reports_more_rows_above_and_below() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+
+        let mut items = Vec::new();
+        for idx in 0..5 {
+            let ts = format!("2025-02-{:02}T00:00:00Z", idx + 1);
+            let preview = format!("item-{idx}");
+            let path = format!("/tmp/item-{idx}.jsonl");
+            items.push(make_row(&path, &ts, &preview));
+        }
+
+        state.reset_pagination();
+        state.ingest_page(page(
+            items, /*next_cursor*/ None, /*num_scanned_files*/ 5,
+            /*reached_scan_cap*/ false,
+        ));
+        state.update_viewport(/*rows*/ 5, /*width*/ 80);
+
+        assert!(!state.has_more_above());
+        assert!(state.has_more_below(/*viewport_height*/ 5));
+
+        state.scroll_top = 2;
+
+        assert!(state.has_more_above());
+        assert!(state.has_more_below(/*viewport_height*/ 5));
     }
 
     #[tokio::test]
     async fn set_query_loads_until_match_and_respects_scan_cap() {
         let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let request_sink = recorded_requests.clone();
-        let loader: PageLoader = Arc::new(move |req: PageLoadRequest| {
+        let loader = page_only_loader(move |req: PageLoadRequest| {
             request_sink.lock().unwrap().push(req);
         });
 
@@ -2252,5 +2944,62 @@ mod tests {
         assert!(state.filtered_rows.is_empty());
         assert!(!state.search_state.is_active());
         assert!(state.pagination.reached_scan_cap);
+    }
+
+    #[tokio::test]
+    async fn esc_with_empty_query_starts_fresh() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+
+        let selection = state
+            .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .await
+            .expect("handle key");
+
+        assert!(matches!(selection, Some(SessionSelection::StartFresh)));
+    }
+
+    #[tokio::test]
+    async fn esc_with_query_clears_search_and_preserves_selected_result() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.reset_pagination();
+        state.ingest_page(page(
+            vec![
+                make_row("/tmp/alpha.jsonl", "2025-01-03T00:00:00Z", "alpha"),
+                make_row("/tmp/beta.jsonl", "2025-01-02T00:00:00Z", "beta"),
+            ],
+            /*next_cursor*/ None,
+            /*num_scanned_files*/ 2,
+            /*reached_scan_cap*/ false,
+        ));
+        state.set_query(String::from("beta"));
+
+        let selection = state
+            .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .await
+            .expect("handle key");
+
+        assert!(selection.is_none());
+        assert!(state.query.is_empty());
+        assert_eq!(state.filtered_rows.len(), 2);
+        assert_eq!(
+            state.filtered_rows[state.selected].path.as_deref(),
+            Some(Path::new("/tmp/beta.jsonl"))
+        );
     }
 }
