@@ -148,7 +148,13 @@ impl ModelProvider for ConfiguredModelProvider {
         let account = if self.info.requires_openai_auth {
             self.auth_manager
                 .as_ref()
-                .and_then(|auth_manager| auth_manager.auth_cached())
+                .and_then(|auth_manager| {
+                    let auth = auth_manager.auth_cached()?;
+                    if auth_manager.refresh_failure_for_auth(&auth).is_some() {
+                        return None;
+                    }
+                    Some(auth)
+                })
                 .map(|auth| match &auth {
                     CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
                     CodexAuth::Chatgpt(_)
