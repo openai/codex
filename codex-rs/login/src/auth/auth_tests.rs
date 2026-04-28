@@ -627,33 +627,6 @@ impl Drop for EnvVarGuard {
 
 #[tokio::test]
 #[serial(codex_auth_env)]
-async fn load_auth_reads_agent_identity_from_env() {
-    let codex_home = tempdir().unwrap();
-    let expected_record = agent_identity_record("account-123");
-    let agent_identity = fake_agent_identity_jwt(&expected_record).expect("fake agent identity");
-    let _agent_guard = EnvVarGuard::set(CODEX_AGENT_IDENTITY_ENV_VAR, &agent_identity);
-
-    let auth = super::load_auth(
-        codex_home.path(),
-        /*enable_codex_api_key_env*/ false,
-        AuthCredentialsStoreMode::File,
-    )
-    .await
-    .expect("env auth should load")
-    .expect("env auth should be present");
-
-    let CodexAuth::AgentIdentity(agent_identity) = auth else {
-        panic!("env auth should load as agent identity");
-    };
-    assert_eq!(agent_identity.record(), &expected_record);
-    assert!(
-        !get_auth_file(codex_home.path()).exists(),
-        "env auth should not write auth.json"
-    );
-}
-
-#[tokio::test]
-#[serial(codex_auth_env)]
 async fn load_auth_keeps_codex_api_key_env_precedence() {
     let codex_home = tempdir().unwrap();
     let record = agent_identity_record("account-123");
@@ -805,9 +778,11 @@ async fn enforce_login_restrictions_blocks_env_api_key_when_chatgpt_required() {
 }
 
 fn agent_identity_record(account_id: &str) -> AgentIdentityAuthRecord {
+    let key_material =
+        codex_agent_identity::generate_agent_key_material().expect("generate agent key material");
     AgentIdentityAuthRecord {
         agent_runtime_id: "agent-runtime-id".to_string(),
-        agent_private_key: "private-key".to_string(),
+        agent_private_key: key_material.private_key_pkcs8_base64,
         account_id: account_id.to_string(),
         chatgpt_user_id: "user-id".to_string(),
         email: "user@example.com".to_string(),

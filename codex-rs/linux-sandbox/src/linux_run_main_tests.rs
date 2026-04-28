@@ -200,7 +200,9 @@ fn split_only_filesystem_policy_requires_direct_runtime_enforcement() {
     let policy = FileSystemSandboxPolicy::restricted(vec![
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Special {
-                value: codex_protocol::permissions::FileSystemSpecialPath::CurrentWorkingDirectory,
+                value: codex_protocol::permissions::FileSystemSpecialPath::project_roots(
+                    /*subpath*/ None,
+                ),
             },
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
         },

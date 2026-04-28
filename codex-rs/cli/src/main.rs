@@ -134,6 +134,9 @@ enum Subcommand {
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
 
+    /// Update Codex to the latest version.
+    Update,
+
     /// Run commands within a Codex-provided sandbox.
     Sandbox(SandboxArgs),
 
@@ -615,6 +618,25 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn run_update_command() -> anyhow::Result<()> {
+    #[cfg(debug_assertions)]
+    {
+        anyhow::bail!(
+            "`codex update` is not available in debug builds. Install a release build of Codex to use this command."
+        );
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        let Some(action) = codex_tui::get_update_action() else {
+            anyhow::bail!(
+                "Could not detect the Codex installation method. Please update manually: https://developers.openai.com/codex/cli/"
+            );
+        };
+        run_update_action(action)
+    }
+}
+
 fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
     cmd.run()
 }
@@ -997,6 +1019,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 "completion",
             )?;
             print_completion(completion_cli);
+        }
+        Some(Subcommand::Update) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "update",
+            )?;
+            run_update_command()?;
         }
         Some(Subcommand::Cloud(mut cloud_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -1888,6 +1918,12 @@ mod tests {
                 .expect("parse");
 
         assert!(matches!(cli.subcommand, Some(Subcommand::Plugin(_))));
+    }
+
+    #[test]
+    fn update_parses_as_update_subcommand() {
+        let cli = MultitoolCli::try_parse_from(["codex", "update"]).expect("parse");
+        assert!(matches!(cli.subcommand, Some(Subcommand::Update)));
     }
 
     #[test]

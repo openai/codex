@@ -1397,6 +1397,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_typed_request_accepts_large_single_frame_response() {
+        let padding = "x".repeat((17 << 20) + 1024);
+        let websocket_url = start_test_remote_server(move |mut websocket| async move {
+            expect_remote_initialize(&mut websocket).await;
+            let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected account/read request");
+            };
+            assert_eq!(request.method, "account/read");
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::json!({
+                        "account": null,
+                        "requiresOpenaiAuth": false,
+                        "padding": padding,
+                    }),
+                }),
+            )
+            .await;
+            websocket.close(None).await.expect("close should succeed");
+        })
+        .await;
+        let client = RemoteAppServerClient::connect(test_remote_connect_args(websocket_url))
+            .await
+            .expect("remote client should connect");
+
+        let response: GetAccountResponse = client
+            .request_typed(ClientRequest::GetAccount {
+                request_id: RequestId::Integer(1),
+                params: codex_app_server_protocol::GetAccountParams {
+                    refresh_token: false,
+                },
+            })
+            .await
+            .expect("large typed request should succeed");
+        assert_eq!(
+            response,
+            GetAccountResponse {
+                account: None,
+                requires_openai_auth: false,
+            }
+        );
+
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
     async fn remote_connect_includes_auth_header_when_configured() {
         let auth_token = "remote-bearer-token".to_string();
         let websocket_url = start_test_remote_server_with_auth(

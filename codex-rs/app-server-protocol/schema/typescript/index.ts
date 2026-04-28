@@ -29,7 +29,6 @@ export type { GetAuthStatusParams } from "./GetAuthStatusParams";
 export type { GetAuthStatusResponse } from "./GetAuthStatusResponse";
 export type { GetConversationSummaryParams } from "./GetConversationSummaryParams";
 export type { GetConversationSummaryResponse } from "./GetConversationSummaryResponse";
-export type { GhostCommit } from "./GhostCommit";
 export type { GitDiffToRemoteParams } from "./GitDiffToRemoteParams";
 export type { GitDiffToRemoteResponse } from "./GitDiffToRemoteResponse";
 export type { GitSha } from "./GitSha";

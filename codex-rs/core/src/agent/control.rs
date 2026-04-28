@@ -113,7 +113,6 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
             | ResponseItem::ToolSearchOutput { .. }
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
-            | ResponseItem::GhostSnapshot { .. }
             | ResponseItem::Compaction { .. }
             | ResponseItem::Other,
         ) => false,

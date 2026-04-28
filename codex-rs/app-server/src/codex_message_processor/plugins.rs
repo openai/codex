@@ -421,22 +421,44 @@ impl CodexMessageProcessor {
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
-        let remote_detail = codex_core_plugins::remote::fetch_remote_plugin_detail(
-            &remote_plugin_service_config,
-            auth.as_ref(),
-            &remote_marketplace_name,
-            &plugin_name,
-        )
-        .await
-        .map_err(|err| {
-            remote_plugin_catalog_error_to_jsonrpc(err, "read remote plugin details before install")
-        })?;
+        let remote_detail =
+            codex_core_plugins::remote::fetch_remote_plugin_detail_with_download_urls(
+                &remote_plugin_service_config,
+                auth.as_ref(),
+                &remote_marketplace_name,
+                &plugin_name,
+            )
+            .await
+            .map_err(|err| {
+                remote_plugin_catalog_error_to_jsonrpc(
+                    err,
+                    "read remote plugin details before install",
+                )
+            })?;
         if remote_detail.summary.install_policy == PluginInstallPolicy::NotAvailable {
             return Err(invalid_request(format!(
                 "remote plugin {plugin_name} is not available for install"
             )));
         }
+        let validated_bundle = codex_core_plugins::remote_bundle::validate_remote_plugin_bundle(
+            &plugin_name,
+            &remote_marketplace_name,
+            &remote_detail.summary.name,
+            remote_detail.release_version.as_deref(),
+            remote_detail.bundle_download_url.as_deref(),
+        )
+        .map_err(remote_plugin_bundle_install_error_to_jsonrpc)?;
 
+        let result = codex_core_plugins::remote_bundle::download_and_install_remote_plugin_bundle(
+            config.codex_home.to_path_buf(),
+            validated_bundle,
+        )
+        .await
+        .map_err(remote_plugin_bundle_install_error_to_jsonrpc)?;
+
+        // Cache first so a backend install cannot succeed when local materialization fails.
+        // If this backend call fails, the cache entry is harmless because remote installed state
+        // is still backend-gated.
         codex_core_plugins::remote::install_remote_plugin(
             &remote_plugin_service_config,
             auth.as_ref(),
@@ -446,18 +468,29 @@ impl CodexMessageProcessor {
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "install remote plugin"))?;
 
+        // TODO(remote plugins): remote marketplaces do not yet have a local
+        // marketplace/read-path sync, so this install path reads MCP/apps directly
+        // from the just-cached bundle.
         self.clear_plugin_related_caches();
 
-        let plugin_apps = remote_detail
-            .app_ids
-            .into_iter()
-            .map(codex_core::plugins::AppConnectorId)
-            .collect::<Vec<_>>();
+        let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
+        if !plugin_mcp_servers.is_empty() {
+            if let Err(err) = self.queue_mcp_server_refresh_for_config(&config).await {
+                warn!(
+                    plugin = result.plugin_id.as_key(),
+                    "failed to queue MCP refresh after remote plugin install: {err:?}"
+                );
+            }
+            self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
+                .await;
+        }
+
+        let plugin_apps = load_plugin_apps(result.installed_path.as_path()).await;
         let apps_needing_auth = self
             .plugin_apps_needing_auth_for_install(
                 &config,
                 auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth),
-                &plugin_name,
+                &result.plugin_id.as_key(),
                 &plugin_apps,
             )
             .await;
@@ -707,4 +740,10 @@ fn remote_plugin_catalog_error_to_jsonrpc(
             data: None,
         },
     }
+}
+
+fn remote_plugin_bundle_install_error_to_jsonrpc(
+    err: codex_core_plugins::remote_bundle::RemotePluginBundleInstallError,
+) -> JSONRPCErrorError {
+    internal_error(format!("install remote plugin bundle: {err}"))
 }

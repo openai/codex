@@ -4,9 +4,12 @@ use super::*;
 use crate::config::RolloutConfig;
 use chrono::TimeZone;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::UserMessageEvent;
@@ -60,6 +63,161 @@ fn write_session_file(root: &Path, ts: &str, uuid: Uuid) -> std::io::Result<Path
     });
     writeln!(file, "{user_event}")?;
     Ok(path)
+}
+
+#[tokio::test]
+async fn load_rollout_items_skips_legacy_ghost_snapshot_lines() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let rollout_path = home.path().join("rollout.jsonl");
+    let mut file = File::create(&rollout_path)?;
+    let thread_id = ThreadId::new();
+    let ts = "2025-01-03T12:00:00Z";
+
+    writeln!(
+        file,
+        "{}",
+        serde_json::json!({
+            "timestamp": ts,
+            "type": "session_meta",
+            "payload": {
+                "id": thread_id,
+                "timestamp": ts,
+                "cwd": ".",
+                "originator": "test_originator",
+                "cli_version": "test_version",
+                "source": "cli",
+                "model_provider": "test-provider",
+            },
+        })
+    )?;
+    writeln!(
+        file,
+        "{}",
+        serde_json::json!({
+            "timestamp": ts,
+            "type": "response_item",
+            "payload": {
+                "type": "ghost_snapshot",
+                "ghost_commit": {
+                    "id": "deadbeef",
+                    "preexisting_untracked_dirs": [],
+                    "preexisting_untracked_files": [],
+                },
+            },
+        })
+    )?;
+    writeln!(
+        file,
+        "{}",
+        serde_json::json!({
+            "timestamp": ts,
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "hello",
+                    }
+                ],
+            },
+        })
+    )?;
+
+    let (items, loaded_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+
+    assert_eq!(loaded_thread_id, Some(thread_id));
+    assert_eq!(parse_errors, 0);
+    assert_eq!(items.len(), 2);
+    assert!(matches!(items[0], RolloutItem::SessionMeta(_)));
+    assert!(matches!(
+        items[1],
+        RolloutItem::ResponseItem(ResponseItem::Message { .. })
+    ));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_rollout_items_filters_legacy_ghost_snapshots_from_compaction_history()
+-> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let rollout_path = home.path().join("rollout.jsonl");
+    let mut file = File::create(&rollout_path)?;
+    let thread_id = ThreadId::new();
+    let ts = "2025-01-03T12:00:00Z";
+
+    writeln!(
+        file,
+        "{}",
+        serde_json::json!({
+            "timestamp": ts,
+            "type": "session_meta",
+            "payload": {
+                "id": thread_id,
+                "timestamp": ts,
+                "cwd": ".",
+                "originator": "test_originator",
+                "cli_version": "test_version",
+                "source": "cli",
+                "model_provider": "test-provider",
+            },
+        })
+    )?;
+    writeln!(
+        file,
+        "{}",
+        serde_json::json!({
+            "timestamp": ts,
+            "type": "compacted",
+            "payload": {
+                "message": "summary",
+                "replacement_history": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "kept",
+                            }
+                        ],
+                    },
+                    {
+                        "type": "ghost_snapshot",
+                        "ghost_commit": {
+                            "id": "deadbeef",
+                            "preexisting_untracked_dirs": [],
+                            "preexisting_untracked_files": [],
+                        },
+                    }
+                ],
+            },
+        })
+    )?;
+
+    let (items, loaded_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+
+    assert_eq!(loaded_thread_id, Some(thread_id));
+    assert_eq!(parse_errors, 0);
+    assert_eq!(items.len(), 2);
+    let RolloutItem::Compacted(compacted) = &items[1] else {
+        panic!("expected compacted rollout item");
+    };
+    let replacement_history = compacted
+        .replacement_history
+        .as_ref()
+        .expect("replacement history");
+    assert_eq!(replacement_history.len(), 1);
+    assert!(matches!(
+        &replacement_history[0],
+        ResponseItem::Message { .. }
+    ));
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -779,7 +937,7 @@ async fn list_threads_metadata_filter_overlays_state_db_list_metadata() -> std::
 }
 
 #[test]
-fn fill_missing_thread_item_metadata_preserves_filesystem_identity() {
+fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fields() {
     let filesystem_thread_id = ThreadId::new();
     let state_thread_id = ThreadId::new();
     let filesystem_path = PathBuf::from("/tmp/filesystem-rollout.jsonl");
@@ -789,9 +947,9 @@ fn fill_missing_thread_item_metadata_preserves_filesystem_identity() {
         thread_id: Some(filesystem_thread_id),
         first_user_message: Some("filesystem message".to_string()),
         cwd: None,
-        git_branch: None,
-        git_sha: None,
-        git_origin_url: None,
+        git_branch: Some("filesystem-branch".to_string()),
+        git_sha: Some("filesystem-sha".to_string()),
+        git_origin_url: Some("https://example.com/filesystem.git".to_string()),
         source: None,
         agent_nickname: None,
         agent_role: None,

@@ -133,6 +133,34 @@ fn http_mcp(url: &str) -> McpServerConfig {
     }
 }
 
+async fn derive_legacy_sandbox_policy_for_test(
+    cfg: &ConfigToml,
+    sandbox_mode_override: Option<SandboxMode>,
+    profile_sandbox_mode: Option<SandboxMode>,
+    windows_sandbox_level: WindowsSandboxLevel,
+    active_project: Option<&ProjectConfig>,
+    permission_profile_constraint: Option<&Constrained<PermissionProfile>>,
+) -> SandboxPolicy {
+    let permission_profile = cfg
+        .derive_permission_profile(
+            sandbox_mode_override,
+            profile_sandbox_mode,
+            windows_sandbox_level,
+            active_project,
+            permission_profile_constraint,
+        )
+        .await;
+    permission_profile
+        .to_legacy_sandbox_policy(Path::new("/"))
+        .unwrap_or_else(|err| {
+            tracing::warn!(
+                error = %err,
+                "derived permission profile cannot be represented as a legacy sandbox policy; falling back to read-only"
+            );
+            SandboxPolicy::new_read_only_policy()
+        })
+}
+
 #[tokio::test]
 async fn load_config_normalizes_relative_cwd_override() -> std::io::Result<()> {
     let expected_cwd = AbsolutePathBuf::relative_to_current_dir("nested")?;
@@ -947,7 +975,7 @@ async fn permission_profile_override_applies_runtime_roots_to_legacy_projection(
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
                 },
                 access: FileSystemAccessMode::Write,
             },
@@ -1630,15 +1658,15 @@ network_access = false  # This should be ignored.
     let sandbox_full_access_cfg = toml::from_str::<ConfigToml>(sandbox_full_access)
         .expect("TOML deserialization should succeed");
     let sandbox_mode_override = None;
-    let resolution = sandbox_full_access_cfg
-        .derive_sandbox_policy(
-            sandbox_mode_override,
-            /*profile_sandbox_mode*/ None,
-            WindowsSandboxLevel::Disabled,
-            /*active_project*/ None,
-            /*permission_profile_constraint*/ None,
-        )
-        .await;
+    let resolution = derive_legacy_sandbox_policy_for_test(
+        &sandbox_full_access_cfg,
+        sandbox_mode_override,
+        /*profile_sandbox_mode*/ None,
+        WindowsSandboxLevel::Disabled,
+        /*active_project*/ None,
+        /*permission_profile_constraint*/ None,
+    )
+    .await;
     assert_eq!(resolution, SandboxPolicy::DangerFullAccess);
 
     let sandbox_read_only = r#"
@@ -1651,15 +1679,15 @@ network_access = true  # This should be ignored.
     let sandbox_read_only_cfg = toml::from_str::<ConfigToml>(sandbox_read_only)
         .expect("TOML deserialization should succeed");
     let sandbox_mode_override = None;
-    let resolution = sandbox_read_only_cfg
-        .derive_sandbox_policy(
-            sandbox_mode_override,
-            /*profile_sandbox_mode*/ None,
-            WindowsSandboxLevel::Disabled,
-            /*active_project*/ None,
-            /*permission_profile_constraint*/ None,
-        )
-        .await;
+    let resolution = derive_legacy_sandbox_policy_for_test(
+        &sandbox_read_only_cfg,
+        sandbox_mode_override,
+        /*profile_sandbox_mode*/ None,
+        WindowsSandboxLevel::Disabled,
+        /*active_project*/ None,
+        /*permission_profile_constraint*/ None,
+    )
+    .await;
     assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
 
     let writable_root = test_absolute_path("/my/workspace");
@@ -1683,15 +1711,15 @@ trust_level = "trusted"
     let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(&sandbox_workspace_write)
         .expect("TOML deserialization should succeed");
     let sandbox_mode_override = None;
-    let resolution = sandbox_workspace_write_cfg
-        .derive_sandbox_policy(
-            sandbox_mode_override,
-            /*profile_sandbox_mode*/ None,
-            WindowsSandboxLevel::Disabled,
-            /*active_project*/ None,
-            /*permission_profile_constraint*/ None,
-        )
-        .await;
+    let resolution = derive_legacy_sandbox_policy_for_test(
+        &sandbox_workspace_write_cfg,
+        sandbox_mode_override,
+        /*profile_sandbox_mode*/ None,
+        WindowsSandboxLevel::Disabled,
+        /*active_project*/ None,
+        /*permission_profile_constraint*/ None,
+    )
+    .await;
     if cfg!(target_os = "windows") {
         assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
     } else {
@@ -1723,15 +1751,15 @@ exclude_slash_tmp = true
     let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(&sandbox_workspace_write)
         .expect("TOML deserialization should succeed");
     let sandbox_mode_override = None;
-    let resolution = sandbox_workspace_write_cfg
-        .derive_sandbox_policy(
-            sandbox_mode_override,
-            /*profile_sandbox_mode*/ None,
-            WindowsSandboxLevel::Disabled,
-            /*active_project*/ None,
-            /*permission_profile_constraint*/ None,
-        )
-        .await;
+    let resolution = derive_legacy_sandbox_policy_for_test(
+        &sandbox_workspace_write_cfg,
+        sandbox_mode_override,
+        /*profile_sandbox_mode*/ None,
+        WindowsSandboxLevel::Disabled,
+        /*active_project*/ None,
+        /*permission_profile_constraint*/ None,
+    )
+    .await;
     if cfg!(target_os = "windows") {
         assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
     } else {
@@ -1748,7 +1776,7 @@ exclude_slash_tmp = true
 }
 
 #[tokio::test]
-async fn legacy_sandbox_mode_config_builds_split_policies_without_drift() -> std::io::Result<()> {
+async fn legacy_sandbox_mode_builds_profiles_with_compatible_projection() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     let extra_root = test_absolute_path("/tmp/legacy-extra-root");
@@ -1793,26 +1821,91 @@ exclude_slash_tmp = true
         )
         .await?;
 
-        let sandbox_policy = &config.legacy_sandbox_policy();
+        let sandbox_policy = config.legacy_sandbox_policy();
+        let file_system_policy = config.permissions.file_system_sandbox_policy();
+        let network_policy = config.permissions.network_sandbox_policy();
+
         assert_eq!(
-            config.permissions.file_system_sandbox_policy(),
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd.path()),
-            "case `{name}` should preserve filesystem semantics from legacy config"
-        );
-        assert_eq!(
-            config.permissions.network_sandbox_policy(),
-            NetworkSandboxPolicy::from(sandbox_policy),
+            network_policy,
+            NetworkSandboxPolicy::from(&sandbox_policy),
             "case `{name}` should preserve network semantics from legacy config"
         );
         assert_eq!(
-            config
-                .permissions
-                .file_system_sandbox_policy()
-                .to_legacy_sandbox_policy(config.permissions.network_sandbox_policy(), cwd.path())
+            file_system_policy
+                .to_legacy_sandbox_policy(network_policy, cwd.path())
                 .unwrap_or_else(|err| panic!("case `{name}` should round-trip: {err}")),
-            sandbox_policy.clone(),
-            "case `{name}` should round-trip through split policies without drift"
+            sandbox_policy,
+            "case `{name}` should preserve its legacy compatibility projection"
         );
+
+        match name.as_str() {
+            "danger-full-access" | "read-only" => {
+                assert_eq!(
+                    file_system_policy,
+                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+                        &sandbox_policy,
+                        cwd.path()
+                    ),
+                    "case `{name}` should match the legacy filesystem projection exactly"
+                );
+            }
+            "workspace-write" => {
+                if cfg!(target_os = "windows") {
+                    assert_eq!(
+                        sandbox_policy,
+                        SandboxPolicy::new_read_only_policy(),
+                        "legacy workspace-write should keep the existing Windows downgrade when \
+                         the experimental Windows sandbox is disabled"
+                    );
+                    assert_eq!(
+                        file_system_policy,
+                        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+                            &sandbox_policy,
+                            cwd.path()
+                        ),
+                        "downgraded workspace-write should match the legacy read-only projection"
+                    );
+                    continue;
+                }
+                assert!(
+                    file_system_policy
+                        .entries
+                        .contains(&FileSystemSandboxEntry {
+                            path: FileSystemPath::Special {
+                                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                            },
+                            access: FileSystemAccessMode::Write,
+                        })
+                );
+                assert!(
+                    file_system_policy
+                        .entries
+                        .contains(&FileSystemSandboxEntry {
+                            path: FileSystemPath::Path {
+                                path: extra_root.clone(),
+                            },
+                            access: FileSystemAccessMode::Write,
+                        })
+                );
+                for subpath in [".git", ".agents", ".codex"] {
+                    assert!(
+                        file_system_policy
+                            .entries
+                            .contains(&FileSystemSandboxEntry {
+                                path: FileSystemPath::Special {
+                                    value: FileSystemSpecialPath::project_roots(Some(
+                                        subpath.into()
+                                    )),
+                                },
+                                access: FileSystemAccessMode::Read,
+                            }),
+                        "case `{name}` should preserve `{subpath}` as a symbolic project-root \
+                         metadata carveout"
+                    );
+                }
+            }
+            _ => unreachable!("unexpected test case `{name}`"),
+        }
     }
 
     Ok(())
@@ -6310,15 +6403,15 @@ trust_level = "untrusted"
         trust_level: Some(TrustLevel::Untrusted),
     };
 
-    let resolution = cfg
-        .derive_sandbox_policy(
-            /*sandbox_mode_override*/ None,
-            /*profile_sandbox_mode*/ None,
-            WindowsSandboxLevel::Disabled,
-            Some(&active_project),
-            /*permission_profile_constraint*/ None,
-        )
-        .await;
+    let resolution = derive_legacy_sandbox_policy_for_test(
+        &cfg,
+        /*sandbox_mode_override*/ None,
+        /*profile_sandbox_mode*/ None,
+        WindowsSandboxLevel::Disabled,
+        Some(&active_project),
+        /*permission_profile_constraint*/ None,
+    )
+    .await;
 
     // Verify that untrusted projects get WorkspaceWrite (or ReadOnly on Windows due to downgrade)
     if cfg!(target_os = "windows") {
@@ -6367,15 +6460,15 @@ async fn derive_sandbox_policy_falls_back_to_read_only_for_implicit_defaults() -
         }
     })?;
 
-    let resolution = cfg
-        .derive_sandbox_policy(
-            /*sandbox_mode_override*/ None,
-            /*profile_sandbox_mode*/ None,
-            WindowsSandboxLevel::Disabled,
-            Some(&active_project),
-            Some(&constrained),
-        )
-        .await;
+    let resolution = derive_legacy_sandbox_policy_for_test(
+        &cfg,
+        /*sandbox_mode_override*/ None,
+        /*profile_sandbox_mode*/ None,
+        WindowsSandboxLevel::Disabled,
+        Some(&active_project),
+        Some(&constrained),
+    )
+    .await;
 
     assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
     Ok(())
@@ -6423,15 +6516,15 @@ async fn derive_sandbox_policy_preserves_windows_downgrade_for_unsupported_fallb
         },
     )?;
 
-    let resolution = cfg
-        .derive_sandbox_policy(
-            /*sandbox_mode_override*/ None,
-            /*profile_sandbox_mode*/ None,
-            WindowsSandboxLevel::Disabled,
-            Some(&active_project),
-            Some(&constrained),
-        )
-        .await;
+    let resolution = derive_legacy_sandbox_policy_for_test(
+        &cfg,
+        /*sandbox_mode_override*/ None,
+        /*profile_sandbox_mode*/ None,
+        WindowsSandboxLevel::Disabled,
+        Some(&active_project),
+        Some(&constrained),
+    )
+    .await;
 
     if cfg!(target_os = "windows") {
         assert_eq!(resolution, SandboxPolicy::new_read_only_policy());

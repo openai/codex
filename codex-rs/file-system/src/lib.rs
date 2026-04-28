@@ -9,8 +9,8 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::io;
 use std::path::Path;
-use tokio::io;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreateDirectoryOptions {
@@ -99,16 +99,20 @@ impl FileSystemSandboxContext {
             && !file_system_policy.has_full_disk_write_access()
     }
 
-    pub(crate) fn drop_cwd_if_unused(mut self) -> Self {
+    pub fn has_cwd_dependent_permissions(&self) -> bool {
         let file_system_policy = self.permissions.file_system_sandbox_policy();
-        if !file_system_policy_has_cwd_dependent_entries(&file_system_policy) {
+        file_system_policy_has_cwd_dependent_entries(&file_system_policy)
+    }
+
+    pub fn drop_cwd_if_unused(mut self) -> Self {
+        if !self.has_cwd_dependent_permissions() {
             self.cwd = None;
         }
         self
     }
 }
 
-pub(crate) fn file_system_policy_has_cwd_dependent_entries(
+fn file_system_policy_has_cwd_dependent_entries(
     file_system_policy: &FileSystemSandboxPolicy,
 ) -> bool {
     file_system_policy
@@ -117,9 +121,7 @@ pub(crate) fn file_system_policy_has_cwd_dependent_entries(
         .any(|entry| match &entry.path {
             FileSystemPath::GlobPattern { pattern } => !Path::new(pattern).is_absolute(),
             FileSystemPath::Special {
-                value:
-                    FileSystemSpecialPath::CurrentWorkingDirectory
-                    | FileSystemSpecialPath::ProjectRoots { .. },
+                value: FileSystemSpecialPath::ProjectRoots { .. },
             } => true,
             FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => false,
         })
@@ -127,6 +129,8 @@ pub(crate) fn file_system_policy_has_cwd_dependent_entries(
 
 pub type FileSystemResult<T> = io::Result<T>;
 
+/// Abstract filesystem access used by components that may operate locally or via
+/// a remote executor.
 #[async_trait]
 pub trait ExecutorFileSystem: Send + Sync {
     async fn read_file(
