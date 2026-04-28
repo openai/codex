@@ -1,5 +1,9 @@
 use crate::STAGE_ONE_PROMPT;
 use crate::build_stage_one_input_message;
+use crate::metrics::MEMORY_PHASE_ONE_E2E_MS;
+use crate::metrics::MEMORY_PHASE_ONE_JOBS;
+use crate::metrics::MEMORY_PHASE_ONE_OUTPUT;
+use crate::metrics::MEMORY_PHASE_ONE_TOKEN_USAGE;
 use crate::runtime::MemoryStartupContext;
 use crate::runtime::StageOneRequestContext;
 use codex_config::types::MemoriesConfig;
@@ -32,10 +36,6 @@ const JOB_LEASE_SECONDS: i64 = 3_600;
 const JOB_RETRY_DELAY_SECONDS: i64 = 3_600;
 const THREAD_SCAN_LIMIT: usize = 5_000;
 const PRUNE_BATCH_SIZE: usize = 200;
-const MEMORY_PHASE_ONE_JOBS: &str = "codex.memory.phase1";
-const MEMORY_PHASE_ONE_E2E_MS: &str = "codex.memory.phase1.e2e_ms";
-const MEMORY_PHASE_ONE_OUTPUT: &str = "codex.memory.phase1.output";
-const MEMORY_PHASE_ONE_TOKEN_USAGE: &str = "codex.memory.phase1.token_usage";
 
 struct JobResult {
     outcome: JobOutcome,

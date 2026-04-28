@@ -1,5 +1,9 @@
 use crate::build_consolidation_prompt;
 use crate::memory_root;
+use crate::metrics::MEMORY_PHASE_TWO_E2E_MS;
+use crate::metrics::MEMORY_PHASE_TWO_INPUT;
+use crate::metrics::MEMORY_PHASE_TWO_JOBS;
+use crate::metrics::MEMORY_PHASE_TWO_TOKEN_USAGE;
 use crate::prune_old_extension_resources;
 use crate::rebuild_raw_memories_file_from_memories;
 use crate::runtime::MemoryStartupContext;
@@ -30,10 +34,6 @@ const REASONING_EFFORT: codex_protocol::openai_models::ReasoningEffort =
 const JOB_LEASE_SECONDS: i64 = 3_600;
 const JOB_RETRY_DELAY_SECONDS: i64 = 3_600;
 const JOB_HEARTBEAT_SECONDS: u64 = 90;
-const MEMORY_PHASE_TWO_JOBS: &str = "codex.memory.phase2";
-const MEMORY_PHASE_TWO_E2E_MS: &str = "codex.memory.phase2.e2e_ms";
-const MEMORY_PHASE_TWO_INPUT: &str = "codex.memory.phase2.input";
-const MEMORY_PHASE_TWO_TOKEN_USAGE: &str = "codex.memory.phase2.token_usage";
 
 #[derive(Debug, Clone, Default)]
 struct Claim {

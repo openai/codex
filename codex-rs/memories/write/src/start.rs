@@ -1,4 +1,5 @@
 use crate::guard;
+use crate::metrics::MEMORY_STARTUP;
 use crate::phase1;
 use crate::phase2;
 use crate::runtime::MemoryStartupContext;
@@ -11,8 +12,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use std::sync::Arc;
 use tracing::warn;
-
-const MEMORY_STARTUP: &str = "codex.memory.startup";
 
 /// Starts the asynchronous startup memory pipeline for an eligible root session.
 ///
