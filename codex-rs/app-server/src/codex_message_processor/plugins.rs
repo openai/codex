@@ -2,6 +2,7 @@ use super::*;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_core_plugins::store::PLUGINS_CACHE_DIR;
 
 impl CodexMessageProcessor {
     pub(super) async fn plugin_list(
@@ -689,6 +690,35 @@ impl CodexMessageProcessor {
         )
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "uninstall remote plugin"))?;
+
+        let remote_plugin_cache_root = config
+            .codex_home
+            .join(PLUGINS_CACHE_DIR)
+            .join(remote_marketplace_name)
+            .join(plugin_name);
+        let remove_cache_result = tokio::task::spawn_blocking(move || {
+            if !remote_plugin_cache_root.exists() {
+                return Ok(());
+            }
+
+            let result = if remote_plugin_cache_root.is_dir() {
+                std::fs::remove_dir_all(&remote_plugin_cache_root)
+            } else {
+                std::fs::remove_file(&remote_plugin_cache_root)
+            };
+            result.map_err(|err| {
+                format!(
+                    "failed to remove remote plugin cache entry {}: {err}",
+                    remote_plugin_cache_root.display()
+                )
+            })
+        })
+        .await
+        .map_err(|err| format!("failed to join remote plugin cache removal task: {err}"))
+        .and_then(|result| result);
+        if let Err(err) = remove_cache_result {
+            return Err(internal_error(err));
+        }
 
         self.clear_plugin_related_caches();
         Ok(PluginUninstallResponse {})

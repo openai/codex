@@ -210,6 +210,15 @@ async fn plugin_uninstall_writes_remote_plugin_to_cloud_when_remote_plugin_enabl
         .mount(&server)
         .await;
 
+    let remote_plugin_cache_root = codex_home
+        .path()
+        .join("plugins/cache/chatgpt-global/plugins~Plugin_linear");
+    std::fs::create_dir_all(remote_plugin_cache_root.join("local/.codex-plugin"))?;
+    std::fs::write(
+        remote_plugin_cache_root.join("local/.codex-plugin/plugin.json"),
+        r#"{"name":"plugins~Plugin_linear"}"#,
+    )?;
+
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
@@ -234,6 +243,7 @@ async fn plugin_uninstall_writes_remote_plugin_to_cloud_when_remote_plugin_enabl
         /*expected_count*/ 1,
     )
     .await?;
+    assert!(!remote_plugin_cache_root.exists());
     Ok(())
 }
 
