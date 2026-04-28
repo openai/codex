@@ -379,7 +379,6 @@ fn tool_capability_bounds(capabilities: ProviderCapabilities) -> ToolCapabilityB
         tool_suggest: capabilities.tool_suggest,
         image_generation: capabilities.image_generation,
         web_search: capabilities.web_search,
-        js_repl: capabilities.js_repl,
     }
 }
 

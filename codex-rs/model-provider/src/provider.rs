@@ -32,7 +32,6 @@ pub struct ProviderCapabilities {
     pub tool_suggest: bool,
     pub image_generation: bool,
     pub web_search: bool,
-    pub js_repl: bool,
 }
 
 impl Default for ProviderCapabilities {
@@ -44,7 +43,6 @@ impl Default for ProviderCapabilities {
             tool_suggest: true,
             image_generation: true,
             web_search: true,
-            js_repl: true,
         }
     }
 }

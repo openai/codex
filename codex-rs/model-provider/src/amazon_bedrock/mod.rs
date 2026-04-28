@@ -64,7 +64,6 @@ impl ModelProvider for AmazonBedrockModelProvider {
             tool_suggest: false,
             image_generation: false,
             web_search: false,
-            js_repl: false,
         }
     }
 
@@ -145,7 +144,6 @@ mod tests {
                 tool_suggest: false,
                 image_generation: false,
                 web_search: false,
-                js_repl: false,
             }
         );
     }

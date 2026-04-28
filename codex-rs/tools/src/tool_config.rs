@@ -120,7 +120,6 @@ pub struct ToolCapabilityBounds {
     pub tool_suggest: bool,
     pub image_generation: bool,
     pub web_search: bool,
-    pub js_repl: bool,
 }
 
 impl Default for ToolCapabilityBounds {
@@ -130,7 +129,6 @@ impl Default for ToolCapabilityBounds {
             tool_suggest: true,
             image_generation: true,
             web_search: true,
-            js_repl: true,
         }
     }
 }
@@ -272,10 +270,6 @@ impl ToolsConfig {
         }
         if !bounds.web_search {
             self.web_search_mode = None;
-        }
-        if !bounds.js_repl {
-            self.js_repl_enabled = false;
-            self.js_repl_tools_only = false;
         }
         self
     }
