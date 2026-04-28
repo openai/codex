@@ -206,6 +206,314 @@ async fn detect_repo_still_reports_non_plugin_items_when_home_config_is_invalid(
 }
 
 #[tokio::test]
+async fn detect_repo_lists_mcp_hooks_commands_and_subagents() {
+    let root = TempDir::new().expect("create tempdir");
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(".claude").join("commands").join("pr"))
+        .expect("create commands");
+    fs::create_dir_all(repo_root.join(".claude").join("agents")).expect("create agents");
+    fs::write(
+        repo_root.join(".mcp.json"),
+        r#"{"mcpServers":{"docs":{"command":"docs-server"}}}"#,
+    )
+    .expect("write mcp");
+    fs::write(
+        repo_root.join(".claude").join("settings.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo claude","timeout":3},{"type":"http","url":"https://example.invalid/hook"}]}]}}"#,
+    )
+    .expect("write hooks");
+    fs::write(
+        repo_root
+            .join(".claude")
+            .join("commands")
+            .join("pr")
+            .join("review.md"),
+        "---\ndescription: Review PR\n---\nReview $ARGUMENTS\n",
+    )
+    .expect("write command");
+    fs::write(
+        repo_root
+            .join(".claude")
+            .join("agents")
+            .join("researcher.md"),
+        "---\nname: researcher\ndescription: Research role\n---\nResearch carefully.\n",
+    )
+    .expect("write subagent");
+
+    let items = service_for_paths(root.path().join(".claude"), root.path().join(".codex"))
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: false,
+            cwds: Some(vec![repo_root.clone()]),
+        })
+        .await
+        .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![
+            ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::McpServerConfig,
+                description: format!(
+                    "Migrate MCP servers from {} into {}",
+                    repo_root.display(),
+                    repo_root.join(".codex").join("config.toml").display()
+                ),
+                cwd: Some(repo_root.clone()),
+                details: None,
+            },
+            ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Hooks,
+                description: format!(
+                    "Migrate hooks from {} to {}",
+                    repo_root.join(".claude").display(),
+                    repo_root.join(".codex").join("hooks.json").display()
+                ),
+                cwd: Some(repo_root.clone()),
+                details: None,
+            },
+            ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Commands,
+                description: format!(
+                    "Migrate commands from {} to {}",
+                    repo_root.join(".claude").join("commands").display(),
+                    repo_root.join(".agents").join("skills").display()
+                ),
+                cwd: Some(repo_root.clone()),
+                details: None,
+            },
+            ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Subagents,
+                description: format!(
+                    "Migrate subagents from {} to {}",
+                    repo_root.join(".claude").join("agents").display(),
+                    repo_root.join(".codex").join("agents").display()
+                ),
+                cwd: Some(repo_root),
+                details: None,
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn detect_repo_skips_hooks_when_only_unsupported_hooks_exist() {
+    let root = TempDir::new().expect("create tempdir");
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(".claude")).expect("create claude dir");
+    fs::write(
+        repo_root.join(".claude").join("settings.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","if":"Bash(rm *)","command":"echo blocked"}]}],"SubagentStart":[{"matcher":"worker","hooks":[{"type":"command","command":"echo started"}]}]}}"#,
+    )
+    .expect("write hooks");
+
+    let items = service_for_paths(root.path().join(".claude"), root.path().join(".codex"))
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: false,
+            cwds: Some(vec![repo_root]),
+        })
+        .await
+        .expect("detect");
+
+    assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
+}
+
+#[tokio::test]
+async fn import_repo_migrates_mcp_hooks_commands_and_subagents() {
+    let root = TempDir::new().expect("create tempdir");
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(".claude").join("commands").join("pr"))
+        .expect("create commands");
+    fs::create_dir_all(repo_root.join(".claude").join("agents")).expect("create agents");
+    fs::write(
+        repo_root.join(".mcp.json"),
+        r#"{
+          "mcpServers": {
+            "docs": {
+              "command": "docs-server",
+              "args": ["--stdio"],
+              "headers": {"X-Ignored": "unsupported for stdio"},
+              "env": {"DOCS_TOKEN": "${DOCS_TOKEN}", "STATIC": "yes"}
+            },
+            "api": {
+              "url": "https://example.com/mcp",
+              "args": ["ignored-for-http"],
+              "env": {"IGNORED": "unsupported for http"},
+              "headers": {
+                "Authorization": "Bearer ${API_TOKEN}",
+                "X-Team": "${TEAM}"
+              }
+            }
+          }
+        }"#,
+    )
+    .expect("write mcp");
+    fs::write(
+        repo_root.join(".claude").join("settings.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo claude","timeout":3},{"type":"prompt","prompt":"skip"}]}],"Stop":[{"matcher":"ignored","hooks":[{"command":"echo done"}]}]}}"#,
+    )
+    .expect("write hooks");
+    fs::write(
+        repo_root
+            .join(".claude")
+            .join("commands")
+            .join("pr")
+            .join("review.md"),
+        "---\ndescription: Review PR\n---\nReview $ARGUMENTS and @README.md\n",
+    )
+    .expect("write command");
+    fs::write(
+        repo_root
+            .join(".claude")
+            .join("agents")
+            .join("researcher.md"),
+        "---\nname: researcher\ndescription: Research role\nmodel: claude-sonnet-4-5\npermissionMode: acceptEdits\nskills: [deep-research]\ntools: Bash, Read\ndisallowedTools: WebFetch\neffort: high\n---\nResearch with Claude Code carefully.\n",
+    )
+    .expect("write subagent");
+
+    service_for_paths(root.path().join(".claude"), root.path().join(".codex"))
+        .import(vec![
+            ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::McpServerConfig,
+                description: String::new(),
+                cwd: Some(repo_root.clone()),
+                details: None,
+            },
+            ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Hooks,
+                description: String::new(),
+                cwd: Some(repo_root.clone()),
+                details: None,
+            },
+            ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Commands,
+                description: String::new(),
+                cwd: Some(repo_root.clone()),
+                details: None,
+            },
+            ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Subagents,
+                description: String::new(),
+                cwd: Some(repo_root.clone()),
+                details: None,
+            },
+        ])
+        .await
+        .expect("import");
+
+    let config: TomlValue = toml::from_str(
+        &fs::read_to_string(repo_root.join(".codex").join("config.toml")).expect("read config"),
+    )
+    .expect("parse config");
+    let expected_config: TomlValue = toml::from_str(
+        r#"
+[mcp_servers.api]
+url = "https://example.com/mcp"
+bearer_token_env_var = "API_TOKEN"
+
+[mcp_servers.api.env_http_headers]
+X-Team = "TEAM"
+
+[mcp_servers.docs]
+command = "docs-server"
+args = ["--stdio"]
+env_vars = ["DOCS_TOKEN"]
+
+[mcp_servers.docs.env]
+STATIC = "yes"
+
+[features]
+codex_hooks = true
+"#,
+    )
+    .expect("parse expected config");
+    assert_eq!(config, expected_config);
+    let mcp_servers = config
+        .get("mcp_servers")
+        .cloned()
+        .ok_or_else(|| io::Error::other("missing mcp_servers"))
+        .expect("mcp servers");
+    let _supported_mcp_config: std::collections::HashMap<
+        String,
+        codex_config::types::McpServerConfig,
+    > = mcp_servers
+        .try_into()
+        .expect("migrated MCP config should be supported");
+
+    let hooks: JsonValue = serde_json::from_str(
+        &fs::read_to_string(repo_root.join(".codex").join("hooks.json")).expect("read hooks"),
+    )
+    .expect("parse hooks");
+    let _supported_hooks: codex_config::HooksFile =
+        serde_json::from_value(hooks.clone()).expect("migrated hooks should be supported");
+    assert_eq!(
+        hooks,
+        serde_json::json!({
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "Bash",
+                    "hooks": [{
+                        "type": "command",
+                        "command": "echo claude",
+                        "timeout": 3
+                    }]
+                }],
+                "Stop": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": "echo done"
+                    }]
+                }]
+            }
+        })
+    );
+    assert!(
+        !repo_root
+            .join(".codex")
+            .join("hooks.migration-notes.md")
+            .exists()
+    );
+
+    assert_eq!(
+        fs::read_to_string(
+            repo_root
+                .join(".agents")
+                .join("skills")
+                .join("source-command-pr-review")
+                .join("SKILL.md")
+        )
+        .expect("read command skill"),
+        "---\nname: \"source-command-pr-review\"\ndescription: \"Review PR\"\n---\n\n# source-command-pr-review\n\nUse this skill when the user asks to run the migrated source command `pr-review`.\n\n## Command Template\n\nReview $ARGUMENTS and @README.md\n\n## MANUAL MIGRATION REQUIRED\n\nMigrated from source command `pr-review` into a Codex skill. Invoke it as `$source-command-pr-review` and manually rewrite any slash-command behavior that depended on provider-specific runtime expansion.\n\nProvider argument placeholders like `$ARGUMENTS` or `$1` were preserved as text; rewrite them into natural-language instructions for Codex.\n\nProvider automatic file-reference expansion was preserved as text; verify Codex should read those files explicitly.\n"
+    );
+
+    let agent: TomlValue = toml::from_str(
+        &fs::read_to_string(
+            repo_root
+                .join(".codex")
+                .join("agents")
+                .join("researcher.toml"),
+        )
+        .expect("read agent"),
+    )
+    .expect("parse agent");
+    let expected_agent: TomlValue = toml::from_str(
+        r#"
+name = "researcher"
+description = "Research role"
+model = "gpt-5.4-mini"
+model_reasoning_effort = "xhigh"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+Research with Codex carefully."""
+"#,
+    )
+    .expect("parse expected agent");
+    assert_eq!(agent, expected_agent);
+}
+
+#[tokio::test]
 async fn import_home_migrates_supported_config_fields_skills_and_agents_md() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
     let agents_skills = codex_home

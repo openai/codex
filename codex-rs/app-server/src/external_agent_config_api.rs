@@ -59,6 +59,13 @@ impl ExternalAgentConfigApi {
                         CoreMigrationItemType::McpServerConfig => {
                             ExternalAgentConfigMigrationItemType::McpServerConfig
                         }
+                        CoreMigrationItemType::Subagents => {
+                            ExternalAgentConfigMigrationItemType::Subagents
+                        }
+                        CoreMigrationItemType::Hooks => ExternalAgentConfigMigrationItemType::Hooks,
+                        CoreMigrationItemType::Commands => {
+                            ExternalAgentConfigMigrationItemType::Commands
+                        }
                     },
                     description: migration_item.description,
                     cwd: migration_item.cwd,
@@ -102,6 +109,15 @@ impl ExternalAgentConfigApi {
                             }
                             ExternalAgentConfigMigrationItemType::McpServerConfig => {
                                 CoreMigrationItemType::McpServerConfig
+                            }
+                            ExternalAgentConfigMigrationItemType::Subagents => {
+                                CoreMigrationItemType::Subagents
+                            }
+                            ExternalAgentConfigMigrationItemType::Hooks => {
+                                CoreMigrationItemType::Hooks
+                            }
+                            ExternalAgentConfigMigrationItemType::Commands => {
+                                CoreMigrationItemType::Commands
                             }
                         },
                         description: migration_item.description,
