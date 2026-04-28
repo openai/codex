@@ -1403,9 +1403,25 @@ fn resolve_tool_suggest_config(
     config_toml: &ConfigToml,
     config_layer_stack: &ConfigLayerStack,
 ) -> ToolSuggestConfig {
-    let discoverables = config_toml
-        .tool_suggest
-        .as_ref()
+    resolve_tool_suggest_config_from_config(config_toml.tool_suggest.as_ref(), config_layer_stack)
+}
+
+pub(crate) fn resolve_tool_suggest_config_from_layer_stack(
+    config_layer_stack: &ConfigLayerStack,
+) -> ToolSuggestConfig {
+    let tool_suggest = config_layer_stack
+        .effective_config()
+        .get("tool_suggest")
+        .cloned()
+        .and_then(|value| value.try_into::<ToolSuggestConfig>().ok());
+    resolve_tool_suggest_config_from_config(tool_suggest.as_ref(), config_layer_stack)
+}
+
+fn resolve_tool_suggest_config_from_config(
+    tool_suggest: Option<&ToolSuggestConfig>,
+    config_layer_stack: &ConfigLayerStack,
+) -> ToolSuggestConfig {
+    let discoverables = tool_suggest
         .into_iter()
         .flat_map(|tool_suggest| tool_suggest.discoverables.iter())
         .filter_map(|discoverable| {
@@ -1435,9 +1451,7 @@ fn resolve_tool_suggest_config(
         /*include_disabled*/ false,
     );
     if layers.is_empty() {
-        for disabled_tool in config_toml
-            .tool_suggest
-            .as_ref()
+        for disabled_tool in tool_suggest
             .into_iter()
             .flat_map(|tool_suggest| tool_suggest.disabled_tools.iter().cloned())
         {
