@@ -1,6 +1,5 @@
-use super::invalid_data_error;
-use super::is_missing_or_empty_text_file;
-use super::rewrite_external_agent_terms;
+//! Migration helpers for importing external-agent configuration into Codex.
+
 use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
 use std::collections::BTreeMap;
@@ -62,7 +61,7 @@ impl HookMigration {
     }
 }
 
-pub(super) fn build_mcp_config_from_external(
+pub fn build_mcp_config_from_external(
     source_root: &Path,
     external_agent_home: Option<&Path>,
     settings: Option<&JsonValue>,
@@ -104,7 +103,7 @@ pub(super) fn build_mcp_config_from_external(
     Ok(TomlValue::Table(root))
 }
 
-pub(super) fn hooks_migration_description(
+pub fn hooks_migration_description(
     source_external_agent_dir: &Path,
     target_hooks: &Path,
 ) -> io::Result<Option<String>> {
@@ -120,7 +119,7 @@ pub(super) fn hooks_migration_description(
     )))
 }
 
-pub(super) fn build_hooks_feature_config() -> TomlValue {
+pub fn build_hooks_feature_config() -> TomlValue {
     let mut features = toml::map::Map::new();
     features.insert("codex_hooks".to_string(), TomlValue::Boolean(true));
 
@@ -129,10 +128,7 @@ pub(super) fn build_hooks_feature_config() -> TomlValue {
     TomlValue::Table(root)
 }
 
-pub(super) fn import_hooks(
-    source_external_agent_dir: &Path,
-    target_hooks: &Path,
-) -> io::Result<bool> {
+pub fn import_hooks(source_external_agent_dir: &Path, target_hooks: &Path) -> io::Result<bool> {
     let Some(parent) = target_hooks.parent() else {
         return Err(invalid_data_error("hooks target path has no parent"));
     };
@@ -160,10 +156,7 @@ pub(super) fn import_hooks(
     Ok(wrote_active_hooks)
 }
 
-pub(super) fn count_missing_subagents(
-    source_agents: &Path,
-    target_agents: &Path,
-) -> io::Result<usize> {
+pub fn count_missing_subagents(source_agents: &Path, target_agents: &Path) -> io::Result<usize> {
     let mut count = 0usize;
     for source_file in agent_source_files(source_agents)? {
         let document = parse_document(&source_file)?;
@@ -180,7 +173,7 @@ pub(super) fn count_missing_subagents(
     Ok(count)
 }
 
-pub(super) fn import_subagents(source_agents: &Path, target_agents: &Path) -> io::Result<usize> {
+pub fn import_subagents(source_agents: &Path, target_agents: &Path) -> io::Result<usize> {
     if !source_agents.is_dir() {
         return Ok(0);
     }
@@ -205,17 +198,14 @@ pub(super) fn import_subagents(source_agents: &Path, target_agents: &Path) -> io
     Ok(imported)
 }
 
-pub(super) fn count_missing_commands(
-    source_commands: &Path,
-    target_skills: &Path,
-) -> io::Result<usize> {
+pub fn count_missing_commands(source_commands: &Path, target_skills: &Path) -> io::Result<usize> {
     Ok(unique_supported_command_sources(source_commands)?
         .into_iter()
         .filter(|(_source_file, name)| !target_skills.join(name).exists())
         .count())
 }
 
-pub(super) fn import_commands(source_commands: &Path, target_skills: &Path) -> io::Result<usize> {
+pub fn import_commands(source_commands: &Path, target_skills: &Path) -> io::Result<usize> {
     if !source_commands.is_dir() {
         return Ok(0);
     }
@@ -1114,10 +1104,116 @@ impl FrontmatterValue {
     }
 }
 
+fn is_missing_or_empty_text_file(path: &Path) -> io::Result<bool> {
+    if !path.exists() {
+        return Ok(true);
+    }
+    if !path.is_file() {
+        return Ok(false);
+    }
+
+    Ok(fs::read_to_string(path)?.trim().is_empty())
+}
+
+fn rewrite_external_agent_terms(content: &str) -> String {
+    let mut rewritten = replace_case_insensitive_with_boundaries(content, "claude.md", "AGENTS.md");
+    for from in [
+        "claude code",
+        "claude-code",
+        "claude_code",
+        "claudecode",
+        "claude",
+    ] {
+        rewritten = replace_case_insensitive_with_boundaries(&rewritten, from, "Codex");
+    }
+    rewritten
+}
+
+fn replace_case_insensitive_with_boundaries(
+    input: &str,
+    needle: &str,
+    replacement: &str,
+) -> String {
+    let needle_lower = needle.to_ascii_lowercase();
+    if needle_lower.is_empty() {
+        return input.to_string();
+    }
+
+    let haystack_lower = input.to_ascii_lowercase();
+    let bytes = input.as_bytes();
+    let mut output = String::with_capacity(input.len());
+    let mut last_emitted = 0usize;
+    let mut search_start = 0usize;
+
+    while let Some(relative_pos) = haystack_lower[search_start..].find(&needle_lower) {
+        let start = search_start + relative_pos;
+        let end = start + needle_lower.len();
+        let boundary_before = start == 0 || !is_word_byte(bytes[start - 1]);
+        let boundary_after = end == bytes.len() || !is_word_byte(bytes[end]);
+
+        if boundary_before && boundary_after {
+            output.push_str(&input[last_emitted..start]);
+            output.push_str(replacement);
+            last_emitted = end;
+        }
+
+        search_start = start + 1;
+    }
+
+    if last_emitted == 0 {
+        return input.to_string();
+    }
+
+    output.push_str(&input[last_emitted..]);
+    output
+}
+
+fn is_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn invalid_data_error(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    fn merge_missing_toml_values_for_test(
+        existing: &mut TomlValue,
+        incoming: &TomlValue,
+    ) -> io::Result<bool> {
+        match (existing, incoming) {
+            (TomlValue::Table(existing_table), TomlValue::Table(incoming_table)) => {
+                let mut changed = false;
+                for (key, incoming_value) in incoming_table {
+                    match existing_table.get_mut(key) {
+                        Some(existing_value) => {
+                            if matches!(
+                                (&*existing_value, incoming_value),
+                                (TomlValue::Table(_), TomlValue::Table(_))
+                            ) && merge_missing_toml_values_for_test(
+                                existing_value,
+                                incoming_value,
+                            )? {
+                                changed = true;
+                            }
+                        }
+                        None => {
+                            existing_table.insert(key.clone(), incoming_value.clone());
+                            changed = true;
+                        }
+                    }
+                }
+                Ok(changed)
+            }
+            _ => Err(invalid_data_error(
+                "expected TOML table while merging migrated config values",
+            )),
+        }
+    }
 
     #[test]
     fn env_placeholder_accepts_defaults() {
@@ -1362,7 +1458,7 @@ command = "enabled-server"
         let mut existing: TomlValue = toml::from_str("[features]\nother = true\n").unwrap();
         let incoming = build_hooks_feature_config();
 
-        assert!(super::super::merge_missing_toml_values(&mut existing, &incoming).unwrap());
+        assert!(merge_missing_toml_values_for_test(&mut existing, &incoming).unwrap());
         assert_eq!(
             existing,
             toml::from_str("[features]\nother = true\ncodex_hooks = true\n").unwrap()

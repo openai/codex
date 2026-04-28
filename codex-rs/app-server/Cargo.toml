@@ -38,6 +38,7 @@ codex-core = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-device-key = { workspace = true }
 codex-exec-server = { workspace = true }
+codex-external-agent-migration = { workspace = true }
 codex-external-agent-sessions = { workspace = true }
 codex-features = { workspace = true }
 codex-git-utils = { workspace = true }
@@ -76,7 +77,6 @@ jsonwebtoken = { workspace = true }
 owo-colors = { workspace = true, features = ["supports-colors"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }

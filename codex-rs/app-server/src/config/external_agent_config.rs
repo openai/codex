@@ -9,6 +9,14 @@ use codex_core_plugins::marketplace::find_marketplace_manifest_path;
 use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
 use codex_core_plugins::marketplace_add::add_marketplace;
 use codex_core_plugins::marketplace_add::is_local_marketplace_source;
+use codex_external_agent_migration::build_hooks_feature_config;
+use codex_external_agent_migration::build_mcp_config_from_external;
+use codex_external_agent_migration::count_missing_commands;
+use codex_external_agent_migration::count_missing_subagents;
+use codex_external_agent_migration::hooks_migration_description;
+use codex_external_agent_migration::import_commands;
+use codex_external_agent_migration::import_hooks;
+use codex_external_agent_migration::import_subagents;
 use codex_external_agent_sessions::ExternalAgentSessionMigration;
 use codex_external_agent_sessions::detect_recent_sessions;
 use codex_protocol::protocol::Product;
@@ -22,18 +30,6 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
-
-#[path = "external_agent_config_migration.rs"]
-mod external_agent_config_migration;
-
-use external_agent_config_migration::build_hooks_feature_config;
-use external_agent_config_migration::build_mcp_config_from_external;
-use external_agent_config_migration::count_missing_commands;
-use external_agent_config_migration::count_missing_subagents;
-use external_agent_config_migration::hooks_migration_description;
-use external_agent_config_migration::import_commands;
-use external_agent_config_migration::import_hooks;
-use external_agent_config_migration::import_subagents;
 
 const EXTERNAL_AGENT_CONFIG_DETECT_METRIC: &str = "codex.external_agent_config.detect";
 const EXTERNAL_AGENT_CONFIG_IMPORT_METRIC: &str = "codex.external_agent_config.import";
