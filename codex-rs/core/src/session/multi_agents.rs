@@ -22,6 +22,6 @@ pub(super) fn usage_hint_text<'a>(
         | SessionSource::Mcp
         | SessionSource::Custom(_)
         | SessionSource::Unknown => multi_agent_v2.root_agent_usage_hint_text.as_deref(),
-        SessionSource::SubAgent(_) => None,
+        SessionSource::Internal(_) | SessionSource::SubAgent(_) => None,
     }
 }
