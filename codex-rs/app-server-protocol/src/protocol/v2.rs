@@ -469,6 +469,7 @@ v2_enum_from_core!(
         Project,
         Mdm,
         SessionFlags,
+        Plugin,
         LegacyManagedConfigFile,
         LegacyManagedConfigMdm,
         Unknown,

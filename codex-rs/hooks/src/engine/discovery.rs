@@ -12,8 +12,10 @@ use codex_config::HooksFile;
 use codex_config::ManagedHooksRequirementsToml;
 use codex_config::MatcherGroup;
 use codex_config::RequirementSource;
+use codex_plugin::PluginHookSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 use super::ConfiguredHandler;
 use crate::events::common::matcher_pattern_for_event;
@@ -25,23 +27,34 @@ pub(crate) struct DiscoveryResult {
     pub warnings: Vec<String>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct HookHandlerSource<'a> {
     path: &'a AbsolutePathBuf,
     is_managed: bool,
     source: HookSource,
+    env: HashMap<String, String>,
 }
 
-pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -> DiscoveryResult {
+pub(crate) fn discover_handlers(
+    config_layer_stack: Option<&ConfigLayerStack>,
+    plugin_hook_sources: Vec<PluginHookSource>,
+    plugin_hook_load_warnings: Vec<String>,
+) -> DiscoveryResult {
     let Some(config_layer_stack) = config_layer_stack else {
-        return DiscoveryResult {
-            handlers: Vec::new(),
-            warnings: Vec::new(),
-        };
+        let mut handlers = Vec::new();
+        let mut warnings = plugin_hook_load_warnings;
+        let mut display_order = 0_i64;
+        append_plugin_hook_sources(
+            &mut handlers,
+            &mut warnings,
+            &mut display_order,
+            plugin_hook_sources,
+        );
+        return DiscoveryResult { handlers, warnings };
     };
 
     let mut handlers = Vec::new();
-    let mut warnings = Vec::new();
+    let mut warnings = plugin_hook_load_warnings;
     let mut display_order = 0_i64;
 
     append_managed_requirement_handlers(
@@ -80,6 +93,7 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
                     path: &source_path,
                     is_managed: false,
                     source: hook_source,
+                    env: HashMap::new(),
                 },
                 hook_events,
             );
@@ -94,11 +108,19 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
                     path: &source_path,
                     is_managed: false,
                     source: hook_source,
+                    env: HashMap::new(),
                 },
                 hook_events,
             );
         }
     }
+
+    append_plugin_hook_sources(
+        &mut handlers,
+        &mut warnings,
+        &mut display_order,
+        plugin_hook_sources,
+    );
 
     DiscoveryResult { handlers, warnings }
 }
@@ -125,9 +147,49 @@ fn append_managed_requirement_handlers(
             path: &source_path,
             is_managed: true,
             source: hook_source_for_requirement_source(managed_hooks.source.as_ref()),
+            env: HashMap::new(),
         },
         managed_hooks.get().hooks.clone(),
     );
+}
+
+fn append_plugin_hook_sources(
+    handlers: &mut Vec<ConfiguredHandler>,
+    warnings: &mut Vec<String>,
+    display_order: &mut i64,
+    plugin_hook_sources: Vec<PluginHookSource>,
+) {
+    // TODO(abhinav): check enabled/trusted state here before plugin hooks become runnable.
+    for source in plugin_hook_sources {
+        let PluginHookSource {
+            plugin_root,
+            plugin_data_root,
+            source_path,
+            hooks,
+            ..
+        } = source;
+        let mut env = HashMap::new();
+        let plugin_root_value = plugin_root.display().to_string();
+        let plugin_data_root_value = plugin_data_root.display().to_string();
+        env.insert("PLUGIN_ROOT".to_string(), plugin_root_value.clone());
+        // For OOTB compat with existing plugins that use this env var.
+        env.insert("CLAUDE_PLUGIN_ROOT".to_string(), plugin_root_value);
+        env.insert("PLUGIN_DATA".to_string(), plugin_data_root_value.clone());
+        // For OOTB compat with existing plugins that use this env var.
+        env.insert("CLAUDE_PLUGIN_DATA".to_string(), plugin_data_root_value);
+        append_hook_events(
+            handlers,
+            warnings,
+            display_order,
+            HookHandlerSource {
+                path: &source_path,
+                is_managed: false,
+                source: HookSource::Plugin,
+                env,
+            },
+            hooks,
+        );
+    }
 }
 
 fn managed_hooks_source_path(
@@ -278,7 +340,7 @@ fn append_hook_events(
             handlers,
             warnings,
             display_order,
-            source,
+            source.clone(),
             event_name,
             groups,
         );
@@ -298,7 +360,7 @@ fn append_matcher_groups(
             handlers,
             warnings,
             display_order,
-            source,
+            source.clone(),
             event_name,
             matcher_pattern_for_event(event_name, group.matcher.as_deref()),
             group.hooks,
@@ -347,6 +409,9 @@ fn append_group_handlers(
                     ));
                     continue;
                 }
+                let command = source.env.iter().fold(command, |command, (key, value)| {
+                    command.replace(&format!("${{{key}}}"), value)
+                });
                 let timeout_sec = timeout_sec.unwrap_or(600).max(1);
                 handlers.push(ConfiguredHandler {
                     event_name,
@@ -358,6 +423,7 @@ fn append_group_handlers(
                     source_path: source.path.clone(),
                     source: source.source,
                     display_order: *display_order,
+                    env: source.env.clone(),
                 });
                 *display_order += 1;
             }
@@ -431,6 +497,7 @@ mod tests {
             path,
             is_managed: false,
             source: hook_source(),
+            env: std::collections::HashMap::new(),
         }
     }
 
@@ -475,6 +542,7 @@ mod tests {
                 source_path: source_path.clone(),
                 source: hook_source(),
                 display_order: 0,
+                env: std::collections::HashMap::new(),
             }]
         );
     }
@@ -508,6 +576,7 @@ mod tests {
                 source_path: source_path.clone(),
                 source: hook_source(),
                 display_order: 0,
+                env: std::collections::HashMap::new(),
             }]
         );
     }

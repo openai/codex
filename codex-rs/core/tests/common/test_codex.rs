@@ -28,6 +28,7 @@ use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -591,10 +592,19 @@ impl TestCodex {
     }
 
     pub async fn submit_turn(&self, prompt: &str) -> Result<()> {
-        self.submit_turn_with_policies(
+        self.submit_turn_with_permission_profile(prompt, PermissionProfile::Disabled)
+            .await
+    }
+
+    pub async fn submit_turn_with_permission_profile(
+        &self,
+        prompt: &str,
+        permission_profile: PermissionProfile,
+    ) -> Result<()> {
+        self.submit_turn_with_approval_and_permission_profile(
             prompt,
             AskForApproval::Never,
-            SandboxPolicy::DangerFullAccess,
+            permission_profile,
         )
         .await
     }
@@ -613,10 +623,10 @@ impl TestCodex {
         prompt: &str,
         service_tier: Option<ServiceTier>,
     ) -> Result<()> {
-        self.submit_turn_with_context(
+        self.submit_turn_with_permission_profile_context(
             prompt,
             AskForApproval::Never,
-            SandboxPolicy::DangerFullAccess,
+            PermissionProfile::Disabled,
             Some(service_tier),
             /*environments*/ None,
         )
@@ -629,10 +639,30 @@ impl TestCodex {
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
     ) -> Result<()> {
+        let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+            &sandbox_policy,
+            self.config.cwd.as_path(),
+        );
         self.submit_turn_with_context(
             prompt,
             approval_policy,
-            sandbox_policy,
+            permission_profile,
+            /*service_tier*/ None,
+            /*environments*/ None,
+        )
+        .await
+    }
+
+    pub async fn submit_turn_with_approval_and_permission_profile(
+        &self,
+        prompt: &str,
+        approval_policy: AskForApproval,
+        permission_profile: PermissionProfile,
+    ) -> Result<()> {
+        self.submit_turn_with_permission_profile_context(
+            prompt,
+            approval_policy,
+            permission_profile,
             /*service_tier*/ None,
             /*environments*/ None,
         )
@@ -644,11 +674,29 @@ impl TestCodex {
         prompt: &str,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> Result<()> {
-        self.submit_turn_with_context(
+        self.submit_turn_with_permission_profile_context(
             prompt,
             AskForApproval::Never,
-            SandboxPolicy::DangerFullAccess,
+            PermissionProfile::Disabled,
             /*service_tier*/ None,
+            environments,
+        )
+        .await
+    }
+
+    async fn submit_turn_with_permission_profile_context(
+        &self,
+        prompt: &str,
+        approval_policy: AskForApproval,
+        permission_profile: PermissionProfile,
+        service_tier: Option<Option<ServiceTier>>,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
+    ) -> Result<()> {
+        self.submit_turn_with_context(
+            prompt,
+            approval_policy,
+            permission_profile,
+            service_tier,
             environments,
         )
         .await
@@ -658,10 +706,13 @@ impl TestCodex {
         &self,
         prompt: &str,
         approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
+        permission_profile: PermissionProfile,
         service_tier: Option<Option<ServiceTier>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> Result<()> {
+        let sandbox_policy = permission_profile
+            .to_legacy_sandbox_policy(self.config.cwd.as_path())
+            .unwrap_or_else(|_| SandboxPolicy::new_read_only_policy());
         let session_model = self.session_configured.model.clone();
         self.codex
             .submit(Op::UserTurn {
@@ -675,7 +726,7 @@ impl TestCodex {
                 approval_policy,
                 approvals_reviewer: None,
                 sandbox_policy,
-                permission_profile: None,
+                permission_profile: Some(permission_profile),
                 model: session_model,
                 effort: None,
                 summary: None,
@@ -832,6 +883,16 @@ impl TestCodexHarness {
     ) -> Result<()> {
         self.test
             .submit_turn_with_policy(prompt, sandbox_policy)
+            .await
+    }
+
+    pub async fn submit_with_permission_profile(
+        &self,
+        prompt: &str,
+        permission_profile: PermissionProfile,
+    ) -> Result<()> {
+        self.test
+            .submit_turn_with_permission_profile(prompt, permission_profile)
             .await
     }
 

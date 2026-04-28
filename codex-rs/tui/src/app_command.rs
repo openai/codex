@@ -23,6 +23,8 @@ use codex_protocol::user_input::UserInput;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::permission_compat::legacy_compatible_permission_profile;
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct AppCommand(Op);
 
@@ -148,18 +150,12 @@ impl AppCommand {
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
     ) -> Self {
-        let sandbox_policy = permission_profile
+        let legacy_profile =
+            legacy_compatible_permission_profile(&permission_profile, cwd.as_path());
+        let sandbox_policy = legacy_profile
             .to_legacy_sandbox_policy(cwd.as_path())
             .unwrap_or_else(|err| {
-                tracing::warn!(
-                    %err,
-                    "permission profile cannot be projected to legacy UserTurn sandbox; using read-only compatibility fallback"
-                );
-                PermissionProfile::read_only()
-                    .to_legacy_sandbox_policy(cwd.as_path())
-                    .unwrap_or_else(|err| {
-                        unreachable!("read-only permissions must be legacy-compatible: {err}")
-                    })
+                unreachable!("legacy-compatible permissions must project to legacy policy: {err}")
             });
         Self(Op::UserTurn {
             items,

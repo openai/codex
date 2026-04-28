@@ -5,6 +5,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::AppConnectorId;
 use crate::PluginCapabilitySummary;
+use crate::PluginHookSource;
 
 const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
 
@@ -21,6 +22,8 @@ pub struct LoadedPlugin<M> {
     pub has_enabled_skills: bool,
     pub mcp_servers: HashMap<String, M>,
     pub apps: Vec<AppConnectorId>,
+    pub hook_sources: Vec<PluginHookSource>,
+    pub hook_load_warnings: Vec<String>,
     pub error: Option<String>,
 }
 
@@ -138,6 +141,22 @@ impl<M: Clone> PluginLoadOutcome<M> {
         }
 
         apps
+    }
+
+    pub fn effective_plugin_hook_sources(&self) -> Vec<PluginHookSource> {
+        self.plugins
+            .iter()
+            .filter(|plugin| plugin.is_active())
+            .flat_map(|plugin| plugin.hook_sources.iter().cloned())
+            .collect()
+    }
+
+    pub fn effective_plugin_hook_warnings(&self) -> Vec<String> {
+        self.plugins
+            .iter()
+            .filter(|plugin| plugin.is_active())
+            .flat_map(|plugin| plugin.hook_load_warnings.iter().cloned())
+            .collect()
     }
 
     pub fn capability_summaries(&self) -> &[PluginCapabilitySummary] {

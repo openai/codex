@@ -790,9 +790,16 @@ mod tests {
 
     #[tokio::test]
     async fn managed_proxy_builder_uses_loopback_ports() {
+        let http_listener = StdTcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+        let http_addr = http_listener.local_addr().unwrap();
+        let socks_listener = StdTcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+        let socks_addr = socks_listener.local_addr().unwrap();
+        drop(http_listener);
+        drop(socks_listener);
+
         let state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
-            proxy_url: "http://127.0.0.1:43128".to_string(),
-            socks_url: "http://127.0.0.1:48081".to_string(),
+            proxy_url: format!("http://{http_addr}"),
+            socks_url: format!("http://{socks_addr}"),
             ..NetworkProxySettings::default()
         }));
         let proxy = match NetworkProxy::builder().state(state).build().await {
@@ -812,14 +819,8 @@ mod tests {
         assert!(proxy.socks_addr.ip().is_loopback());
         #[cfg(target_os = "windows")]
         {
-            assert_eq!(
-                proxy.http_addr,
-                "127.0.0.1:43128".parse::<SocketAddr>().unwrap()
-            );
-            assert_eq!(
-                proxy.socks_addr,
-                "127.0.0.1:48081".parse::<SocketAddr>().unwrap()
-            );
+            assert_eq!(proxy.http_addr, http_addr);
+            assert_eq!(proxy.socks_addr, socks_addr);
         }
         #[cfg(not(target_os = "windows"))]
         {

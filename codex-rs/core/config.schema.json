@@ -463,6 +463,9 @@
             "personality": {
               "type": "boolean"
             },
+            "plugin_hooks": {
+              "type": "boolean"
+            },
             "plugins": {
               "type": "boolean"
             },
@@ -3377,6 +3380,9 @@
           "$ref": "#/definitions/FeatureToml_for_MultiAgentV2ConfigToml"
         },
         "personality": {
+          "type": "boolean"
+        },
+        "plugin_hooks": {
           "type": "boolean"
         },
         "plugins": {

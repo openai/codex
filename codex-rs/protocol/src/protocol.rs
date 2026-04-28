@@ -1563,6 +1563,7 @@ pub enum HookSource {
     Project,
     Mdm,
     SessionFlags,
+    Plugin,
     LegacyManagedConfigFile,
     LegacyManagedConfigMdm,
     #[default]

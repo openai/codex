@@ -150,6 +150,7 @@ mod npm_registry;
 pub(crate) mod onboarding;
 mod oss_selection;
 mod pager_overlay;
+mod permission_compat;
 pub(crate) mod public_widgets;
 mod render;
 mod resize_reflow_cap;
