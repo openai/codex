@@ -48,7 +48,6 @@ pub fn start_memories_startup_task(
     }
 
     tokio::spawn(async move {
-
         // Clean memories to make preserve DB size. This does not consume tokens so can be
         // done before the quota check.
         phase1::prune(context.as_ref(), &config).await;
