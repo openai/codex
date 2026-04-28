@@ -19,7 +19,6 @@ use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_model_provider::create_model_provider;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_tools::DiscoverableTool;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
