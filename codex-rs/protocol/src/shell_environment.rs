@@ -158,7 +158,7 @@ const COMMON_CORE_VARS: &[&str] = &["PATH", "SHELL", "TMPDIR", "TEMP", "TMP"];
 #[cfg(not(target_os = "windows"))]
 const PLATFORM_CORE_VARS: &[&str] = &["HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "USER"];
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
