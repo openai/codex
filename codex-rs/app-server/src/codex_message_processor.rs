@@ -2483,9 +2483,10 @@ impl CodexMessageProcessor {
             .default_environment_selections(&config.cwd);
         let imported_thread = self
             .thread_manager
-            .start_thread_with_tools_and_service_name(StartThreadWithToolsOptions {
+            .start_thread_with_options(StartThreadOptions {
                 config,
                 initial_history: InitialHistory::Forked(rollout_items),
+                session_source: None,
                 dynamic_tools: Vec::new(),
                 persist_extended_history: true,
                 metrics_service_name: None,
