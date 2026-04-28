@@ -5432,6 +5432,40 @@ async fn build_initial_context_omits_multi_agent_v2_usage_hints_when_feature_dis
 }
 
 #[tokio::test]
+async fn configured_multi_agent_v2_usage_hint_texts_use_effective_enabled_feature_state() {
+    let (mut session, _turn_context) =
+        make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ false).await;
+    let mut effective_features = Features::with_defaults();
+    effective_features.enable(Feature::MultiAgentV2);
+    Arc::get_mut(&mut session)
+        .expect("session should not be shared")
+        .features = effective_features.into();
+
+    let hint_texts = session.configured_multi_agent_v2_usage_hint_texts().await;
+
+    assert_eq!(
+        hint_texts,
+        vec![
+            "Root guidance.".to_string(),
+            "Subagent guidance.".to_string()
+        ]
+    );
+}
+
+#[tokio::test]
+async fn configured_multi_agent_v2_usage_hint_texts_omit_effectively_disabled_feature() {
+    let (mut session, _turn_context) =
+        make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ true).await;
+    Arc::get_mut(&mut session)
+        .expect("session should not be shared")
+        .features = Features::with_defaults().into();
+
+    let hint_texts = session.configured_multi_agent_v2_usage_hint_texts().await;
+
+    assert_eq!(hint_texts, Vec::<String>::new());
+}
+
+#[tokio::test]
 async fn build_initial_context_omits_default_image_save_location_with_image_history() {
     let (session, turn_context) = make_session_and_context().await;
     session

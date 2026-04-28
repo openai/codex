@@ -403,6 +403,7 @@ impl AgentControl {
             if let Some(parent_thread) = parent_thread.as_ref() {
                 parent_thread
                     .codex
+                    .session
                     .configured_multi_agent_v2_usage_hint_texts()
                     .await
             } else if config.features.enabled(Feature::MultiAgentV2) {

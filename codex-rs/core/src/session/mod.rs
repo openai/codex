@@ -764,22 +764,6 @@ impl Codex {
         state.session_configuration.thread_config_snapshot()
     }
 
-    pub(crate) async fn configured_multi_agent_v2_usage_hint_texts(&self) -> Vec<String> {
-        let state = self.session.state.lock().await;
-        let config = &state.session_configuration.original_config_do_not_use;
-        if !config.features.enabled(Feature::MultiAgentV2) {
-            return Vec::new();
-        }
-
-        [
-            config.multi_agent_v2.root_agent_usage_hint_text.clone(),
-            config.multi_agent_v2.subagent_usage_hint_text.clone(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect()
-    }
-
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.session.state_db()
     }
@@ -855,6 +839,22 @@ impl Session {
                 .app_server_client_version
                 .clone(),
         }
+    }
+
+    pub(crate) async fn configured_multi_agent_v2_usage_hint_texts(&self) -> Vec<String> {
+        if !self.features.enabled(Feature::MultiAgentV2) {
+            return Vec::new();
+        }
+
+        let state = self.state.lock().await;
+        let config = &state.session_configuration.original_config_do_not_use;
+        [
+            config.multi_agent_v2.root_agent_usage_hint_text.clone(),
+            config.multi_agent_v2.subagent_usage_hint_text.clone(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 
     fn managed_network_proxy_active_for_permission_profile(
