@@ -1962,8 +1962,8 @@ mod tests {
         };
 
         assert_eq!(
-            exec.validate_removed_flags(),
-            Err("`--full-auto` has been removed; use `--sandbox workspace-write` instead.")
+            exec.removed_full_auto_warning(),
+            Some("warning: `--full-auto` is deprecated; use `--sandbox workspace-write` instead.")
         );
     }
 

@@ -40,7 +40,8 @@ pub struct Cli {
         long = "full-auto",
         hide = true,
         global = true,
-        default_value_t = false
+        default_value_t = false,
+        conflicts_with = "dangerously_bypass_approvals_and_sandbox"
     )]
     pub removed_full_auto: bool,
 
@@ -95,12 +96,14 @@ impl std::ops::DerefMut for Cli {
 }
 
 impl Cli {
-    pub fn validate_removed_flags(&self) -> Result<(), &'static str> {
+    pub fn removed_full_auto_warning(&self) -> Option<&'static str> {
         if self.removed_full_auto {
-            return Err("`--full-auto` has been removed; use `--sandbox workspace-write` instead.");
+            return Some(
+                "warning: `--full-auto` is deprecated; use `--sandbox workspace-write` instead.",
+            );
         }
 
-        Ok(())
+        None
     }
 }
 

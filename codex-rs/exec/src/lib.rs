@@ -216,8 +216,9 @@ fn exec_root_span() -> tracing::Span {
 }
 
 pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
-    if let Err(message) = cli.validate_removed_flags() {
-        anyhow::bail!(message);
+    #[allow(clippy::print_stderr)]
+    if let Some(message) = cli.removed_full_auto_warning() {
+        eprintln!("{message}");
     }
 
     if let Err(err) = set_default_originator("codex_exec".to_string()) {
@@ -231,7 +232,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         ephemeral,
         ignore_user_config,
         ignore_rules,
-        removed_full_auto: _,
+        removed_full_auto,
         color,
         last_message_file,
         json: json_mode,
@@ -273,7 +274,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .with_writer(std::io::stderr)
         .with_filter(env_filter);
 
-    let sandbox_mode = if dangerously_bypass_approvals_and_sandbox {
+    let sandbox_mode = if removed_full_auto {
+        Some(SandboxMode::WorkspaceWrite)
+    } else if dangerously_bypass_approvals_and_sandbox {
         Some(SandboxMode::DangerFullAccess)
     } else {
         sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)

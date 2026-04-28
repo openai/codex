@@ -76,7 +76,7 @@ fn removed_full_auto_flag_reports_migration_path() {
     let cli = Cli::parse_from(["codex-exec", "--full-auto", "summarize"]);
 
     assert_eq!(
-        cli.validate_removed_flags(),
-        Err("`--full-auto` has been removed; use `--sandbox workspace-write` instead.")
+        cli.removed_full_auto_warning(),
+        Some("warning: `--full-auto` is deprecated; use `--sandbox workspace-write` instead.")
     );
 }
