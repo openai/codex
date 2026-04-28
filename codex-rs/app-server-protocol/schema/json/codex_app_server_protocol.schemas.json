@@ -4352,6 +4352,26 @@
           "properties": {
             "method": {
               "enum": [
+                "remoteControl/environment/updated"
+              ],
+              "title": "RemoteControl/environment/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/RemoteControlEnvironmentUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "RemoteControl/environment/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "externalAgentConfig/import/completed"
               ],
               "title": "ExternalAgentConfig/import/completedNotificationMethod",
@@ -12497,6 +12517,20 @@
           "remote_control_client_enrollment"
         ],
         "type": "string"
+      },
+      "RemoteControlEnvironmentUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Current remote-control environment id exposed to remote-control clients.",
+        "properties": {
+          "environmentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "RemoteControlEnvironmentUpdatedNotification",
+        "type": "object"
       },
       "RequestId": {
         "anyOf": [

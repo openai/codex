@@ -2602,6 +2602,18 @@
       ],
       "type": "object"
     },
+    "RemoteControlEnvironmentUpdatedNotification": {
+      "description": "Current remote-control environment id exposed to remote-control clients.",
+      "properties": {
+        "environmentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "RequestId": {
       "anyOf": [
         {
@@ -5339,6 +5351,26 @@
         "params"
       ],
       "title": "App/list/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "remoteControl/environment/updated"
+          ],
+          "title": "RemoteControl/environment/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/RemoteControlEnvironmentUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "RemoteControl/environment/updatedNotification",
       "type": "object"
     },
     {

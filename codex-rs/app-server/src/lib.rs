@@ -40,6 +40,8 @@ use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::RemoteControlEnvironmentUpdatedNotification;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
 use codex_config::ConfigLoadError;
@@ -724,6 +726,7 @@ pub async fn run_main_with_transport_options(
 
     let processor_handle = tokio::spawn({
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+        let initialize_notification_sender = outgoing_message_sender.clone();
         let outbound_control_tx = outbound_control_tx;
         let auth_manager =
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
@@ -739,12 +742,14 @@ pub async fn run_main_with_transport_options(
             session_source,
             auth_manager,
             rpc_transport: analytics_rpc_transport(&transport),
-            remote_control_handle: Some(remote_control_handle),
+            remote_control_handle: Some(remote_control_handle.clone()),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,
         }));
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
+        let mut remote_control_environment_id_rx = remote_control_handle.environment_id_receiver();
+        let mut remote_control_environment_id = remote_control_environment_id_rx.borrow().clone();
         let transport_shutdown_token = transport_shutdown_token.clone();
         async move {
             let mut listen_for_threads = true;
@@ -884,6 +889,20 @@ pub async fn run_main_with_transport_options(
                                                     connection_id,
                                                 )
                                                 .await;
+                                            if let Some(environment_id) =
+                                                remote_control_environment_id.clone()
+                                            {
+                                                initialize_notification_sender
+                                                    .send_server_notification_to_connections(
+                                                        &[connection_id],
+                                                        ServerNotification::RemoteControlEnvironmentUpdated(
+                                                            RemoteControlEnvironmentUpdatedNotification {
+                                                                environment_id: Some(environment_id),
+                                                            },
+                                                        ),
+                                                    )
+                                                    .await;
+                                            }
                                             processor.connection_initialized(connection_id).await;
                                             connection_state
                                                 .outbound_initialized
@@ -914,6 +933,23 @@ pub async fn run_main_with_transport_options(
                                 }
                             }
                         }
+                    }
+                    changed = remote_control_environment_id_rx.changed() => {
+                        if changed.is_err() {
+                            continue;
+                        }
+                        let environment_id = remote_control_environment_id_rx.borrow().clone();
+                        if remote_control_environment_id == environment_id {
+                            continue;
+                        }
+                        remote_control_environment_id = environment_id.clone();
+                        initialize_notification_sender
+                            .send_server_notification(ServerNotification::RemoteControlEnvironmentUpdated(
+                                RemoteControlEnvironmentUpdatedNotification {
+                                    environment_id,
+                                },
+                            ))
+                            .await;
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {

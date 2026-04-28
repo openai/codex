@@ -2877,6 +2877,14 @@ pub struct DeviceKeyPublicResponse {
     pub protection_class: DeviceKeyProtectionClass,
 }
 
+/// Current remote-control environment id exposed to remote-control clients.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlEnvironmentUpdatedNotification {
+    pub environment_id: Option<String>,
+}
+
 /// Audience for a remote-control client connection device-key proof.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]

@@ -45,6 +45,7 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
@@ -115,6 +116,20 @@ fn remote_control_url_for_listener(listener: &TcpListener) -> String {
     format!("http://{addr}/backend-api/")
 }
 
+async fn expect_remote_control_environment_id(
+    environment_id_rx: &mut watch::Receiver<Option<String>>,
+    expected_environment_id: Option<&str>,
+) {
+    timeout(Duration::from_secs(5), environment_id_rx.changed())
+        .await
+        .expect("environment id event should arrive in time")
+        .expect("environment id watch should remain open");
+    assert_eq!(
+        environment_id_rx.borrow().as_deref(),
+        expected_environment_id
+    );
+}
+
 #[tokio::test]
 async fn remote_control_transport_manages_virtual_clients_and_routes_messages() {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -125,7 +140,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
-    let (remote_task, _remote_handle) = start_remote_control(
+    let (remote_task, remote_handle) = start_remote_control(
         remote_control_url,
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
@@ -136,6 +151,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
     )
     .await
     .expect("remote control should start");
+    let mut environment_id_rx = remote_handle.environment_id_receiver();
     let enroll_request = accept_http_request(&listener).await;
     assert_eq!(
         enroll_request.request_line,
@@ -147,6 +163,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
     )
     .await;
     let mut websocket = accept_remote_control_connection(&listener).await;
+    expect_remote_control_environment_id(&mut environment_id_rx, Some("env_test")).await;
 
     let client_id = ClientId("client-1".to_string());
     send_client_event(
@@ -394,7 +411,7 @@ async fn remote_control_transport_reconnects_after_disconnect() {
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
-    let (remote_task, _remote_handle) = start_remote_control(
+    let (remote_task, remote_handle) = start_remote_control(
         remote_control_url,
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
@@ -405,6 +422,7 @@ async fn remote_control_transport_reconnects_after_disconnect() {
     )
     .await
     .expect("remote control should start");
+    let mut environment_id_rx = remote_handle.environment_id_receiver();
 
     let enroll_request = accept_http_request(&listener).await;
     assert_eq!(
@@ -424,6 +442,7 @@ async fn remote_control_transport_reconnects_after_disconnect() {
     drop(first_websocket);
 
     let mut second_websocket = accept_remote_control_connection(&listener).await;
+    expect_remote_control_environment_id(&mut environment_id_rx, Some("env_test")).await;
     send_client_event(
         &mut second_websocket,
         ClientEnvelope {
@@ -625,7 +644,7 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
-    let (remote_task, _remote_handle) = start_remote_control(
+    let (remote_task, remote_handle) = start_remote_control(
         remote_control_url,
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
@@ -636,6 +655,7 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
     )
     .await
     .expect("remote control should start");
+    let mut environment_id_rx = remote_handle.environment_id_receiver();
 
     let enroll_request = accept_http_request(&listener).await;
     respond_with_json(
@@ -644,6 +664,7 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
     )
     .await;
     let mut first_websocket = accept_remote_control_connection(&listener).await;
+    expect_remote_control_environment_id(&mut environment_id_rx, Some("env_test")).await;
 
     let client_id = ClientId("client-1".to_string());
     let initialize_message = JSONRPCMessage::Request(codex_app_server_protocol::JSONRPCRequest {
@@ -793,7 +814,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let expected_server_name = gethostname().to_string_lossy().trim().to_string();
     let shutdown_token = CancellationToken::new();
-    let (remote_task, _remote_handle) = start_remote_control(
+    let (remote_task, remote_handle) = start_remote_control(
         remote_control_url,
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
@@ -804,6 +825,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
     )
     .await
     .expect("remote control should start");
+    let mut environment_id_rx = remote_handle.environment_id_receiver();
 
     let enroll_request = accept_http_request(&listener).await;
     assert_eq!(
@@ -836,6 +858,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
 
     let (handshake_request, mut websocket) =
         accept_remote_control_backend_connection(&listener).await;
+    expect_remote_control_environment_id(&mut environment_id_rx, Some("env_test")).await;
     assert_eq!(
         handshake_request.path,
         "/backend-api/wham/remote/control/server"
@@ -1220,7 +1243,7 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     let (transport_event_tx, _transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
-    let (remote_task, _remote_handle) = start_remote_control(
+    let (remote_task, remote_handle) = start_remote_control(
         remote_control_url,
         Some(state_db.clone()),
         remote_control_auth_manager_with_home(&codex_home),
@@ -1231,6 +1254,7 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     )
     .await
     .expect("remote control should start");
+    let mut environment_id_rx = remote_handle.environment_id_receiver();
 
     let websocket_request = accept_http_request(&listener).await;
     assert_eq!(
@@ -1241,7 +1265,13 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
         websocket_request.headers.get("x-codex-server-id"),
         Some(&stale_enrollment.server_id)
     );
+    expect_remote_control_environment_id(&mut environment_id_rx, Some("env_stale")).await;
     respond_with_status(websocket_request.stream, "404 Not Found", "").await;
+    expect_remote_control_environment_id(
+        &mut environment_id_rx,
+        /*expected_environment_id*/ None,
+    )
+    .await;
 
     let enroll_request = accept_http_request(&listener).await;
     assert_eq!(
@@ -1258,6 +1288,7 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     .await;
 
     let (handshake_request, _websocket) = accept_remote_control_backend_connection(&listener).await;
+    expect_remote_control_environment_id(&mut environment_id_rx, Some("env_refreshed")).await;
     assert_eq!(
         handshake_request.headers.get("x-codex-server-id"),
         Some(&refreshed_enrollment.server_id)

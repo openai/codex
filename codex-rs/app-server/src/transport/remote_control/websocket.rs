@@ -117,6 +117,7 @@ pub(crate) struct RemoteControlWebsocket {
     remote_control_target: Option<RemoteControlTarget>,
     state_db: Option<Arc<StateRuntime>>,
     auth_manager: Arc<AuthManager>,
+    environment_id_publisher: RemoteControlEnvironmentIdPublisher,
     shutdown_token: CancellationToken,
     reconnect_attempt: u64,
     enrollment: Option<RemoteControlEnrollment>,
@@ -134,20 +135,56 @@ enum ConnectOutcome {
     Shutdown,
 }
 
+pub(super) struct RemoteControlChannels {
+    pub(super) transport_event_tx: mpsc::Sender<TransportEvent>,
+    pub(super) environment_id_publisher: RemoteControlEnvironmentIdPublisher,
+}
+
+#[derive(Clone)]
+pub(super) struct RemoteControlEnvironmentIdPublisher {
+    tx: watch::Sender<Option<String>>,
+}
+
+impl RemoteControlEnvironmentIdPublisher {
+    pub(super) fn new(tx: watch::Sender<Option<String>>) -> Self {
+        Self { tx }
+    }
+
+    fn publish_if_changed(&self, environment_id: Option<String>) {
+        self.tx.send_if_modified(|current_environment_id| {
+            if *current_environment_id == environment_id {
+                return false;
+            }
+
+            *current_environment_id = environment_id;
+            true
+        });
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct RemoteControlConnectOptions<'a> {
+    subscribe_cursor: Option<&'a str>,
+    app_server_client_name: Option<&'a str>,
+}
+
 impl RemoteControlWebsocket {
     pub(crate) fn new(
         remote_control_url: String,
         remote_control_target: Option<RemoteControlTarget>,
         state_db: Option<Arc<StateRuntime>>,
         auth_manager: Arc<AuthManager>,
-        transport_event_tx: mpsc::Sender<TransportEvent>,
+        channels: RemoteControlChannels,
         shutdown_token: CancellationToken,
         enabled_rx: watch::Receiver<bool>,
     ) -> Self {
         let shutdown_token = shutdown_token.child_token();
         let (server_event_tx, server_event_rx) = mpsc::channel(super::CHANNEL_CAPACITY);
-        let client_tracker =
-            ClientTracker::new(server_event_tx, transport_event_tx, &shutdown_token);
+        let client_tracker = ClientTracker::new(
+            server_event_tx,
+            channels.transport_event_tx,
+            &shutdown_token,
+        );
         let (outbound_buffer, used_rx) = BoundedOutboundBuffer::new();
         let auth_recovery = auth_manager.unauthorized_recovery();
 
@@ -156,6 +193,7 @@ impl RemoteControlWebsocket {
             remote_control_target,
             state_db,
             auth_manager,
+            environment_id_publisher: channels.environment_id_publisher,
             shutdown_token,
             reconnect_attempt: 0,
             enrollment: None,
@@ -267,6 +305,10 @@ impl RemoteControlWebsocket {
 
         loop {
             let subscribe_cursor = self.state.lock().await.subscribe_cursor.clone();
+            let connect_options = RemoteControlConnectOptions {
+                subscribe_cursor: subscribe_cursor.as_deref(),
+                app_server_client_name,
+            };
             let connect_result = tokio::select! {
                 _ = shutdown_token.cancelled() => return ConnectOutcome::Shutdown,
                 changed = self.enabled_rx.wait_for(|enabled| !*enabled) => {
@@ -281,8 +323,8 @@ impl RemoteControlWebsocket {
                     &self.auth_manager,
                     &mut self.auth_recovery,
                     &mut self.enrollment,
-                    subscribe_cursor.as_deref(),
-                    app_server_client_name,
+                    connect_options,
+                    &self.environment_id_publisher,
                 ) => connect_result,
             };
 
@@ -745,8 +787,8 @@ pub(super) async fn connect_remote_control_websocket(
     auth_manager: &Arc<AuthManager>,
     auth_recovery: &mut UnauthorizedRecovery,
     enrollment: &mut Option<RemoteControlEnrollment>,
-    subscribe_cursor: Option<&str>,
-    app_server_client_name: Option<&str>,
+    connect_options: RemoteControlConnectOptions<'_>,
+    environment_id_publisher: &RemoteControlEnvironmentIdPublisher,
 ) -> io::Result<(
     WebSocketStream<MaybeTlsStream<TcpStream>>,
     tungstenite::http::Response<()>,
@@ -773,16 +815,22 @@ pub(super) async fn connect_remote_control_websocket(
             auth.account_id
         );
         *enrollment = None;
+        environment_id_publisher.publish_if_changed(/*environment_id*/ None);
     }
 
     if enrollment.is_none() {
-        *enrollment = load_persisted_remote_control_enrollment(
+        let loaded_enrollment = load_persisted_remote_control_enrollment(
             Some(state_db),
             remote_control_target,
             &auth.account_id,
-            app_server_client_name,
+            connect_options.app_server_client_name,
         )
         .await?;
+        if let Some(loaded_enrollment) = loaded_enrollment.as_ref() {
+            environment_id_publisher
+                .publish_if_changed(Some(loaded_enrollment.environment_id.clone()));
+        }
+        *enrollment = loaded_enrollment;
     }
 
     if enrollment.is_none() {
@@ -807,7 +855,7 @@ pub(super) async fn connect_remote_control_websocket(
             Some(state_db),
             remote_control_target,
             &auth.account_id,
-            app_server_client_name,
+            connect_options.app_server_client_name,
             Some(&new_enrollment),
         )
         .await
@@ -823,6 +871,7 @@ pub(super) async fn connect_remote_control_websocket(
             new_enrollment.server_id,
             new_enrollment.environment_id
         );
+        environment_id_publisher.publish_if_changed(Some(new_enrollment.environment_id.clone()));
         *enrollment = Some(new_enrollment);
     }
 
@@ -833,7 +882,7 @@ pub(super) async fn connect_remote_control_websocket(
         &remote_control_target.websocket_url,
         enrollment_ref,
         &auth,
-        subscribe_cursor,
+        connect_options.subscribe_cursor,
     )?;
 
     match connect_async(request).await {
@@ -852,7 +901,7 @@ pub(super) async fn connect_remote_control_websocket(
                         Some(state_db),
                         remote_control_target,
                         &auth.account_id,
-                        app_server_client_name,
+                        connect_options.app_server_client_name,
                         /*enrollment*/ None,
                     )
                     .await
@@ -862,6 +911,7 @@ pub(super) async fn connect_remote_control_websocket(
                         );
                     }
                     *enrollment = None;
+                    environment_id_publisher.publish_if_changed(/*environment_id*/ None);
                 }
                 tungstenite::Error::Http(response)
                     if matches!(response.status().as_u16(), 401 | 403) =>
@@ -1059,6 +1109,8 @@ mod tests {
             server_id: "srv_e_test".to_string(),
             server_name: "test-server".to_string(),
         });
+        let (environment_id_tx, environment_id_rx) = watch::channel(None);
+        let environment_id_publisher = RemoteControlEnvironmentIdPublisher::new(environment_id_tx);
 
         let err = match connect_remote_control_websocket(
             &remote_control_target,
@@ -1066,8 +1118,11 @@ mod tests {
             &auth_manager,
             &mut auth_recovery,
             &mut enrollment,
-            /*subscribe_cursor*/ None,
-            /*app_server_client_name*/ None,
+            RemoteControlConnectOptions {
+                subscribe_cursor: None,
+                app_server_client_name: None,
+            },
+            &environment_id_publisher,
         )
         .await
         {
@@ -1077,6 +1132,11 @@ mod tests {
 
         server_task.await.expect("server task should succeed");
         assert_eq!(err.to_string(), expected_error);
+        assert!(
+            !environment_id_rx
+                .has_changed()
+                .expect("environment id watch should remain open")
+        );
     }
 
     #[tokio::test]
@@ -1109,6 +1169,8 @@ mod tests {
             server_id: "srv_e_test".to_string(),
             server_name: "test-server".to_string(),
         });
+        let (environment_id_tx, environment_id_rx) = watch::channel(None);
+        let environment_id_publisher = RemoteControlEnvironmentIdPublisher::new(environment_id_tx);
         save_auth(
             codex_home.path(),
             &remote_control_auth_dot_json("fresh-token"),
@@ -1131,13 +1193,21 @@ mod tests {
             &auth_manager,
             &mut auth_recovery,
             &mut enrollment,
-            /*subscribe_cursor*/ None,
-            /*app_server_client_name*/ None,
+            RemoteControlConnectOptions {
+                subscribe_cursor: None,
+                app_server_client_name: None,
+            },
+            &environment_id_publisher,
         )
         .await
         .expect_err("unauthorized response should fail the websocket connect");
 
         server_task.await.expect("server task should succeed");
+        assert!(
+            !environment_id_rx
+                .has_changed()
+                .expect("environment id watch should remain open")
+        );
         assert_eq!(
             err.to_string(),
             "remote control websocket auth failed with HTTP 401 Unauthorized; retrying after auth recovery"
@@ -1187,6 +1257,8 @@ mod tests {
         .await;
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut enrollment = None;
+        let (environment_id_tx, environment_id_rx) = watch::channel(None);
+        let environment_id_publisher = RemoteControlEnvironmentIdPublisher::new(environment_id_tx);
         save_auth(
             codex_home.path(),
             &remote_control_auth_dot_json("fresh-token"),
@@ -1200,13 +1272,21 @@ mod tests {
             &auth_manager,
             &mut auth_recovery,
             &mut enrollment,
-            /*subscribe_cursor*/ None,
-            /*app_server_client_name*/ None,
+            RemoteControlConnectOptions {
+                subscribe_cursor: None,
+                app_server_client_name: None,
+            },
+            &environment_id_publisher,
         )
         .await
         .expect_err("unauthorized enrollment should fail the websocket connect");
 
         server_task.await.expect("server task should succeed");
+        assert!(
+            !environment_id_rx
+                .has_changed()
+                .expect("environment id watch should remain open")
+        );
         assert_eq!(
             err.to_string(),
             format!(
@@ -1266,6 +1346,8 @@ mod tests {
             normalize_remote_control_url(&remote_control_url).expect("target should parse");
         let (transport_event_tx, transport_event_rx) = mpsc::channel(1);
         drop(transport_event_rx);
+        let (environment_id_tx, _environment_id_rx) = watch::channel(None);
+        let environment_id_publisher = RemoteControlEnvironmentIdPublisher::new(environment_id_tx);
         let shutdown_token = CancellationToken::new();
         let (_enabled_tx, enabled_rx) = watch::channel(true);
         let websocket_task = tokio::spawn({
@@ -1276,7 +1358,10 @@ mod tests {
                     Some(remote_control_target),
                     /*state_db*/ None,
                     remote_control_auth_manager(),
-                    transport_event_tx,
+                    RemoteControlChannels {
+                        transport_event_tx,
+                        environment_id_publisher,
+                    },
                     shutdown_token,
                     enabled_rx,
                 )
@@ -1292,6 +1377,40 @@ mod tests {
             .await
             .expect("shutdown should cancel reconnect backoff")
             .expect("websocket task should join");
+    }
+
+    #[tokio::test]
+    async fn publish_environment_id_if_changed_sends_only_identity_changes() {
+        let (environment_id_tx, mut environment_id_rx) = watch::channel(None);
+        let environment_id_publisher = RemoteControlEnvironmentIdPublisher::new(environment_id_tx);
+
+        environment_id_publisher.publish_if_changed(/*environment_id*/ None);
+        assert!(
+            timeout(Duration::from_millis(20), environment_id_rx.changed())
+                .await
+                .is_err()
+        );
+
+        environment_id_publisher.publish_if_changed(Some("env_first".to_string()));
+        environment_id_rx
+            .changed()
+            .await
+            .expect("environment id watch should remain open");
+        assert_eq!(environment_id_rx.borrow().as_deref(), Some("env_first"));
+
+        environment_id_publisher.publish_if_changed(Some("env_first".to_string()));
+        assert!(
+            timeout(Duration::from_millis(20), environment_id_rx.changed())
+                .await
+                .is_err()
+        );
+
+        environment_id_publisher.publish_if_changed(/*environment_id*/ None);
+        environment_id_rx
+            .changed()
+            .await
+            .expect("environment id watch should remain open");
+        assert_eq!(environment_id_rx.borrow().as_deref(), None);
     }
 
     #[tokio::test]
