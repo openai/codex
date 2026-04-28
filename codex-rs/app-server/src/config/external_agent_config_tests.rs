@@ -23,6 +23,7 @@ fn github_plugin_details() -> MigrationDetails {
             marketplace_name: "acme-tools".to_string(),
             plugin_names: vec!["formatter".to_string()],
         }],
+        sessions: Vec::new(),
     }
 }
 
@@ -84,6 +85,58 @@ async fn detect_home_lists_config_skills_and_agents_md() {
     ];
 
     assert_eq!(items, expected);
+}
+
+#[tokio::test]
+async fn detect_home_lists_recent_sessions() {
+    let (root, external_agent_home, codex_home) = fixture_paths();
+    let project_root = root.path().join("repo");
+    let recent_timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let session_path = external_agent_home
+        .join("projects")
+        .join("repo")
+        .join("session.jsonl");
+    fs::create_dir_all(&project_root).expect("create project root");
+    fs::create_dir_all(session_path.parent().expect("session parent")).expect("create sessions");
+    fs::write(
+        &session_path,
+        serde_json::json!({
+            "type": "user",
+            "cwd": &project_root,
+            "timestamp": &recent_timestamp,
+            "message": { "content": "first request" },
+        })
+        .to_string(),
+    )
+    .expect("write session");
+
+    let items = service_for_paths(external_agent_home.clone(), codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: true,
+            cwds: None,
+        })
+        .await
+        .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Sessions,
+            description: format!(
+                "Migrate recent sessions from {}",
+                external_agent_home.join("projects").display()
+            ),
+            cwd: None,
+            details: Some(MigrationDetails {
+                plugins: Vec::new(),
+                sessions: vec![ExternalAgentSessionMigration {
+                    path: session_path,
+                    cwd: project_root,
+                    title: Some("first request".to_string()),
+                }],
+            }),
+        }]
+    );
 }
 
 #[tokio::test]
@@ -352,6 +405,7 @@ async fn import_local_plugins_returns_completed_status() {
                     marketplace_name: "my-plugins".to_string(),
                     plugin_names: vec!["cloudflare".to_string()],
                 }],
+                sessions: Vec::new(),
             }),
         }])
         .await
@@ -392,6 +446,7 @@ async fn import_git_plugins_returns_pending_async_status() {
                     marketplace_name: "acme-tools".to_string(),
                     plugin_names: vec!["formatter".to_string()],
                 }],
+                sessions: Vec::new(),
             }),
         }])
         .await
@@ -406,6 +461,7 @@ async fn import_git_plugins_returns_pending_async_status() {
                     marketplace_name: "acme-tools".to_string(),
                     plugin_names: vec!["formatter".to_string()],
                 }],
+                sessions: Vec::new(),
             },
         }]
     );
@@ -659,6 +715,7 @@ async fn detect_home_lists_enabled_plugins_from_settings() {
                     marketplace_name: "acme-tools".to_string(),
                     plugin_names: vec!["deployer".to_string(), "formatter".to_string()],
                 }],
+                sessions: Vec::new(),
             }),
         }]
     );
@@ -719,6 +776,7 @@ enabled = true
                     marketplace_name: "acme-tools".to_string(),
                     plugin_names: vec!["deployer".to_string()],
                 }],
+                sessions: Vec::new(),
             }),
         }]
     );
@@ -877,6 +935,7 @@ enabled = true
                     marketplace_name: "acme-tools".to_string(),
                     plugin_names: vec!["formatter".to_string()],
                 }],
+                sessions: Vec::new(),
             }),
         }]
     );
@@ -1057,6 +1116,7 @@ source = "owner/debug-marketplace"
                     marketplace_name: "debug".to_string(),
                     plugin_names: vec!["available".to_string()],
                 }],
+                sessions: Vec::new(),
             }),
         }]
     );
@@ -1090,6 +1150,7 @@ async fn import_plugins_requires_source_marketplace_details() {
                     marketplace_name: "other-tools".to_string(),
                     plugin_names: github_plugin_details().plugins[0].plugin_names.clone(),
                 }],
+                sessions: Vec::new(),
             }),
         )
         .await
@@ -1197,6 +1258,7 @@ async fn import_plugins_supports_external_agent_plugin_marketplace_layout() {
                     marketplace_name: "my-plugins".to_string(),
                     plugin_names: vec!["cloudflare".to_string()],
                 }],
+                sessions: Vec::new(),
             }),
         )
         .await
@@ -1284,6 +1346,7 @@ async fn detect_home_supports_relative_external_agent_plugin_marketplace_path() 
                     marketplace_name: "my-plugins".to_string(),
                     plugin_names: vec!["cloudflare".to_string()],
                 }],
+                sessions: Vec::new(),
             }),
         }]
     );
@@ -1327,6 +1390,7 @@ async fn detect_home_infers_claude_official_marketplace_when_missing_from_settin
                     marketplace_name: "claude-plugins-official".to_string(),
                     plugin_names: vec!["sample".to_string()],
                 }],
+                sessions: Vec::new(),
             }),
         }]
     );
@@ -1386,6 +1450,7 @@ async fn import_plugins_supports_relative_external_agent_plugin_marketplace_path
                     marketplace_name: "my-plugins".to_string(),
                     plugin_names: vec!["cloudflare".to_string()],
                 }],
+                sessions: Vec::new(),
             }),
         )
         .await
@@ -1429,6 +1494,7 @@ async fn import_plugins_infers_claude_official_marketplace_when_missing_from_set
                     marketplace_name: "claude-plugins-official".to_string(),
                     plugin_names: vec!["sample".to_string()],
                 }],
+                sessions: Vec::new(),
             }),
         )
         .await
@@ -1518,6 +1584,7 @@ async fn detect_repo_supports_project_relative_external_agent_plugin_marketplace
                     marketplace_name: "my-plugins".to_string(),
                     plugin_names: vec!["cloudflare".to_string()],
                 }],
+                sessions: Vec::new(),
             }),
         }]
     );
@@ -1582,6 +1649,7 @@ async fn import_plugins_supports_project_relative_external_agent_plugin_marketpl
                     marketplace_name: "my-plugins".to_string(),
                     plugin_names: vec!["cloudflare".to_string()],
                 }],
+                sessions: Vec::new(),
             }),
         )
         .await

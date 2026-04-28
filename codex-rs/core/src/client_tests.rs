@@ -18,6 +18,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_rollout_trace::ExecutionStatus;
@@ -190,6 +191,18 @@ fn build_subagent_headers_sets_other_subagent_label() {
     let client = test_model_client(SessionSource::SubAgent(SubAgentSource::Other(
         "memory_consolidation".to_string(),
     )));
+    let headers = client.build_subagent_headers();
+    let value = headers
+        .get(X_OPENAI_SUBAGENT_HEADER)
+        .and_then(|value| value.to_str().ok());
+    assert_eq!(value, Some("memory_consolidation"));
+}
+
+#[test]
+fn build_subagent_headers_sets_internal_memory_consolidation_label() {
+    let client = test_model_client(SessionSource::Internal(
+        InternalSessionSource::MemoryConsolidation,
+    ));
     let headers = client.build_subagent_headers();
     let value = headers
         .get(X_OPENAI_SUBAGENT_HEADER)

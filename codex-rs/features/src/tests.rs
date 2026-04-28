@@ -415,6 +415,8 @@ enabled = true
 max_concurrent_threads_per_session = 4
 usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
+root_agent_usage_hint_text = "Root guidance."
+subagent_usage_hint_text = "Subagent guidance."
 hide_spawn_agent_metadata = true
 "#,
     )
@@ -431,6 +433,8 @@ hide_spawn_agent_metadata = true
             max_concurrent_threads_per_session: Some(4),
             usage_hint_enabled: Some(false),
             usage_hint_text: Some("Custom delegation guidance.".to_string()),
+            root_agent_usage_hint_text: Some("Root guidance.".to_string()),
+            subagent_usage_hint_text: Some("Subagent guidance.".to_string()),
             hide_spawn_agent_metadata: Some(true),
         }))
     );
@@ -463,6 +467,8 @@ usage_hint_enabled = false
             max_concurrent_threads_per_session: None,
             usage_hint_enabled: Some(false),
             usage_hint_text: None,
+            root_agent_usage_hint_text: None,
+            subagent_usage_hint_text: None,
             hide_spawn_agent_metadata: None,
         }))
     );

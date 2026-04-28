@@ -6,26 +6,18 @@ import type { ReasoningEffort } from "../ReasoningEffort";
 import type { ServiceTier } from "../ServiceTier";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
-import type { PermissionProfile } from "./PermissionProfile";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
 
-export type ThreadResumeResponse = { thread: Thread, model: string, modelProvider: string, serviceTier: ServiceTier | null, cwd: AbsolutePathBuf,
-/**
+export type ThreadResumeResponse = {thread: Thread, model: string, modelProvider: string, serviceTier: ServiceTier | null, cwd: AbsolutePathBuf, /**
  * Instruction source files currently loaded for this thread.
  */
-instructionSources: Array<AbsolutePathBuf>, approvalPolicy: AskForApproval,
-/**
+instructionSources: Array<AbsolutePathBuf>, approvalPolicy: AskForApproval, /**
  * Reviewer currently used for approval requests on this thread.
  */
-approvalsReviewer: ApprovalsReviewer,
-/**
+approvalsReviewer: ApprovalsReviewer, /**
  * Legacy sandbox policy retained for compatibility. New clients should use
  * `permissionProfile` when present as the canonical active permissions
  * view.
  */
-sandbox: SandboxPolicy,
-/**
- * Canonical active permissions view for this thread.
- */
-permissionProfile: PermissionProfile | null, reasoningEffort: ReasoningEffort | null, };
+sandbox: SandboxPolicy, reasoningEffort: ReasoningEffort | null};

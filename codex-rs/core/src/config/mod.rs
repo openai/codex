@@ -47,6 +47,7 @@ use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDiscoverable;
+use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
@@ -62,7 +63,7 @@ use codex_features::MultiAgentV2ConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
-use codex_memories_write::memory_root;
+use codex_memories_read::memory_root;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
@@ -99,9 +100,12 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::config::permissions::compile_permission_profile;
+use crate::config::permissions::builtin_permission_profile;
+use crate::config::permissions::compile_permission_profile_selection;
+use crate::config::permissions::default_builtin_permission_profile_name;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
-use crate::config::permissions::network_proxy_config_from_profile_network;
+use crate::config::permissions::network_proxy_config_for_profile_selection;
+use crate::config::permissions::validate_user_permission_profile_names;
 use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
@@ -318,6 +322,18 @@ impl Permissions {
     }
 }
 
+// A profile override only inherits the selected profile's proxy/allowlist config
+// when Codex is still responsible for the network policy. `Disabled` means no
+// outer sandbox, so starting the managed proxy would narrow the override.
+fn profile_allows_configured_network_proxy(permission_profile: &PermissionProfile) -> bool {
+    match permission_profile {
+        PermissionProfile::Managed { network, .. } | PermissionProfile::External { network } => {
+            network.is_enabled()
+        }
+        PermissionProfile::Disabled => false,
+    }
+}
+
 /// Configured thread persistence backend.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ThreadStoreConfig {
@@ -467,7 +483,6 @@ pub struct Config {
     /// - `always`: Always use alternate screen (original behavior).
     /// - `never`: Never use alternate screen (inline mode, preserves scrollback).
     pub tui_alternate_screen: AltScreenMode,
-
     /// Ordered list of status line item identifiers for the TUI.
     ///
     /// When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.
@@ -485,6 +500,15 @@ pub struct Config {
 
     /// Terminal resize-reflow tuning knobs.
     pub terminal_resize_reflow: TerminalResizeReflowConfig,
+
+    /// Keybinding overrides for the TUI.
+    ///
+    /// Precedence is:
+    ///
+    /// 1. context table (`tui.keymap.chat`, `tui.keymap.composer`, etc.)
+    /// 2. `tui.keymap.global`
+    /// 3. built-in defaults
+    pub tui_keymap: TuiKeymap,
 
     /// The absolute directory that should be treated as the current working
     /// directory for the session. All relative paths inside the business-logic
@@ -731,6 +755,8 @@ pub struct MultiAgentV2Config {
     pub max_concurrent_threads_per_session: usize,
     pub usage_hint_enabled: bool,
     pub usage_hint_text: Option<String>,
+    pub root_agent_usage_hint_text: Option<String>,
+    pub subagent_usage_hint_text: Option<String>,
     pub hide_spawn_agent_metadata: bool,
 }
 
@@ -741,6 +767,8 @@ impl Default for MultiAgentV2Config {
                 DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION,
             usage_hint_enabled: true,
             usage_hint_text: None,
+            root_agent_usage_hint_text: None,
+            subagent_usage_hint_text: None,
             hide_spawn_agent_metadata: false,
         }
     }
@@ -1619,6 +1647,16 @@ fn resolve_multi_agent_v2_config(
         .or_else(|| base.and_then(|config| config.usage_hint_text.as_ref()))
         .cloned()
         .or(default.usage_hint_text);
+    let root_agent_usage_hint_text = profile
+        .and_then(|config| config.root_agent_usage_hint_text.as_ref())
+        .or_else(|| base.and_then(|config| config.root_agent_usage_hint_text.as_ref()))
+        .cloned()
+        .or(default.root_agent_usage_hint_text);
+    let subagent_usage_hint_text = profile
+        .and_then(|config| config.subagent_usage_hint_text.as_ref())
+        .or_else(|| base.and_then(|config| config.subagent_usage_hint_text.as_ref()))
+        .cloned()
+        .or(default.subagent_usage_hint_text);
     let hide_spawn_agent_metadata = profile
         .and_then(|config| config.hide_spawn_agent_metadata)
         .or_else(|| base.and_then(|config| config.hide_spawn_agent_metadata))
@@ -1628,6 +1666,8 @@ fn resolve_multi_agent_v2_config(
         max_concurrent_threads_per_session,
         usage_hint_enabled,
         usage_hint_text,
+        root_agent_usage_hint_text,
+        subagent_usage_hint_text,
         hide_spawn_agent_metadata,
     }
 }
@@ -1861,6 +1901,7 @@ impl Config {
             .permissions
             .as_ref()
             .is_some_and(|profiles| !profiles.is_empty());
+        validate_user_permission_profile_names(cfg.permissions.as_ref())?;
         if has_permission_profiles
             && !matches!(
                 permission_config_syntax,
@@ -1891,8 +1932,8 @@ impl Config {
         let profiles_are_active = matches!(
             permission_config_syntax,
             Some(PermissionConfigSyntax::Profiles)
-        ) || (permission_config_syntax.is_none()
-            && has_permission_profiles);
+        ) || permission_config_syntax.is_none();
+        let using_implicit_builtin_profile = permission_config_syntax.is_none();
         let (
             configured_network_proxy_config,
             permission_profile,
@@ -1901,25 +1942,22 @@ impl Config {
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
             let configured_network_proxy_config =
-                if network_sandbox_policy.is_enabled() && profiles_are_active {
-                    let permissions = cfg.permissions.as_ref().ok_or_else(|| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            "default_permissions requires a `[permissions]` table",
-                        )
-                    })?;
-                    let default_permissions = cfg.default_permissions.as_deref().ok_or_else(|| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            "default_permissions requires a named permissions profile",
-                        )
-                    })?;
-                    let profile = resolve_permission_profile(permissions, default_permissions)?;
-
+                if profile_allows_configured_network_proxy(&permission_profile)
+                    && profiles_are_active
+                {
                     // PermissionProfile carries the active network sandbox bit, not the configured
                     // proxy/allowlist policy. Keep that config so active profiles can round-trip
                     // without broadening network behavior.
-                    network_proxy_config_from_profile_network(profile.network.as_ref())
+                    let default_permissions = cfg.default_permissions.as_deref().unwrap_or_else(|| {
+                        default_builtin_permission_profile_name(
+                            &active_project,
+                            windows_sandbox_level,
+                        )
+                    });
+                    network_proxy_config_for_profile_selection(
+                        cfg.permissions.as_ref(),
+                        default_permissions,
+                    )?
                 } else {
                     NetworkProxyConfig::default()
                 };
@@ -1947,32 +1985,31 @@ impl Config {
                 file_system_sandbox_policy,
             )
         } else if profiles_are_active {
-            let permissions = cfg.permissions.as_ref().ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "default_permissions requires a `[permissions]` table",
-                )
-            })?;
-            let default_permissions = cfg.default_permissions.as_deref().ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "default_permissions requires a named permissions profile",
-                )
-            })?;
-            let profile = resolve_permission_profile(permissions, default_permissions)?;
-            let configured_network_proxy_config =
-                network_proxy_config_from_profile_network(profile.network.as_ref());
+            let default_permissions = cfg.default_permissions.as_deref().unwrap_or_else(|| {
+                default_builtin_permission_profile_name(&active_project, windows_sandbox_level)
+            });
+            let configured_network_proxy_config = network_proxy_config_for_profile_selection(
+                cfg.permissions.as_ref(),
+                default_permissions,
+            )?;
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
-                compile_permission_profile(
-                    permissions,
+                compile_permission_profile_selection(
+                    cfg.permissions.as_ref(),
                     default_permissions,
+                    cfg.sandbox_workspace_write.as_ref(),
                     resolved_cwd.as_path(),
                     &mut startup_warnings,
                 )?;
-            let mut permission_profile = PermissionProfile::from_runtime_permissions(
-                &file_system_sandbox_policy,
-                network_sandbox_policy,
-            );
+            let mut permission_profile = if let Some(permission_profile) =
+                builtin_permission_profile(default_permissions, cfg.sandbox_workspace_write.as_ref())
+            {
+                permission_profile
+            } else {
+                PermissionProfile::from_runtime_permissions(
+                    &file_system_sandbox_policy,
+                    network_sandbox_policy,
+                )
+            };
             let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
                 &permission_profile,
                 &file_system_sandbox_policy,
@@ -1980,11 +2017,17 @@ impl Config {
                 resolved_cwd.as_path(),
             );
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
-                file_system_sandbox_policy = file_system_sandbox_policy
-                    .with_additional_writable_roots(
+                file_system_sandbox_policy = if using_implicit_builtin_profile {
+                    file_system_sandbox_policy
+                        .with_additional_legacy_workspace_writable_roots(
+                            &additional_writable_roots,
+                        )
+                } else {
+                    file_system_sandbox_policy.with_additional_writable_roots(
                         resolved_cwd.as_path(),
                         &additional_writable_roots,
-                    );
+                    )
+                };
                 permission_profile = PermissionProfile::from_runtime_permissions(
                     &file_system_sandbox_policy,
                     network_sandbox_policy,
@@ -2666,6 +2709,11 @@ impl Config {
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
             terminal_resize_reflow,
+            tui_keymap: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.keymap.clone())
+                .unwrap_or_default(),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);

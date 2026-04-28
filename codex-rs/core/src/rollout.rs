@@ -50,10 +50,6 @@ pub(crate) mod list {
     pub use codex_rollout::find_thread_path_by_id_str;
 }
 
-pub(crate) mod policy {
-    pub use codex_rollout::should_persist_response_item_for_memories;
-}
-
 pub(crate) mod recorder {
     pub use codex_rollout::RolloutRecorder;
 }

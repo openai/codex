@@ -259,6 +259,7 @@ fn create_filesystem_args(
         writable_roots.push(WritableRoot {
             root: AbsolutePathBuf::from_absolute_path("/")?,
             read_only_subpaths: Vec::new(),
+            protected_metadata_names: Vec::new(),
         });
     }
     let missing_auto_metadata_read_only_project_root_subpaths: HashSet<PathBuf> =

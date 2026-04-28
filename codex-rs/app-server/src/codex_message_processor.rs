@@ -241,11 +241,10 @@ use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
-use codex_core::StartThreadWithToolsOptions;
+use codex_core::StartThreadOptions;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
-use codex_core::clear_memory_roots_contents;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
@@ -290,6 +289,7 @@ use codex_core_plugins::remote::RemotePluginServiceConfig;
 use codex_core_plugins::remote::RemotePluginSummary as RemoteCatalogPluginSummary;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::LOCAL_FS;
+use codex_external_agent_sessions::ImportedExternalAgentSession;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::Stage;
@@ -315,6 +315,7 @@ use codex_mcp::discover_supported_scopes;
 use codex_mcp::effective_mcp_servers;
 use codex_mcp::read_mcp_resource as read_mcp_resource_without_thread;
 use codex_mcp::resolve_oauth_scopes;
+use codex_memories_write::clear_memory_roots_contents;
 use codex_model_provider::ProviderAccountError;
 use codex_model_provider::create_model_provider;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -2448,6 +2449,64 @@ impl CodexMessageProcessor {
             .spawn(thread_start_task.instrument(request_context.span()));
     }
 
+    pub(crate) async fn import_external_agent_session(
+        &self,
+        session: ImportedExternalAgentSession,
+    ) -> Result<ThreadId, JSONRPCErrorError> {
+        let ImportedExternalAgentSession {
+            cwd,
+            title,
+            rollout_items,
+        } = session;
+        let typesafe_overrides = self.build_thread_config_overrides(
+            /*model*/ None,
+            /*model_provider*/ None,
+            /*service_tier*/ None,
+            Some(cwd.to_string_lossy().into_owned()),
+            /*approval_policy*/ None,
+            /*approvals_reviewer*/ None,
+            /*sandbox*/ None,
+            /*permission_profile*/ None,
+            /*base_instructions*/ None,
+            /*developer_instructions*/ None,
+            /*personality*/ None,
+        );
+        let config = self
+            .config_manager
+            .load_with_overrides(/*request_overrides*/ None, typesafe_overrides)
+            .await
+            .map_err(|err| {
+                internal_error(format!("failed to load imported session config: {err}"))
+            })?;
+        let environments = self
+            .thread_manager
+            .default_environment_selections(&config.cwd);
+        let imported_thread = self
+            .thread_manager
+            .start_thread_with_options(StartThreadOptions {
+                config,
+                initial_history: InitialHistory::Forked(rollout_items),
+                session_source: None,
+                dynamic_tools: Vec::new(),
+                persist_extended_history: true,
+                metrics_service_name: None,
+                parent_trace: None,
+                environments,
+            })
+            .await
+            .map_err(|err| internal_error(format!("failed to import session: {err}")))?;
+        if let Some(title) = title
+            && let Some(name) = codex_core::util::normalize_thread_name(&title)
+        {
+            imported_thread
+                .thread
+                .submit(Op::SetThreadName { name })
+                .await
+                .map_err(|err| internal_error(format!("failed to name imported session: {err}")))?;
+        }
+        Ok(imported_thread.thread_id)
+    }
+
     pub(crate) async fn drain_background_tasks(&self) {
         self.background_tasks.close();
         if tokio::time::timeout(Duration::from_secs(10), self.background_tasks.wait())
@@ -2621,7 +2680,7 @@ impl CodexMessageProcessor {
                 ..
             } = listener_task_context
                 .thread_manager
-                .start_thread_with_tools_and_service_name(StartThreadWithToolsOptions {
+                .start_thread_with_options(StartThreadOptions {
                     config,
                     initial_history: match session_start_source
                         .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
@@ -2633,6 +2692,7 @@ impl CodexMessageProcessor {
                             InitialHistory::Cleared
                         }
                     },
+                    session_source: None,
                     dynamic_tools: core_dynamic_tools,
                     persist_extended_history,
                     metrics_service_name: service_name,
@@ -2712,6 +2772,10 @@ impl CodexMessageProcessor {
                 /*has_in_progress_turn*/ false,
             );
 
+            let sandbox = thread_response_sandbox_policy(
+                &config_snapshot.permission_profile,
+                config_snapshot.cwd.as_path(),
+            );
             let permission_profile =
                 thread_response_permission_profile(config_snapshot.permission_profile);
 
@@ -2724,7 +2788,7 @@ impl CodexMessageProcessor {
                 instruction_sources,
                 approval_policy: config_snapshot.approval_policy.into(),
                 approvals_reviewer: config_snapshot.approvals_reviewer.into(),
-                sandbox: config_snapshot.sandbox_policy.into(),
+                sandbox,
                 permission_profile,
                 reasoning_effort: config_snapshot.reasoning_effort,
             };
@@ -3284,7 +3348,7 @@ impl CodexMessageProcessor {
             builder.model_provider = Some(model_provider.clone());
             builder.cwd = config_snapshot.cwd.to_path_buf();
             builder.cli_version = Some(env!("CARGO_PKG_VERSION").to_string());
-            builder.sandbox_policy = config_snapshot.sandbox_policy.clone();
+            builder.sandbox_policy = config_snapshot.sandbox_policy();
             builder.approval_mode = config_snapshot.approval_policy;
             let metadata = builder.build(model_provider.as_str());
             if let Err(err) = state_db_ctx.insert_thread_if_absent(&metadata).await {
@@ -3655,13 +3719,13 @@ impl CodexMessageProcessor {
         params: ThreadLoadedListParams,
     ) -> Result<ThreadLoadedListResponse, JSONRPCErrorError> {
         let ThreadLoadedListParams { cursor, limit } = params;
-        let mut data = self
+        let mut data: Vec<String> = self
             .thread_manager
             .list_thread_ids()
             .await
             .into_iter()
             .map(|thread_id| thread_id.to_string())
-            .collect::<Vec<_>>();
+            .collect();
 
         if data.is_empty() {
             return Ok(ThreadLoadedListResponse {
@@ -4235,9 +4299,13 @@ impl CodexMessageProcessor {
                     thread_status,
                     /*has_live_in_progress_turn*/ false,
                 );
-                let permission_profile = thread_response_permission_profile(
-                    codex_thread.config_snapshot().await.permission_profile,
+                let config_snapshot = codex_thread.config_snapshot().await;
+                let sandbox = thread_response_sandbox_policy(
+                    &config_snapshot.permission_profile,
+                    config_snapshot.cwd.as_path(),
                 );
+                let permission_profile =
+                    thread_response_permission_profile(config_snapshot.permission_profile.clone());
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -4248,7 +4316,7 @@ impl CodexMessageProcessor {
                     instruction_sources,
                     approval_policy: session_configured.approval_policy.into(),
                     approvals_reviewer: session_configured.approvals_reviewer.into(),
-                    sandbox: session_configured.sandbox_policy.into(),
+                    sandbox,
                     permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
                 };
@@ -4831,9 +4899,13 @@ impl CodexMessageProcessor {
                     .await,
                 /*has_in_progress_turn*/ false,
             );
-            let permission_profile = thread_response_permission_profile(
-                forked_thread.config_snapshot().await.permission_profile,
+            let config_snapshot = forked_thread.config_snapshot().await;
+            let sandbox = thread_response_sandbox_policy(
+                &config_snapshot.permission_profile,
+                config_snapshot.cwd.as_path(),
             );
+            let permission_profile =
+                thread_response_permission_profile(config_snapshot.permission_profile);
 
             let response = ThreadForkResponse {
                 thread: thread.clone(),
@@ -4844,7 +4916,7 @@ impl CodexMessageProcessor {
                 instruction_sources,
                 approval_policy: session_configured.approval_policy.into(),
                 approvals_reviewer: session_configured.approvals_reviewer.into(),
-                sandbox: session_configured.sandbox_policy.into(),
+                sandbox,
                 permission_profile,
                 reasoning_effort: session_configured.reasoning_effort,
             };
@@ -4866,7 +4938,6 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-
         self.analytics_events_client.track_response(
             request_id.connection_id.0,
             ClientResponse::ThreadFork {
@@ -6322,12 +6393,12 @@ impl CodexMessageProcessor {
                 );
                 return Err(error);
             }
-            let (_, thread) = self
-                .load_thread(&params.thread_id)
-                .await
-                .inspect_err(|error| {
-                    self.track_error_response(&request_id, error, /*error_type*/ None);
-                })?;
+            let (thread_id, thread) =
+                self.load_thread(&params.thread_id)
+                    .await
+                    .inspect_err(|error| {
+                        self.track_error_response(&request_id, error, /*error_type*/ None);
+                    })?;
             Self::set_app_server_client_info(
                 thread.as_ref(),
                 app_server_client_name,
@@ -6367,6 +6438,7 @@ impl CodexMessageProcessor {
                 .into_iter()
                 .map(V2UserInput::into_core)
                 .collect();
+            let turn_has_input = !mapped_items.is_empty();
 
             let has_any_overrides = params.cwd.is_some()
                 || params.approval_policy.is_some()
@@ -6460,6 +6532,18 @@ impl CodexMessageProcessor {
                     self.track_error_response(&request_id, &error, /*error_type*/ None);
                     error
                 })?;
+
+            if turn_has_input {
+                let config_snapshot = thread.config_snapshot().await;
+                codex_memories_write::start_memories_startup_task(
+                    Arc::clone(&self.thread_manager),
+                    Arc::clone(&self.auth_manager),
+                    thread_id,
+                    Arc::clone(&thread),
+                    thread.config().await,
+                    &config_snapshot.session_source,
+                );
+            }
 
             self.outgoing
                 .record_request_turn_id(&request_id, &turn_id)
@@ -8091,13 +8175,13 @@ async fn handle_pending_thread_resume_request(
         service_tier,
         approval_policy,
         approvals_reviewer,
-        sandbox_policy,
         permission_profile,
         cwd,
         reasoning_effort,
         ..
     } = pending.config_snapshot;
     let instruction_sources = pending.instruction_sources;
+    let sandbox = thread_response_sandbox_policy(&permission_profile, cwd.as_path());
     let permission_profile = thread_response_permission_profile(permission_profile);
 
     let response = ThreadResumeResponse {
@@ -8109,7 +8193,7 @@ async fn handle_pending_thread_resume_request(
         instruction_sources,
         approval_policy: approval_policy.into(),
         approvals_reviewer: approvals_reviewer.into(),
-        sandbox: sandbox_policy.into(),
+        sandbox,
         permission_profile,
         reasoning_effort,
     };
@@ -8314,8 +8398,9 @@ fn collect_resume_override_mismatches(
         }
     }
     if let Some(requested_sandbox) = request.sandbox.as_ref() {
+        let active_sandbox = config_snapshot.sandbox_policy();
         let sandbox_matches = matches!(
-            (requested_sandbox, &config_snapshot.sandbox_policy),
+            (requested_sandbox, &active_sandbox),
             (
                 SandboxMode::ReadOnly,
                 codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
@@ -8332,8 +8417,7 @@ fn collect_resume_override_mismatches(
         );
         if !sandbox_matches {
             mismatch_details.push(format!(
-                "sandbox requested={requested_sandbox:?} active={:?}",
-                config_snapshot.sandbox_policy
+                "sandbox requested={requested_sandbox:?} active={active_sandbox:?}"
             ));
         }
     }
@@ -9240,6 +9324,20 @@ fn thread_response_permission_profile(
     Some(permission_profile.into())
 }
 
+fn thread_response_sandbox_policy(
+    permission_profile: &codex_protocol::models::PermissionProfile,
+    cwd: &Path,
+) -> codex_app_server_protocol::SandboxPolicy {
+    let file_system_policy = permission_profile.file_system_sandbox_policy();
+    let sandbox_policy = codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
+        permission_profile,
+        &file_system_policy,
+        permission_profile.network_sandbox_policy(),
+        cwd,
+    );
+    sandbox_policy.into()
+}
+
 fn requested_permissions_trust_project(overrides: &ConfigOverrides, cwd: &Path) -> bool {
     if matches!(
         overrides.sandbox_mode,
@@ -10019,7 +10117,6 @@ mod tests {
             service_tier: Some(codex_protocol::config_types::ServiceTier::Flex),
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
-            sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
             permission_profile: codex_protocol::models::PermissionProfile::Disabled,
             cwd,
             ephemeral: false,

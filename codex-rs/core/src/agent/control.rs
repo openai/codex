@@ -19,6 +19,7 @@ use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
@@ -27,7 +28,6 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_rollout::state_db;
@@ -148,16 +148,8 @@ impl AgentControl {
         }
     }
 
-    /// Create a control-plane handle over the same thread manager with an independent live-agent
-    /// registry.
-    pub(crate) fn detached_registry(&self) -> Self {
-        Self {
-            manager: self.manager.clone(),
-            ..Default::default()
-        }
-    }
-
     /// Spawn a new agent thread and submit the initial prompt.
+    #[cfg(test)]
     pub(crate) async fn spawn_agent(
         &self,
         config: crate::config::Config,
@@ -395,7 +387,40 @@ impl AgentControl {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
         }
-        forked_rollout_items.retain(keep_forked_rollout_item);
+        // MultiAgentV2 root/subagent usage hints are injected as standalone developer
+        // messages at thread start. When forking history, drop hints from the parent
+        // so the child gets a fresh hint that matches its own session source/config.
+        let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
+            if let Some(parent_thread) = parent_thread.as_ref() {
+                parent_thread
+                    .codex
+                    .session
+                    .configured_multi_agent_v2_usage_hint_texts()
+                    .await
+            } else if config.features.enabled(Feature::MultiAgentV2) {
+                [
+                    config.multi_agent_v2.root_agent_usage_hint_text.clone(),
+                    config.multi_agent_v2.subagent_usage_hint_text.clone(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
+            } else {
+                Vec::new()
+            };
+        forked_rollout_items.retain(|item| {
+            if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = item
+                && role == "developer"
+                && let [ContentItem::InputText { text }] = content.as_slice()
+                && multi_agent_v2_usage_hint_texts_to_filter
+                    .iter()
+                    .any(|usage_hint_text| usage_hint_text == text)
+            {
+                return false;
+            }
+
+            keep_forked_rollout_item(item)
+        });
 
         state
             .fork_thread_with_source(
@@ -795,16 +820,6 @@ impl AgentControl {
         let state = self.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
         Ok(thread.subscribe_status())
-    }
-
-    pub(crate) async fn get_total_token_usage(&self, agent_id: ThreadId) -> Option<TokenUsage> {
-        let Ok(state) = self.upgrade() else {
-            return None;
-        };
-        let Ok(thread) = state.get_thread(agent_id).await else {
-            return None;
-        };
-        thread.total_token_usage().await
     }
 
     pub(crate) async fn format_environment_context_subagents(

@@ -38,6 +38,7 @@ codex-core = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-device-key = { workspace = true }
 codex-exec-server = { workspace = true }
+codex-external-agent-sessions = { workspace = true }
 codex-features = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-otel = { workspace = true }
@@ -48,6 +49,7 @@ codex-backend-client = { workspace = true }
 codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-login = { workspace = true }
+codex-memories-write = { workspace = true }
 codex-mcp = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-models-manager = { workspace = true }
@@ -105,6 +107,7 @@ axum = { workspace = true, default-features = false, features = [
 core_test_support = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
+flate2 = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
@@ -115,6 +118,7 @@ rmcp = { workspace = true, default-features = false, features = [
     "transport-streamable-http-server",
 ] }
 serial_test = { workspace = true }
+tar = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 wiremock = { workspace = true }

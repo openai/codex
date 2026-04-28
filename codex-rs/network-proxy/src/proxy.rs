@@ -422,7 +422,6 @@ pub const NO_PROXY_ENV_KEYS: &[&str] = &[
 
 pub const DEFAULT_NO_PROXY_VALUE: &str = concat!(
     "localhost,127.0.0.1,::1,",
-    "169.254.0.0/16,",
     "10.0.0.0/8,",
     "172.16.0.0/12,",
     "192.168.0.0/16"
@@ -1009,7 +1008,7 @@ mod tests {
         assert!(no_proxy.contains("10.0.0.0/8"));
         assert!(no_proxy.contains("172.16.0.0/12"));
         assert!(no_proxy.contains("192.168.0.0/16"));
-        assert!(no_proxy.contains("169.254.0.0/16"));
+        assert!(!no_proxy.contains("169.254.0.0/16"));
         assert_eq!(env.get(PROXY_ACTIVE_ENV_KEY), Some(&"1".to_string()));
         assert_eq!(env.get(ALLOW_LOCAL_BINDING_ENV_KEY), Some(&"0".to_string()));
         assert_eq!(

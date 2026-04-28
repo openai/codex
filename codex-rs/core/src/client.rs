@@ -77,6 +77,7 @@ use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::W3cTraceContext;
@@ -566,7 +567,7 @@ impl ModelClient {
         }
         if matches!(
             self.state.session_source,
-            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation)
+            SessionSource::Internal(InternalSessionSource::MemoryConsolidation)
         ) {
             extra_headers.insert(
                 X_OPENAI_MEMGEN_REQUEST_HEADER,
@@ -1596,15 +1597,23 @@ fn build_responses_headers(
 }
 
 fn subagent_header_value(session_source: &SessionSource) -> Option<String> {
-    let SessionSource::SubAgent(subagent_source) = session_source else {
-        return None;
-    };
-    match subagent_source {
-        SubAgentSource::Review => Some("review".to_string()),
-        SubAgentSource::Compact => Some("compact".to_string()),
-        SubAgentSource::MemoryConsolidation => Some("memory_consolidation".to_string()),
-        SubAgentSource::ThreadSpawn { .. } => Some("collab_spawn".to_string()),
-        SubAgentSource::Other(label) => Some(label.clone()),
+    match session_source {
+        SessionSource::SubAgent(subagent_source) => match subagent_source {
+            SubAgentSource::Review => Some("review".to_string()),
+            SubAgentSource::Compact => Some("compact".to_string()),
+            SubAgentSource::MemoryConsolidation => Some("memory_consolidation".to_string()),
+            SubAgentSource::ThreadSpawn { .. } => Some("collab_spawn".to_string()),
+            SubAgentSource::Other(label) => Some(label.clone()),
+        },
+        SessionSource::Internal(InternalSessionSource::MemoryConsolidation) => {
+            Some("memory_consolidation".to_string())
+        }
+        SessionSource::Cli
+        | SessionSource::VSCode
+        | SessionSource::Exec
+        | SessionSource::Mcp
+        | SessionSource::Custom(_)
+        | SessionSource::Unknown => None,
     }
 }
 
@@ -1618,6 +1627,7 @@ fn parent_thread_id_header_value(session_source: &SessionSource) -> Option<Strin
         | SessionSource::Exec
         | SessionSource::Mcp
         | SessionSource::Custom(_)
+        | SessionSource::Internal(_)
         | SessionSource::SubAgent(_)
         | SessionSource::Unknown => None,
     }

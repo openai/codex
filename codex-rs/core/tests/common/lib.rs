@@ -8,6 +8,9 @@ use ctor::ctor;
 use std::sync::OnceLock;
 use tempfile::TempDir;
 
+use codex_config::CloudRequirementsLoader;
+use codex_config::ConfigRequirementsToml;
+use codex_config::NetworkRequirementsToml;
 use codex_core::CodexThread;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -164,12 +167,39 @@ pub fn fetch_dotslash_file(
 /// temporary directory. Using a per-test directory keeps tests hermetic and
 /// avoids clobbering a developer’s real `~/.codex`.
 pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
+    load_default_config_for_test_with_cloud_requirements(
+        codex_home,
+        CloudRequirementsLoader::default(),
+    )
+    .await
+}
+
+/// Returns a default `Config` with test-provided cloud requirements applied
+/// during config construction.
+pub async fn load_default_config_for_test_with_cloud_requirements(
+    codex_home: &TempDir,
+    cloud_requirements: CloudRequirementsLoader,
+) -> Config {
     ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(default_test_overrides())
+        .cloud_requirements(cloud_requirements)
         .build()
         .await
         .expect("defaults for test should always succeed")
+}
+
+pub fn managed_network_requirements_loader() -> CloudRequirementsLoader {
+    CloudRequirementsLoader::new(async {
+        Ok(Some(ConfigRequirementsToml {
+            network: Some(NetworkRequirementsToml {
+                enabled: Some(true),
+                allow_local_binding: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
+    })
 }
 
 #[cfg(target_os = "linux")]

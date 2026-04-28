@@ -143,8 +143,8 @@ struct PickerPage {
 /// sessions appear during pagination.
 ///
 /// Filtering happens in two layers:
-/// 1. Provider and source filtering at the backend.
-/// 2. Working-directory filtering at the picker (unless `--all` is passed).
+/// 1. Provider, source, and eligible working-directory filtering at the backend.
+/// 2. Typed search filtering over loaded rows in the picker.
 pub async fn run_resume_picker_with_app_server(
     tui: &mut Tui,
     config: &Config,
@@ -154,11 +154,12 @@ pub async fn run_resume_picker_with_app_server(
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
     let is_remote = app_server.is_remote();
-    let cwd_filter = if show_all {
-        None
-    } else {
-        app_server.remote_cwd_override().map(Path::to_path_buf)
-    };
+    let cwd_filter = picker_cwd_filter(
+        config.cwd.as_path(),
+        show_all,
+        is_remote,
+        app_server.remote_cwd_override(),
+    );
     run_session_picker_with_loader(
         tui,
         config,
@@ -179,11 +180,12 @@ pub async fn run_fork_picker_with_app_server(
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
     let is_remote = app_server.is_remote();
-    let cwd_filter = if show_all {
-        None
-    } else {
-        app_server.remote_cwd_override().map(Path::to_path_buf)
-    };
+    let cwd_filter = picker_cwd_filter(
+        config.cwd.as_path(),
+        show_all,
+        is_remote,
+        app_server.remote_cwd_override(),
+    );
     run_session_picker_with_loader(
         tui,
         config,
@@ -213,14 +215,10 @@ async fn run_session_picker_with_loader(
     } else {
         ProviderFilter::MatchDefault(config.model_provider_id.to_string())
     };
-    let filter_cwd = if show_all || is_remote {
-        // Remote sessions live in the server's filesystem namespace, so the client
-        // process cwd is not a meaningful row filter. If the user provided an
-        // explicit remote --cd, filtering is handled server-side in thread/list.
-        None
-    } else {
-        std::env::current_dir().ok()
-    };
+    // Remote sessions live in the server's filesystem namespace, so the client
+    // process cwd is not a meaningful row filter. Local cwd filtering and explicit
+    // remote --cd filtering are handled server-side in thread/list.
+    let filter_cwd = None;
 
     let mut state = PickerState::new(
         alt.tui.frame_requester(),
@@ -268,6 +266,21 @@ async fn run_session_picker_with_loader(
 
     // Fallback – treat as cancel/new
     Ok(SessionSelection::StartFresh)
+}
+
+fn picker_cwd_filter(
+    config_cwd: &Path,
+    show_all: bool,
+    is_remote: bool,
+    remote_cwd_override: Option<&Path>,
+) -> Option<PathBuf> {
+    if show_all {
+        None
+    } else if is_remote {
+        remote_cwd_override.map(Path::to_path_buf)
+    } else {
+        Some(config_cwd.to_path_buf())
+    }
 }
 
 fn spawn_app_server_page_loader(
@@ -1557,6 +1570,28 @@ mod tests {
         };
 
         assert_eq!(row.display_preview(), "My session");
+    }
+
+    #[test]
+    fn local_picker_thread_list_params_include_cwd_filter() {
+        let cwd_filter = picker_cwd_filter(
+            Path::new("/tmp/project"),
+            /*show_all*/ false,
+            /*is_remote*/ false,
+            /*remote_cwd_override*/ None,
+        );
+        let params = thread_list_params(
+            Some(String::from("cursor-1")),
+            cwd_filter.as_deref(),
+            ProviderFilter::MatchDefault(String::from("openai")),
+            ThreadSortKey::UpdatedAt,
+            /*include_non_interactive*/ false,
+        );
+
+        assert_eq!(
+            params.cwd,
+            Some(ThreadListCwdFilter::One(String::from("/tmp/project")))
+        );
     }
 
     #[test]

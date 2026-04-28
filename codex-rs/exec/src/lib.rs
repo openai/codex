@@ -439,6 +439,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
         forced_login_method: config.forced_login_method,
         forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
+        chatgpt_base_url: Some(config.chatgpt_base_url.clone()),
     })
     .await
     {
@@ -1046,8 +1047,9 @@ fn session_configured_from_thread_response(
         service_tier,
         approval_policy,
         approvals_reviewer,
-        sandbox_policy,
-        permission_profile,
+        permission_profile: permission_profile.unwrap_or_else(|| {
+            PermissionProfile::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, cwd.as_path())
+        }),
         cwd,
         reasoning_effort,
         history_log_id: 0,
