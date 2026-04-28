@@ -421,13 +421,10 @@ pub(crate) enum AppEvent {
     /// The `cwd` keeps local file-link display stable across the final re-render.
     /// `scrollback_reflow` lets table-tail finalization force the already-emitted
     /// terminal scrollback to be rebuilt from the consolidated source-backed cell.
-    /// `deferred_history_cell` lets callers add the final stream tail to the
-    /// transcript without first writing its provisional render to scrollback.
     ConsolidateAgentMessage {
         source: String,
         cwd: PathBuf,
         scrollback_reflow: ConsolidationScrollbackReflow,
-        deferred_history_cell: Option<Box<dyn HistoryCell>>,
     },
 
     /// Replace the contiguous run of streaming `ProposedPlanStreamCell`s at the

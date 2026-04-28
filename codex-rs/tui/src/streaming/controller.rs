@@ -1,12 +1,12 @@
 //! Two-region streaming controllers for agent messages and proposed plans.
 //!
-//! Each stream partitions rendered markdown into a *stable region* (committed
-//! to scrollback via the animation queue in `StreamState`) and a *tail region*
-//! (mutable, displayed in the active-cell slot as a transient stream-tail cell).
+//! Each stream partitions markdown source into a *stable prefix* (committed to
+//! scrollback via the animation queue in `StreamState`) and a *mutable tail*
+//! (displayed in the active-cell slot as a transient stream-tail cell).
 //!
-//! `StreamCore` owns the shared bookkeeping: source accumulation, re-rendering,
-//! stable/tail partitioning, commit-animation queue management, and terminal
-//! resize handling.  `StreamController` and `PlanStreamController` are thin
+//! `StreamCore` owns the shared bookkeeping: source accumulation, source
+//! partitioning, commit-animation queue management, and terminal resize
+//! handling. `StreamController` and `PlanStreamController` are thin
 //! wrappers that add only their `emit()` styling and finalize return types.
 //!
 //! ## Table holdback
@@ -21,19 +21,19 @@
 //!
 //! ## Resize handling
 //!
-//! On terminal width change, `StreamCore::set_width` re-renders at the new
-//! width and rebuilds the queued stable region from the current emitted line
-//! count. This intentionally avoids byte-level remap complexity while the
-//! stream is active; finalized content is canonicalized by transcript
-//! consolidation into source-backed markdown cells.
+//! On terminal width change, `StreamCore::set_width` re-renders the stable
+//! source prefix at the new width and rebuilds the queued stable region from
+//! the current emitted line count. Finalized content is canonicalized by
+//! transcript consolidation into source-backed markdown cells.
 //!
 //! ## Invariants
 //!
-//! - `emitted_stable_len <= enqueued_stable_len <= rendered_lines.len()`.
+//! - `emitted_stable_len <= enqueued_stable_len <= rendered_stable_lines.len()`.
 //! - `raw_source` is append-only until `reset()`; never modified mid-stream.
-//! - Tail starts exactly at `enqueued_stable_len`.
-//! - During confirmed table streaming, only lines from the table header onward
-//!   are forced into tail; pre-table lines may remain stable.
+//! - `stable_source_len` marks the exact source boundary between stable source
+//!   and mutable tail source.
+//! - During confirmed table streaming, only source from the table header onward
+//!   stays mutable; pre-table source may remain stable.
 
 use crate::history_cell::HistoryCell;
 use crate::history_cell::{self};
@@ -72,24 +72,18 @@ struct StreamCore {
     width: Option<usize>,
     /// Accumulated raw markdown source for the current stream.
     raw_source: String,
-    /// Full re-render of `raw_source` at `width`. Rebuilt on every committed delta.
-    rendered_lines: Vec<Line<'static>>,
+    /// Byte length of the stable prefix in `raw_source`.
+    stable_source_len: usize,
+    /// Re-render of only the stable source prefix at `width`.
+    rendered_stable_lines: Vec<Line<'static>>,
     /// Lines enqueued into the commit-animation queue.
     enqueued_stable_len: usize,
     /// Lines actually emitted to scrollback.
     emitted_stable_len: usize,
     /// Session cwd used to keep local file-link display stable during stream re-renders.
     cwd: PathBuf,
-    /// Cached rendered line count for prefix-before-table keyed by source start and width.
-    stable_prefix_len_cache: Option<StablePrefixLenCache>,
     /// Incremental holdback scanner state for append-only source updates.
     holdback_scanner: TableHoldbackScanner,
-}
-
-struct StablePrefixLenCache {
-    source_start: usize,
-    width: Option<usize>,
-    stable_prefix_len: usize,
 }
 
 impl StreamCore {
@@ -98,11 +92,11 @@ impl StreamCore {
             state: StreamState::new(width, cwd),
             width,
             raw_source: String::with_capacity(1024),
-            rendered_lines: Vec::with_capacity(64),
+            stable_source_len: 0,
+            rendered_stable_lines: Vec::with_capacity(64),
             enqueued_stable_len: 0,
             emitted_stable_len: 0,
             cwd: cwd.to_path_buf(),
-            stable_prefix_len_cache: None,
             holdback_scanner: TableHoldbackScanner::new(),
         }
     }
@@ -121,7 +115,8 @@ impl StreamCore {
         {
             self.raw_source.push_str(&committed_source);
             self.holdback_scanner.push_source_chunk(&committed_source);
-            self.recompute_streaming_render();
+            self.update_stable_source_len();
+            self.recompute_stable_render();
             enqueued = self.sync_stable_queue();
         }
         enqueued
@@ -187,19 +182,29 @@ impl StreamCore {
         self.state.oldest_queued_age(now)
     }
 
-    /// Lines that belong to the mutable tail, not yet queued for stable commit.
-    ///
-    /// The tail starts at `enqueued_stable_len` -- everything from that offset to
-    /// the end of `rendered_lines` is displayed live in the active-cell slot.
-    #[inline]
+    /// Lines that belong to the mutable source tail, not yet queued for stable commit.
     fn current_tail_lines(&self) -> Vec<Line<'static>> {
-        let start = self.enqueued_stable_len.min(self.rendered_lines.len());
-        self.rendered_lines[start..].to_vec()
+        if !self.has_tail() {
+            return Vec::new();
+        }
+
+        let mut rendered_full_source = Vec::new();
+        append_markdown_agent_with_cwd(
+            &self.raw_source,
+            self.width,
+            Some(self.cwd.as_path()),
+            &mut rendered_full_source,
+        );
+        let stable_len = self
+            .rendered_stable_lines
+            .len()
+            .min(rendered_full_source.len());
+        rendered_full_source[stable_len..].to_vec()
     }
 
     #[inline]
     fn has_tail(&self) -> bool {
-        self.enqueued_stable_len < self.rendered_lines.len()
+        self.stable_source_len < self.raw_source.len()
     }
 
     /// Update rendering width and rebuild queued stable lines for the new layout.
@@ -218,10 +223,12 @@ impl StreamCore {
             return;
         }
 
-        self.recompute_streaming_render();
-        self.emitted_stable_len = self.emitted_stable_len.min(self.rendered_lines.len());
+        self.recompute_stable_render();
+        self.emitted_stable_len = self
+            .emitted_stable_len
+            .min(self.rendered_stable_lines.len());
         if had_pending_queue
-            && self.emitted_stable_len == self.rendered_lines.len()
+            && self.emitted_stable_len == self.rendered_stable_lines.len()
             && self.emitted_stable_len > 0
         {
             // If wrapped remainder compresses into fewer lines at the new width,
@@ -234,7 +241,7 @@ impl StreamCore {
             // Avoid replaying already-emitted content after resize when no
             // stable lines were waiting in the queue and there was no mutable
             // tail to preserve.
-            self.enqueued_stable_len = self.rendered_lines.len();
+            self.enqueued_stable_len = self.rendered_stable_lines.len();
             return;
         }
         self.rebuild_stable_queue_from_render();
@@ -244,30 +251,39 @@ impl StreamCore {
     fn reset(&mut self) {
         self.state.clear();
         self.raw_source.clear();
-        self.rendered_lines.clear();
+        self.stable_source_len = 0;
+        self.rendered_stable_lines.clear();
         self.enqueued_stable_len = 0;
         self.emitted_stable_len = 0;
-        self.stable_prefix_len_cache = None;
         self.holdback_scanner.reset();
     }
 
-    /// Re-render the full `raw_source` at current `width`.
-    fn recompute_streaming_render(&mut self) {
-        self.rendered_lines.clear();
+    /// Update the direct source boundary between stable output and mutable tail.
+    fn update_stable_source_len(&mut self) {
+        self.stable_source_len = match self.holdback_scanner.state() {
+            TableHoldbackState::Confirmed { table_start }
+            | TableHoldbackState::PendingHeader {
+                header_start: table_start,
+            } => table_start.min(self.raw_source.len()),
+            TableHoldbackState::None => self.raw_source.len(),
+        };
+    }
+
+    /// Re-render the stable source prefix at the current width.
+    fn recompute_stable_render(&mut self) {
+        self.rendered_stable_lines.clear();
         append_markdown_agent_with_cwd(
-            &self.raw_source,
+            &self.raw_source[..self.stable_source_len],
             self.width,
             Some(self.cwd.as_path()),
-            &mut self.rendered_lines,
+            &mut self.rendered_stable_lines,
         );
     }
 
     /// Compute how many rendered lines should be in the stable region.
-    fn compute_target_stable_len(&mut self) -> usize {
-        let tail_budget = self.active_tail_budget_lines();
-        self.rendered_lines
+    fn compute_target_stable_len(&self) -> usize {
+        self.rendered_stable_lines
             .len()
-            .saturating_sub(tail_budget)
             .max(self.emitted_stable_len)
     }
 
@@ -282,7 +298,7 @@ impl StreamCore {
             self.state.clear_queue();
             if self.emitted_stable_len < target_stable_len {
                 self.state.enqueue(
-                    self.rendered_lines[self.emitted_stable_len..target_stable_len].to_vec(),
+                    self.rendered_stable_lines[self.emitted_stable_len..target_stable_len].to_vec(),
                 );
             }
             self.enqueued_stable_len = target_stable_len;
@@ -293,8 +309,9 @@ impl StreamCore {
             return false;
         }
 
-        self.state
-            .enqueue(self.rendered_lines[self.enqueued_stable_len..target_stable_len].to_vec());
+        self.state.enqueue(
+            self.rendered_stable_lines[self.enqueued_stable_len..target_stable_len].to_vec(),
+        );
         self.enqueued_stable_len = target_stable_len;
         true
     }
@@ -305,84 +322,11 @@ impl StreamCore {
         let target_stable_len = self.compute_target_stable_len();
         self.state.clear_queue();
         if self.emitted_stable_len < target_stable_len {
-            self.state
-                .enqueue(self.rendered_lines[self.emitted_stable_len..target_stable_len].to_vec());
+            self.state.enqueue(
+                self.rendered_stable_lines[self.emitted_stable_len..target_stable_len].to_vec(),
+            );
         }
         self.enqueued_stable_len = target_stable_len;
-    }
-
-    /// How many rendered lines to withhold as mutable tail.
-    ///
-    /// When a table is detected (`Confirmed` or `PendingHeader`), the entire
-    /// table region is held as tail because adding a row can reshape table
-    /// column widths. For `PendingHeader`, only content from the speculative
-    /// header line onward is kept mutable so earlier prose can continue
-    /// streaming. When no table is detected, everything flows directly to
-    /// stable. This is the core decision point for the holdback mechanism.
-    fn active_tail_budget_lines(&mut self) -> usize {
-        let scan_start = Instant::now();
-        let holdback_state = self.holdback_scanner.state();
-        let tail_budget = match holdback_state {
-            TableHoldbackState::Confirmed { table_start: start }
-            | TableHoldbackState::PendingHeader {
-                header_start: start,
-            } => self.tail_budget_from_source_start(start),
-            TableHoldbackState::None => 0,
-        };
-        tracing::trace!(
-            state = ?holdback_state,
-            tail_budget,
-            elapsed_us = scan_start.elapsed().as_micros(),
-            "table holdback decision",
-        );
-        tail_budget
-    }
-
-    fn tail_budget_from_source_start(&mut self, source_start: usize) -> usize {
-        if source_start == 0 {
-            return self.rendered_lines.len();
-        }
-        let source_start = source_start.min(self.raw_source.len());
-        let stable_prefix_len = self.stable_prefix_len_for_source_start(source_start);
-        self.rendered_lines.len().saturating_sub(stable_prefix_len)
-    }
-
-    fn stable_prefix_len_for_source_start(&mut self, source_start: usize) -> usize {
-        if let Some(cache) = &self.stable_prefix_len_cache
-            && cache.source_start == source_start
-            && cache.width == self.width
-        {
-            tracing::trace!(
-                source_start,
-                width = ?self.width,
-                stable_prefix_len = cache.stable_prefix_len,
-                "table holdback stable-prefix cache hit",
-            );
-            return cache.stable_prefix_len;
-        }
-
-        let render_start = Instant::now();
-        let mut stable_prefix_render = Vec::new();
-        append_markdown_agent_with_cwd(
-            &self.raw_source[..source_start.min(self.raw_source.len())],
-            self.width,
-            Some(self.cwd.as_path()),
-            &mut stable_prefix_render,
-        );
-        let stable_prefix_len = stable_prefix_render.len();
-        tracing::trace!(
-            source_start,
-            width = ?self.width,
-            stable_prefix_len,
-            elapsed_us = render_start.elapsed().as_micros(),
-            "table holdback stable-prefix render",
-        );
-        self.stable_prefix_len_cache = Some(StablePrefixLenCache {
-            source_start,
-            width: self.width,
-            stable_prefix_len,
-        });
-        stable_prefix_len
     }
 }
 
@@ -780,11 +724,11 @@ mod tests {
         let mut ctrl = stream_controller(Some(80));
         assert!(!ctrl.has_live_tail());
 
-        ctrl.core.rendered_lines = vec![Line::from("tail line")];
-        ctrl.core.enqueued_stable_len = 0;
+        ctrl.core.raw_source = "tail line\n".to_string();
+        ctrl.core.stable_source_len = 0;
         assert!(ctrl.has_live_tail());
 
-        ctrl.core.enqueued_stable_len = 1;
+        ctrl.core.stable_source_len = ctrl.core.raw_source.len();
         assert!(!ctrl.has_live_tail());
     }
 
@@ -793,11 +737,11 @@ mod tests {
         let mut ctrl = plan_stream_controller(Some(80));
         assert!(!ctrl.has_live_tail());
 
-        ctrl.core.rendered_lines = vec![Line::from("tail line")];
-        ctrl.core.enqueued_stable_len = 0;
+        ctrl.core.raw_source = "tail line\n".to_string();
+        ctrl.core.stable_source_len = 0;
         assert!(ctrl.has_live_tail());
 
-        ctrl.core.enqueued_stable_len = 1;
+        ctrl.core.stable_source_len = ctrl.core.raw_source.len();
         assert!(!ctrl.has_live_tail());
     }
 

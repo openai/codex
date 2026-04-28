@@ -210,15 +210,8 @@ impl App {
                 source,
                 cwd,
                 scrollback_reflow,
-                deferred_history_cell,
             } => {
-                self.handle_consolidate_agent_message(
-                    tui,
-                    source,
-                    cwd,
-                    scrollback_reflow,
-                    deferred_history_cell,
-                )?;
+                self.handle_consolidate_agent_message(tui, source, cwd, scrollback_reflow)?;
             }
             AppEvent::ConsolidateProposedPlan(source) => {
                 if !self.terminal_resize_reflow_enabled() {

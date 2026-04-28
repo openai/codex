@@ -174,16 +174,13 @@ async fn flush_answer_stream_keeps_default_reflow_for_plain_text_tail() {
         match event {
             AppEvent::InsertHistoryCell(_) => saw_insert_history = true,
             AppEvent::ConsolidateAgentMessage {
-                scrollback_reflow,
-                deferred_history_cell,
-                ..
+                scrollback_reflow, ..
             } => {
                 saw_consolidate = true;
                 assert_eq!(
                     scrollback_reflow,
                     crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan
                 );
-                assert!(deferred_history_cell.is_none());
             }
             _ => {}
         }
@@ -225,18 +222,12 @@ async fn flush_answer_stream_requests_scrollback_reflow_for_live_table_tail() {
         match event {
             AppEvent::InsertHistoryCell(_) => saw_insert_history = true,
             AppEvent::ConsolidateAgentMessage {
-                scrollback_reflow,
-                deferred_history_cell,
-                ..
+                scrollback_reflow, ..
             } => {
                 saw_consolidate = true;
                 assert_eq!(
                     scrollback_reflow,
                     crate::app_event::ConsolidationScrollbackReflow::Required
-                );
-                assert!(
-                    deferred_history_cell.is_some(),
-                    "live table tail should be staged for consolidation",
                 );
             }
             _ => {}

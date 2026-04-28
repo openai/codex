@@ -2033,15 +2033,12 @@ impl ChatWidget {
             };
             self.clear_active_stream_tail();
             let (cell, source) = controller.finalize();
-            let deferred_history_cell =
-                if scrollback_reflow == crate::app_event::ConsolidationScrollbackReflow::Required {
-                    cell
-                } else {
-                    if let Some(cell) = cell {
-                        self.add_boxed_history(cell);
-                    }
-                    None
-                };
+            if scrollback_reflow
+                == crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan
+                && let Some(cell) = cell
+            {
+                self.add_boxed_history(cell);
+            }
             // Consolidate the run of streaming AgentMessageCells into a single AgentMarkdownCell
             // that can re-render from source on resize.
             if let Some(source) = source {
@@ -2049,7 +2046,6 @@ impl ChatWidget {
                     source,
                     cwd: self.config.cwd.to_path_buf(),
                     scrollback_reflow,
-                    deferred_history_cell,
                 });
             }
         }

@@ -7,7 +7,6 @@ use super::App;
 use super::resize_reflow::trailing_run_start;
 use crate::app_event::ConsolidationScrollbackReflow;
 use crate::history_cell;
-use crate::history_cell::HistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::tui;
 
@@ -18,16 +17,7 @@ impl App {
         source: String,
         cwd: PathBuf,
         scrollback_reflow: ConsolidationScrollbackReflow,
-        deferred_history_cell: Option<Box<dyn HistoryCell>>,
     ) -> Result<()> {
-        if let Some(cell) = deferred_history_cell {
-            let cell: Arc<dyn HistoryCell> = cell.into();
-            if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                t.insert_cell(cell.clone());
-            }
-            self.transcript_cells.push(cell);
-        }
-
         // Walk backward to find the contiguous run of streaming AgentMessageCells that
         // belong to the just-finalized stream.
         let end = self.transcript_cells.len();
@@ -36,12 +26,12 @@ impl App {
             source.len()
         );
         let start = trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells);
+        let consolidated: Arc<dyn crate::history_cell::HistoryCell> =
+            Arc::new(history_cell::AgentMarkdownCell::new(source, &cwd));
         if start < end {
             tracing::debug!(
                 "ConsolidateAgentMessage: replacing cells [{start}..{end}] with AgentMarkdownCell"
             );
-            let consolidated: Arc<dyn HistoryCell> =
-                Arc::new(history_cell::AgentMarkdownCell::new(source, &cwd));
             self.transcript_cells
                 .splice(start..end, std::iter::once(consolidated.clone()));
 
@@ -53,9 +43,14 @@ impl App {
             self.finish_agent_message_consolidation(tui, scrollback_reflow)?;
         } else {
             tracing::debug!(
-                "ConsolidateAgentMessage: no cells to consolidate(start={start}, end={end})",
+                "ConsolidateAgentMessage: inserting AgentMarkdownCell(start={start}, end={end})",
             );
-            self.maybe_finish_stream_reflow(tui)?;
+            self.transcript_cells.push(consolidated.clone());
+            if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+                t.insert_cell(consolidated);
+                tui.frame_requester().schedule_frame();
+            }
+            self.finish_agent_message_consolidation(tui, scrollback_reflow)?;
         }
 
         Ok(())
