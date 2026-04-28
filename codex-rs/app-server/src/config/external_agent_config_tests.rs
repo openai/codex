@@ -988,6 +988,58 @@ async fn import_repo_hooks_preserves_disabled_codex_hooks_feature() {
 }
 
 #[tokio::test]
+async fn import_repo_mcp_uses_home_settings_toggles_when_repo_settings_missing() {
+    let root = TempDir::new().expect("create tempdir");
+    let repo_root = root.path().join("repo");
+    let external_agent_home = root.path().join(".claude");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
+    fs::write(
+        external_agent_home.join("settings.json"),
+        r#"{"disabledMcpjsonServers":["blocked"]}"#,
+    )
+    .expect("write home settings");
+    fs::write(
+        root.path().join(".claude.json"),
+        serde_json::json!({
+            "projects": {
+                repo_root.display().to_string(): {
+                    "mcpServers": {
+                        "allowed": {"command": "allowed-server"},
+                        "blocked": {"command": "blocked-server"}
+                    }
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("write external agent project config");
+
+    service_for_paths(external_agent_home, root.path().join(".codex"))
+        .import(vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::McpServerConfig,
+            description: String::new(),
+            cwd: Some(repo_root.clone()),
+            details: None,
+        }])
+        .await
+        .expect("import");
+
+    let config: TomlValue = toml::from_str(
+        &fs::read_to_string(repo_root.join(".codex").join("config.toml")).expect("read config"),
+    )
+    .expect("parse config");
+    let expected: TomlValue = toml::from_str(
+        r#"
+[mcp_servers.allowed]
+command = "allowed-server"
+"#,
+    )
+    .expect("parse expected config");
+    assert_eq!(config, expected);
+}
+
+#[tokio::test]
 async fn import_repo_uses_non_empty_external_agent_agents_source() {
     let root = TempDir::new().expect("create tempdir");
     let repo_root = root.path().join("repo");

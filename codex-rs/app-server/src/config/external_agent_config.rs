@@ -283,10 +283,11 @@ impl ExternalAgentConfigService {
         }
 
         let source_root = self.source_root(repo_root);
+        let mcp_settings = self.mcp_settings(repo_root, settings.clone())?;
         let migrated_mcp = build_mcp_config_from_external(
             source_root.as_path(),
             Some(self.external_agent_home.as_path()),
-            settings.as_ref(),
+            mcp_settings.as_ref(),
         )?;
         if !is_empty_toml_table(&migrated_mcp) {
             let mut should_include = true;
@@ -532,6 +533,18 @@ impl ExternalAgentConfigService {
             .unwrap_or_else(|| PathBuf::from(".agents").join("skills"))
     }
 
+    fn mcp_settings(
+        &self,
+        repo_root: Option<&Path>,
+        source_settings: Option<JsonValue>,
+    ) -> io::Result<Option<JsonValue>> {
+        if repo_root.is_some() && source_settings.is_none() {
+            read_external_settings(&self.external_agent_home.join("settings.json"))
+        } else {
+            Ok(source_settings)
+        }
+    }
+
     fn source_root(&self, repo_root: Option<&Path>) -> PathBuf {
         repo_root.map_or_else(
             || {
@@ -767,7 +780,10 @@ impl ExternalAgentConfigService {
                 self.codex_home.join("config.toml"),
             )
         };
-        let settings = read_external_settings(&source_settings)?;
+        let settings = self.mcp_settings(
+            repo_root.as_deref(),
+            read_external_settings(&source_settings)?,
+        )?;
         let migrated = build_mcp_config_from_external(
             self.source_root(repo_root.as_deref()).as_path(),
             Some(self.external_agent_home.as_path()),

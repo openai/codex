@@ -619,9 +619,23 @@ fn rewrite_hook_command(command: &str, target_config_dir: Option<&Path>) -> Stri
         "{}/{EXTERNAL_AGENT_HOOKS_SUBDIR}/",
         external_agent_config_dir()
     );
+    let source_hook_prefixes = [
+        format!("${{{project_dir_env_var}}}/{source_hooks_path}"),
+        format!("${project_dir_env_var}/{source_hooks_path}"),
+        format!("./{source_hooks_path}"),
+        source_hooks_path.clone(),
+    ];
+    let command =
+        replace_quoted_hook_path_prefixes(command, '\'', &source_hook_prefixes, &hook_dir);
+    let command =
+        replace_quoted_hook_path_prefixes(&command, '"', &source_hook_prefixes, &hook_dir);
     command
         .replace(
             &format!("\"${project_dir_env_var}\"/{source_hooks_path}"),
+            &hook_dir,
+        )
+        .replace(
+            &format!("\"${{{project_dir_env_var}}}\"/{source_hooks_path}"),
             &hook_dir,
         )
         .replace(
@@ -632,7 +646,36 @@ fn rewrite_hook_command(command: &str, target_config_dir: Option<&Path>) -> Stri
             &format!("${project_dir_env_var}/{source_hooks_path}"),
             &hook_dir,
         )
+        .replace(&format!("./{source_hooks_path}"), &hook_dir)
         .replace(&source_hooks_path, &hook_dir)
+}
+
+fn replace_quoted_hook_path_prefixes(
+    command: &str,
+    quote: char,
+    source_hook_prefixes: &[String],
+    hook_dir: &str,
+) -> String {
+    let mut rewritten = command.to_string();
+    for source_hook_prefix in source_hook_prefixes {
+        let quoted_prefix = format!("{quote}{source_hook_prefix}");
+        let mut search_start = 0usize;
+        while let Some(relative_start) = rewritten[search_start..].find(&quoted_prefix) {
+            let start = search_start + relative_start;
+            let path_start = start + quoted_prefix.len();
+            if let Some(relative_end) = rewritten[path_start..].find(quote) {
+                let end = path_start + relative_end;
+                let suffix = rewritten[path_start..end].to_string();
+                let replacement = format!("{hook_dir}{suffix}");
+                rewritten.replace_range(start..end + quote.len_utf8(), &replacement);
+                search_start = start + replacement.len();
+            } else {
+                rewritten.replace_range(start..path_start, hook_dir);
+                search_start = start + hook_dir.len();
+            }
+        }
+    }
+    rewritten
 }
 
 fn shell_quote_path_prefix(path: &Path) -> String {
@@ -1656,6 +1699,27 @@ Review carefully."""
         assert_eq!(
             rewrite_hook_command(
                 &source_hook_command("check.py"),
+                Some(Path::new("/repo/.codex")),
+            ),
+            migrated_hook_command("check.py")
+        );
+        assert_eq!(
+            rewrite_hook_command(
+                "python3 ./.claude/hooks/check.py",
+                Some(Path::new("/repo/.codex")),
+            ),
+            migrated_hook_command("check.py")
+        );
+        assert_eq!(
+            rewrite_hook_command(
+                "python3 '${CLAUDE_PROJECT_DIR}/.claude/hooks/check.py'",
+                Some(Path::new("/repo/.codex")),
+            ),
+            migrated_hook_command("check.py")
+        );
+        assert_eq!(
+            rewrite_hook_command(
+                "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/check.py\"",
                 Some(Path::new("/repo/.codex")),
             ),
             migrated_hook_command("check.py")
