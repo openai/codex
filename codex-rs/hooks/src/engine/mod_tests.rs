@@ -19,6 +19,8 @@ use codex_config::TomlValue;
 use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::HookOutputEntryKind;
+use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookSource;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
@@ -345,22 +347,18 @@ async fn plugin_hook_sources_run_with_plugin_env_and_plugin_source() {
         AbsolutePathBuf::try_from(temp.path().join("plugin-data")).expect("plugin data root");
     fs::create_dir_all(plugin_root.join("hooks")).expect("create hooks dir");
     let source_path = plugin_root.join("hooks/hooks.json");
-    let log_path = plugin_root.join("env.json");
     let script_path = plugin_root.join("hooks/write_env.py");
     fs::write(
         script_path.as_path(),
-        format!(
-            r#"import json
+        r#"import json
 import os
-from pathlib import Path
-
-Path(r"{log_path}").write_text(json.dumps({{
-    "plugin": os.environ.get("PLUGIN_ROOT"),
-    "claude": os.environ.get("CLAUDE_PLUGIN_ROOT"),
-}}), encoding="utf-8")
+print(json.dumps({
+    "systemMessage": json.dumps({
+        "plugin": os.environ.get("PLUGIN_ROOT"),
+        "claude": os.environ.get("CLAUDE_PLUGIN_ROOT"),
+    })
+}))
 "#,
-            log_path = log_path.display(),
-        ),
     )
     .expect("write hook script");
     let plugin_id = PluginId::parse("demo-plugin@test-marketplace").expect("plugin id");
@@ -427,9 +425,15 @@ Path(r"{log_path}").write_text(json.dumps({{
 
     assert_eq!(outcome.hook_events.len(), 1);
     assert_eq!(outcome.hook_events[0].run.source, HookSource::Plugin);
+    assert_eq!(outcome.hook_events[0].run.status, HookRunStatus::Completed);
+    assert_eq!(outcome.hook_events[0].run.entries.len(), 1);
+    assert_eq!(
+        outcome.hook_events[0].run.entries[0].kind,
+        HookOutputEntryKind::Warning
+    );
     let logged: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(log_path.as_path()).expect("read env log"))
-            .expect("parse env log");
+        serde_json::from_str(&outcome.hook_events[0].run.entries[0].text)
+            .expect("parse env payload");
     assert_eq!(
         logged,
         serde_json::json!({
