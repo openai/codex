@@ -893,7 +893,7 @@ WHERE kind = ? AND job_key = ?
 
         let existing_job = sqlx::query(
             r#"
-SELECT status, lease_until, retry_at, input_watermark, finished_at
+SELECT status, lease_until, retry_at, input_watermark, finished_at, last_error
 FROM jobs
 WHERE kind = ? AND job_key = ?
             "#,
@@ -951,6 +951,7 @@ INSERT INTO jobs (
         let existing_lease_until: Option<i64> = existing_job.try_get("lease_until")?;
         let retry_at: Option<i64> = existing_job.try_get("retry_at")?;
         let finished_at: Option<i64> = existing_job.try_get("finished_at")?;
+        let last_error: Option<String> = existing_job.try_get("last_error")?;
         if retry_at.is_some_and(|retry_at| retry_at > now) {
             tx.commit().await?;
             return Ok(Phase2JobClaimOutcome::SkippedRetryUnavailable);
@@ -960,7 +961,8 @@ INSERT INTO jobs (
             tx.commit().await?;
             return Ok(Phase2JobClaimOutcome::SkippedRunning);
         }
-        if status == "done" && finished_at.is_some_and(|finished_at| finished_at > cooldown_cutoff)
+        if last_error.is_none()
+            && finished_at.is_some_and(|finished_at| finished_at > cooldown_cutoff)
         {
             tx.commit().await?;
             return Ok(Phase2JobClaimOutcome::SkippedCooldown);
@@ -981,7 +983,7 @@ SET
 WHERE kind = ? AND job_key = ?
   AND (status != 'running' OR lease_until IS NULL OR lease_until <= ?)
   AND (retry_at IS NULL OR retry_at <= ?)
-  AND (status != 'done' OR finished_at IS NULL OR finished_at <= ?)
+  AND (last_error IS NOT NULL OR finished_at IS NULL OR finished_at <= ?)
             "#,
         )
         .bind(worker_id.as_str())
@@ -2548,6 +2550,16 @@ WHERE kind = 'memory_stage1'
             .await
             .expect("claim phase2 after success");
         assert_eq!(claim_after_success, Phase2JobClaimOutcome::SkippedCooldown);
+
+        runtime
+            .enqueue_global_consolidation(/*input_watermark*/ 101)
+            .await
+            .expect("enqueue global consolidation after success");
+        let claim_after_enqueue = runtime
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
+            .await
+            .expect("claim phase2 after enqueue");
+        assert_eq!(claim_after_enqueue, Phase2JobClaimOutcome::SkippedCooldown);
 
         age_phase2_success_beyond_cooldown(&runtime).await;
         let claim_after_cooldown = runtime
