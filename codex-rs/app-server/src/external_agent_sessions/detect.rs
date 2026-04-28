@@ -50,7 +50,10 @@ pub(crate) fn detect_recent_sessions(
             let Ok(Some(summary)) = summarize_session(&path) else {
                 continue;
             };
-            if ledger.contains_current_source(&path)? {
+            let Ok(has_been_imported) = ledger.contains_current_source(&path) else {
+                continue;
+            };
+            if has_been_imported {
                 continue;
             }
             if !is_recent_enough(now, summary.latest_timestamp) {
