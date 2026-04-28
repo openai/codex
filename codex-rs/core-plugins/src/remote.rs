@@ -440,7 +440,10 @@ async fn fetch_remote_plugin_detail_by_id(
     auth: &CodexAuth,
     plugin_id: &str,
 ) -> Result<RemotePluginDetail, RemotePluginCatalogError> {
-    let plugin = fetch_plugin_detail(config, auth, plugin_id).await?;
+    let plugin = fetch_plugin_detail(
+        config, auth, plugin_id, /*include_download_urls*/ false,
+    )
+    .await?;
     let scope = plugin.scope;
     build_remote_plugin_detail(
         config,
