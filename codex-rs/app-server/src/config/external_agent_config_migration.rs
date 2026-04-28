@@ -209,18 +209,10 @@ pub(super) fn count_missing_commands(
     source_commands: &Path,
     target_skills: &Path,
 ) -> io::Result<usize> {
-    let mut count = 0usize;
-    for source_file in command_source_files(source_commands)? {
-        let document = parse_document(&source_file)?;
-        let Some(name) = command_skill_name_if_supported(source_commands, &source_file, &document)
-        else {
-            continue;
-        };
-        if !target_skills.join(name).exists() {
-            count += 1;
-        }
-    }
-    Ok(count)
+    Ok(unique_supported_command_sources(source_commands)?
+        .into_iter()
+        .filter(|(_source_file, name)| !target_skills.join(name).exists())
+        .count())
 }
 
 pub(super) fn import_commands(source_commands: &Path, target_skills: &Path) -> io::Result<usize> {
@@ -230,12 +222,8 @@ pub(super) fn import_commands(source_commands: &Path, target_skills: &Path) -> i
 
     fs::create_dir_all(target_skills)?;
     let mut imported = 0usize;
-    for source_file in command_source_files(source_commands)? {
+    for (source_file, name) in unique_supported_command_sources(source_commands)? {
         let document = parse_document(&source_file)?;
-        let Some(name) = command_skill_name_if_supported(source_commands, &source_file, &document)
-        else {
-            continue;
-        };
         let target_dir = target_skills.join(&name);
         if target_dir.exists() {
             continue;
@@ -441,6 +429,13 @@ fn hook_migration(source_external_agent_dir: &Path) -> io::Result<HookMigration>
         let raw = fs::read_to_string(&settings_file)?;
         let settings: JsonValue = serde_json::from_str(&raw)
             .map_err(|err| invalid_data_error(format!("invalid hooks settings: {err}")))?;
+        if settings
+            .get("disableAllHooks")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false)
+        {
+            return Ok(HookMigration::default());
+        }
         append_convertible_hook_groups(&settings, &mut migration);
     }
 
@@ -525,7 +520,7 @@ fn append_convertible_hook_groups(settings: &JsonValue, migration: &mut HookMigr
                     if let Some(timeout) = hook_object
                         .get("timeout")
                         .or_else(|| hook_object.get("timeoutSec"))
-                        .and_then(json_i64)
+                        .and_then(json_u64)
                     {
                         command_payload.insert(
                             "timeout".to_string(),
@@ -632,6 +627,28 @@ fn command_source_files(source_commands: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+fn unique_supported_command_sources(source_commands: &Path) -> io::Result<Vec<(PathBuf, String)>> {
+    let mut by_name = BTreeMap::<String, Vec<PathBuf>>::new();
+    for source_file in command_source_files(source_commands)? {
+        let document = parse_document(&source_file)?;
+        let Some(name) = command_skill_name_if_supported(source_commands, &source_file, &document)
+        else {
+            continue;
+        };
+        by_name.entry(name).or_default().push(source_file);
+    }
+
+    Ok(by_name
+        .into_iter()
+        .filter_map(|(name, source_files)| {
+            let [source_file] = source_files.as_slice() else {
+                return None;
+            };
+            Some((source_file.clone(), name))
+        })
+        .collect())
+}
+
 fn collect_markdown_files(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
     if !dir.is_dir() {
         return Ok(());
@@ -657,14 +674,17 @@ fn parse_document(source_file: &Path) -> io::Result<ParsedDocument> {
 }
 
 fn parse_document_content(content: &str) -> ParsedDocument {
-    let Some(rest) = content.strip_prefix("---\n") else {
+    let Some(rest) = content
+        .strip_prefix("---\n")
+        .or_else(|| content.strip_prefix("---\r\n"))
+    else {
         return ParsedDocument {
             frontmatter: BTreeMap::new(),
             body: content.to_string(),
             frontmatter_error: None,
         };
     };
-    let Some(end) = rest.find("\n---") else {
+    let Some((end, body_start)) = frontmatter_end(rest) else {
         return ParsedDocument {
             frontmatter: BTreeMap::new(),
             body: content.to_string(),
@@ -673,16 +693,27 @@ fn parse_document_content(content: &str) -> ParsedDocument {
     };
 
     let raw_frontmatter = &rest[..end];
-    let body_start = end + "\n---".len();
-    let body = rest[body_start..]
-        .strip_prefix('\n')
-        .unwrap_or(&rest[body_start..]);
+    let body = &rest[body_start..];
     let (frontmatter, frontmatter_error) = parse_frontmatter(raw_frontmatter);
     ParsedDocument {
         frontmatter,
         body: body.to_string(),
         frontmatter_error,
     }
+}
+
+fn frontmatter_end(rest: &str) -> Option<(usize, usize)> {
+    [
+        "\r\n---\r\n",
+        "\r\n---\n",
+        "\n---\r\n",
+        "\n---\n",
+        "\r\n---",
+        "\n---",
+    ]
+    .into_iter()
+    .filter_map(|delimiter| rest.find(delimiter).map(|end| (end, end + delimiter.len())))
+    .min_by_key(|(end, _body_start)| *end)
 }
 
 fn parse_frontmatter(
@@ -943,11 +974,11 @@ fn json_string(value: &JsonValue) -> Option<String> {
     }
 }
 
-fn json_i64(value: &JsonValue) -> Option<i64> {
+fn json_u64(value: &JsonValue) -> Option<u64> {
     if value.is_boolean() || value.is_null() {
         return None;
     }
-    value.as_i64().or_else(|| value.as_str()?.parse().ok())
+    value.as_u64().or_else(|| value.as_str()?.parse().ok())
 }
 
 fn yaml_string(value: &str) -> String {
@@ -1063,6 +1094,28 @@ mod tests {
     }
 
     #[test]
+    fn command_slug_collisions_are_skipped() {
+        let root = tempfile::TempDir::new().expect("tempdir");
+        let commands = root.path().join("commands");
+        fs::create_dir_all(&commands).expect("create commands");
+        fs::write(
+            commands.join("foo-bar.md"),
+            "---\ndescription: First\n---\nRun the first command.\n",
+        )
+        .expect("write first command");
+        fs::write(
+            commands.join("foo_bar.md"),
+            "---\ndescription: Second\n---\nRun the second command.\n",
+        )
+        .expect("write second command");
+
+        assert_eq!(
+            unique_supported_command_sources(&commands).unwrap(),
+            Vec::<(PathBuf, String)>::new()
+        );
+    }
+
+    #[test]
     fn hook_feature_merges_into_existing_config() {
         let mut existing: TomlValue = toml::from_str("[features]\nother = true\n").unwrap();
         let incoming = build_hooks_feature_config();
@@ -1095,9 +1148,34 @@ mod tests {
     }
 
     #[test]
+    fn frontmatter_accepts_crlf_delimiters() {
+        let document = parse_document_content(
+            "---\r\nname: reviewer\r\ndescription: Review code\r\n---\r\nReview carefully.\r\n",
+        );
+
+        assert_eq!(
+            (
+                document
+                    .frontmatter
+                    .get("name")
+                    .and_then(FrontmatterValue::as_scalar),
+                document
+                    .frontmatter
+                    .get("description")
+                    .and_then(FrontmatterValue::as_scalar),
+                document.body.as_str(),
+            ),
+            (
+                Some("reviewer"),
+                Some("Review code"),
+                "Review carefully.\r\n"
+            )
+        );
+    }
+
+    #[test]
     fn hook_migration_ignores_unsupported_handlers() {
         let settings = serde_json::json!({
-            "disableAllHooks": true,
             "hooks": {
                 "PreToolUse": [{
                     "matcher": "Bash",
@@ -1144,6 +1222,63 @@ mod tests {
                     "hooks": [{
                         "type": "command",
                         "command": "python3 .codex/hooks/approve.py"
+                    }]
+                }]
+            })
+            .as_object()
+            .cloned()
+            .expect("object")
+        );
+    }
+
+    #[test]
+    fn hook_migration_honors_disable_all_hooks() {
+        let root = tempfile::TempDir::new().expect("tempdir");
+        fs::write(
+            root.path().join("settings.json"),
+            r#"{
+              "disableAllHooks": true,
+              "hooks": {
+                "SessionStart": [{
+                  "matcher": "startup",
+                  "hooks": [{"type": "command", "command": "echo setup"}]
+                }]
+              }
+            }"#,
+        )
+        .expect("write settings");
+
+        assert_eq!(
+            hook_migration(root.path()).unwrap().hooks_payload,
+            serde_json::Map::new()
+        );
+    }
+
+    #[test]
+    fn hook_migration_drops_negative_timeouts() {
+        let settings = serde_json::json!({
+            "hooks": {
+                "SessionStart": [{
+                    "matcher": "startup",
+                    "hooks": [{
+                        "type": "command",
+                        "command": "echo setup",
+                        "timeout": -1
+                    }]
+                }]
+            }
+        });
+        let mut migration = HookMigration::default();
+        append_convertible_hook_groups(&settings, &mut migration);
+
+        assert_eq!(
+            migration.hooks_payload,
+            serde_json::json!({
+                "SessionStart": [{
+                    "matcher": "startup",
+                    "hooks": [{
+                        "type": "command",
+                        "command": "echo setup"
                     }]
                 }]
             })
