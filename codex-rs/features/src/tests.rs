@@ -231,20 +231,6 @@ fn tool_call_mcp_elicitation_is_stable_and_enabled_by_default() {
 }
 
 #[test]
-fn goals_is_experimental_and_disabled_by_default() {
-    let stage = Feature::Goals.stage();
-
-    assert!(matches!(stage, Stage::Experimental { .. }));
-    assert_eq!(stage.experimental_menu_name(), Some("Goals"));
-    assert_eq!(
-        stage.experimental_menu_description(),
-        Some("Set a persistent goal Codex can continue over time")
-    );
-    assert_eq!(stage.experimental_announcement(), None);
-    assert_eq!(Feature::Goals.default_enabled(), false);
-}
-
-#[test]
 fn remote_control_is_under_development() {
     assert_eq!(Feature::RemoteControl.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::RemoteControl.default_enabled(), false);
