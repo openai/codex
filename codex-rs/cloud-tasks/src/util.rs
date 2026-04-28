@@ -50,7 +50,6 @@ pub async fn load_auth_manager(chatgpt_base_url: Option<String>) -> Option<AuthM
             /*enable_codex_api_key_env*/ false,
             config.cli_auth_credentials_store_mode,
             chatgpt_base_url.or(Some(config.chatgpt_base_url)),
-            config.agent_identity_authapi_base_url,
         )
         .await,
     )

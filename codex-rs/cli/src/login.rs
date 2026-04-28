@@ -362,12 +362,8 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
-    match CodexAuth::from_auth_storage(
-        &config.codex_home,
-        config.cli_auth_credentials_store_mode,
-        config.agent_identity_authapi_base_url.as_deref(),
-    )
-    .await
+    match CodexAuth::from_auth_storage(&config.codex_home, config.cli_auth_credentials_store_mode)
+        .await
     {
         Ok(Some(auth)) => match auth.auth_mode() {
             AuthMode::ApiKey => match auth.get_token() {

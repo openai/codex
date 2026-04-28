@@ -320,9 +320,6 @@
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
       "properties": {
-        "agent_identity_authapi_base_url": {
-          "type": "string"
-        },
         "analytics": {
           "$ref": "#/definitions/AnalyticsConfigToml"
         },
@@ -2402,10 +2399,6 @@
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
-    "agent_identity_authapi_base_url": {
-      "description": "Base URL for AgentIdentity task registration.",
-      "type": "string"
-    },
     "agents": {
       "allOf": [
         {

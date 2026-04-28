@@ -197,7 +197,6 @@ impl CodexAuth {
         codex_home: &Path,
         auth_dot_json: AuthDotJson,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
-        agent_identity_authapi_base_url: Option<&str>,
     ) -> std::io::Result<Self> {
         let auth_mode = auth_dot_json.resolved_mode();
         let client = create_client();
@@ -213,8 +212,7 @@ impl CodexAuth {
                     "agent identity auth is missing an agent identity token.",
                 ));
             };
-            return Self::from_agent_identity_jwt(&agent_identity, agent_identity_authapi_base_url)
-                .await;
+            return Self::from_agent_identity_jwt(&agent_identity).await;
         }
 
         let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
@@ -239,25 +237,18 @@ impl CodexAuth {
     pub async fn from_auth_storage(
         codex_home: &Path,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
-        agent_identity_authapi_base_url: Option<&str>,
     ) -> std::io::Result<Option<Self>> {
         load_auth(
             codex_home,
             /*enable_codex_api_key_env*/ false,
             auth_credentials_store_mode,
-            agent_identity_authapi_base_url,
         )
         .await
     }
 
-    pub async fn from_agent_identity_jwt(
-        jwt: &str,
-        agent_identity_authapi_base_url: Option<&str>,
-    ) -> std::io::Result<Self> {
+    pub async fn from_agent_identity_jwt(jwt: &str) -> std::io::Result<Self> {
         let record = AgentIdentityAuthRecord::from_agent_identity_jwt(jwt)?;
-        Ok(Self::AgentIdentity(
-            AgentIdentityAuth::load(record, agent_identity_authapi_base_url).await?,
-        ))
+        Ok(Self::AgentIdentity(AgentIdentityAuth::load(record).await?))
     }
 
     pub fn auth_mode(&self) -> AuthMode {
@@ -521,7 +512,6 @@ pub async fn logout_with_revoke(
         /*enable_codex_api_key_env*/ false,
         auth_credentials_store_mode,
         /*chatgpt_base_url*/ None,
-        /*agent_identity_authapi_base_url*/ None,
     )
     .await
     .logout_with_revoke()
@@ -609,7 +599,6 @@ pub struct AuthConfig {
     pub auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub forced_chatgpt_workspace_id: Option<String>,
-    pub agent_identity_authapi_base_url: Option<String>,
 }
 
 pub async fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<()> {
@@ -617,7 +606,6 @@ pub async fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<
         &config.codex_home,
         /*enable_codex_api_key_env*/ true,
         config.auth_credentials_store_mode,
-        config.agent_identity_authapi_base_url.as_deref(),
     )
     .await?
     else {
@@ -723,7 +711,6 @@ async fn load_auth(
     codex_home: &Path,
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-    agent_identity_authapi_base_url: Option<&str>,
 ) -> std::io::Result<Option<CodexAuth>> {
     // API key via env var takes precedence over any other auth method.
     if enable_codex_api_key_env && let Some(api_key) = read_codex_api_key_from_env() {
@@ -741,7 +728,6 @@ async fn load_auth(
             codex_home,
             auth_dot_json,
             AuthCredentialsStoreMode::Ephemeral,
-            agent_identity_authapi_base_url,
         )
         .await?;
         return Ok(Some(auth));
@@ -753,12 +739,9 @@ async fn load_auth(
     }
 
     if let Some(agent_identity) = read_codex_agent_identity_from_env() {
-        return CodexAuth::from_agent_identity_jwt(
-            &agent_identity,
-            agent_identity_authapi_base_url,
-        )
-        .await
-        .map(Some);
+        return CodexAuth::from_agent_identity_jwt(&agent_identity)
+            .await
+            .map(Some);
     }
 
     // Fall back to the configured persistent store (file/keyring/auto) for managed auth.
@@ -768,13 +751,9 @@ async fn load_auth(
         None => return Ok(None),
     };
 
-    let auth = CodexAuth::from_auth_dot_json(
-        codex_home,
-        auth_dot_json,
-        auth_credentials_store_mode,
-        agent_identity_authapi_base_url,
-    )
-    .await?;
+    let auth =
+        CodexAuth::from_auth_dot_json(codex_home, auth_dot_json, auth_credentials_store_mode)
+            .await?;
     Ok(Some(auth))
 }
 
@@ -1250,7 +1229,6 @@ pub struct AuthManager {
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     forced_chatgpt_workspace_id: RwLock<Option<String>>,
     chatgpt_base_url: Option<String>,
-    agent_identity_authapi_base_url: Option<String>,
     refresh_lock: Semaphore,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
 }
@@ -1273,11 +1251,6 @@ pub trait AuthManagerConfig {
 
     /// Returns the ChatGPT backend base URL used for first-party backend authorization.
     fn chatgpt_base_url(&self) -> String;
-
-    /// Returns the AgentIdentity AuthAPI base URL used for task registration, if configured.
-    fn agent_identity_authapi_base_url(&self) -> Option<String> {
-        None
-    }
 }
 
 impl Debug for AuthManager {
@@ -1295,10 +1268,6 @@ impl Debug for AuthManager {
                 &self.forced_chatgpt_workspace_id,
             )
             .field("chatgpt_base_url", &self.chatgpt_base_url)
-            .field(
-                "agent_identity_authapi_base_url",
-                &self.agent_identity_authapi_base_url,
-            )
             .field("has_external_auth", &self.has_external_auth())
             .finish_non_exhaustive()
     }
@@ -1314,13 +1283,11 @@ impl AuthManager {
         enable_codex_api_key_env: bool,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<String>,
-        agent_identity_authapi_base_url: Option<String>,
     ) -> Self {
         let managed_auth = load_auth(
             &codex_home,
             enable_codex_api_key_env,
             auth_credentials_store_mode,
-            agent_identity_authapi_base_url.as_deref(),
         )
         .await
         .ok()
@@ -1335,7 +1302,6 @@ impl AuthManager {
             auth_credentials_store_mode,
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url,
-            agent_identity_authapi_base_url,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
         }
@@ -1355,7 +1321,6 @@ impl AuthManager {
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url: None,
-            agent_identity_authapi_base_url: None,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
         })
@@ -1374,7 +1339,6 @@ impl AuthManager {
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url: None,
-            agent_identity_authapi_base_url: None,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
         })
@@ -1391,7 +1355,6 @@ impl AuthManager {
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url: None,
-            agent_identity_authapi_base_url: None,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(Some(
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
@@ -1528,7 +1491,6 @@ impl AuthManager {
             &self.codex_home,
             self.enable_codex_api_key_env,
             self.auth_credentials_store_mode,
-            self.agent_identity_authapi_base_url.as_deref(),
         )
         .await
         .ok()
@@ -1599,7 +1561,6 @@ impl AuthManager {
         enable_codex_api_key_env: bool,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<String>,
-        agent_identity_authapi_base_url: Option<String>,
     ) -> Arc<Self> {
         Arc::new(
             Self::new(
@@ -1607,7 +1568,6 @@ impl AuthManager {
                 enable_codex_api_key_env,
                 auth_credentials_store_mode,
                 chatgpt_base_url,
-                agent_identity_authapi_base_url,
             )
             .await,
         )
@@ -1623,7 +1583,6 @@ impl AuthManager {
             enable_codex_api_key_env,
             config.cli_auth_credentials_store_mode(),
             Some(config.chatgpt_base_url()),
-            config.agent_identity_authapi_base_url(),
         )
         .await;
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id());
