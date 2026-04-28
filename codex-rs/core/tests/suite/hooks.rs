@@ -732,7 +732,7 @@ fn request_message_input_texts(body: &[u8], role: &str) -> Vec<String> {
         .collect()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -846,7 +846,7 @@ async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -891,7 +891,7 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn resumed_thread_keeps_stop_continuation_prompt_in_history() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -967,7 +967,7 @@ async fn resumed_thread_keeps_stop_continuation_prompt_in_history() -> Result<()
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn multiple_blocking_stop_hooks_persist_multiple_hook_prompt_fragments() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1033,7 +1033,7 @@ async fn multiple_blocking_stop_hooks_persist_multiple_hook_prompt_fragments() -
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1116,7 +1116,7 @@ async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() 
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1281,7 +1281,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn permission_request_hook_allows_shell_command_without_user_approval() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1360,7 +1360,7 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1442,7 +1442,7 @@ async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1523,7 +1523,7 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn permission_request_hook_allows_network_approval_without_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1680,7 +1680,7 @@ allow_local_binding = true
 }
 
 #[cfg(not(target_os = "linux"))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1750,7 +1750,7 @@ async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Re
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1852,7 +1852,7 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn plugin_pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1996,7 +1996,7 @@ print(json.dumps({{
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn pre_tool_use_blocks_shell_when_defined_in_config_toml() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2079,7 +2079,7 @@ async fn pre_tool_use_blocks_shell_when_defined_in_config_toml() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn pre_tool_use_merges_hooks_json_and_config_toml() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2180,7 +2180,7 @@ async fn pre_tool_use_merges_hooks_json_and_config_toml() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2274,7 +2274,7 @@ async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn pre_tool_use_blocks_exec_command_before_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2361,7 +2361,7 @@ async fn pre_tool_use_blocks_exec_command_before_execution() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn pre_tool_use_blocks_apply_patch_before_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2438,7 +2438,7 @@ async fn pre_tool_use_blocks_apply_patch_before_execution() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn pre_tool_use_blocks_apply_patch_with_write_alias() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2513,7 +2513,7 @@ async fn pre_tool_use_blocks_apply_patch_with_write_alias() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn pre_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2585,7 +2585,7 @@ async fn pre_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_records_additional_context_for_shell_command() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2682,7 +2682,7 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_block_decision_replaces_shell_command_output_with_reason() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2750,7 +2750,7 @@ async fn post_tool_use_block_decision_replaces_shell_command_output_with_reason(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_continue_false_replaces_shell_command_output_with_stop_reason() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
@@ -2819,7 +2819,7 @@ async fn post_tool_use_continue_false_replaces_shell_command_output_with_stop_re
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2893,7 +2893,7 @@ async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_exit_two_replaces_one_shot_exec_command_output_with_feedback() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
@@ -2968,7 +2968,7 @@ async fn post_tool_use_exit_two_replaces_one_shot_exec_command_output_with_feedb
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_windows!(Ok(()));
@@ -3074,7 +3074,7 @@ async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> R
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -3165,7 +3165,7 @@ async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -3238,7 +3238,7 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
