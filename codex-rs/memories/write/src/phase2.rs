@@ -244,6 +244,9 @@ mod job {
             codex_state::Phase2JobClaimOutcome::SkippedRetryUnavailable => {
                 return Err("skipped_retry_unavailable");
             }
+            codex_state::Phase2JobClaimOutcome::SkippedCooldown => {
+                return Err("skipped_cooldown");
+            }
             codex_state::Phase2JobClaimOutcome::SkippedRunning => return Err("skipped_running"),
         };
 
