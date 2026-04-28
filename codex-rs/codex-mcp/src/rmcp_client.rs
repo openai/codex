@@ -397,109 +397,6 @@ fn is_untrusted_connector_meta_key(key: &str) -> bool {
     UNTRUSTED_CONNECTOR_META_KEYS.contains(&key)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rmcp::model::JsonObject;
-    use rmcp::model::Meta;
-
-    fn tool_with_connector_meta() -> RmcpTool {
-        RmcpTool {
-            name: "capture_file_upload".to_string().into(),
-            title: None,
-            description: Some("test tool".to_string().into()),
-            input_schema: Arc::new(JsonObject::default()),
-            output_schema: None,
-            annotations: None,
-            execution: None,
-            icons: None,
-            meta: Some(Meta(
-                serde_json::json!({
-                    "connector_id": "connector_gmail",
-                    "connector_name": "Gmail",
-                    "connector_display_name": "Gmail",
-                    "connector_description": "Mail connector",
-                    "connectorDescription": "Mail connector",
-                    "connectorFutureField": "future connector metadata",
-                    "CONNECTOR_UPPERCASE": "uppercase connector metadata",
-                    "openai/fileParams": ["file"],
-                    "custom": "kept"
-                })
-                .as_object()
-                .expect("object")
-                .clone(),
-            )),
-        }
-    }
-
-    #[test]
-    fn custom_mcp_connector_metadata_is_stripped() {
-        let mut tool = tool_with_connector_meta();
-
-        let (connector_id, connector_name, connector_description) =
-            sanitize_tool_connector_metadata(
-                "minimaltest",
-                &mut tool,
-                Some("connector_gmail".to_string()),
-                Some("Gmail".to_string()),
-                Some("Mail connector".to_string()),
-            );
-
-        assert_eq!(connector_id, None);
-        assert_eq!(connector_name, None);
-        assert_eq!(connector_description, None);
-
-        let meta = tool.meta.as_ref().expect("meta");
-        for key in [
-            "connector_id",
-            "connector_name",
-            "connector_display_name",
-            "connector_description",
-            "connectorDescription",
-        ] {
-            assert!(!meta.0.contains_key(key), "{key} should be stripped");
-        }
-        assert!(meta.0.contains_key("connectorFutureField"));
-        assert!(meta.0.contains_key("CONNECTOR_UPPERCASE"));
-        assert!(meta.0.contains_key("openai/fileParams"));
-        assert_eq!(
-            meta.0.get("custom").and_then(|value| value.as_str()),
-            Some("kept")
-        );
-    }
-
-    #[test]
-    fn codex_apps_connector_metadata_is_preserved() {
-        let mut tool = tool_with_connector_meta();
-
-        let (connector_id, connector_name, connector_description) =
-            sanitize_tool_connector_metadata(
-                CODEX_APPS_MCP_SERVER_NAME,
-                &mut tool,
-                Some("connector_gmail".to_string()),
-                Some("Gmail".to_string()),
-                Some("Mail connector".to_string()),
-            );
-
-        assert_eq!(connector_id.as_deref(), Some("connector_gmail"));
-        assert_eq!(connector_name.as_deref(), Some("Gmail"));
-        assert_eq!(connector_description.as_deref(), Some("Mail connector"));
-
-        let meta = tool.meta.as_ref().expect("meta");
-        for key in [
-            "connector_id",
-            "connector_name",
-            "connector_display_name",
-            "connector_description",
-            "connectorDescription",
-            "connectorFutureField",
-            "CONNECTOR_UPPERCASE",
-        ] {
-            assert!(meta.0.contains_key(key), "{key} should be preserved");
-        }
-    }
-}
-
 fn resolve_bearer_token(
     server_name: &str,
     bearer_token_env_var: Option<&str>,
@@ -727,6 +624,109 @@ async fn make_rmcp_client(
             )
             .await
             .map_err(StartupOutcomeError::from)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmcp::model::JsonObject;
+    use rmcp::model::Meta;
+
+    fn tool_with_connector_meta() -> RmcpTool {
+        RmcpTool {
+            name: "capture_file_upload".to_string().into(),
+            title: None,
+            description: Some("test tool".to_string().into()),
+            input_schema: Arc::new(JsonObject::default()),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: Some(Meta(
+                serde_json::json!({
+                    "connector_id": "connector_gmail",
+                    "connector_name": "Gmail",
+                    "connector_display_name": "Gmail",
+                    "connector_description": "Mail connector",
+                    "connectorDescription": "Mail connector",
+                    "connectorFutureField": "future connector metadata",
+                    "CONNECTOR_UPPERCASE": "uppercase connector metadata",
+                    "openai/fileParams": ["file"],
+                    "custom": "kept"
+                })
+                .as_object()
+                .expect("object")
+                .clone(),
+            )),
+        }
+    }
+
+    #[test]
+    fn custom_mcp_connector_metadata_is_stripped() {
+        let mut tool = tool_with_connector_meta();
+
+        let (connector_id, connector_name, connector_description) =
+            sanitize_tool_connector_metadata(
+                "minimaltest",
+                &mut tool,
+                Some("connector_gmail".to_string()),
+                Some("Gmail".to_string()),
+                Some("Mail connector".to_string()),
+            );
+
+        assert_eq!(connector_id, None);
+        assert_eq!(connector_name, None);
+        assert_eq!(connector_description, None);
+
+        let meta = tool.meta.as_ref().expect("meta");
+        for key in [
+            "connector_id",
+            "connector_name",
+            "connector_display_name",
+            "connector_description",
+            "connectorDescription",
+        ] {
+            assert!(!meta.0.contains_key(key), "{key} should be stripped");
+        }
+        assert!(meta.0.contains_key("connectorFutureField"));
+        assert!(meta.0.contains_key("CONNECTOR_UPPERCASE"));
+        assert!(meta.0.contains_key("openai/fileParams"));
+        assert_eq!(
+            meta.0.get("custom").and_then(|value| value.as_str()),
+            Some("kept")
+        );
+    }
+
+    #[test]
+    fn codex_apps_connector_metadata_is_preserved() {
+        let mut tool = tool_with_connector_meta();
+
+        let (connector_id, connector_name, connector_description) =
+            sanitize_tool_connector_metadata(
+                CODEX_APPS_MCP_SERVER_NAME,
+                &mut tool,
+                Some("connector_gmail".to_string()),
+                Some("Gmail".to_string()),
+                Some("Mail connector".to_string()),
+            );
+
+        assert_eq!(connector_id.as_deref(), Some("connector_gmail"));
+        assert_eq!(connector_name.as_deref(), Some("Gmail"));
+        assert_eq!(connector_description.as_deref(), Some("Mail connector"));
+
+        let meta = tool.meta.as_ref().expect("meta");
+        for key in [
+            "connector_id",
+            "connector_name",
+            "connector_display_name",
+            "connector_description",
+            "connectorDescription",
+            "connectorFutureField",
+            "CONNECTOR_UPPERCASE",
+        ] {
+            assert!(meta.0.contains_key(key), "{key} should be preserved");
         }
     }
 }
