@@ -119,9 +119,13 @@ fn login_with_agent_identity_rejects_invalid_jwt() {
 #[tokio::test]
 async fn missing_auth_json_returns_none() {
     let dir = tempdir().unwrap();
-    let auth = CodexAuth::from_auth_storage(dir.path(), AuthCredentialsStoreMode::File)
-        .await
-        .expect("call should succeed");
+    let auth = CodexAuth::from_auth_storage(
+        dir.path(),
+        AuthCredentialsStoreMode::File,
+        /*agent_identity_authapi_base_url*/ None,
+    )
+    .await
+    .expect("call should succeed");
     assert_eq!(auth, None);
 }
 
@@ -143,6 +147,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*agent_identity_authapi_base_url*/ None,
     )
     .await
     .unwrap()
@@ -197,6 +202,7 @@ async fn loads_api_key_from_auth_json() {
         dir.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*agent_identity_authapi_base_url*/ None,
     )
     .await
     .unwrap()
@@ -233,6 +239,7 @@ async fn unauthorized_recovery_reports_mode_and_step_names() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        /*agent_identity_authapi_base_url*/ None,
     )
     .await;
     let managed = UnauthorizedRecovery {
@@ -271,6 +278,7 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*agent_identity_authapi_base_url*/ None,
     )
     .await
     .expect("load auth")
@@ -288,6 +296,7 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
         codex_home.path(),
         updated_auth_dot_json,
         AuthCredentialsStoreMode::File,
+        /*agent_identity_authapi_base_url*/ None,
     )
     .await
     .expect("updated auth should parse");
@@ -591,6 +600,7 @@ async fn build_config(
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         forced_login_method,
         forced_chatgpt_workspace_id,
+        agent_identity_authapi_base_url: None,
     }
 }
 
@@ -638,6 +648,7 @@ async fn load_auth_keeps_codex_api_key_env_precedence() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ true,
         AuthCredentialsStoreMode::File,
+        /*agent_identity_authapi_base_url*/ None,
     )
     .await
     .expect("env auth should load")
@@ -825,6 +836,7 @@ async fn plan_type_maps_known_plan() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*agent_identity_authapi_base_url*/ None,
     )
     .await
     .expect("load auth")
@@ -850,6 +862,7 @@ async fn plan_type_maps_self_serve_business_usage_based_plan() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*agent_identity_authapi_base_url*/ None,
     )
     .await
     .expect("load auth")
@@ -878,6 +891,7 @@ async fn plan_type_maps_enterprise_cbp_usage_based_plan() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*agent_identity_authapi_base_url*/ None,
     )
     .await
     .expect("load auth")
@@ -906,6 +920,7 @@ async fn plan_type_maps_unknown_to_unknown() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*agent_identity_authapi_base_url*/ None,
     )
     .await
     .expect("load auth")
@@ -931,6 +946,7 @@ async fn missing_plan_type_maps_to_unknown() {
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*agent_identity_authapi_base_url*/ None,
     )
     .await
     .expect("load auth")

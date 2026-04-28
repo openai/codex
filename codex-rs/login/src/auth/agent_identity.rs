@@ -6,7 +6,7 @@ use crate::default_client::build_reqwest_client;
 
 use super::storage::AgentIdentityAuthRecord;
 
-const AGENT_IDENTITY_AUTHAPI_BASE_URL: &str = "https://auth.openai.com/api/accounts";
+const PROD_AGENT_IDENTITY_AUTHAPI_BASE_URL: &str = "https://auth.openai.com/api/accounts";
 
 #[derive(Clone, Debug)]
 pub struct AgentIdentityAuth {
@@ -15,10 +15,15 @@ pub struct AgentIdentityAuth {
 }
 
 impl AgentIdentityAuth {
-    pub async fn load(record: AgentIdentityAuthRecord) -> std::io::Result<Self> {
+    pub async fn load(
+        record: AgentIdentityAuthRecord,
+        configured_agent_identity_authapi_base_url: Option<&str>,
+    ) -> std::io::Result<Self> {
+        let agent_identity_authapi_base_url =
+            agent_identity_authapi_base_url(configured_agent_identity_authapi_base_url);
         let process_task_id = register_agent_task(
             &build_reqwest_client(),
-            AGENT_IDENTITY_AUTHAPI_BASE_URL,
+            &agent_identity_authapi_base_url,
             key(&record),
         )
         .await
@@ -58,9 +63,42 @@ impl AgentIdentityAuth {
     }
 }
 
+fn agent_identity_authapi_base_url(
+    configured_agent_identity_authapi_base_url: Option<&str>,
+) -> String {
+    if let Some(base_url) = configured_agent_identity_authapi_base_url {
+        return base_url.trim_end_matches('/').to_string();
+    }
+
+    PROD_AGENT_IDENTITY_AUTHAPI_BASE_URL.to_string()
+}
+
 fn key(record: &AgentIdentityAuthRecord) -> AgentIdentityKey<'_> {
     AgentIdentityKey {
         agent_runtime_id: &record.agent_runtime_id,
         private_key_pkcs8_base64: &record.agent_private_key,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_identity_authapi_base_url_prefers_configured_value() {
+        assert_eq!(
+            agent_identity_authapi_base_url(Some("https://authapi.example.test/api/accounts/")),
+            "https://authapi.example.test/api/accounts"
+        );
+    }
+
+    #[test]
+    fn agent_identity_authapi_base_url_uses_prod_authapi_by_default() {
+        assert_eq!(
+            agent_identity_authapi_base_url(
+                /*configured_agent_identity_authapi_base_url*/ None,
+            ),
+            PROD_AGENT_IDENTITY_AUTHAPI_BASE_URL
+        );
     }
 }

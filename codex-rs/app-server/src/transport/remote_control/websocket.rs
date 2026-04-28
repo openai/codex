@@ -1090,6 +1090,7 @@ mod tests {
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
+            /*agent_identity_authapi_base_url*/ None,
         )
         .await;
         let mut auth_recovery = auth_manager.unauthorized_recovery();
@@ -1173,6 +1174,7 @@ mod tests {
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
+            /*agent_identity_authapi_base_url*/ None,
         )
         .await;
         let mut auth_recovery = auth_manager.unauthorized_recovery();

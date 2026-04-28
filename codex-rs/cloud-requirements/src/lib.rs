@@ -738,6 +738,7 @@ pub async fn cloud_requirements_loader_for_storage(
         enable_codex_api_key_env,
         credentials_store_mode,
         Some(chatgpt_base_url.clone()),
+        /*agent_identity_authapi_base_url*/ None,
     )
     .await;
     cloud_requirements_loader(auth_manager, chatgpt_base_url, codex_home)
@@ -868,6 +869,7 @@ mod tests {
                 /*enable_codex_api_key_env*/ false,
                 AuthCredentialsStoreMode::File,
                 /*chatgpt_base_url*/ None,
+                /*agent_identity_authapi_base_url*/ None,
             )
             .await,
         )
@@ -896,6 +898,7 @@ mod tests {
                 /*enable_codex_api_key_env*/ false,
                 AuthCredentialsStoreMode::File,
                 /*chatgpt_base_url*/ None,
+                /*agent_identity_authapi_base_url*/ None,
             )
             .await,
         )
@@ -1008,6 +1011,7 @@ mod tests {
                     /*enable_codex_api_key_env*/ false,
                     AuthCredentialsStoreMode::File,
                     /*chatgpt_base_url*/ None,
+                    /*agent_identity_authapi_base_url*/ None,
                 )
                 .await,
             ),
@@ -1422,6 +1426,7 @@ enabled = false
                 /*enable_codex_api_key_env*/ false,
                 AuthCredentialsStoreMode::File,
                 /*chatgpt_base_url*/ None,
+                /*agent_identity_authapi_base_url*/ None,
             )
             .await,
         );
@@ -1499,6 +1504,7 @@ enabled = false
                 /*enable_codex_api_key_env*/ false,
                 AuthCredentialsStoreMode::File,
                 /*chatgpt_base_url*/ None,
+                /*agent_identity_authapi_base_url*/ None,
             )
             .await,
         );
@@ -1635,6 +1641,7 @@ enabled = false
                 /*enable_codex_api_key_env*/ false,
                 AuthCredentialsStoreMode::File,
                 /*chatgpt_base_url*/ None,
+                /*agent_identity_authapi_base_url*/ None,
             )
             .await,
         );

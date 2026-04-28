@@ -39,6 +39,7 @@ pub struct ConfigProfile {
     pub model_catalog_json: Option<AbsolutePathBuf>,
     pub personality: Option<Personality>,
     pub chatgpt_base_url: Option<String>,
+    pub agent_identity_authapi_base_url: Option<String>,
     /// Optional path to a file containing model instructions.
     pub model_instructions_file: Option<AbsolutePathBuf>,
     /// Deprecated: ignored.
