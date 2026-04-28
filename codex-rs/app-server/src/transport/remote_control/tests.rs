@@ -167,7 +167,12 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
     )
     .await;
     let mut websocket = accept_remote_control_connection(&listener).await;
-    expect_remote_control_status(&mut status_rx, None, Some("env_test")).await;
+    expect_remote_control_status(
+        &mut status_rx,
+        /*expected_state*/ None,
+        Some("env_test"),
+    )
+    .await;
 
     let client_id = ClientId("client-1".to_string());
     send_client_event(
@@ -446,7 +451,12 @@ async fn remote_control_transport_reconnects_after_disconnect() {
     drop(first_websocket);
 
     let mut second_websocket = accept_remote_control_connection(&listener).await;
-    expect_remote_control_status(&mut status_rx, None, Some("env_test")).await;
+    expect_remote_control_status(
+        &mut status_rx,
+        /*expected_state*/ None,
+        Some("env_test"),
+    )
+    .await;
     send_client_event(
         &mut second_websocket,
         ClientEnvelope {
@@ -679,7 +689,12 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
     )
     .await;
     let mut first_websocket = accept_remote_control_connection(&listener).await;
-    expect_remote_control_status(&mut status_rx, None, Some("env_test")).await;
+    expect_remote_control_status(
+        &mut status_rx,
+        /*expected_state*/ None,
+        Some("env_test"),
+    )
+    .await;
 
     let client_id = ClientId("client-1".to_string());
     let initialize_message = JSONRPCMessage::Request(codex_app_server_protocol::JSONRPCRequest {
@@ -873,7 +888,12 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
 
     let (handshake_request, mut websocket) =
         accept_remote_control_backend_connection(&listener).await;
-    expect_remote_control_status(&mut status_rx, None, Some("env_test")).await;
+    expect_remote_control_status(
+        &mut status_rx,
+        /*expected_state*/ None,
+        Some("env_test"),
+    )
+    .await;
     assert_eq!(
         handshake_request.path,
         "/backend-api/wham/remote/control/server"
@@ -1280,9 +1300,19 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
         websocket_request.headers.get("x-codex-server-id"),
         Some(&stale_enrollment.server_id)
     );
-    expect_remote_control_status(&mut status_rx, None, Some("env_stale")).await;
+    expect_remote_control_status(
+        &mut status_rx,
+        /*expected_state*/ None,
+        Some("env_stale"),
+    )
+    .await;
     respond_with_status(websocket_request.stream, "404 Not Found", "").await;
-    expect_remote_control_status(&mut status_rx, None, /*expected_environment_id*/ None).await;
+    expect_remote_control_status(
+        &mut status_rx,
+        /*expected_state*/ None,
+        /*expected_environment_id*/ None,
+    )
+    .await;
 
     let enroll_request = accept_http_request(&listener).await;
     assert_eq!(
@@ -1299,7 +1329,12 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     .await;
 
     let (handshake_request, _websocket) = accept_remote_control_backend_connection(&listener).await;
-    expect_remote_control_status(&mut status_rx, None, Some("env_refreshed")).await;
+    expect_remote_control_status(
+        &mut status_rx,
+        /*expected_state*/ None,
+        Some("env_refreshed"),
+    )
+    .await;
     assert_eq!(
         handshake_request.headers.get("x-codex-server-id"),
         Some(&refreshed_enrollment.server_id)
