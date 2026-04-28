@@ -7,8 +7,8 @@
 //!
 //! 1. Apply deterministic precedence (`context -> global fallback -> defaults`).
 //! 2. Parse canonical key spec strings into `KeyBinding` values.
-//! 3. Enforce per-context uniqueness so one key cannot trigger multiple actions
-//!    in the same active scope.
+//! 3. Enforce uniqueness across runtime surfaces so one key cannot trigger
+//!    multiple actions on the same focused input path.
 //! 4. Return actionable, user-facing error messages with config paths and next
 //!    steps.
 //!
@@ -641,6 +641,84 @@ impl RuntimeKeymap {
             ],
         )?;
 
+        // While the composer is focused, these main-surface handlers always
+        // consume matching keys before the event reaches the textarea editor.
+        validate_no_shadow_with_allowed_overlaps(
+            "main",
+            [
+                ("open_transcript", self.app.open_transcript.as_slice()),
+                (
+                    "open_external_editor",
+                    self.app.open_external_editor.as_slice(),
+                ),
+                ("copy", self.app.copy.as_slice()),
+                ("clear_terminal", self.app.clear_terminal.as_slice()),
+                (
+                    "chat.decrease_reasoning_effort",
+                    self.chat.decrease_reasoning_effort.as_slice(),
+                ),
+                (
+                    "chat.increase_reasoning_effort",
+                    self.chat.increase_reasoning_effort.as_slice(),
+                ),
+                ("composer.submit", self.composer.submit.as_slice()),
+                (
+                    "composer.history_search_previous",
+                    self.composer.history_search_previous.as_slice(),
+                ),
+            ],
+            [
+                (
+                    "editor.insert_newline",
+                    self.editor.insert_newline.as_slice(),
+                ),
+                ("editor.move_left", self.editor.move_left.as_slice()),
+                ("editor.move_right", self.editor.move_right.as_slice()),
+                ("editor.move_up", self.editor.move_up.as_slice()),
+                ("editor.move_down", self.editor.move_down.as_slice()),
+                (
+                    "editor.move_word_left",
+                    self.editor.move_word_left.as_slice(),
+                ),
+                (
+                    "editor.move_word_right",
+                    self.editor.move_word_right.as_slice(),
+                ),
+                (
+                    "editor.move_line_start",
+                    self.editor.move_line_start.as_slice(),
+                ),
+                ("editor.move_line_end", self.editor.move_line_end.as_slice()),
+                (
+                    "editor.delete_backward",
+                    self.editor.delete_backward.as_slice(),
+                ),
+                (
+                    "editor.delete_forward",
+                    self.editor.delete_forward.as_slice(),
+                ),
+                (
+                    "editor.delete_backward_word",
+                    self.editor.delete_backward_word.as_slice(),
+                ),
+                (
+                    "editor.delete_forward_word",
+                    self.editor.delete_forward_word.as_slice(),
+                ),
+                (
+                    "editor.kill_line_start",
+                    self.editor.kill_line_start.as_slice(),
+                ),
+                ("editor.kill_line_end", self.editor.kill_line_end.as_slice()),
+                ("editor.yank", self.editor.yank.as_slice()),
+            ],
+            [(
+                "composer.submit",
+                "editor.insert_newline",
+                key_hint::plain(KeyCode::Enter),
+            )],
+        )?;
+
         validate_unique(
             "editor",
             [
@@ -810,6 +888,15 @@ fn validate_no_shadow<const N: usize, const M: usize>(
     primary: [(&'static str, &[KeyBinding]); N],
     shadowed: [(&'static str, &[KeyBinding]); M],
 ) -> Result<(), String> {
+    validate_no_shadow_with_allowed_overlaps(context, primary, shadowed, [])
+}
+
+fn validate_no_shadow_with_allowed_overlaps<const N: usize, const M: usize, const A: usize>(
+    context: &str,
+    primary: [(&'static str, &[KeyBinding]); N],
+    shadowed: [(&'static str, &[KeyBinding]); M],
+    allowed_overlaps: [(&'static str, &'static str, KeyBinding); A],
+) -> Result<(), String> {
     let mut seen: HashMap<(KeyCode, KeyModifiers), &'static str> = HashMap::new();
     for (action, bindings) in primary {
         for binding in bindings {
@@ -820,6 +907,15 @@ fn validate_no_shadow<const N: usize, const M: usize>(
         for binding in bindings {
             let key = binding.parts();
             if let Some(previous) = seen.get(&key) {
+                if allowed_overlaps.iter().any(
+                    |(allowed_primary, allowed_shadowed, allowed_binding)| {
+                        *allowed_primary == *previous
+                            && *allowed_shadowed == action
+                            && allowed_binding.parts() == key
+                    },
+                ) {
+                    continue;
+                }
                 return Err(format!(
                     "Ambiguous `tui.keymap.{context}` bindings: `{previous}` shadows `{action}` with the same key. \
 Set unique keys in `~/.codex/config.toml` and retry.\n\
@@ -1076,6 +1172,28 @@ mod tests {
     }
 
     #[test]
+    fn rejects_shadowing_editor_binding_in_main_scope() {
+        let mut keymap = TuiKeymap::default();
+        keymap.composer.submit = Some(one("ctrl-j"));
+        keymap.editor.insert_newline = Some(one("ctrl-j"));
+
+        let err = RuntimeKeymap::from_config(&keymap).expect_err("expected shadowing conflict");
+        assert!(err.contains("composer.submit"));
+        assert!(err.contains("editor.insert_newline"));
+    }
+
+    #[test]
+    fn rejects_shadowing_editor_binding_from_outer_main_handler() {
+        let mut keymap = TuiKeymap::default();
+        keymap.global.copy = Some(one("ctrl-y"));
+        keymap.editor.yank = Some(one("ctrl-y"));
+
+        let err = RuntimeKeymap::from_config(&keymap).expect_err("expected shadowing conflict");
+        assert!(err.contains("copy"));
+        assert!(err.contains("editor.yank"));
+    }
+
+    #[test]
     fn rejects_shadowing_approval_binding_in_app_scope() {
         let mut keymap = TuiKeymap::default();
         keymap.global.open_transcript = Some(one("y"));
@@ -1108,7 +1226,7 @@ mod tests {
 
         keymap.composer.submit = Some(KeybindingsSpec::Many(vec![
             KeybindingSpec("ctrl-enter".to_string()),
-            KeybindingSpec("shift-enter".to_string()),
+            KeybindingSpec("alt-enter".to_string()),
         ]));
 
         let runtime = RuntimeKeymap::from_config(&keymap).expect("valid multi-binding");
@@ -1121,7 +1239,7 @@ mod tests {
         keymap.composer.submit = Some(KeybindingsSpec::Many(vec![
             KeybindingSpec("ctrl-enter".to_string()),
             KeybindingSpec("ctrl-enter".to_string()),
-            KeybindingSpec("shift-enter".to_string()),
+            KeybindingSpec("alt-enter".to_string()),
         ]));
 
         let runtime = RuntimeKeymap::from_config(&keymap).expect("valid multi-binding");
@@ -1129,7 +1247,7 @@ mod tests {
             runtime.composer.submit,
             vec![
                 key_hint::ctrl(KeyCode::Enter),
-                key_hint::shift(KeyCode::Enter)
+                key_hint::alt(KeyCode::Enter)
             ]
         );
     }
