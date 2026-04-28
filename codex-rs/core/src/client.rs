@@ -1778,6 +1778,10 @@ where
                     }
                 }
                 Err(err) => {
+                    let response_debug_context =
+                        extract_response_debug_context_from_api_error(&err);
+                    let upstream_request_id =
+                        upstream_request_id.or(response_debug_context.request_id.as_deref());
                     let mapped = map_api_error(err);
                     inference_trace_attempt.record_failed(
                         &mapped,
