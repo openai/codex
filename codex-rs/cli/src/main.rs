@@ -1954,6 +1954,20 @@ mod tests {
     }
 
     #[test]
+    fn exec_full_auto_reports_migration_path() {
+        let cli = MultitoolCli::try_parse_from(["codex", "exec", "--full-auto", "summarize"])
+            .expect("exec should accept removed flag long enough to report a migration path");
+        let Some(Subcommand::Exec(exec)) = cli.subcommand else {
+            panic!("expected exec subcommand");
+        };
+
+        assert_eq!(
+            exec.validate_removed_flags(),
+            Err("`--full-auto` has been removed; use `--sandbox workspace-write` instead.")
+        );
+    }
+
+    #[test]
     fn sandbox_full_auto_no_longer_parses() {
         let result =
             MultitoolCli::try_parse_from(["codex", "sandbox", "linux", "--full-auto", "--"]);

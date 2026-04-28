@@ -35,6 +35,15 @@ pub struct Cli {
     #[arg(long = "ignore-rules", global = true, default_value_t = false)]
     pub ignore_rules: bool,
 
+    /// Legacy compatibility trap for the removed `--full-auto` flag.
+    #[arg(
+        long = "full-auto",
+        hide = true,
+        global = true,
+        default_value_t = false
+    )]
+    pub removed_full_auto: bool,
+
     /// Path to a JSON Schema file describing the model's final response shape.
     #[arg(long = "output-schema", value_name = "FILE")]
     pub output_schema: Option<PathBuf>,
@@ -82,6 +91,16 @@ impl std::ops::Deref for Cli {
 impl std::ops::DerefMut for Cli {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.shared.0
+    }
+}
+
+impl Cli {
+    pub fn validate_removed_flags(&self) -> Result<(), &'static str> {
+        if self.removed_full_auto {
+            return Err("`--full-auto` has been removed; use `--sandbox workspace-write` instead.");
+        }
+
+        Ok(())
     }
 }
 

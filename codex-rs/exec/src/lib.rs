@@ -216,6 +216,10 @@ fn exec_root_span() -> tracing::Span {
 }
 
 pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
+    if let Err(message) = cli.validate_removed_flags() {
+        anyhow::bail!(message);
+    }
+
     if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
     }
@@ -227,6 +231,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         ephemeral,
         ignore_user_config,
         ignore_rules,
+        removed_full_auto: _,
         color,
         last_message_file,
         json: json_mode,
