@@ -6,6 +6,7 @@ use crate::ShellToolOptions;
 use crate::SpawnAgentToolOptions;
 use crate::TOOL_SEARCH_DEFAULT_LIMIT;
 use crate::TOOL_SEARCH_TOOL_NAME;
+use crate::TOOL_SUGGEST_NAMESPACE_NAME;
 use crate::TOOL_SUGGEST_TOOL_NAME;
 use crate::ToolHandlerKind;
 use crate::ToolName;
@@ -312,7 +313,10 @@ pub fn build_tool_registry_plan(
             /*supports_parallel_tool_calls*/ true,
             /*code_mode_enabled*/ false,
         );
-        plan.register_handler(TOOL_SUGGEST_TOOL_NAME, ToolHandlerKind::ToolSuggest);
+        plan.register_handler(
+            ToolName::namespaced(TOOL_SUGGEST_NAMESPACE_NAME, TOOL_SUGGEST_TOOL_NAME),
+            ToolHandlerKind::ToolSuggest,
+        );
     }
 
     if config.has_environment

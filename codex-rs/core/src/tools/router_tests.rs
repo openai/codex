@@ -1,11 +1,17 @@
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::session::tests::make_session_and_context;
 use crate::tools::context::ToolPayload;
+use crate::tools::registry::ToolRegistry;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
+use codex_tools::ConfiguredToolSpec;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
@@ -137,6 +143,49 @@ async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> 
     assert!(!router.tool_supports_parallel(&different_server_call));
 
     Ok(())
+}
+
+#[test]
+fn tool_suggest_namespaced_parallel_support_uses_child_tool_name() {
+    let router = ToolRouter {
+        registry: ToolRegistry::empty_for_test(),
+        specs: vec![ConfiguredToolSpec::new(
+            ToolSpec::Namespace(ResponsesApiNamespace {
+                name: "tool_suggest".to_string(),
+                description: "Suggest tools".to_string(),
+                tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                    name: "tool_suggest".to_string(),
+                    description: "Suggest a missing tool".to_string(),
+                    strict: false,
+                    defer_loading: None,
+                    parameters: JsonSchema::object(
+                        BTreeMap::new(),
+                        /*required*/ None,
+                        /*additional_properties*/ None,
+                    ),
+                    output_schema: None,
+                })],
+            }),
+            /*supports_parallel_tool_calls*/ true,
+        )],
+        model_visible_specs: Vec::new(),
+        parallel_mcp_server_names: HashSet::new(),
+    };
+
+    assert!(router.tool_supports_parallel(&ToolCall {
+        tool_name: ToolName::namespaced("tool_suggest", "tool_suggest"),
+        call_id: "call-namespaced-parallel".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+    }));
+    assert!(!router.tool_supports_parallel(&ToolCall {
+        tool_name: ToolName::plain("tool_suggest"),
+        call_id: "call-plain-not-parallel".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+    }));
 }
 
 #[tokio::test]

@@ -1558,10 +1558,8 @@ fn tool_suggest_can_be_registered_without_search_tool() {
     assert_contains_tool_names(&tools, &[TOOL_SUGGEST_TOOL_NAME]);
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
 
-    let tool_suggest = find_tool(&tools, TOOL_SUGGEST_TOOL_NAME);
-    let ToolSpec::Function(ResponsesApiTool { description, .. }) = &tool_suggest.spec else {
-        panic!("expected function tool");
-    };
+    let ResponsesApiTool { description, .. } =
+        find_namespace_function_tool(&tools, TOOL_SUGGEST_NAMESPACE_NAME, TOOL_SUGGEST_TOOL_NAME);
     assert!(description.contains(
         "Suggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin"
     ));
@@ -1611,23 +1609,23 @@ fn tool_suggest_description_lists_discoverable_tools() {
         })),
     ];
 
-    let (tools, _) = build_specs_with_discoverable_tools(
+    let (tools, handlers) = build_specs_with_discoverable_tools(
         &tools_config,
         /*mcp_tools*/ None,
         /*deferred_mcp_tools*/ None,
         Some(discoverable_tools),
         &[],
     );
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::namespaced(TOOL_SUGGEST_NAMESPACE_NAME, TOOL_SUGGEST_TOOL_NAME),
+        kind: ToolHandlerKind::ToolSuggest,
+    }));
 
-    let tool_suggest = find_tool(&tools, TOOL_SUGGEST_TOOL_NAME);
-    let ToolSpec::Function(ResponsesApiTool {
+    let ResponsesApiTool {
         description,
         parameters,
         ..
-    }) = &tool_suggest.spec
-    else {
-        panic!("expected function tool");
-    };
+    } = find_namespace_function_tool(&tools, TOOL_SUGGEST_NAMESPACE_NAME, TOOL_SUGGEST_TOOL_NAME);
     assert!(description.contains(
         "Suggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin"
     ));

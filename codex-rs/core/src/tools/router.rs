@@ -144,17 +144,24 @@ impl ToolRouter {
     }
 
     fn configured_tool_supports_parallel(&self, tool_name: &ToolName) -> bool {
-        if tool_name.namespace.is_some() {
-            return false;
-        }
-
         self.specs
             .iter()
             .filter(|config| config.supports_parallel_tool_calls)
             .any(|config| match &config.spec {
-                ToolSpec::Function(tool) => tool.name == tool_name.name.as_str(),
-                ToolSpec::Freeform(tool) => tool.name == tool_name.name.as_str(),
-                ToolSpec::Namespace(_)
+                ToolSpec::Function(tool) if tool_name.namespace.is_none() => {
+                    tool.name == tool_name.name.as_str()
+                }
+                ToolSpec::Freeform(tool) if tool_name.namespace.is_none() => {
+                    tool.name == tool_name.name.as_str()
+                }
+                ToolSpec::Namespace(namespace) => namespace.tools.iter().any(|tool| match tool {
+                    ResponsesApiNamespaceTool::Function(tool) => {
+                        tool_name.namespace.as_deref() == Some(namespace.name.as_str())
+                            && tool.name == tool_name.name
+                    }
+                }),
+                ToolSpec::Function(_)
+                | ToolSpec::Freeform(_)
                 | ToolSpec::ToolSearch { .. }
                 | ToolSpec::LocalShell {}
                 | ToolSpec::ImageGeneration { .. }

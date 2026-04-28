@@ -47,13 +47,31 @@ fn function_tool_description(body: &Value, name: &str) -> Option<String> {
         .and_then(Value::as_array)
         .and_then(|tools| {
             tools.iter().find_map(|tool| {
-                if tool.get("name").and_then(Value::as_str) == Some(name) {
-                    tool.get("description")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                } else {
-                    None
+                if tool.get("name").and_then(Value::as_str) != Some(name) {
+                    return None;
                 }
+
+                if tool.get("type").and_then(Value::as_str) == Some("namespace") {
+                    return tool.get("tools").and_then(Value::as_array).and_then(
+                        |namespace_tools| {
+                            namespace_tools.iter().find_map(|namespace_tool| {
+                                if namespace_tool.get("name").and_then(Value::as_str) == Some(name)
+                                {
+                                    namespace_tool
+                                        .get("description")
+                                        .and_then(Value::as_str)
+                                        .map(str::to_string)
+                                } else {
+                                    None
+                                }
+                            })
+                        },
+                    );
+                }
+
+                tool.get("description")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
             })
         })
 }
