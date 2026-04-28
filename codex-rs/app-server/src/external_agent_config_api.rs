@@ -14,23 +14,17 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::MigrationDetails;
 use codex_app_server_protocol::PluginsMigration;
 use codex_external_agent_sessions::ExternalAgentSessionMigration as CoreSessionMigration;
-use codex_external_agent_sessions::ImportedExternalAgentSession;
-use codex_external_agent_sessions::has_current_session_been_imported;
-use codex_external_agent_sessions::load_session_for_import;
+use codex_external_agent_sessions::PendingSessionImport;
+use codex_external_agent_sessions::PrepareSessionImportsError;
+use codex_external_agent_sessions::prepare_pending_session_imports;
 use codex_external_agent_sessions::record_imported_session;
 use codex_protocol::ThreadId;
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 #[derive(Clone)]
 pub(crate) struct ExternalAgentConfigApi {
     codex_home: PathBuf,
     migration_service: ExternalAgentConfigService,
-}
-
-pub(crate) struct PendingSessionImport {
-    pub(crate) source_path: PathBuf,
-    pub(crate) session: ImportedExternalAgentSession,
 }
 
 impl ExternalAgentConfigApi {
@@ -127,57 +121,24 @@ impl ExternalAgentConfigApi {
             })
             .filter_map(|item| item.details.as_ref())
             .flat_map(|details| details.sessions.clone())
+            .map(|session| CoreSessionMigration {
+                path: session.path,
+                cwd: session.cwd,
+                title: session.title,
+            })
             .collect::<Vec<_>>();
-        let detected_session_paths = if sessions.is_empty() {
-            HashSet::new()
+        let detected_sessions = if sessions.is_empty() {
+            Vec::new()
         } else {
             self.detect_recent_sessions()?
-                .into_iter()
-                .map(|session| session.path)
-                .collect::<HashSet<_>>()
         };
-
-        let mut pending_session_imports = Vec::new();
-        for session in sessions {
-            let has_been_imported =
-                match has_current_session_been_imported(&self.codex_home, &session.path) {
-                    Ok(has_been_imported) => has_been_imported,
-                    Err(err) => {
-                        tracing::warn!(
-                            error = %err,
-                            path = %session.path.display(),
-                            "external agent session import ledger check failed"
-                        );
-                        continue;
-                    }
-                };
-            if !detected_session_paths.contains(&session.path) && !has_been_imported {
-                return Err(invalid_params(format!(
-                    "external agent session was not detected for import: {}",
-                    session.path.display()
-                )));
-            }
-            if has_been_imported {
-                continue;
-            }
-            let imported_session = match load_session_for_import(&session.path) {
-                Ok(Some(imported_session)) if imported_session.cwd.is_dir() => imported_session,
-                Ok(Some(_)) | Ok(None) => continue,
-                Err(err) => {
-                    tracing::warn!(
-                        error = %err,
-                        path = %session.path.display(),
-                        "external agent session import skipped"
-                    );
-                    continue;
+        prepare_pending_session_imports(&self.codex_home, sessions, detected_sessions).map_err(
+            |err| match err {
+                PrepareSessionImportsError::SessionNotDetected(_) => {
+                    invalid_params(err.to_string())
                 }
-            };
-            pending_session_imports.push(PendingSessionImport {
-                source_path: session.path,
-                session: imported_session,
-            });
-        }
-        Ok(pending_session_imports)
+            },
+        )
     }
 
     pub(crate) fn record_imported_session(
