@@ -313,7 +313,11 @@ pub fn agent_identity_biscuit_url(chatgpt_base_url: &str) -> String {
 
 pub fn agent_identity_jwks_url(chatgpt_base_url: &str) -> String {
     let trimmed = chatgpt_base_url.trim_end_matches('/');
-    format!("{trimmed}/wham/agent-identities/jwks")
+    if trimmed.contains("/backend-api") {
+        format!("{trimmed}/wham/agent-identities/jwks")
+    } else {
+        format!("{trimmed}/agent-identities/jwks")
+    }
 }
 
 pub fn agent_identity_request_id() -> Result<String> {
@@ -685,6 +689,18 @@ J1bwkqKZTB5dHolX9A58e/xXnfZ5P8f3Z83+Izap3FwqQulk7b1WO1MQcHuVg2NN
         assert_eq!(
             agent_identity_jwks_url("https://chatgpt.com/backend-api/"),
             "https://chatgpt.com/backend-api/wham/agent-identities/jwks"
+        );
+    }
+
+    #[test]
+    fn agent_identity_jwks_url_uses_codex_api_base_url() {
+        assert_eq!(
+            agent_identity_jwks_url("http://localhost:8080/api/codex"),
+            "http://localhost:8080/api/codex/agent-identities/jwks"
+        );
+        assert_eq!(
+            agent_identity_jwks_url("http://localhost:8080/api/codex/"),
+            "http://localhost:8080/api/codex/agent-identities/jwks"
         );
     }
 

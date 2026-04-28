@@ -775,8 +775,8 @@ async fn load_auth(
 
     if let Some(agent_identity) = read_codex_agent_identity_from_env() {
         return CodexAuth::from_agent_identity_jwt(&agent_identity, chatgpt_base_url)
-        .await
-        .map(Some);
+            .await
+            .map(Some);
     }
 
     // Fall back to the configured persistent store (file/keyring/auto) for managed auth.
@@ -1290,7 +1290,6 @@ pub trait AuthManagerConfig {
 
     /// Returns the ChatGPT backend base URL used for first-party backend authorization.
     fn chatgpt_base_url(&self) -> String;
-
 }
 
 impl Debug for AuthManager {
