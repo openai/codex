@@ -44,8 +44,12 @@ const SET_RLIMIT_CORE_FAILED_EXIT_CODE: i32 = 7;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) fn pre_main_hardening_linux() {
     // Disable ptrace attach / mark process non-dumpable.
-    if let Err(err) = disable_process_dumping() {
-        eprintln!("ERROR: prctl(PR_SET_DUMPABLE, 0) failed: {}", err);
+    let ret_code = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+    if ret_code != 0 {
+        eprintln!(
+            "ERROR: prctl(PR_SET_DUMPABLE, 0) failed: {}",
+            std::io::Error::last_os_error()
+        );
         std::process::exit(PRCTL_FAILED_EXIT_CODE);
     }
 
@@ -58,7 +62,7 @@ pub(crate) fn pre_main_hardening_linux() {
 }
 
 /// Mark the current Linux process non-dumpable so same-user processes cannot attach with ptrace.
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(target_os = "linux")]
 pub fn disable_process_dumping() -> std::io::Result<()> {
     let ret_code = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
     if ret_code == 0 {
