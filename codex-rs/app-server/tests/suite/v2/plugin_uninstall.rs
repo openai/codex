@@ -44,9 +44,8 @@ enabled = true
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let params = PluginUninstallParams {
-        plugin_id: Some("sample-plugin@debug".to_string()),
+        plugin_id: "sample-plugin@debug".to_string(),
         remote_marketplace_name: None,
-        plugin_name: None,
     };
 
     let request_id = mcp.send_plugin_uninstall_request(params.clone()).await?;
@@ -105,9 +104,8 @@ async fn plugin_uninstall_tracks_analytics_event() -> Result<()> {
 
     let request_id = mcp
         .send_plugin_uninstall_request(PluginUninstallParams {
-            plugin_id: Some("sample-plugin@debug".to_string()),
+            plugin_id: "sample-plugin@debug".to_string(),
             remote_marketplace_name: None,
-            plugin_name: None,
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -163,9 +161,8 @@ async fn plugin_uninstall_rejects_remote_marketplace_when_remote_plugin_is_disab
 
     let request_id = mcp
         .send_plugin_uninstall_request(PluginUninstallParams {
-            plugin_id: None,
+            plugin_id: "plugins~Plugin_sample".to_string(),
             remote_marketplace_name: Some("chatgpt-global".to_string()),
-            plugin_name: Some("plugins~Plugin_sample".to_string()),
         })
         .await?;
 
@@ -218,9 +215,8 @@ async fn plugin_uninstall_writes_remote_plugin_to_cloud_when_remote_plugin_enabl
 
     let request_id = mcp
         .send_plugin_uninstall_request(PluginUninstallParams {
-            plugin_id: None,
+            plugin_id: "plugins~Plugin_linear".to_string(),
             remote_marketplace_name: Some("chatgpt-global".to_string()),
-            plugin_name: Some("plugins~Plugin_linear".to_string()),
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -254,9 +250,8 @@ async fn plugin_uninstall_rejects_invalid_remote_plugin_name_before_network_call
 
     let request_id = mcp
         .send_plugin_uninstall_request(PluginUninstallParams {
-            plugin_id: None,
+            plugin_id: "linear/../../oops".to_string(),
             remote_marketplace_name: Some("chatgpt-global".to_string()),
-            plugin_name: Some("linear/../../oops".to_string()),
         })
         .await?;
 
@@ -284,54 +279,25 @@ async fn plugin_uninstall_rejects_invalid_remote_plugin_name_before_network_call
 }
 
 #[tokio::test]
-async fn plugin_uninstall_rejects_invalid_selector_combinations() -> Result<()> {
+async fn plugin_uninstall_rejects_empty_remote_plugin_id() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
-    let cases = [
-        PluginUninstallParams {
-            plugin_id: None,
-            remote_marketplace_name: None,
-            plugin_name: None,
-        },
-        PluginUninstallParams {
-            plugin_id: None,
+    let request_id = mcp
+        .send_plugin_uninstall_request(PluginUninstallParams {
+            plugin_id: String::new(),
             remote_marketplace_name: Some("chatgpt-global".to_string()),
-            plugin_name: None,
-        },
-        PluginUninstallParams {
-            plugin_id: None,
-            remote_marketplace_name: None,
-            plugin_name: Some("plugins~Plugin_linear".to_string()),
-        },
-        PluginUninstallParams {
-            plugin_id: Some("sample-plugin@debug".to_string()),
-            remote_marketplace_name: Some("chatgpt-global".to_string()),
-            plugin_name: Some("plugins~Plugin_linear".to_string()),
-        },
-        PluginUninstallParams {
-            plugin_id: Some("sample-plugin@debug".to_string()),
-            remote_marketplace_name: None,
-            plugin_name: Some("plugins~Plugin_linear".to_string()),
-        },
-    ];
+        })
+        .await?;
+    let err = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
 
-    for params in cases {
-        let request_id = mcp.send_plugin_uninstall_request(params).await?;
-        let err = timeout(
-            DEFAULT_TIMEOUT,
-            mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
-        )
-        .await??;
-
-        assert_eq!(err.error.code, -32600);
-        assert!(
-            err.error
-                .message
-                .contains("requires either pluginId or remoteMarketplaceName plus pluginName")
-        );
-    }
+    assert_eq!(err.error.code, -32600);
+    assert!(err.error.message.contains("invalid remote plugin id"));
 
     Ok(())
 }

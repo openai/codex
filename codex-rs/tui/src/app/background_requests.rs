@@ -537,9 +537,8 @@ pub(super) async fn fetch_plugin_uninstall(
         .request_typed(ClientRequest::PluginUninstall {
             request_id,
             params: PluginUninstallParams {
-                plugin_id: Some(plugin_id),
+                plugin_id,
                 remote_marketplace_name: None,
-                plugin_name: None,
             },
         })
         .await
