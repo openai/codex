@@ -2,7 +2,6 @@ use super::*;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use codex_app_server_protocol::PluginInstallPolicy;
-use codex_core_plugins::store::PLUGINS_CACHE_DIR;
 
 impl CodexMessageProcessor {
     pub(super) async fn plugin_list(
@@ -575,19 +574,14 @@ impl CodexMessageProcessor {
         &self,
         params: PluginUninstallParams,
     ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
-        let PluginUninstallParams {
-            plugin_id,
-            remote_marketplace_name,
-        } = params;
-        if let Some(remote_marketplace_name) = remote_marketplace_name {
+        let PluginUninstallParams { plugin_id } = params;
+        if !plugin_id.contains('@') {
             if plugin_id.is_empty() || !is_valid_remote_plugin_id(&plugin_id) {
                 return Err(invalid_request(
                     "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed",
                 ));
             }
-            return self
-                .remote_plugin_uninstall_response(remote_marketplace_name, plugin_id)
-                .await;
+            return self.remote_plugin_uninstall_response(plugin_id).await;
         }
         let plugins_manager = self.thread_manager.plugins_manager();
 
@@ -661,18 +655,15 @@ impl CodexMessageProcessor {
 
     async fn remote_plugin_uninstall_response(
         &self,
-        remote_marketplace_name: String,
-        plugin_name: String,
+        plugin_id: String,
     ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         if !config.features.enabled(Feature::Plugins)
             || !config.features.enabled(Feature::RemotePlugin)
         {
-            return Err(invalid_request(format!(
-                "remote plugin uninstall is not enabled for marketplace {remote_marketplace_name}"
-            )));
+            return Err(invalid_request("remote plugin uninstall is not enabled"));
         }
-        if plugin_name.is_empty() || !is_valid_remote_plugin_id(&plugin_name) {
+        if plugin_id.is_empty() || !is_valid_remote_plugin_id(&plugin_id) {
             return Err(invalid_request(
                 "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed",
             ));
@@ -685,40 +676,11 @@ impl CodexMessageProcessor {
         codex_core_plugins::remote::uninstall_remote_plugin(
             &remote_plugin_service_config,
             auth.as_ref(),
-            &remote_marketplace_name,
-            &plugin_name,
+            config.codex_home.to_path_buf(),
+            &plugin_id,
         )
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "uninstall remote plugin"))?;
-
-        let remote_plugin_cache_root = config
-            .codex_home
-            .join(PLUGINS_CACHE_DIR)
-            .join(remote_marketplace_name)
-            .join(plugin_name);
-        let remove_cache_result = tokio::task::spawn_blocking(move || {
-            if !remote_plugin_cache_root.exists() {
-                return Ok(());
-            }
-
-            let result = if remote_plugin_cache_root.is_dir() {
-                std::fs::remove_dir_all(&remote_plugin_cache_root)
-            } else {
-                std::fs::remove_file(&remote_plugin_cache_root)
-            };
-            result.map_err(|err| {
-                format!(
-                    "failed to remove remote plugin cache entry {}: {err}",
-                    remote_plugin_cache_root.display()
-                )
-            })
-        })
-        .await
-        .map_err(|err| format!("failed to join remote plugin cache removal task: {err}"))
-        .and_then(|result| result);
-        if let Err(err) = remove_cache_result {
-            return Err(internal_error(err));
-        }
 
         self.clear_plugin_related_caches();
         Ok(PluginUninstallResponse {})
@@ -815,7 +777,8 @@ fn remote_plugin_catalog_error_to_jsonrpc(
         | RemotePluginCatalogError::UnexpectedStatus { .. }
         | RemotePluginCatalogError::Decode { .. }
         | RemotePluginCatalogError::UnexpectedPluginId { .. }
-        | RemotePluginCatalogError::UnexpectedEnabledState { .. } => JSONRPCErrorError {
+        | RemotePluginCatalogError::UnexpectedEnabledState { .. }
+        | RemotePluginCatalogError::CacheRemove(_) => JSONRPCErrorError {
             code: INTERNAL_ERROR_CODE,
             message: format!("{context}: {err}"),
             data: None,

@@ -8624,12 +8624,6 @@
       "properties": {
         "pluginId": {
           "type": "string"
-        },
-        "remoteMarketplaceName": {
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "required": [
