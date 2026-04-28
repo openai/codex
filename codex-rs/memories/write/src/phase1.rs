@@ -1,4 +1,3 @@
-use crate::STAGE_ONE_PROMPT;
 use crate::build_stage_one_input_message;
 use crate::metrics::MEMORY_PHASE_ONE_E2E_MS;
 use crate::metrics::MEMORY_PHASE_ONE_JOBS;
@@ -14,7 +13,6 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_rollout::INTERACTIVE_SESSION_SOURCES;
@@ -28,14 +26,6 @@ use std::path::Path;
 use std::sync::Arc;
 use tracing::info;
 use tracing::warn;
-
-const MODEL: &str = "gpt-5.4-mini";
-const REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
-const CONCURRENCY_LIMIT: usize = 8;
-const JOB_LEASE_SECONDS: i64 = 3_600;
-const JOB_RETRY_DELAY_SECONDS: i64 = 3_600;
-const THREAD_SCAN_LIMIT: usize = 5_000;
-const PRUNE_BATCH_SIZE: usize = 200;
 
 struct JobResult {
     outcome: JobOutcome,
@@ -122,7 +112,7 @@ pub async fn prune(context: &MemoryStartupContext, config: &Config) {
     if let Some(db) = context.state_db() {
         let max_unused_days = config.memories.max_unused_days;
         match db
-            .prune_stage1_outputs_for_retention(max_unused_days, PRUNE_BATCH_SIZE)
+            .prune_stage1_outputs_for_retention(max_unused_days, crate::stage_one::PRUNE_BATCH_SIZE)
             .await
         {
             Ok(pruned) => {
@@ -174,12 +164,12 @@ async fn claim_startup_jobs(
         .claim_stage1_jobs_for_startup(
             context.thread_id(),
             codex_state::Stage1StartupClaimParams {
-                scan_limit: THREAD_SCAN_LIMIT,
+                scan_limit: crate::stage_one::THREAD_SCAN_LIMIT,
                 max_claimed: memories_config.max_rollouts_per_startup,
                 max_age_days: memories_config.max_rollout_age_days,
                 min_rollout_idle_hours: memories_config.min_rollout_idle_hours,
                 allowed_sources: allowed_sources.as_slice(),
-                lease_seconds: JOB_LEASE_SECONDS,
+                lease_seconds: crate::stage_one::JOB_LEASE_SECONDS,
             },
         )
         .await
@@ -200,9 +190,9 @@ async fn build_request_context(
         .memories
         .extract_model
         .clone()
-        .unwrap_or(MODEL.to_string());
+        .unwrap_or(crate::stage_one::MODEL.to_string());
     context
-        .stage_one_request_context(config, &model_name, REASONING_EFFORT)
+        .stage_one_request_context(config, &model_name, crate::stage_one::REASONING_EFFORT)
         .await
 }
 
@@ -221,7 +211,7 @@ async fn run_jobs(
                 job::run(context.as_ref(), config.as_ref(), claim, &stage_one_context).await
             }
         })
-        .buffer_unordered(CONCURRENCY_LIMIT)
+        .buffer_unordered(crate::stage_one::CONCURRENCY_LIMIT)
         .collect::<Vec<_>>()
         .await
 }
@@ -310,7 +300,7 @@ mod job {
             phase: None,
         }];
         prompt.base_instructions = BaseInstructions {
-            text: STAGE_ONE_PROMPT.to_string(),
+            text: crate::stage_one::PROMPT.to_string(),
         };
         prompt.output_schema = Some(output_schema());
         prompt.output_schema_strict = true;
@@ -343,7 +333,7 @@ mod job {
                         thread_id,
                         ownership_token,
                         reason,
-                        JOB_RETRY_DELAY_SECONDS,
+                        crate::stage_one::JOB_RETRY_DELAY_SECONDS,
                     )
                     .await;
             }

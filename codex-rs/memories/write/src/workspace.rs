@@ -5,11 +5,6 @@ use codex_git_utils::ensure_git_baseline_repository;
 use codex_git_utils::reset_git_repository;
 use std::path::Path;
 
-/// Generated diff file the Phase 2 consolidation agent reads before editing memories.
-pub const WORKSPACE_DIFF_FILENAME: &str = "phase2_workspace_diff.md";
-
-const WORKSPACE_DIFF_MAX_BYTES: usize = 4 * 1024 * 1024;
-
 /// Prepares the memory directory for git-baseline diffing.
 ///
 /// This keeps an existing usable `.git/` baseline intact. It initializes a new git baseline when the
@@ -35,7 +30,7 @@ pub async fn memory_workspace_diff(root: &Path) -> anyhow::Result<GitBaselineDif
 
 /// Writes `phase2_workspace_diff.md` with a bounded git-style diff from the current baseline.
 pub async fn write_workspace_diff(root: &Path, diff: &GitBaselineDiff) -> anyhow::Result<()> {
-    let path = root.join(WORKSPACE_DIFF_FILENAME);
+    let path = root.join(crate::workspace_diff::FILENAME);
     tokio::fs::write(&path, render_workspace_diff_file(diff))
         .await
         .with_context(|| format!("write memory workspace diff file {}", path.display()))
@@ -56,7 +51,7 @@ pub async fn reset_memory_workspace_baseline(root: &Path) -> anyhow::Result<()> 
 /// diffing and before baseline reset so the generated diff file itself is not treated as memory
 /// workspace input.
 pub(super) async fn remove_workspace_diff(root: &Path) -> anyhow::Result<()> {
-    let path = root.join(WORKSPACE_DIFF_FILENAME);
+    let path = root.join(crate::workspace_diff::FILENAME);
     match tokio::fs::remove_file(&path).await {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -87,7 +82,7 @@ fn render_workspace_diff_file(diff: &GitBaselineDiff) -> String {
 }
 
 fn append_bounded_diff(rendered: &mut String, diff: &str) {
-    if diff.len() <= WORKSPACE_DIFF_MAX_BYTES {
+    if diff.len() <= crate::workspace_diff::MAX_BYTES {
         rendered.push_str(diff);
         if !diff.ends_with('\n') {
             rendered.push('\n');
@@ -95,13 +90,14 @@ fn append_bounded_diff(rendered: &mut String, diff: &str) {
         return;
     }
 
-    let boundary = previous_char_boundary(diff, WORKSPACE_DIFF_MAX_BYTES);
+    let boundary = previous_char_boundary(diff, crate::workspace_diff::MAX_BYTES);
     rendered.push_str(&diff[..boundary]);
     if !rendered.ends_with('\n') {
         rendered.push('\n');
     }
     rendered.push_str(&format!(
-        "\n[workspace diff truncated at {WORKSPACE_DIFF_MAX_BYTES} bytes]\n"
+        "\n[workspace diff truncated at {} bytes]\n",
+        crate::workspace_diff::MAX_BYTES
     ));
 }
 

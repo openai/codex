@@ -28,12 +28,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-const MODEL: &str = "gpt-5.4";
-const REASONING_EFFORT: codex_protocol::openai_models::ReasoningEffort =
-    codex_protocol::openai_models::ReasoningEffort::Medium;
-const JOB_LEASE_SECONDS: i64 = 3_600;
-const JOB_RETRY_DELAY_SECONDS: i64 = 3_600;
-const JOB_HEARTBEAT_SECONDS: u64 = 90;
 
 #[derive(Debug, Clone, Default)]
 struct Claim {
@@ -223,7 +217,7 @@ mod job {
         db: &StateRuntime,
     ) -> Result<Claim, &'static str> {
         let claim = db
-            .try_claim_global_phase2_job(context.thread_id(), JOB_LEASE_SECONDS)
+            .try_claim_global_phase2_job(context.thread_id(), crate::stage_two::JOB_LEASE_SECONDS)
             .await
             .map_err(|e| {
                 tracing::error!("failed to claim job: {e}");
@@ -261,15 +255,19 @@ mod job {
     ) {
         context.counter(MEMORY_PHASE_TWO_JOBS, /*inc*/ 1, &[("status", reason)]);
         if matches!(
-            db.mark_global_phase2_job_failed(&claim.token, reason, JOB_RETRY_DELAY_SECONDS,)
-                .await,
+            db.mark_global_phase2_job_failed(
+                &claim.token,
+                reason,
+                crate::stage_two::JOB_RETRY_DELAY_SECONDS,
+            )
+            .await,
             Ok(false)
         ) {
             let _ = db
                 .mark_global_phase2_job_failed_if_unowned(
                     &claim.token,
                     reason,
-                    JOB_RETRY_DELAY_SECONDS,
+                    crate::stage_two::JOB_RETRY_DELAY_SECONDS,
                 )
                 .await;
         }
@@ -336,9 +334,9 @@ mod agent {
                 .memories
                 .consolidation_model
                 .clone()
-                .unwrap_or(MODEL.to_string()),
+                .unwrap_or(crate::stage_two::MODEL.to_string()),
         );
-        agent_config.model_reasoning_effort = Some(REASONING_EFFORT);
+        agent_config.model_reasoning_effort = Some(crate::stage_two::REASONING_EFFORT);
 
         Some(agent_config)
     }
@@ -384,7 +382,10 @@ mod agent {
                 }
                 // Do not reset the workspace baseline if we lost the lock.
                 let still_owns_lock = match db
-                    .heartbeat_global_phase2_job(&claim.token, JOB_LEASE_SECONDS)
+                    .heartbeat_global_phase2_job(
+                        &claim.token,
+                        crate::stage_two::JOB_LEASE_SECONDS,
+                    )
                     .await
                     .inspect_err(|err| {
                         tracing::error!(
@@ -448,7 +449,7 @@ mod agent {
         thread: &codex_core::CodexThread,
     ) -> AgentStatus {
         let mut heartbeat_interval =
-            tokio::time::interval(Duration::from_secs(JOB_HEARTBEAT_SECONDS));
+            tokio::time::interval(Duration::from_secs(crate::stage_two::JOB_HEARTBEAT_SECONDS));
         heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut status_poll_interval = tokio::time::interval(Duration::from_secs(1));
         status_poll_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -480,7 +481,7 @@ mod agent {
                     match db
                         .heartbeat_global_phase2_job(
                             &token,
-                            JOB_LEASE_SECONDS,
+                            crate::stage_two::JOB_LEASE_SECONDS,
                         )
                         .await
                     {

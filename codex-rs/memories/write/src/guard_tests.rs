@@ -6,7 +6,7 @@ fn snapshot(
     secondary_used_percent: Option<f64>,
 ) -> RateLimitSnapshot {
     RateLimitSnapshot {
-        limit_id: Some(CODEX_LIMIT_ID.to_string()),
+        limit_id: Some(crate::guard_limits::CODEX_LIMIT_ID.to_string()),
         limit_name: None,
         primary: primary_used_percent.map(window),
         secondary: secondary_used_percent.map(window),

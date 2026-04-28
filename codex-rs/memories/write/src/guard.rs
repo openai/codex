@@ -6,8 +6,6 @@ use codex_protocol::protocol::RateLimitWindow;
 use tracing::info;
 use tracing::warn;
 
-const CODEX_LIMIT_ID: &str = "codex";
-
 pub(crate) async fn rate_limits_ok(auth_manager: &AuthManager, config: &Config) -> bool {
     rate_limits_check(auth_manager, config)
         .await
@@ -32,7 +30,7 @@ async fn rate_limits_check(auth_manager: &AuthManager, config: &Config) -> Optio
 
     let snapshot = snapshots
         .iter()
-        .find(|s| s.limit_id.as_deref() == Some(CODEX_LIMIT_ID))
+        .find(|s| s.limit_id.as_deref() == Some(crate::guard_limits::CODEX_LIMIT_ID))
         .or_else(|| snapshots.first())?;
 
     let min_remaining_percent = config.memories.min_rate_limit_remaining_percent;
