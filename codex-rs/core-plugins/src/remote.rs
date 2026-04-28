@@ -170,23 +170,16 @@ impl RemotePluginScope {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RemotePluginPagination {
-    #[serde(alias = "nextPageToken")]
     next_page_token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RemotePluginSkillInterfaceResponse {
-    #[serde(alias = "displayName")]
     display_name: Option<String>,
-    #[serde(alias = "shortDescription")]
     short_description: Option<String>,
-    #[serde(alias = "brandColor")]
     brand_color: Option<String>,
-    #[serde(alias = "defaultPrompt")]
     default_prompt: Option<String>,
-    #[serde(alias = "iconSmallUrl")]
     icon_small_url: Option<String>,
-    #[serde(alias = "iconLargeUrl")]
     icon_large_url: Option<String>,
 }
 
@@ -199,31 +192,20 @@ struct RemotePluginSkillResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RemotePluginReleaseInterfaceResponse {
-    #[serde(alias = "shortDescription")]
     short_description: Option<String>,
-    #[serde(alias = "longDescription")]
     long_description: Option<String>,
-    #[serde(alias = "developerName")]
     developer_name: Option<String>,
     category: Option<String>,
     #[serde(default)]
     capabilities: Vec<String>,
-    #[serde(alias = "websiteUrl")]
     website_url: Option<String>,
-    #[serde(alias = "privacyPolicyUrl")]
     privacy_policy_url: Option<String>,
-    #[serde(alias = "termsOfServiceUrl")]
     terms_of_service_url: Option<String>,
-    #[serde(alias = "brandColor")]
     brand_color: Option<String>,
-    #[serde(alias = "defaultPrompt")]
     default_prompt: Option<String>,
-    #[serde(alias = "composerIconUrl")]
     composer_icon_url: Option<String>,
-    #[serde(alias = "logoUrl")]
     logo_url: Option<String>,
     #[serde(default)]
-    #[serde(alias = "screenshotUrls")]
     screenshot_urls: Vec<String>,
 }
 
@@ -231,13 +213,11 @@ struct RemotePluginReleaseInterfaceResponse {
 struct RemotePluginReleaseResponse {
     #[serde(default)]
     version: Option<String>,
-    #[serde(alias = "displayName")]
     display_name: String,
     description: String,
     #[serde(default)]
     bundle_download_url: Option<String>,
     #[serde(default)]
-    #[serde(alias = "appIds")]
     app_ids: Vec<String>,
     interface: RemotePluginReleaseInterfaceResponse,
     #[serde(default)]
@@ -249,9 +229,7 @@ struct RemotePluginDirectoryItem {
     id: String,
     name: String,
     scope: RemotePluginScope,
-    #[serde(alias = "installationPolicy")]
     installation_policy: PluginInstallPolicy,
-    #[serde(alias = "authenticationPolicy")]
     authentication_policy: PluginAuthPolicy,
     release: RemotePluginReleaseResponse,
 }
@@ -262,7 +240,6 @@ struct RemotePluginInstalledItem {
     plugin: RemotePluginDirectoryItem,
     enabled: bool,
     #[serde(default)]
-    #[serde(alias = "disabledSkillNames")]
     disabled_skill_names: Vec<String>,
 }
 

@@ -116,6 +116,7 @@ rmcp = { workspace = true, default-features = false, features = [
     "transport-streamable-http-server",
 ] }
 serial_test = { workspace = true }
+tar = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 wiremock = { workspace = true }

@@ -456,6 +456,9 @@ impl CodexMessageProcessor {
         .await
         .map_err(remote_plugin_bundle_install_error_to_jsonrpc)?;
 
+        // Cache first so a backend install cannot succeed when local materialization fails.
+        // If this backend call fails, the cache entry is harmless because remote installed state
+        // is still backend-gated.
         codex_core_plugins::remote::install_remote_plugin(
             &remote_plugin_service_config,
             auth.as_ref(),
@@ -465,8 +468,9 @@ impl CodexMessageProcessor {
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "install remote plugin"))?;
 
-        // Remote marketplaces do not yet have a local marketplace/read-path sync.
-        // This install path only materializes the bundle into the plugin cache.
+        // TODO(remote plugins): remote marketplaces do not yet have a local
+        // marketplace/read-path sync, so this install path reads MCP/apps directly
+        // from the just-cached bundle.
         self.clear_plugin_related_caches();
 
         let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;

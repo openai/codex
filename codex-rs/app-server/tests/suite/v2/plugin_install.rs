@@ -43,13 +43,14 @@ use rmcp::transport::StreamableHttpServerConfig;
 use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use serde_json::json;
-use std::io::Write;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use wiremock::Match;
 use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::Request;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::header;
 use wiremock::matchers::method;
@@ -60,6 +61,8 @@ use wiremock::matchers::query_param;
 // starts, which is noticeably slower on Windows CI.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const REMOTE_PLUGIN_ID: &str = "plugins~Plugin_00000000000000000000000000000000";
+const TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS: &str =
+    "CODEX_TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS";
 
 #[tokio::test]
 async fn plugin_install_rejects_relative_marketplace_paths() -> Result<()> {
@@ -158,7 +161,7 @@ async fn plugin_install_rejects_remote_marketplace_when_remote_plugin_is_disable
         .send_plugin_install_request(PluginInstallParams {
             marketplace_path: None,
             remote_marketplace_name: Some("chatgpt-global".to_string()),
-            plugin_name: "plugins~Plugin_sample".to_string(),
+            plugin_name: "plugins~Plugin_22222222222222222222222222222222".to_string(),
         })
         .await?;
 
@@ -182,18 +185,30 @@ async fn plugin_install_rejects_remote_marketplace_when_remote_plugin_is_disable
 async fn plugin_install_writes_remote_plugin_to_cloud_and_cache() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
-    let bundle_url = format!("{}/bundles/linear.tar.gz", server.uri());
+    let installed_path = codex_home
+        .path()
+        .join("plugins/cache/chatgpt-global/linear/1.2.3");
+    let bundle_url = mount_remote_plugin_bundle(
+        &server,
+        /*status_code*/ 200,
+        remote_plugin_bundle_tar_gz_bytes("linear")?,
+    )
+    .await;
     configure_remote_plugin_test(codex_home.path(), &server)?;
     mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", Some(&bundle_url)).await;
     mount_empty_remote_installed_plugins(&server).await;
-    mount_remote_plugin_install(&server, REMOTE_PLUGIN_ID).await;
-    mount_remote_plugin_bundle(
+    mount_remote_plugin_install_after_cache_write(
         &server,
-        ResponseTemplate::new(200).set_body_bytes(remote_plugin_bundle_tar_gz_bytes("linear")),
+        REMOTE_PLUGIN_ID,
+        installed_path.join(".codex-plugin/plugin.json"),
     )
     .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))],
+    )
+    .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
@@ -218,17 +233,13 @@ async fn plugin_install_writes_remote_plugin_to_cloud_and_cache() -> Result<()> 
         /*expected_count*/ 1,
     )
     .await?;
-    assert_remote_plugin_request_order(
+    wait_for_remote_plugin_request_count(
         &server,
         "GET",
         "/bundles/linear.tar.gz",
-        "POST",
-        &format!("/ps/plugins/{REMOTE_PLUGIN_ID}/install"),
+        /*expected_count*/ 1,
     )
     .await?;
-    let installed_path = codex_home
-        .path()
-        .join("plugins/cache/chatgpt-global/linear/1.2.3");
     assert!(installed_path.join(".codex-plugin/plugin.json").is_file());
     assert!(installed_path.join("skills/plan-work/SKILL.md").is_file());
     assert!(
@@ -247,7 +258,13 @@ async fn plugin_install_rejects_missing_remote_bundle_url() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     configure_remote_plugin_test(codex_home.path(), &server)?;
-    mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", None).await;
+    mount_remote_plugin_detail(
+        &server,
+        REMOTE_PLUGIN_ID,
+        "1.2.3",
+        /*bundle_download_url*/ None,
+    )
+    .await;
     mount_empty_remote_installed_plugins(&server).await;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -283,12 +300,58 @@ async fn plugin_install_rejects_missing_remote_bundle_url() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_install_rejects_invalid_remote_release_version() -> Result<()> {
+async fn plugin_install_rejects_plain_http_remote_bundle_url() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     let bundle_url = format!("{}/bundles/linear.tar.gz", server.uri());
     configure_remote_plugin_test(codex_home.path(), &server)?;
-    mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "../1.2.3", Some(&bundle_url)).await;
+    mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", Some(&bundle_url)).await;
+    mount_empty_remote_installed_plugins(&server).await;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
+    let err = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, -32603);
+    assert!(
+        err.error
+            .message
+            .contains("unsupported download URL scheme")
+    );
+    wait_for_remote_plugin_request_count(
+        &server,
+        "POST",
+        &format!("/ps/plugins/{REMOTE_PLUGIN_ID}/install"),
+        /*expected_count*/ 0,
+    )
+    .await?;
+    assert!(
+        !codex_home
+            .path()
+            .join("plugins/cache/chatgpt-global/linear")
+            .exists()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_install_rejects_invalid_remote_release_version() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    configure_remote_plugin_test(codex_home.path(), &server)?;
+    mount_remote_plugin_detail(
+        &server,
+        REMOTE_PLUGIN_ID,
+        "../1.2.3",
+        Some("https://127.0.0.1:1/bundles/linear.tar.gz"),
+    )
+    .await;
     mount_empty_remote_installed_plugins(&server).await;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -617,18 +680,22 @@ async fn plugin_install_tracks_analytics_event() -> Result<()> {
 async fn plugin_install_errors_when_remote_bundle_download_fails() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
-    let bundle_url = format!("{}/bundles/linear.tar.gz", server.uri());
+    let bundle_url = mount_remote_plugin_bundle(
+        &server,
+        /*status_code*/ 503,
+        b"bundle temporarily unavailable".to_vec(),
+    )
+    .await;
     configure_remote_plugin_test(codex_home.path(), &server)?;
     mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", Some(&bundle_url)).await;
     mount_empty_remote_installed_plugins(&server).await;
     mount_remote_plugin_install(&server, REMOTE_PLUGIN_ID).await;
-    mount_remote_plugin_bundle(
-        &server,
-        ResponseTemplate::new(503).set_body_string("bundle temporarily unavailable"),
-    )
-    .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))],
+    )
+    .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
@@ -640,6 +707,13 @@ async fn plugin_install_errors_when_remote_bundle_download_fails() -> Result<()>
 
     assert_eq!(err.error.code, -32603);
     assert!(err.error.message.contains("failed with status 503"));
+    wait_for_remote_plugin_request_count(
+        &server,
+        "GET",
+        "/bundles/linear.tar.gz",
+        /*expected_count*/ 1,
+    )
+    .await?;
     wait_for_remote_plugin_request_count(
         &server,
         "POST",
@@ -1111,6 +1185,23 @@ fn configure_remote_plugin_test(codex_home: &std::path::Path, server: &MockServe
     )
 }
 
+async fn mount_remote_plugin_bundle(
+    server: &MockServer,
+    status_code: u16,
+    body: Vec<u8>,
+) -> String {
+    Mock::given(method("GET"))
+        .and(path("/bundles/linear.tar.gz"))
+        .respond_with(
+            ResponseTemplate::new(status_code)
+                .insert_header("content-type", "application/gzip")
+                .set_body_bytes(body),
+        )
+        .mount(server)
+        .await;
+    format!("{}/bundles/linear.tar.gz", server.uri())
+}
+
 async fn mount_remote_plugin_detail(
     server: &MockServer,
     remote_plugin_id: &str,
@@ -1185,10 +1276,33 @@ async fn mount_remote_plugin_install(server: &MockServer, remote_plugin_id: &str
         .await;
 }
 
-async fn mount_remote_plugin_bundle(server: &MockServer, response: ResponseTemplate) {
-    Mock::given(method("GET"))
-        .and(path("/bundles/linear.tar.gz"))
-        .respond_with(response)
+#[derive(Debug, Clone)]
+struct CacheManifestExists {
+    manifest_path: std::path::PathBuf,
+}
+
+impl Match for CacheManifestExists {
+    fn matches(&self, _request: &Request) -> bool {
+        self.manifest_path.is_file()
+    }
+}
+
+async fn mount_remote_plugin_install_after_cache_write(
+    server: &MockServer,
+    remote_plugin_id: &str,
+    manifest_path: std::path::PathBuf,
+) {
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/backend-api/ps/plugins/{remote_plugin_id}/install"
+        )))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .and(CacheManifestExists { manifest_path })
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(format!(r#"{{"id":"{remote_plugin_id}","enabled":true}}"#)),
+        )
         .mount(server)
         .await;
 }
@@ -1234,34 +1348,6 @@ async fn wait_for_remote_plugin_request_count(
         }
     })
     .await??;
-    Ok(())
-}
-
-async fn assert_remote_plugin_request_order(
-    server: &MockServer,
-    earlier_method: &str,
-    earlier_path_suffix: &str,
-    later_method: &str,
-    later_path_suffix: &str,
-) -> Result<()> {
-    let Some(requests) = server.received_requests().await else {
-        bail!("wiremock did not record requests");
-    };
-    let Some(earlier_index) = requests.iter().position(|request| {
-        request.method == earlier_method && request.url.path().ends_with(earlier_path_suffix)
-    }) else {
-        bail!("missing {earlier_method} {earlier_path_suffix} request");
-    };
-    let Some(later_index) = requests.iter().position(|request| {
-        request.method == later_method && request.url.path().ends_with(later_path_suffix)
-    }) else {
-        bail!("missing {later_method} {later_path_suffix} request");
-    };
-    if earlier_index >= later_index {
-        bail!(
-            "expected {earlier_method} {earlier_path_suffix} before {later_method} {later_path_suffix}"
-        );
-    }
     Ok(())
 }
 
@@ -1335,94 +1421,28 @@ fn write_plugin_source(
     Ok(())
 }
 
-fn remote_plugin_bundle_tar_gz_bytes(plugin_name: &str) -> Vec<u8> {
+fn remote_plugin_bundle_tar_gz_bytes(plugin_name: &str) -> Result<Vec<u8>> {
     let manifest = format!(r#"{{"name":"{plugin_name}"}}"#);
     let skill = "# Plan Work\n\nTrack work in Linear.\n";
-    let entries = [
-        TarEntry::directory(".codex-plugin", 0o755),
-        TarEntry::directory("skills", 0o755),
-        TarEntry::directory("skills/plan-work", 0o755),
-        TarEntry::file(".codex-plugin/plugin.json", manifest.as_bytes(), 0o644),
-        TarEntry::file("skills/plan-work/SKILL.md", skill.as_bytes(), 0o644),
-    ];
-    tar_gz_bytes(&entries)
-}
-
-enum TarEntry<'a> {
-    Directory {
-        path: &'a str,
-        mode: u32,
-    },
-    File {
-        path: &'a str,
-        contents: &'a [u8],
-        mode: u32,
-    },
-}
-
-impl<'a> TarEntry<'a> {
-    fn directory(path: &'a str, mode: u32) -> Self {
-        Self::Directory { path, mode }
+    let encoder = GzEncoder::new(Vec::new(), Compression::default());
+    let mut tar = tar::Builder::new(encoder);
+    for (path, contents, mode) in [
+        (
+            ".codex-plugin/plugin.json",
+            manifest.as_bytes(),
+            /*mode*/ 0o644,
+        ),
+        (
+            "skills/plan-work/SKILL.md",
+            skill.as_bytes(),
+            /*mode*/ 0o644,
+        ),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(mode);
+        header.set_cksum();
+        tar.append_data(&mut header, path, contents)?;
     }
-
-    fn file(path: &'a str, contents: &'a [u8], mode: u32) -> Self {
-        Self::File {
-            path,
-            contents,
-            mode,
-        }
-    }
-}
-
-fn tar_gz_bytes(entries: &[TarEntry<'_>]) -> Vec<u8> {
-    let mut tar = Vec::new();
-    for entry in entries {
-        match entry {
-            TarEntry::Directory { path, mode } => {
-                append_tar_entry(&mut tar, path, b"", *mode, b'5');
-            }
-            TarEntry::File {
-                path,
-                contents,
-                mode,
-            } => append_tar_entry(&mut tar, path, contents, *mode, b'0'),
-        }
-    }
-    tar.extend_from_slice(&[0u8; 512]);
-    tar.extend_from_slice(&[0u8; 512]);
-
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&tar).expect("write gzip");
-    encoder.finish().expect("finish gzip")
-}
-
-fn append_tar_entry(output: &mut Vec<u8>, path: &str, contents: &[u8], mode: u32, kind: u8) {
-    let mut header = [0u8; 512];
-    write_tar_field(&mut header[0..100], path.as_bytes());
-    write_tar_octal(&mut header[100..108], u64::from(mode));
-    write_tar_octal(&mut header[108..116], 0);
-    write_tar_octal(&mut header[116..124], 0);
-    write_tar_octal(&mut header[124..136], contents.len() as u64);
-    write_tar_octal(&mut header[136..148], 0);
-    header[148..156].fill(b' ');
-    header[156] = kind;
-    write_tar_field(&mut header[257..263], b"ustar");
-    write_tar_field(&mut header[263..265], b"00");
-    let checksum = header.iter().map(|byte| u32::from(*byte)).sum::<u32>();
-    let checksum = format!("{checksum:06o}\0 ");
-    header[148..156].copy_from_slice(checksum.as_bytes());
-
-    output.extend_from_slice(&header);
-    output.extend_from_slice(contents);
-    let padding = (512 - contents.len() % 512) % 512;
-    output.extend(std::iter::repeat_n(0, padding));
-}
-
-fn write_tar_field(field: &mut [u8], value: &[u8]) {
-    field[..value.len()].copy_from_slice(value);
-}
-
-fn write_tar_octal(field: &mut [u8], value: u64) {
-    let value = format!("{value:0width$o}\0", width = field.len() - 1);
-    field.copy_from_slice(value.as_bytes());
+    Ok(tar.into_inner()?.finish()?)
 }
