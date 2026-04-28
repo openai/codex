@@ -5487,6 +5487,7 @@ impl ChatWidget {
                 } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c')
             )
             && !key_hint::ctrl(KeyCode::Char('r')).is_press(key_event)
+            && !key_hint::ctrl(KeyCode::Char('u')).is_press(key_event)
         {
             self.bottom_pane.handle_key_event(key_event);
             if self.bottom_pane.no_modal_or_popup_active() {
@@ -11684,6 +11685,9 @@ impl ChatWidget {
         &mut self,
         plugins: Option<Vec<PluginCapabilitySummary>>,
     ) {
+        if self.bottom_pane.plugins() == plugins.as_ref() {
+            return;
+        }
         self.bottom_pane.set_plugin_mentions(plugins);
     }
 
