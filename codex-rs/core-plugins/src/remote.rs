@@ -16,6 +16,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
+use tracing::warn;
 
 pub const REMOTE_GLOBAL_MARKETPLACE_NAME: &str = "chatgpt-global";
 pub const REMOTE_WORKSPACE_MARKETPLACE_NAME: &str = "chatgpt-workspace";
@@ -544,7 +545,6 @@ pub async fn uninstall_remote_plugin(
     plugin_id: &str,
 ) -> Result<(), RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
-    let remote_detail = fetch_remote_plugin_detail_by_id(config, auth, plugin_id).await?;
 
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/plugins/{plugin_id}/uninstall");
@@ -565,14 +565,19 @@ pub async fn uninstall_remote_plugin(
         });
     }
 
+    let remote_detail = match fetch_remote_plugin_detail_by_id(config, auth, plugin_id).await {
+        Ok(remote_detail) => Some(remote_detail),
+        Err(err) => {
+            warn!(
+                plugin_id,
+                "failed to read remote plugin details after uninstall; skipping named cache removal: {err}"
+            );
+            None
+        }
+    };
     let legacy_plugin_id = plugin_id.to_string();
     tokio::task::spawn_blocking(move || {
-        remove_remote_plugin_cache(
-            codex_home,
-            remote_detail.marketplace_name,
-            remote_detail.summary.name,
-            legacy_plugin_id,
-        )
+        remove_remote_plugin_cache(codex_home, remote_detail, legacy_plugin_id)
     })
     .await
     .map_err(|err| {
@@ -587,31 +592,44 @@ pub async fn uninstall_remote_plugin(
 
 fn remove_remote_plugin_cache(
     codex_home: PathBuf,
-    marketplace_name: String,
-    plugin_name: String,
+    remote_detail: Option<RemotePluginDetail>,
     legacy_plugin_id: String,
 ) -> Result<(), String> {
-    let store = PluginStore::try_new(codex_home.clone())
-        .map_err(|err| format!("failed to resolve remote plugin cache root: {err}"))?;
-    let plugin_id =
-        PluginId::new(plugin_name.clone(), marketplace_name.clone()).map_err(|err| {
+    if let Some(remote_detail) = remote_detail {
+        let marketplace_name = remote_detail.marketplace_name;
+        let plugin_name = remote_detail.summary.name;
+        let store = PluginStore::try_new(codex_home.clone())
+            .map_err(|err| format!("failed to resolve remote plugin cache root: {err}"))?;
+        let plugin_id = PluginId::new(plugin_name.clone(), marketplace_name.clone()).map_err(
+            |err| {
+                format!(
+                    "invalid remote plugin cache id for `{plugin_name}` in `{marketplace_name}`: {err}"
+                )
+            },
+        )?;
+        let plugin_cache_root = store.plugin_base_root(&plugin_id);
+        store.uninstall(&plugin_id).map_err(|err| {
             format!(
-                "invalid remote plugin cache id for `{plugin_name}` in `{marketplace_name}`: {err}"
+                "failed to remove remote plugin cache entry {}: {err}",
+                plugin_cache_root.display()
             )
         })?;
-    let plugin_cache_root = store.plugin_base_root(&plugin_id);
-    store.uninstall(&plugin_id).map_err(|err| {
-        format!(
-            "failed to remove remote plugin cache entry {}: {err}",
-            plugin_cache_root.display()
-        )
-    })?;
 
-    let legacy_remote_plugin_cache_root = codex_home
-        .join(PLUGINS_CACHE_DIR)
-        .join(marketplace_name)
-        .join(legacy_plugin_id);
-    if legacy_remote_plugin_cache_root != plugin_cache_root.as_path() {
+        let legacy_remote_plugin_cache_root = codex_home
+            .join(PLUGINS_CACHE_DIR)
+            .join(marketplace_name)
+            .join(legacy_plugin_id);
+        if legacy_remote_plugin_cache_root != plugin_cache_root.as_path() {
+            remove_path_if_exists(&legacy_remote_plugin_cache_root)?;
+        }
+        return Ok(());
+    }
+
+    for scope in RemotePluginScope::all() {
+        let legacy_remote_plugin_cache_root = codex_home
+            .join(PLUGINS_CACHE_DIR)
+            .join(scope.marketplace_name())
+            .join(&legacy_plugin_id);
         remove_path_if_exists(&legacy_remote_plugin_cache_root)?;
     }
     Ok(())

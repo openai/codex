@@ -326,6 +326,103 @@ async fn plugin_uninstall_uses_detail_scope_for_cache_namespace() -> Result<()> 
 }
 
 #[tokio::test]
+async fn plugin_uninstall_posts_even_when_remote_detail_fetch_fails() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_catalog_config(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/backend-api/plugins/{REMOTE_PLUGIN_ID}/uninstall"
+        )))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(format!(r#"{{"id":"{REMOTE_PLUGIN_ID}","enabled":false}}"#)),
+        )
+        .mount(&server)
+        .await;
+
+    let legacy_remote_plugin_cache_root = codex_home
+        .path()
+        .join(format!("plugins/cache/chatgpt-global/{REMOTE_PLUGIN_ID}"));
+    std::fs::create_dir_all(legacy_remote_plugin_cache_root.join("local/.codex-plugin"))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_uninstall_request(PluginUninstallParams {
+            plugin_id: REMOTE_PLUGIN_ID.to_string(),
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginUninstallResponse = to_response(response)?;
+
+    assert_eq!(response, PluginUninstallResponse {});
+    wait_for_remote_plugin_request_count(
+        &server,
+        "POST",
+        &format!("/plugins/{REMOTE_PLUGIN_ID}/uninstall"),
+        /*expected_count*/ 1,
+    )
+    .await?;
+    assert!(!legacy_remote_plugin_cache_root.exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_uninstall_rejects_malformed_local_plugin_id_before_remote_path() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_catalog_config(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_uninstall_request(PluginUninstallParams {
+            plugin_id: "sample-plugin".to_string(),
+        })
+        .await?;
+
+    let err = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, -32600);
+    assert!(err.error.message.contains("invalid plugin id"));
+    wait_for_remote_plugin_request_count(
+        &server,
+        "POST",
+        "/plugins/sample-plugin/uninstall",
+        /*expected_count*/ 0,
+    )
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_uninstall_rejects_invalid_remote_plugin_id_before_network_call() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
@@ -349,12 +446,7 @@ async fn plugin_uninstall_rejects_invalid_remote_plugin_id_before_network_call()
     .await??;
 
     assert_eq!(err.error.code, -32600);
-    assert!(err.error.message.contains("invalid remote plugin id"));
-    assert!(
-        err.error
-            .message
-            .contains("only ASCII letters, digits, `_`, `-`, and `~` are allowed")
-    );
+    assert!(err.error.message.contains("invalid plugin id"));
     wait_for_remote_plugin_request_count(
         &server,
         "POST",
@@ -388,7 +480,7 @@ async fn plugin_uninstall_rejects_empty_remote_plugin_id() -> Result<()> {
     .await??;
 
     assert_eq!(err.error.code, -32600);
-    assert!(err.error.message.contains("invalid remote plugin id"));
+    assert!(err.error.message.contains("invalid plugin id"));
 
     Ok(())
 }
