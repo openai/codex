@@ -373,7 +373,7 @@ print(json.dumps({
                 matcher: Some("Bash".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
                     command: format!("python3 {}", script_path.display()),
-                    timeout_sec: Some(15),
+                    timeout_sec: Some(10),
                     r#async: false,
                     status_message: None,
                 }],
@@ -425,12 +425,7 @@ print(json.dumps({
 
     assert_eq!(outcome.hook_events.len(), 1);
     assert_eq!(outcome.hook_events[0].run.source, HookSource::Plugin);
-    assert_eq!(
-        outcome.hook_events[0].run.status,
-        HookRunStatus::Completed,
-        "plugin hook entries: {:?}",
-        outcome.hook_events[0].run.entries,
-    );
+    assert_eq!(outcome.hook_events[0].run.status, HookRunStatus::Completed);
     assert_eq!(outcome.hook_events[0].run.entries.len(), 1);
     assert_eq!(
         outcome.hook_events[0].run.entries[0].kind,
