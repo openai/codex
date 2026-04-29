@@ -447,17 +447,17 @@ fn encrypted_reasoning_upgrades_when_later_sighting_has_more_readable_body() -> 
     start_turn(&writer, "turn-1")?;
 
     let user = message("user", "count files");
-    // Both sightings carry the same encrypted identity. The second sighting is
-    // strictly richer because it preserves the original text and adds summary.
+    // Both sightings carry the same encrypted identity, but each has a
+    // different kind of readable evidence. The reducer should keep both
+    // observations because text and summary are complementary.
     let text_only_reasoning = json!({
         "type": "reasoning",
         "content": [{"type": "text", "text": "need count"}],
         "summary": [],
         "encrypted_content": "encoded-reasoning"
     });
-    let text_and_summary_reasoning = json!({
+    let summary_only_reasoning = json!({
         "type": "reasoning",
-        "content": [{"type": "text", "text": "need count"}],
         "summary": [{"type": "summary_text", "text": "counting files"}],
         "encrypted_content": "encoded-reasoning"
     });
@@ -474,7 +474,7 @@ fn encrypted_reasoning_upgrades_when_later_sighting_has_more_readable_body() -> 
     let second_request = writer.write_json_payload(
         RawPayloadKind::InferenceRequest,
         &json!({
-            "input": [user, text_and_summary_reasoning]
+            "input": [user, summary_only_reasoning]
         }),
     )?;
     append_inference_start(&writer, "inference-2", "turn-2", second_request)?;
@@ -484,8 +484,8 @@ fn encrypted_reasoning_upgrades_when_later_sighting_has_more_readable_body() -> 
     let second = &rollout.inference_calls["inference-2"];
     let reasoning_item_id = &first.request_item_ids[1];
 
-    // The reducer should keep one conversation item and upgrade its readable
-    // body to the richer non-conflicting observation.
+    // The reducer should keep one conversation item and merge the missing
+    // readable kind without treating the second sighting as a conflict.
     assert_eq!(&second.request_item_ids[1], reasoning_item_id);
     assert_eq!(
         rollout.conversation_items[reasoning_item_id].body.parts,

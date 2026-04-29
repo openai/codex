@@ -6,6 +6,7 @@
 //! later model-facing payload carries their content.
 
 use anyhow::Context;
+use anyhow::Ok;
 use anyhow::Result;
 use anyhow::bail;
 use serde_json::Value;
@@ -633,10 +634,60 @@ fn merge_reasoning_body(
     if !reasoning_body_matches(existing, incoming) {
         bail!("reasoning item merge attempted with different encrypted_content identity");
     }
-    if incoming_readable_reasoning_supersedes_existing(existing, incoming) {
-        existing.parts = incoming.parts.clone();
+
+    let existing_text_parts = reasoning_text_parts(existing);
+    let existing_summary_parts = reasoning_summary_parts(existing);
+    if !existing_text_parts.is_empty() && !existing_summary_parts.is_empty() {
+        return Ok(());
     }
+
+    let incoming_text_parts = reasoning_text_parts(incoming);
+    let incoming_summary_parts = reasoning_summary_parts(incoming);
+
+    let text_parts = if !existing_text_parts.is_empty() {
+        existing_text_parts
+    } else {
+        incoming_text_parts
+    };
+
+    let summary_parts = if !existing_summary_parts.is_empty() {
+        existing_summary_parts
+    } else {
+        incoming_summary_parts
+    };
+
+    // We already know that the encoded part exist (and matches).
+    let encoded_parts = reasoning_encoded_parts(existing);
+
+    existing.parts = text_parts
+        .into_iter()
+        .cloned()
+        .chain(summary_parts.into_iter().cloned())
+        .chain(encoded_parts.into_iter().cloned())
+        .collect();
+
     Ok(())
+}
+
+fn reasoning_text_parts(body: &ConversationBody) -> Vec<&ConversationPart> {
+    body.parts
+        .iter()
+        .filter(|part| matches!(part, ConversationPart::Text { .. }))
+        .collect()
+}
+
+fn reasoning_summary_parts(body: &ConversationBody) -> Vec<&ConversationPart> {
+    body.parts
+        .iter()
+        .filter(|part| matches!(part, ConversationPart::Summary { .. }))
+        .collect()
+}
+
+fn reasoning_encoded_parts(body: &ConversationBody) -> Vec<&ConversationPart> {
+    body.parts
+        .iter()
+        .filter(|part| matches!(part, ConversationPart::Encoded { .. }))
+        .collect()
 }
 
 fn reasoning_encoded_part(body: &ConversationBody) -> Option<(&str, &str)> {
@@ -647,34 +698,6 @@ fn reasoning_encoded_part(body: &ConversationBody) -> Option<(&str, &str)> {
             None
         }
     })
-}
-
-fn readable_reasoning_parts(body: &ConversationBody) -> Vec<&ConversationPart> {
-    body.parts
-        .iter()
-        .filter(|part| {
-            matches!(
-                part,
-                ConversationPart::Text { .. } | ConversationPart::Summary { .. }
-            )
-        })
-        .collect()
-}
-
-fn incoming_readable_reasoning_supersedes_existing(
-    existing: &ConversationBody,
-    incoming: &ConversationBody,
-) -> bool {
-    let existing_parts = readable_reasoning_parts(existing);
-    let incoming_parts = readable_reasoning_parts(incoming);
-    // Keep the richest non-conflicting readable observation. Treat "richer" as
-    // an ordered superset so a later sighting can add summary/text while a
-    // conflicting sighting cannot overwrite the first readable body.
-    let mut incoming_iter = incoming_parts.iter();
-    existing_parts.len() < incoming_parts.len()
-        && existing_parts
-            .iter()
-            .all(|existing| incoming_iter.any(|incoming| incoming == existing))
 }
 
 #[cfg(test)]
