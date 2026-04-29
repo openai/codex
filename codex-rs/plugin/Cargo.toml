@@ -13,6 +13,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+codex-config = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-plugins = { workspace = true }
 thiserror = { workspace = true }

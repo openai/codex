@@ -33,30 +33,8 @@ static CONTEXTUAL_USER_FRAGMENTS: &[&dyn FragmentRegistration] = &[
     &SUBAGENT_NOTIFICATION_REGISTRATION,
 ];
 
-static MEMORY_EXCLUDED_CONTEXTUAL_USER_FRAGMENTS: &[&dyn FragmentRegistration] = &[
-    &USER_INSTRUCTIONS_REGISTRATION,
-    &SKILL_INSTRUCTIONS_REGISTRATION,
-];
-
 fn is_standard_contextual_user_text(text: &str) -> bool {
     CONTEXTUAL_USER_FRAGMENTS
-        .iter()
-        .any(|fragment| fragment.matches_text(text))
-}
-
-/// Returns whether a contextual user fragment should be omitted from memory
-/// stage-1 inputs.
-///
-/// We exclude injected `AGENTS.md` instructions and skill payloads because
-/// they are prompt scaffolding rather than conversation content, so they do
-/// not improve the resulting memory. We keep environment context and
-/// subagent notifications because they can carry useful execution context or
-/// subtask outcomes that should remain visible to memory generation.
-pub(crate) fn is_memory_excluded_contextual_user_fragment(content_item: &ContentItem) -> bool {
-    let ContentItem::InputText { text } = content_item else {
-        return false;
-    };
-    MEMORY_EXCLUDED_CONTEXTUAL_USER_FRAGMENTS
         .iter()
         .any(|fragment| fragment.matches_text(text))
 }

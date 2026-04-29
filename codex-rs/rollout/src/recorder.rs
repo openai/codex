@@ -867,7 +867,7 @@ impl RolloutRecorder {
             if line.trim().is_empty() {
                 continue;
             }
-            let v: Value = match serde_json::from_str(line) {
+            let mut v: Value = match serde_json::from_str(line) {
                 Ok(v) => v,
                 Err(e) => {
                     warn!("failed to parse line as JSON: {line:?}, error: {e}");
@@ -875,6 +875,10 @@ impl RolloutRecorder {
                     continue;
                 }
             };
+            if strip_legacy_ghost_snapshot_rollout_line(&mut v) {
+                trace!("skipping legacy ghost_snapshot rollout line");
+                continue;
+            }
 
             // Parse the rollout line structure
             match serde_json::from_value::<RolloutLine>(v.clone()) {
@@ -959,6 +963,29 @@ impl RolloutRecorder {
         };
         Ok(())
     }
+}
+
+fn strip_legacy_ghost_snapshot_rollout_line(value: &mut Value) -> bool {
+    match value.get("type").and_then(Value::as_str) {
+        Some("response_item") => value
+            .get("payload")
+            .is_some_and(is_legacy_ghost_snapshot_response_item),
+        Some("compacted") => {
+            if let Some(replacement_history) = value
+                .get_mut("payload")
+                .and_then(|payload| payload.get_mut("replacement_history"))
+                .and_then(Value::as_array_mut)
+            {
+                replacement_history.retain(|item| !is_legacy_ghost_snapshot_response_item(item));
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn is_legacy_ghost_snapshot_response_item(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("ghost_snapshot")
 }
 
 fn truncate_fs_page(

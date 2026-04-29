@@ -3,24 +3,20 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_config::ConfigLayerStack;
-use codex_config::ConfigLayerStackOrdering;
-use codex_config::NetworkConstraints;
-use codex_config::NetworkRequirementsToml;
-use codex_config::RequirementSource;
-use codex_config::Sourced;
 use codex_core::config::Constrained;
 use codex_features::Feature;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
+use core_test_support::managed_network_requirements_loader;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -52,6 +48,24 @@ const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
 const BLOCKED_PROMPT_CONTEXT: &str = "Remember the blocked lighthouse note.";
 const PERMISSION_REQUEST_HOOK_MATCHER: &str = "^Bash$";
 const PERMISSION_REQUEST_ALLOW_REASON: &str = "should not be used for allow";
+
+fn restrictive_workspace_write_profile() -> PermissionProfile {
+    PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    )
+}
+
+fn network_workspace_write_profile() -> PermissionProfile {
+    PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Enabled,
+        /*exclude_tmpdir_env_var*/ false,
+        /*exclude_slash_tmp*/ false,
+    )
+}
 
 fn write_stop_hook(home: &Path, block_prompts: &[&str]) -> Result<()> {
     let script_path = home.join("stop_hook.py");
@@ -732,7 +746,7 @@ fn request_message_input_texts(body: &[u8], role: &str) -> Vec<String> {
         .collect()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -846,7 +860,7 @@ async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -891,7 +905,7 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn resumed_thread_keeps_stop_continuation_prompt_in_history() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -967,7 +981,7 @@ async fn resumed_thread_keeps_stop_continuation_prompt_in_history() -> Result<()
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn multiple_blocking_stop_hooks_persist_multiple_hook_prompt_fragments() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1033,7 +1047,7 @@ async fn multiple_blocking_stop_hooks_persist_multiple_hook_prompt_fragments() -
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1116,7 +1130,7 @@ async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() 
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1281,7 +1295,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn permission_request_hook_allows_shell_command_without_user_approval() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1327,10 +1341,10 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
 
     fs::write(&marker, "seed").context("create permission request marker")?;
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "run the shell command after hook approval",
         AskForApproval::OnRequest,
-        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 
@@ -1360,7 +1374,7 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1412,15 +1426,10 @@ async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result
     let test = builder.build(&server).await?;
     let target_path = test.workspace_path(&patch_path);
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "apply the patch after hook approval",
         AskForApproval::OnRequest,
-        SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        },
+        restrictive_workspace_write_profile(),
     )
     .await?;
 
@@ -1442,7 +1451,7 @@ async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1499,10 +1508,10 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
 
     fs::write(&marker, "seed").context("create exec command permission request marker")?;
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "run the exec command after hook approval",
         AskForApproval::OnRequest,
-        codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+        PermissionProfile::read_only(),
     )
     .await?;
 
@@ -1523,7 +1532,7 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn permission_request_hook_allows_network_approval_without_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1563,13 +1572,8 @@ allow_local_binding = true
     .await;
 
     let approval_policy = AskForApproval::OnFailure;
-    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
-        network_access: true,
-        exclude_tmpdir_env_var: false,
-        exclude_slash_tmp: false,
-    };
-    let sandbox_policy_for_config = sandbox_policy.clone();
+    let permission_profile = network_workspace_write_profile();
+    let permission_profile_for_config = permission_profile.clone();
     let test = test_codex()
         .with_home(Arc::clone(&home))
         .with_pre_build_hook(|home| {
@@ -1577,6 +1581,7 @@ allow_local_binding = true
                 panic!("failed to write permission request hook test fixture: {error}");
             }
         })
+        .with_cloud_requirements(managed_network_requirements_loader())
         .with_config(move |config| {
             config
                 .features
@@ -1584,35 +1589,9 @@ allow_local_binding = true
                 .expect("test config should allow feature update");
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
             config
-                .set_legacy_sandbox_policy(sandbox_policy_for_config)
-                .expect("set sandbox policy");
-            let layers = config
-                .config_layer_stack
-                .get_layers(
-                    ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                    /*include_disabled*/ true,
-                )
-                .into_iter()
-                .cloned()
-                .collect();
-            let mut requirements = config.config_layer_stack.requirements().clone();
-            requirements.network = Some(Sourced::new(
-                NetworkConstraints {
-                    enabled: Some(true),
-                    allow_local_binding: Some(true),
-                    ..Default::default()
-                },
-                RequirementSource::CloudRequirements,
-            ));
-            let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
-            requirements_toml.network = Some(NetworkRequirementsToml {
-                enabled: Some(true),
-                allow_local_binding: Some(true),
-                ..Default::default()
-            });
-            config.config_layer_stack =
-                ConfigLayerStack::new(layers, requirements, requirements_toml)
-                    .expect("rebuild config layer stack with network requirements");
+                .permissions
+                .set_permission_profile(permission_profile_for_config)
+                .expect("set permission profile");
         })
         .build(&server)
         .await?;
@@ -1629,10 +1608,10 @@ allow_local_binding = true
         .as_ref()
         .expect("expected runtime managed network proxy addresses");
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "run the shell command after network hook approval",
         approval_policy,
-        sandbox_policy,
+        permission_profile,
     )
     .await?;
 
@@ -1680,7 +1659,7 @@ allow_local_binding = true
 }
 
 #[cfg(not(target_os = "linux"))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1726,10 +1705,10 @@ async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Re
     let marker_path = test.workspace_path(marker);
     let _ = fs::remove_file(&marker_path);
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "retry the shell command after sandbox denial",
         AskForApproval::OnFailure,
-        codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+        PermissionProfile::read_only(),
     )
     .await?;
 
@@ -1750,7 +1729,7 @@ async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Re
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1800,9 +1779,9 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
         fs::remove_file(&marker).context("remove leftover pre tool use marker")?;
     }
 
-    test.submit_turn_with_policy(
+    test.submit_turn_with_permission_profile(
         "run the blocked shell command",
-        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 
@@ -1852,7 +1831,151 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
+async fn plugin_pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "plugin-pretooluse-shell-command";
+    let marker = std::env::temp_dir().join("plugin-pretooluse-shell-command-marker");
+    let command = format!("printf blocked > {}", marker.display());
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "plugin hook blocked it"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let home = Arc::new(TempDir::new()?);
+    let plugin_root = home.path().join("plugins/cache/test/sample/local");
+    let hooks_dir = plugin_root.join("hooks");
+    fs::create_dir_all(plugin_root.join(".codex-plugin"))
+        .context("create plugin manifest directory")?;
+    fs::create_dir_all(&hooks_dir).context("create plugin hooks directory")?;
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )
+    .context("write plugin manifest")?;
+    fs::write(
+        home.path().join("config.toml"),
+        r#"[plugins."sample@test"]
+enabled = true
+"#,
+    )
+    .context("write plugin config")?;
+
+    let script_path = hooks_dir.join("pre_tool_use_hook.py");
+    let log_path = hooks_dir.join("pre_tool_use_hook_log.jsonl");
+    fs::write(
+        &script_path,
+        format!(
+            r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+print(json.dumps({{
+    "hookSpecificOutput": {{
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "blocked by plugin hook"
+    }}
+}}))
+"#,
+            log_path = log_path.display(),
+        ),
+    )
+    .context("write plugin pre tool use hook script")?;
+    fs::write(
+        hooks_dir.join("hooks.json"),
+        r#"{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "^Bash$",
+      "hooks": [{
+        "type": "command",
+        "command": "python3 ${PLUGIN_ROOT}/hooks/pre_tool_use_hook.py"
+      }]
+    }]
+  }
+}"#,
+    )
+    .context("write plugin hooks config")?;
+
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Plugins)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::PluginHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    if marker.exists() {
+        fs::remove_file(&marker).context("remove leftover plugin pre tool use marker")?;
+    }
+
+    test.submit_turn_with_policy(
+        "run the shell command blocked by a plugin hook",
+        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(
+        output.contains("Command blocked by PreToolUse hook: blocked by plugin hook"),
+        "blocked tool output should surface the plugin hook reason",
+    );
+    assert!(
+        !marker.exists(),
+        "plugin hook should block shell command execution"
+    );
+
+    let hook_inputs = read_hook_inputs_from_log(&log_path)?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PreToolUse");
+    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
+    assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn pre_tool_use_blocks_shell_when_defined_in_config_toml() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1900,9 +2023,9 @@ async fn pre_tool_use_blocks_shell_when_defined_in_config_toml() -> Result<()> {
         fs::remove_file(&marker).context("remove leftover config.toml marker")?;
     }
 
-    test.submit_turn_with_policy(
+    test.submit_turn_with_permission_profile(
         "run the blocked shell command from config toml",
-        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 
@@ -1935,7 +2058,7 @@ async fn pre_tool_use_blocks_shell_when_defined_in_config_toml() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn pre_tool_use_merges_hooks_json_and_config_toml() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2036,7 +2159,7 @@ async fn pre_tool_use_merges_hooks_json_and_config_toml() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2130,7 +2253,7 @@ async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn pre_tool_use_blocks_exec_command_before_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2217,7 +2340,7 @@ async fn pre_tool_use_blocks_exec_command_before_execution() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn pre_tool_use_blocks_apply_patch_before_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2294,7 +2417,7 @@ async fn pre_tool_use_blocks_apply_patch_before_execution() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn pre_tool_use_blocks_apply_patch_with_write_alias() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2369,7 +2492,7 @@ async fn pre_tool_use_blocks_apply_patch_with_write_alias() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn pre_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2441,7 +2564,7 @@ async fn pre_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_records_additional_context_for_shell_command() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2538,7 +2661,7 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_block_decision_replaces_shell_command_output_with_reason() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2606,7 +2729,7 @@ async fn post_tool_use_block_decision_replaces_shell_command_output_with_reason(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_continue_false_replaces_shell_command_output_with_stop_reason() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
@@ -2675,7 +2798,7 @@ async fn post_tool_use_continue_false_replaces_shell_command_output_with_stop_re
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2749,7 +2872,7 @@ async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_exit_two_replaces_one_shot_exec_command_output_with_feedback() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
@@ -2824,7 +2947,7 @@ async fn post_tool_use_exit_two_replaces_one_shot_exec_command_output_with_feedb
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_windows!(Ok(()));
@@ -2930,7 +3053,7 @@ async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> R
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -3021,7 +3144,7 @@ async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -3094,7 +3217,7 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn post_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

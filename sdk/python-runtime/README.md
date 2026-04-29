@@ -1,6 +1,6 @@
 # Codex CLI Runtime for Python SDK
 
-Platform-specific runtime package consumed by the published `codex-app-server-sdk`.
+Platform-specific runtime package consumed by the published `openai-codex-app-server-sdk`.
 
 This package is staged during release so the SDK can pin an exact Codex CLI
 version without checking platform binaries into the repo.

@@ -30,7 +30,7 @@ async fn marketplace_upgrade_no_longer_runs_at_top_level() -> Result<()> {
         .args(["marketplace", "upgrade"])
         .assert()
         .failure()
-        .stderr(contains("unexpected argument 'upgrade' found"));
+        .stderr(contains("unrecognized subcommand 'upgrade'"));
 
     Ok(())
 }

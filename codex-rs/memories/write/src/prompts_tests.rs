@@ -9,7 +9,7 @@ fn build_stage_one_input_message_truncates_rollout_using_model_context_window() 
     model_info.context_window = Some(123_000);
     let expected_rollout_token_limit = usize::try_from(
         ((123_000_i64 * model_info.effective_context_window_percent) / 100)
-            * STAGE_ONE_CONTEXT_WINDOW_PERCENT
+            * crate::stage_one::CONTEXT_WINDOW_PERCENT
             / 100,
     )
     .unwrap();
@@ -39,7 +39,7 @@ fn build_stage_one_input_message_uses_default_limit_when_model_context_window_mi
     model_info.max_context_window = None;
     let expected_truncated = truncate_text(
         &input,
-        TruncationPolicy::Tokens(DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT),
+        TruncationPolicy::Tokens(crate::stage_one::DEFAULT_ROLLOUT_TOKEN_LIMIT),
     );
     let message = build_stage_one_input_message(
         &model_info,

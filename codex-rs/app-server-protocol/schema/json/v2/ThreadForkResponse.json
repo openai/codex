@@ -2485,18 +2485,6 @@
     "modelProvider": {
       "type": "string"
     },
-    "permissionProfile": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/PermissionProfile"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "Canonical active permissions view for this thread."
-    },
     "reasoningEffort": {
       "anyOf": [
         {

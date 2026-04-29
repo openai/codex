@@ -79,7 +79,6 @@ use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::NetworkApprovalProtocol;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnContextItem;
@@ -1638,8 +1637,11 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
         auto_review.approval_policy
     );
     assert_eq!(
-        &app.chat_widget.config_ref().legacy_sandbox_policy(),
-        &auto_review.sandbox_policy
+        app.chat_widget
+            .config_ref()
+            .permissions
+            .permission_profile(),
+        auto_review.permission_profile
     );
     assert_eq!(
         app.chat_widget.config_ref().approvals_reviewer,
@@ -1647,8 +1649,8 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
     );
     assert_eq!(app.runtime_approval_policy_override, None);
     assert_eq!(
-        app.runtime_sandbox_policy_override,
-        Some(auto_review.sandbox_policy.clone())
+        app.runtime_permission_profile_override,
+        Some(auto_review.permission_profile.clone())
     );
     assert_eq!(
         op_rx.try_recv(),
@@ -1656,8 +1658,8 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
-            sandbox_policy: Some(auto_review.sandbox_policy.clone()),
-            permission_profile: None,
+            sandbox_policy: None,
+            permission_profile: Some(auto_review.permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1714,11 +1716,12 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
         .approval_policy
         .set(AskForApproval::OnRequest)?;
     app.config
-        .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())?;
+        .permissions
+        .set_permission_profile(PermissionProfile::workspace_write())?;
     app.chat_widget
         .set_approval_policy(AskForApproval::OnRequest);
     app.chat_widget
-        .set_sandbox_policy(SandboxPolicy::new_workspace_write_policy())?;
+        .set_permission_profile(PermissionProfile::workspace_write())?;
 
     app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
         .await;
@@ -1813,8 +1816,11 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
         auto_review.approval_policy
     );
     assert_eq!(
-        &app.chat_widget.config_ref().legacy_sandbox_policy(),
-        &auto_review.sandbox_policy
+        app.chat_widget
+            .config_ref()
+            .permissions
+            .permission_profile(),
+        auto_review.permission_profile
     );
     assert_eq!(
         op_rx.try_recv(),
@@ -1822,8 +1828,8 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
-            sandbox_policy: Some(auto_review.sandbox_policy.clone()),
-            permission_profile: None,
+            sandbox_policy: None,
+            permission_profile: Some(auto_review.permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1940,8 +1946,8 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
-            sandbox_policy: Some(auto_review.sandbox_policy.clone()),
-            permission_profile: None,
+            sandbox_policy: None,
+            permission_profile: Some(auto_review.permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -2211,8 +2217,7 @@ async fn inactive_thread_approval_bubbles_into_active_view() -> Result<()> {
             /*capacity*/ 1,
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-                permission_profile: Some(PermissionProfile::workspace_write()),
+                permission_profile: PermissionProfile::workspace_write(),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2371,8 +2376,7 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
             /*capacity*/ 4,
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-                permission_profile: Some(PermissionProfile::workspace_write()),
+                permission_profile: PermissionProfile::workspace_write(),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2663,8 +2667,7 @@ async fn inactive_thread_approval_badge_clears_after_turn_completion_notificatio
             /*capacity*/ 4,
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-                permission_profile: Some(PermissionProfile::workspace_write()),
+                permission_profile: PermissionProfile::workspace_write(),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2717,8 +2720,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
         ThreadId::from_string("00000000-0000-0000-0000-000000000202").expect("valid thread");
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
-        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-        permission_profile: Some(PermissionProfile::workspace_write()),
+        permission_profile: PermissionProfile::workspace_write(),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
 
@@ -2735,6 +2737,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     );
 
     let rollout_path = temp_dir.path().join("agent-rollout.jsonl");
+    let permission_profile = PermissionProfile::workspace_write();
     let turn_context = TurnContextItem {
         turn_id: None,
         trace_id: None,
@@ -2742,8 +2745,10 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
         current_date: None,
         timezone: None,
         approval_policy: primary_session.approval_policy,
-        sandbox_policy: primary_session.sandbox_policy.clone(),
-        permission_profile: None,
+        sandbox_policy: permission_profile
+            .to_legacy_sandbox_policy(test_path_buf("/tmp/agent").as_path())
+            .expect("workspace profile must be legacy-compatible"),
+        permission_profile: Some(permission_profile),
         network: None,
         file_system_sandbox_policy: None,
         model: "gpt-agent".to_string(),
@@ -2830,8 +2835,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
         ThreadId::from_string("00000000-0000-0000-0000-000000000302").expect("valid thread");
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
-        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-        permission_profile: Some(PermissionProfile::workspace_write()),
+        permission_profile: PermissionProfile::workspace_write(),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
 
@@ -2887,9 +2891,9 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
     Ok(())
 }
 
-/// `thread/read` is metadata/replay hydration and does not return an
-/// authoritative runtime `PermissionProfile`, so it must not reuse the active
-/// primary session profile after swapping in the read thread's cwd.
+/// `thread/read` is metadata/replay hydration and does not return a fresh
+/// server-authored `PermissionProfile`, so it must not reuse the cached primary
+/// session profile after swapping in the read thread's cwd.
 #[tokio::test]
 async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
     let mut app = make_test_app().await;
@@ -2899,8 +2903,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         ThreadId::from_string("00000000-0000-0000-0000-000000000402").expect("valid thread");
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
-        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-        permission_profile: Some(PermissionProfile::workspace_write()),
+        permission_profile: PermissionProfile::workspace_write(),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
     app.primary_session_configured = Some(primary_session);
@@ -2931,10 +2934,15 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
 
     assert_eq!(session.thread_id, read_thread_id);
     assert_eq!(session.cwd.as_path(), test_path_buf("/tmp/read").as_path());
+    let expected_permission_profile = app
+        .chat_widget
+        .config_ref()
+        .permissions
+        .permission_profile();
     assert_eq!(
-        session.permission_profile, None,
-        "thread/read does not return an authoritative permission profile; reusing the primary \
-         session profile would reinterpret cwd-bound entries against the read thread cwd"
+        session.permission_profile, expected_permission_profile,
+        "thread/read does not return fresh server permissions; the fallback profile must use the \
+         active widget permissions rather than reusing the cached primary session profile"
     );
 }
 
@@ -3561,8 +3569,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: Some(ReasoningEffortConfig::High),
             history_log_id: 0,
@@ -3689,7 +3696,7 @@ async fn make_test_app() -> App {
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),
         runtime_approval_policy_override: None,
-        runtime_sandbox_policy_override: None,
+        runtime_permission_profile_override: None,
         file_search,
         transcript_cells: Vec::new(),
         overlay: None,
@@ -3698,6 +3705,7 @@ async fn make_test_app() -> App {
         transcript_reflow: TranscriptReflowState::default(),
         initial_history_replay_buffer: None,
         enhanced_keys_supported: false,
+        keymap: crate::keymap::RuntimeKeymap::defaults(),
         commit_anim_running: Arc::new(AtomicBool::new(false)),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -3748,7 +3756,7 @@ async fn make_test_app_with_channels() -> (
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),
             runtime_approval_policy_override: None,
-            runtime_sandbox_policy_override: None,
+            runtime_permission_profile_override: None,
             file_search,
             transcript_cells: Vec::new(),
             overlay: None,
@@ -3757,6 +3765,7 @@ async fn make_test_app_with_channels() -> (
             transcript_reflow: TranscriptReflowState::default(),
             initial_history_replay_buffer: None,
             enhanced_keys_supported: false,
+            keymap: crate::keymap::RuntimeKeymap::defaults(),
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -3799,8 +3808,7 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        permission_profile: Some(PermissionProfile::read_only()),
+        permission_profile: PermissionProfile::read_only(),
         cwd: cwd.abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
@@ -4312,8 +4320,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4376,8 +4383,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4470,8 +4476,7 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4760,7 +4765,10 @@ async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
             /*is_first_line*/ false,
         )) as Arc<dyn HistoryCell>,
     ];
-    app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
+    app.overlay = Some(Overlay::new_transcript(
+        app.transcript_cells.clone(),
+        app.keymap.pager.clone(),
+    ));
     app.deferred_history_lines = vec![Line::from("stale buffered line")];
     app.backtrack.overlay_preview_active = true;
     app.backtrack.nth_user_message = 1;
@@ -4854,8 +4862,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        permission_profile: None,
+        permission_profile: PermissionProfile::read_only(),
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: None,
         history_log_id: 0,
@@ -4967,8 +4974,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4986,7 +4992,10 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
         local_image_paths: Vec::new(),
         remote_image_urls: Vec::new(),
     }) as Arc<dyn HistoryCell>];
-    app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
+    app.overlay = Some(Overlay::new_transcript(
+        app.transcript_cells.clone(),
+        crate::keymap::RuntimeKeymap::defaults().pager,
+    ));
     app.deferred_history_lines = vec![Line::from("stale buffered line")];
     app.has_emitted_history_lines = true;
     app.backtrack.primed = true;

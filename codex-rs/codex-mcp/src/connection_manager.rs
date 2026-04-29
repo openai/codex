@@ -71,6 +71,7 @@ pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     server_origins: HashMap<String, String>,
     elicitation_requests: ElicitationRequestManager,
+    startup_cancellation_token: CancellationToken,
 }
 
 impl McpConnectionManager {
@@ -85,11 +86,30 @@ impl McpConnectionManager {
                 approval_policy.value(),
                 permission_profile.get().clone(),
             ),
+            startup_cancellation_token: CancellationToken::new(),
         }
     }
 
     pub fn has_servers(&self) -> bool {
         !self.clients.is_empty()
+    }
+
+    /// Drain all MCP clients from this manager and return a future that stops
+    /// them and terminates their stdio server processes.
+    pub fn begin_shutdown(&mut self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        self.startup_cancellation_token.cancel();
+        let clients = std::mem::take(&mut self.clients);
+        self.server_origins.clear();
+        async move {
+            for client in clients.into_values() {
+                client.shutdown().await;
+            }
+        }
+    }
+
+    /// Stop all MCP clients owned by this manager and terminate stdio server processes.
+    pub async fn shutdown(&mut self) {
+        self.begin_shutdown().await;
     }
 
     pub fn server_origin(&self, server_name: &str) -> Option<&str> {
@@ -221,6 +241,7 @@ impl McpConnectionManager {
             clients,
             server_origins,
             elicitation_requests: elicitation_requests.clone(),
+            startup_cancellation_token: cancel_token.clone(),
         };
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
@@ -606,6 +627,13 @@ impl McpConnectionManager {
             .client()
             .await
             .context("failed to get client")
+    }
+}
+
+impl Drop for McpConnectionManager {
+    fn drop(&mut self) {
+        self.startup_cancellation_token.cancel();
+        self.clients.clear();
     }
 }
 

@@ -16,6 +16,7 @@ workspace = true
 anyhow = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-config = { workspace = true }
+codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 futures = { workspace = true, features = ["alloc"] }

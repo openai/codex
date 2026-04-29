@@ -19,8 +19,11 @@ async fn prunes_only_old_resources_from_extensions_with_instructions() {
     .expect("write chronicle instructions");
 
     let now = DateTime::from_naive_utc_and_offset(
-        NaiveDateTime::parse_from_str("2026-04-14T12-00-00", FILENAME_TS_FORMAT)
-            .expect("parse now"),
+        NaiveDateTime::parse_from_str(
+            "2026-04-14T12-00-00",
+            crate::extension_resources::FILENAME_TS_FORMAT,
+        )
+        .expect("parse now"),
         Utc,
     );
     let old_file = chronicle_resources.join("2026-04-06T11-59-59-abcd-10min-old.md");

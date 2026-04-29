@@ -5,6 +5,28 @@ mod registry;
 mod schema;
 mod types;
 
+/// Hook event names as they appear in hooks JSON and config files.
+pub const HOOK_EVENT_NAMES: [&str; 6] = [
+    "PreToolUse",
+    "PermissionRequest",
+    "PostToolUse",
+    "SessionStart",
+    "UserPromptSubmit",
+    "Stop",
+];
+
+/// Hook event names whose matcher fields are meaningful during dispatch.
+///
+/// Other events can appear in hooks JSON, but Codex ignores their matcher
+/// fields because those events do not dispatch against a tool or session-start
+/// source.
+pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 4] = [
+    "PreToolUse",
+    "PermissionRequest",
+    "PostToolUse",
+    "SessionStart",
+];
+
 pub use events::permission_request::PermissionRequestDecision;
 pub use events::permission_request::PermissionRequestOutcome;
 pub use events::permission_request::PermissionRequestRequest;

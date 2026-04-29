@@ -140,6 +140,8 @@ pub use tool_spec::create_local_shell_tool;
 pub use tool_spec::create_tools_json_for_responses_api;
 pub use tool_spec::create_web_search_tool;
 pub use tool_suggest::TOOL_SUGGEST_APPROVAL_KIND_VALUE;
+pub use tool_suggest::TOOL_SUGGEST_PERSIST_ALWAYS_VALUE;
+pub use tool_suggest::TOOL_SUGGEST_PERSIST_KEY;
 pub use tool_suggest::ToolSuggestArgs;
 pub use tool_suggest::ToolSuggestMeta;
 pub use tool_suggest::ToolSuggestResult;

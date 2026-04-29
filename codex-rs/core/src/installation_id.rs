@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 pub(crate) const INSTALLATION_ID_FILENAME: &str = "installation_id";
 
-pub(crate) async fn resolve_installation_id(codex_home: &AbsolutePathBuf) -> Result<String> {
+pub async fn resolve_installation_id(codex_home: &AbsolutePathBuf) -> Result<String> {
     let path = codex_home.join(INSTALLATION_ID_FILENAME);
     fs::create_dir_all(codex_home).await?;
     tokio::task::spawn_blocking(move || {

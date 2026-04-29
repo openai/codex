@@ -74,11 +74,13 @@ def run_sbx(
     env.update(ENV_BASE)
     if env_extra:
         env.update(env_extra)
-    # Map policy to codex CLI flags
-    # read-only => default; workspace-write => --full-auto
+    # Map policy to codex CLI overrides.
+    # read-only => default; workspace-write => legacy sandbox_mode override
     if policy not in ("read-only", "workspace-write"):
         raise ValueError(f"unknown policy: {policy}")
-    policy_flags: List[str] = ["--full-auto"] if policy == "workspace-write" else []
+    policy_flags: List[str] = (
+        ["-c", 'sandbox_mode="workspace-write"'] if policy == "workspace-write" else []
+    )
 
     overrides: List[str] = []
     if policy == "workspace-write" and additional_root is not None:

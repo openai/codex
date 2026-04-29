@@ -28,9 +28,9 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::WebSearchAction as ApiWebSearchAction;
 use codex_protocol::ThreadId;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
@@ -114,8 +114,7 @@ fn session_configured_produces_thread_started_event() {
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        permission_profile: None,
+        permission_profile: PermissionProfile::read_only(),
         cwd: test_path_buf("/tmp/project").abs(),
         reasoning_effort: None,
         history_log_id: 0,

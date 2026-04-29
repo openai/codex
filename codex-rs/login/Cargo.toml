@@ -45,6 +45,7 @@ webbrowser = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 core_test_support = { workspace = true }
+jsonwebtoken = { workspace = true }
 keyring = { workspace = true }
 pretty_assertions = { workspace = true }
 regex-lite = { workspace = true }

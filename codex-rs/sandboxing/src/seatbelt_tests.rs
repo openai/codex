@@ -26,6 +26,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -57,6 +58,26 @@ fn seatbelt_policy_arg(args: &[String]) -> &str {
         .expect("seatbelt args should include -p");
     args.get(policy_index + 1)
         .expect("seatbelt args should include policy text")
+}
+
+fn seatbelt_protected_metadata_name_requirements(root: &Path) -> String {
+    let mut root = root.to_string_lossy().to_string();
+    while root.len() > 1 && root.ends_with('/') {
+        root.pop();
+    }
+    let root = regex_lite::escape(&root);
+    PROTECTED_METADATA_PATH_NAMES
+        .iter()
+        .map(|name| {
+            let name = regex_lite::escape(name);
+            if root == "/" {
+                format!(r#"(require-not (regex #"^/{name}(/.*)?$"))"#)
+            } else {
+                format!(r#"(require-not (regex #"^{root}/{name}(/.*)?$"))"#)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 struct TestConfigReloader;
@@ -184,6 +205,12 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
     assert!(
         policy.contains("(require-not (subpath (param \"WRITABLE_ROOT_0_EXCLUDED_0\")))"),
         "expected write carveout in policy:\n{policy}"
+    );
+    assert!(
+        policy.contains(&seatbelt_protected_metadata_name_requirements(Path::new(
+            "/"
+        ))),
+        "expected metadata protection regex deny requirements in policy:\n{policy}"
     );
     assert!(
         args.iter().any(
@@ -773,12 +800,13 @@ fn create_seatbelt_args_full_network_with_proxy_is_still_proxy_only() {
 #[test]
 fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     // Create a temporary workspace with two writable roots: one containing
-    // top-level .git and .codex directories and one without them.
+    // top-level workspace metadata paths and one without them.
     let tmp = TempDir::new().expect("tempdir");
     let PopulatedTmp {
         vulnerable_root,
         vulnerable_root_canonical,
         dot_git_canonical,
+        dot_agents_canonical: _,
         dot_codex_canonical,
         empty_root,
         empty_root_canonical,
@@ -828,7 +856,12 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     );
     assert!(
         policy_text.contains("WRITABLE_ROOT_0_EXCLUDED_0"),
-        "expected cwd .codex carveout in policy:\n{policy_text}",
+        "expected cwd metadata carveouts in policy:\n{policy_text}",
+    );
+    assert!(
+        policy_text.contains("WRITABLE_ROOT_0_EXCLUDED_1")
+            && policy_text.contains("WRITABLE_ROOT_0_EXCLUDED_2"),
+        "expected symbolic cwd .git/.agents carveouts in policy:\n{policy_text}",
     );
     assert!(
         policy_text.contains("WRITABLE_ROOT_1_EXCLUDED_0")
@@ -836,8 +869,22 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
         "expected explicit writable root .git/.codex carveouts in policy:\n{policy_text}",
     );
     assert!(
-        policy_text.contains("(subpath (param \"WRITABLE_ROOT_2\"))"),
-        "expected second explicit writable root grant in policy:\n{policy_text}",
+        policy_text.contains(&seatbelt_protected_metadata_name_requirements(
+            &cwd.canonicalize().expect("canonicalize cwd")
+        )),
+        "expected cwd metadata protection regex requirements in policy:\n{policy_text}",
+    );
+    assert!(
+        policy_text.contains(&seatbelt_protected_metadata_name_requirements(
+            &vulnerable_root_canonical
+        )),
+        "expected populated root metadata protection regex requirements in policy:\n{policy_text}",
+    );
+    assert!(
+        policy_text.contains(&seatbelt_protected_metadata_name_requirements(
+            &empty_root_canonical
+        )),
+        "expected empty root metadata protection regex requirements in policy:\n{policy_text}",
     );
 
     let expected_definitions = [
@@ -852,6 +899,20 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
             cwd.canonicalize()
                 .expect("canonicalize cwd")
                 .join(".codex")
+                .display()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_0_EXCLUDED_1={}",
+            cwd.canonicalize()
+                .expect("canonicalize cwd")
+                .join(".git")
+                .display()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_0_EXCLUDED_2={}",
+            cwd.canonicalize()
+                .expect("canonicalize cwd")
+                .join(".agents")
                 .display()
         ),
         format!(
@@ -995,7 +1056,7 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
 }
 
 #[test]
-fn create_seatbelt_args_block_first_time_dot_codex_creation_with_exact_and_descendant_carveouts() {
+fn create_seatbelt_args_block_first_time_dot_codex_creation_with_metadata_name_regex() {
     let tmp = TempDir::new().expect("tempdir");
     let repo_root = tmp.path().join("repo");
     fs::create_dir_all(&repo_root).expect("create repo root");
@@ -1037,12 +1098,10 @@ fn create_seatbelt_args_block_first_time_dot_codex_creation_with_exact_and_desce
 
     let policy_text = seatbelt_policy_arg(&args);
     assert!(
-        policy_text.contains("(require-not (literal (param \"WRITABLE_ROOT_0_EXCLUDED_1\")))"),
-        "expected exact .codex carveout in policy:\n{policy_text}"
-    );
-    assert!(
-        policy_text.contains("(require-not (subpath (param \"WRITABLE_ROOT_0_EXCLUDED_1\")))"),
-        "expected descendant .codex carveout in policy:\n{policy_text}"
+        policy_text.contains(&seatbelt_protected_metadata_name_requirements(
+            &repo_root.canonicalize().expect("canonicalize repo root")
+        )),
+        "expected metadata protection regex requirements in policy:\n{policy_text}"
     );
 }
 
@@ -1146,19 +1205,20 @@ fn create_seatbelt_args_with_read_only_git_pointer_file() {
 #[test]
 fn create_seatbelt_args_for_cwd_as_git_repo() {
     // Create a temporary workspace with two writable roots: one containing
-    // top-level .git and .codex directories and one without them.
+    // top-level workspace metadata paths and one without them.
     let tmp = TempDir::new().expect("tempdir");
     let PopulatedTmp {
         vulnerable_root,
         vulnerable_root_canonical,
         dot_git_canonical,
+        dot_agents_canonical,
         dot_codex_canonical,
         ..
     } = populate_tmpdir(tmp.path());
 
     // Build a policy that does not specify any writable_roots, but does
-    // use the default ones (cwd and TMPDIR) and verifies the `.git` and
-    // `.codex` checks are done properly for cwd.
+    // use the default ones (cwd and TMPDIR) and verifies the protected
+    // metadata checks are done properly for cwd.
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
@@ -1187,84 +1247,87 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         /*network*/ None,
     );
 
-    let tmpdir_env_var = std::env::var("TMPDIR")
+    let slash_tmp = PathBuf::from("/tmp")
+        .canonicalize()
+        .expect("canonicalize /tmp");
+    let policy_text = seatbelt_policy_arg(&args);
+    assert!(
+        policy_text.contains(&seatbelt_protected_metadata_name_requirements(
+            &vulnerable_root_canonical
+        )),
+        "expected cwd metadata protection regex requirements in policy:\n{policy_text}",
+    );
+    assert!(
+        policy_text.contains(&seatbelt_protected_metadata_name_requirements(&slash_tmp)),
+        "expected /tmp metadata protection regex requirements in policy:\n{policy_text}",
+    );
+    if let Some(tmpdir_env_var) = std::env::var("TMPDIR")
         .ok()
         .map(PathBuf::from)
         .and_then(|p| p.canonicalize().ok())
-        .map(|p| p.to_string_lossy().to_string());
-
-    let tempdir_policy_entry = if tmpdir_env_var.is_some() {
-        r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_1"))) )"#
-    } else {
-        ""
-    };
-
-    // Build the expected policy text using a raw string for readability.
-    // Note that the policy includes:
-    // - the base policy,
-    // - read-only access to the filesystem,
-    // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
-    let expected_policy = format!(
-        r#"{MACOS_SEATBELT_BASE_POLICY}
-; allow read-only file operations
-(allow file-read*)
-(allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
-)
-
-"#,
-    );
-
-    let mut expected_args = vec![
-        "-p".to_string(),
-        expected_policy,
-        format!(
-            "-DWRITABLE_ROOT_0={}",
-            vulnerable_root_canonical.to_string_lossy()
-        ),
-        format!(
-            "-DWRITABLE_ROOT_0_EXCLUDED_0={}",
-            dot_git_canonical.to_string_lossy()
-        ),
-        format!(
-            "-DWRITABLE_ROOT_0_EXCLUDED_1={}",
-            dot_codex_canonical.to_string_lossy()
-        ),
-        format!(
-            "-DWRITABLE_ROOT_1={}",
-            PathBuf::from("/tmp")
-                .canonicalize()
-                .expect("canonicalize /tmp")
-                .to_string_lossy()
-        ),
-    ];
-
-    if let Some(p) = tmpdir_env_var {
-        expected_args.push(format!("-DWRITABLE_ROOT_2={p}"));
-        expected_args.push(format!(
-            "-DWRITABLE_ROOT_2_EXCLUDED_0={}",
-            dot_git_canonical.to_string_lossy()
-        ));
-        expected_args.push(format!(
-            "-DWRITABLE_ROOT_2_EXCLUDED_1={}",
-            dot_codex_canonical.to_string_lossy()
-        ));
+    {
+        assert!(
+            policy_text.contains(&seatbelt_protected_metadata_name_requirements(
+                &tmpdir_env_var
+            )),
+            "expected TMPDIR metadata protection regex requirements in policy:\n{policy_text}",
+        );
     }
 
-    expected_args.extend(
-        macos_dir_params()
-            .into_iter()
-            .map(|(key, value)| format!("-D{key}={value}", value = value.to_string_lossy())),
+    let expected_root = format!(
+        "-DWRITABLE_ROOT_0={}",
+        vulnerable_root_canonical.to_string_lossy()
     );
+    assert!(
+        args.contains(&expected_root),
+        "missing {expected_root}: {args:#?}"
+    );
+    let expected_dot_git = format!(
+        "-DWRITABLE_ROOT_0_EXCLUDED_0={}",
+        dot_git_canonical.to_string_lossy()
+    );
+    assert!(
+        args.contains(&expected_dot_git),
+        "missing {expected_dot_git}: {args:#?}"
+    );
+    let expected_dot_codex = format!(
+        "-DWRITABLE_ROOT_0_EXCLUDED_1={}",
+        dot_codex_canonical.to_string_lossy()
+    );
+    assert!(
+        args.contains(&expected_dot_codex),
+        "missing {expected_dot_codex}: {args:#?}"
+    );
+    let unexpected_dot_agents = format!(
+        "-DWRITABLE_ROOT_0_EXCLUDED_1={}",
+        dot_agents_canonical.to_string_lossy()
+    );
+    assert!(
+        !args.contains(&unexpected_dot_agents),
+        "missing .agents should be handled by regex rather than materialized as a path param: {args:#?}"
+    );
+    let expected_slash_tmp = format!("-DWRITABLE_ROOT_1={}", slash_tmp.to_string_lossy());
+    assert!(
+        args.contains(&expected_slash_tmp),
+        "missing {expected_slash_tmp}: {args:#?}"
+    );
+    for (key, value) in macos_dir_params() {
+        let expected_definition = format!("-D{key}={}", value.to_string_lossy());
+        assert!(
+            args.contains(&expected_definition),
+            "expected definition arg `{expected_definition}` in {args:#?}"
+        );
+    }
 
-    expected_args.push("--".to_string());
-    expected_args.extend(shell_command);
-
-    assert_eq!(expected_args, args);
+    let command_index = args
+        .iter()
+        .position(|arg| arg == "--")
+        .expect("seatbelt args should include command separator");
+    assert_eq!(args[command_index + 1..], shell_command);
 }
 
 struct PopulatedTmp {
-    /// Path containing a .git and .codex subfolder.
+    /// Path containing protected metadata subfolders.
     /// For the purposes of this test, we consider this a "vulnerable" root
     /// because a bad actor could write to .git/hooks/pre-commit so an
     /// unsuspecting user would run code as privileged the next time they
@@ -1274,9 +1337,10 @@ struct PopulatedTmp {
     vulnerable_root: PathBuf,
     vulnerable_root_canonical: PathBuf,
     dot_git_canonical: PathBuf,
+    dot_agents_canonical: PathBuf,
     dot_codex_canonical: PathBuf,
 
-    /// Path without .git or .codex subfolders.
+    /// Path without protected metadata subfolders.
     empty_root: PathBuf,
     /// Canonicalized version of `empty_root`.
     empty_root_canonical: PathBuf,
@@ -1310,12 +1374,14 @@ fn populate_tmpdir(tmp: &Path) -> PopulatedTmp {
         .canonicalize()
         .expect("canonicalize vulnerable_root");
     let dot_git_canonical = vulnerable_root_canonical.join(".git");
+    let dot_agents_canonical = vulnerable_root_canonical.join(".agents");
     let dot_codex_canonical = vulnerable_root_canonical.join(".codex");
     let empty_root_canonical = empty_root.canonicalize().expect("canonicalize empty_root");
     PopulatedTmp {
         vulnerable_root,
         vulnerable_root_canonical,
         dot_git_canonical,
+        dot_agents_canonical,
         dot_codex_canonical,
         empty_root,
         empty_root_canonical,

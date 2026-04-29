@@ -25,7 +25,7 @@ use crate::state::LoaderOverrides;
 use crate::thread_config::ThreadConfigContext;
 use crate::thread_config::ThreadConfigLoader;
 use codex_app_server_protocol::ConfigLayerSource;
-use codex_exec_server::ExecutorFileSystem;
+use codex_file_system::ExecutorFileSystem;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;

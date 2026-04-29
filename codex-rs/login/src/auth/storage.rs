@@ -19,6 +19,7 @@ use std::sync::Mutex;
 use tracing::warn;
 
 use crate::token_data::TokenData;
+use codex_agent_identity::AgentIdentityJwtClaims;
 use codex_agent_identity::decode_agent_identity_jwt;
 use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
@@ -59,18 +60,24 @@ pub struct AgentIdentityAuthRecord {
 
 impl AgentIdentityAuthRecord {
     pub(crate) fn from_agent_identity_jwt(jwt: &str) -> std::io::Result<Self> {
-        let claims = decode_agent_identity_jwt(jwt, /*public_key_base64*/ None)
-            .map_err(std::io::Error::other)?;
+        let claims =
+            decode_agent_identity_jwt(jwt, /*jwks*/ None).map_err(std::io::Error::other)?;
 
-        Ok(Self {
+        Ok(claims.into())
+    }
+}
+
+impl From<AgentIdentityJwtClaims> for AgentIdentityAuthRecord {
+    fn from(claims: AgentIdentityJwtClaims) -> Self {
+        Self {
             agent_runtime_id: claims.agent_runtime_id,
             agent_private_key: claims.agent_private_key,
             account_id: claims.account_id,
             chatgpt_user_id: claims.chatgpt_user_id,
             email: claims.email,
-            plan_type: claims.plan_type,
+            plan_type: claims.plan_type.into(),
             chatgpt_account_is_fedramp: claims.chatgpt_account_is_fedramp,
-        })
+        }
     }
 }
 

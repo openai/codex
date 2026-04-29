@@ -7,6 +7,7 @@ use crate::policy::Host;
 use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
 use crate::policy::normalize_host;
+use crate::policy::unscoped_ip_literal;
 use crate::reasons::REASON_DENIED;
 use crate::reasons::REASON_NOT_ALLOWED;
 use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
@@ -371,11 +372,11 @@ impl NetworkProxyState {
         //  1) explicit deny always wins
         //  2) local/private networking is opt-in (defense-in-depth)
         //  3) allowlist is enforced when configured
-        if deny_set.is_match(host_str) {
+        if globset_matches_host_or_unscoped(&deny_set, host_str) {
             return Ok(HostBlockDecision::Blocked(HostBlockReason::Denied));
         }
 
-        let is_allowlisted = allow_set.is_match(host_str);
+        let is_allowlisted = globset_matches_host_or_unscoped(&allow_set, host_str);
         if !allow_local_binding {
             // If the intent is "prevent access to local/internal networks", we must not rely solely
             // on string checks like `localhost` / `127.0.0.1`. Attackers can use DNS rebinding or
@@ -386,10 +387,7 @@ impl NetworkProxyState {
             // allowlisted; hostnames that resolve to local/private IPs are blocked even if
             // allowlisted.
             let local_literal = {
-                let host_no_scope = host_str
-                    .split_once('%')
-                    .map(|(ip, _)| ip)
-                    .unwrap_or(host_str);
+                let host_no_scope = unscoped_ip_literal(host_str).unwrap_or(host_str);
                 if is_loopback_host(&host) {
                     true
                 } else if let Ok(ip) = host_no_scope.parse::<IpAddr>() {
@@ -530,6 +528,12 @@ impl NetworkProxyState {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
         Ok(guard.config.network.allow_upstream_proxy)
+    }
+
+    pub async fn allow_local_binding(&self) -> Result<bool> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard.config.network.allow_local_binding)
     }
 
     pub async fn network_mode(&self) -> Result<NetworkMode> {
@@ -791,8 +795,13 @@ fn log_domain_list_changes(list_name: &str, previous: &[String], next: &[String]
     }
 }
 
+fn globset_matches_host_or_unscoped(set: &GlobSet, host: &str) -> bool {
+    set.is_match(host) || unscoped_ip_literal(host).is_some_and(|ip| set.is_match(ip))
+}
+
 fn is_explicit_local_allowlisted(allowed_domains: &[String], host: &Host) -> bool {
     let normalized_host = host.as_str();
+    let unscoped_host = unscoped_ip_literal(normalized_host);
     allowed_domains.iter().any(|pattern| {
         let pattern = pattern.trim();
         if pattern == "*" || pattern.starts_with("*.") || pattern.starts_with("**.") {
@@ -801,7 +810,9 @@ fn is_explicit_local_allowlisted(allowed_domains: &[String], host: &Host) -> boo
         if pattern.contains('*') || pattern.contains('?') {
             return false;
         }
-        normalize_host(pattern) == normalized_host
+        let normalized_pattern = normalize_host(pattern);
+        normalized_pattern == normalized_host
+            || unscoped_host.is_some_and(|ip| normalized_pattern == ip)
     })
 }
 
@@ -1241,11 +1252,73 @@ mod tests {
 
     #[tokio::test]
     async fn host_blocked_allows_scoped_ipv6_literal_when_explicitly_allowlisted() {
-        let state = network_proxy_state_for_policy(network_settings(&["fe80::1%lo0"], &[]));
+        let state = network_proxy_state_for_policy(network_settings(&["fe80::1"], &[]));
 
         assert_eq!(
             state
                 .host_blocked("fe80::1%lo0", /*port*/ 80)
+                .await
+                .unwrap(),
+            HostBlockDecision::Allowed
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_requires_exact_scoped_ipv6_allowlist_match() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allow_local_binding: true,
+            ..network_settings(&["fe80::1%eth0"], &[])
+        });
+
+        assert_eq!(
+            state
+                .host_blocked("fe80::1%eth0", /*port*/ 80)
+                .await
+                .unwrap(),
+            HostBlockDecision::Allowed
+        );
+        assert_eq!(
+            state
+                .host_blocked("fe80::1%eth1", /*port*/ 80)
+                .await
+                .unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_denies_scoped_ipv6_literal_before_local_binding() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allow_local_binding: true,
+            ..network_settings(&["*"], &["fd00::1"])
+        });
+
+        for host in ["fd00::1%eth0", "[fd00::1%eth0]", "[fd00::1%25eth0]"] {
+            assert_eq!(
+                state.host_blocked(host, /*port*/ 80).await.unwrap(),
+                HostBlockDecision::Blocked(HostBlockReason::Denied),
+                "host should be denied after normalization: {host}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn host_blocked_requires_exact_scoped_ipv6_denylist_match() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allow_local_binding: true,
+            ..network_settings(&["*"], &["fd00::1%eth0"])
+        });
+
+        assert_eq!(
+            state
+                .host_blocked("fd00::1%eth0", /*port*/ 80)
+                .await
+                .unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::Denied)
+        );
+        assert_eq!(
+            state
+                .host_blocked("fd00::1%eth1", /*port*/ 80)
                 .await
                 .unwrap(),
             HostBlockDecision::Allowed

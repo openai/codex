@@ -200,16 +200,6 @@ async fn prefetch_rate_limits_is_gated_on_chatgpt_auth_provider() {
 }
 
 #[tokio::test]
-async fn worked_elapsed_from_resets_when_timer_restarts() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    assert_eq!(chat.worked_elapsed_from(/*current_elapsed*/ 5), 5);
-    assert_eq!(chat.worked_elapsed_from(/*current_elapsed*/ 9), 4);
-    // Simulate status timer resetting (e.g., status indicator recreated for a new task).
-    assert_eq!(chat.worked_elapsed_from(/*current_elapsed*/ 3), 3);
-    assert_eq!(chat.worked_elapsed_from(/*current_elapsed*/ 7), 4);
-}
-
-#[tokio::test]
 async fn rate_limit_warnings_emit_thresholds() {
     let mut state = RateLimitWarningState::default();
     let mut warnings: Vec<String> = Vec::new();
@@ -955,6 +945,65 @@ async fn idle_commit_ticks_do_not_restore_status_without_commentary_completion()
     // A second idle tick should not toggle the row back on and cause jitter.
     chat.on_commit_tick();
     assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+}
+
+#[tokio::test]
+async fn final_answer_completion_restores_status_indicator_for_pending_steer() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.on_task_started();
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+
+    chat.on_agent_message_delta("Long output line 1\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+    chat.on_agent_message_delta("Long output line 2\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
+
+    chat.bottom_pane.set_composer_text(
+        "Please summarize the rest more briefly.".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.pending_steers.len(), 1);
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(
+        items,
+        vec![UserInput::Text {
+            text: "Please summarize the rest more briefly.".to_string(),
+            text_elements: Vec::new(),
+        }]
+    );
+
+    complete_assistant_message(
+        &mut chat,
+        "msg-final",
+        "Long output line 1\nLong output line 2\n",
+        Some(MessagePhase::FinalAnswer),
+    );
+
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
+
+    complete_user_message(
+        &mut chat,
+        "user-steer",
+        "Please summarize the rest more briefly.",
+    );
+
+    assert!(chat.pending_steers.is_empty());
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
 }
 
 #[tokio::test]
@@ -1741,8 +1790,7 @@ async fn session_configured_clears_goal_status_footer() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: Some(ReasoningEffortConfig::default()),
             history_log_id: 0,
@@ -1934,7 +1982,9 @@ async fn runtime_metrics_websocket_timing_logs_and_final_separator_sums_totals()
         .expect("expected websocket timing log");
     assert!(second_log.contains("TTFT: 80ms (iapi)"));
 
-    chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
+    chat.on_task_complete(
+        /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
+    );
     let mut final_separator = None;
     while let Ok(event) = rx.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = event {

@@ -172,17 +172,41 @@ pub(crate) async fn build_guardian_prompt_items(
     if let Some(note) = omission_note {
         push_text(format!("\n{note}\n"));
     }
-    push_text(headings.action_intro.to_string());
-    push_text(">>> APPROVAL REQUEST START\n".to_string());
-    if let Some(reason) = retry_reason {
-        push_text("Retry reason:\n".to_string());
-        push_text(format!("{reason}\n\n"));
+    match &request {
+        GuardianApprovalRequest::NetworkAccess { trigger, .. } => {
+            push_text(">>> APPROVAL REQUEST START\n".to_string());
+            push_text("Below is a proposed network access request under review.\n".to_string());
+            if trigger.is_some() {
+                push_text(
+                    "The network access was triggered by the action in the `trigger` entry. When assessing this request, focus primarily on whether the triggering command is authorised by the user and whether it is within the rules. The user does not need to have explicitly authorised this exact network connection, as long as the network access is a reasonable consequence of the triggering command.\n\n"
+                        .to_string(),
+                );
+            } else {
+                push_text(
+                    "No trigger action was captured for this network access request. When performing the assessment, use the retained transcript and network access JSON to evaluate user authorization and risk.\n\n"
+                        .to_string(),
+                );
+            }
+            push_text(
+                "Assess the exact network access below. Use read-only tool checks when local state matters.\n"
+                    .to_string(),
+            );
+            push_text("Network access JSON:\n".to_string());
+        }
+        _ => {
+            push_text(headings.action_intro.to_string());
+            push_text(">>> APPROVAL REQUEST START\n".to_string());
+            if let Some(reason) = retry_reason {
+                push_text("Retry reason:\n".to_string());
+                push_text(format!("{reason}\n\n"));
+            }
+            push_text(
+                "Assess the exact planned action below. Use read-only tool checks when local state matters.\n"
+                    .to_string(),
+            );
+            push_text("Planned action JSON:\n".to_string());
+        }
     }
-    push_text(
-        "Assess the exact planned action below. Use read-only tool checks when local state matters.\n"
-            .to_string(),
-    );
-    push_text("Planned action JSON:\n".to_string());
     push_text(format!("{}\n", planned_action_json.text));
     push_text(">>> APPROVAL REQUEST END\n".to_string());
     Ok(GuardianPromptItems {

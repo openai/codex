@@ -307,7 +307,15 @@ async fn plugin_list_returns_empty_when_workspace_codex_plugins_disabled() -> Re
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    let home = codex_home.path().to_string_lossy().into_owned();
+    let mut mcp = McpProcess::new_without_managed_config_with_env(
+        codex_home.path(),
+        &[
+            ("HOME", Some(home.as_str())),
+            ("USERPROFILE", Some(home.as_str())),
+        ],
+    )
+    .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -388,7 +396,15 @@ async fn plugin_list_reuses_cached_workspace_codex_plugins_setting() -> Result<(
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    let home = codex_home.path().to_string_lossy().into_owned();
+    let mut mcp = McpProcess::new_without_managed_config_with_env(
+        codex_home.path(),
+        &[
+            ("HOME", Some(home.as_str())),
+            ("USERPROFILE", Some(home.as_str())),
+        ],
+    )
+    .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     for _ in 0..2 {
@@ -1131,7 +1147,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     let global_directory_body = r#"{
   "plugins": [
     {
-      "id": "plugins~Plugin_linear",
+      "id": "plugins~Plugin_00000000000000000000000000000000",
       "name": "linear",
       "scope": "GLOBAL",
       "installation_policy": "AVAILABLE",
@@ -1165,7 +1181,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     let global_installed_body = r#"{
   "plugins": [
     {
-      "id": "plugins~Plugin_linear",
+      "id": "plugins~Plugin_00000000000000000000000000000000",
       "name": "linear",
       "scope": "GLOBAL",
       "installation_policy": "AVAILABLE",
@@ -1255,7 +1271,10 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
         Some("ChatGPT Plugins")
     );
     assert_eq!(remote_marketplace.plugins.len(), 1);
-    assert_eq!(remote_marketplace.plugins[0].id, "plugins~Plugin_linear");
+    assert_eq!(
+        remote_marketplace.plugins[0].id,
+        "plugins~Plugin_00000000000000000000000000000000"
+    );
     assert_eq!(remote_marketplace.plugins[0].name, "linear");
     assert_eq!(remote_marketplace.plugins[0].source, PluginSource::Remote);
     assert_eq!(remote_marketplace.plugins[0].installed, true);
@@ -1314,7 +1333,7 @@ async fn plugin_list_remote_marketplace_replaces_local_marketplace_with_same_nam
     let global_directory_body = r#"{
   "plugins": [
     {
-      "id": "plugins~Plugin_linear",
+      "id": "plugins~Plugin_00000000000000000000000000000000",
       "name": "linear",
       "scope": "GLOBAL",
       "installation_policy": "AVAILABLE",

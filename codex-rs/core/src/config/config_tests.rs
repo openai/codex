@@ -46,9 +46,13 @@ use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SkillsConfig;
+use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
+use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
+use codex_config::types::WindowsSandboxModeToml;
+use codex_config::types::WindowsToml;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
@@ -131,6 +135,34 @@ fn http_mcp(url: &str) -> McpServerConfig {
         oauth_resource: None,
         tools: HashMap::new(),
     }
+}
+
+async fn derive_legacy_sandbox_policy_for_test(
+    cfg: &ConfigToml,
+    sandbox_mode_override: Option<SandboxMode>,
+    profile_sandbox_mode: Option<SandboxMode>,
+    windows_sandbox_level: WindowsSandboxLevel,
+    active_project: Option<&ProjectConfig>,
+    permission_profile_constraint: Option<&Constrained<PermissionProfile>>,
+) -> SandboxPolicy {
+    let permission_profile = cfg
+        .derive_permission_profile(
+            sandbox_mode_override,
+            profile_sandbox_mode,
+            windows_sandbox_level,
+            active_project,
+            permission_profile_constraint,
+        )
+        .await;
+    permission_profile
+        .to_legacy_sandbox_policy(Path::new("/"))
+        .unwrap_or_else(|err| {
+            tracing::warn!(
+                error = %err,
+                "derived permission profile cannot be represented as a legacy sandbox policy; falling back to read-only"
+            );
+            SandboxPolicy::new_read_only_policy()
+        })
 }
 
 #[tokio::test]
@@ -238,6 +270,7 @@ max_unused_days = 21
 max_rollout_age_days = 42
 max_rollouts_per_startup = 9
 min_rollout_idle_hours = 24
+min_rate_limit_remaining_percent = 12
 extract_model = "gpt-5-mini"
 consolidation_model = "gpt-5.2"
 "#;
@@ -253,6 +286,7 @@ consolidation_model = "gpt-5.2"
             max_rollout_age_days: Some(42),
             max_rollouts_per_startup: Some(9),
             min_rollout_idle_hours: Some(24),
+            min_rate_limit_remaining_percent: Some(12),
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5.2".to_string()),
         }),
@@ -277,6 +311,7 @@ consolidation_model = "gpt-5.2"
             max_rollout_age_days: 42,
             max_rollouts_per_startup: 9,
             min_rollout_idle_hours: 24,
+            min_rate_limit_remaining_percent: 12,
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5.2".to_string()),
         }
@@ -516,6 +551,7 @@ fn config_toml_deserializes_model_availability_nux() {
             status_line: None,
             terminal_title: None,
             theme: None,
+            keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig {
                 shown_count: HashMap::from([
                     ("gpt-bar".to_string(), 4),
@@ -633,8 +669,55 @@ allow_upstream_proxy = false
 }
 
 #[tokio::test]
-async fn permissions_profiles_network_populates_runtime_network_proxy_spec() -> std::io::Result<()>
-{
+async fn permissions_profiles_network_enabled_allows_runtime_network_without_proxy()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some("workspace".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "workspace".to_string(),
+                    PermissionProfileToml {
+                        filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
+                            entries: BTreeMap::from([(
+                                ":minimal".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            )]),
+                        }),
+                        network: Some(NetworkToml {
+                            enabled: Some(true),
+                            ..Default::default()
+                        }),
+                    },
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Enabled
+    );
+    assert!(
+        config.permissions.network.is_none(),
+        "bare profile network.enabled should not start the managed network proxy"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permissions_profiles_proxy_policy_starts_managed_network_proxy() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
@@ -671,14 +754,20 @@ async fn permissions_profiles_network_populates_runtime_network_proxy_spec() -> 
         codex_home.abs(),
     )
     .await?;
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Enabled
+    );
     let network = config
         .permissions
         .network
         .as_ref()
-        .expect("enabled profile network should produce a NetworkProxySpec");
-
+        .expect("profile proxy policy should start the managed network proxy");
     assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
-    assert!(!network.socks_enabled());
+    assert!(
+        !network.socks_enabled(),
+        "profile proxy policy should preserve SOCKS config"
+    );
     Ok(())
 }
 
@@ -986,7 +1075,8 @@ async fn permission_profile_override_applies_runtime_roots_to_legacy_projection(
 }
 
 #[tokio::test]
-async fn permission_profile_override_preserves_configured_network_proxy() -> std::io::Result<()> {
+async fn permission_profile_override_preserves_configured_network_policy_without_starting_proxy()
+-> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     let permission_profile = PermissionProfile::Disabled;
@@ -1031,14 +1121,10 @@ async fn permission_profile_override_preserves_configured_network_proxy() -> std
         codex_home.abs(),
     )
     .await?;
-    let network = config
-        .permissions
-        .network
-        .as_ref()
-        .expect("network-enabled override should preserve configured proxy");
-
-    assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
-    assert!(!network.socks_enabled());
+    assert!(
+        config.permissions.network.is_none(),
+        "profile network.enabled should not start the managed network proxy"
+    );
     assert_eq!(config.permissions.permission_profile(), permission_profile);
     Ok(())
 }
@@ -1157,6 +1243,306 @@ async fn permissions_profiles_require_default_permissions() -> std::io::Result<(
     assert_eq!(
         err.to_string(),
         "config defines `[permissions]` profiles but does not set `default_permissions`"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_permissions_can_select_builtin_profile_without_permissions_table()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":workspace".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    assert!(
+        policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+        "expected :workspace to allow writing the project root, policy: {policy:?}"
+    );
+    assert!(
+        !policy.can_write_path_with_cwd(&cwd.path().join(".git"), cwd.path()),
+        "expected :workspace to protect project metadata, policy: {policy:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn empty_config_defaults_to_builtin_profile_for_trusted_project() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let project_key = cwd.path().to_string_lossy().to_string();
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            projects: Some(HashMap::from([(
+                project_key,
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Trusted),
+                },
+            )])),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    if cfg!(target_os = "windows") {
+        assert!(
+            !policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+            "expected trusted project fallback to stay read-only without Windows sandbox support, policy: {policy:?}"
+        );
+    } else {
+        assert!(
+            policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+            "expected trusted project fallback to use :workspace, policy: {policy:?}"
+        );
+        assert!(
+            !policy.can_write_path_with_cwd(&cwd.path().join(".codex"), cwd.path()),
+            "expected :workspace metadata carveouts, policy: {policy:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn implicit_builtin_workspace_profile_preserves_sandbox_workspace_write_settings()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let extra_root = TempDir::new()?;
+    let extra_root = extra_root.path().abs();
+    let project_key = cwd.path().to_string_lossy().to_string();
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            projects: Some(HashMap::from([(
+                project_key,
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Trusted),
+                },
+            )])),
+            sandbox_workspace_write: Some(SandboxWorkspaceWrite {
+                writable_roots: vec![extra_root.clone()],
+                network_access: true,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: false,
+            }),
+            windows: Some(WindowsToml {
+                sandbox: Some(WindowsSandboxModeToml::Elevated),
+                sandbox_private_desktop: None,
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    assert!(
+        policy.can_write_path_with_cwd(extra_root.as_path(), cwd.path()),
+        "expected implicit :workspace to preserve sandbox_workspace_write.writable_roots, policy: {policy:?}"
+    );
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Enabled
+    );
+    match config.legacy_sandbox_policy() {
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots,
+            network_access,
+            exclude_tmpdir_env_var,
+            exclude_slash_tmp,
+        } => {
+            assert!(writable_roots.contains(&extra_root));
+            assert!(network_access);
+            assert!(exclude_tmpdir_env_var);
+            assert!(!exclude_slash_tmp);
+        }
+        sandbox_policy => panic!("expected workspace-write projection, got {sandbox_policy:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn implicit_builtin_workspace_profile_preserves_add_dir_metadata_carveouts()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let extra_root = TempDir::new()?;
+    for subpath in [".git", ".agents", ".codex"] {
+        std::fs::create_dir_all(extra_root.path().join(subpath))?;
+    }
+    let project_key = cwd.path().to_string_lossy().to_string();
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            projects: Some(HashMap::from([(
+                project_key,
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Trusted),
+                },
+            )])),
+            windows: Some(WindowsToml {
+                sandbox: Some(WindowsSandboxModeToml::Elevated),
+                sandbox_private_desktop: None,
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            additional_writable_roots: vec![extra_root.path().to_path_buf()],
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    let extra_root = extra_root.path().abs();
+    assert!(
+        policy.can_write_path_with_cwd(extra_root.as_path(), cwd.path()),
+        "expected implicit :workspace to preserve additional writable roots, policy: {policy:?}"
+    );
+    for subpath in [".git", ".agents", ".codex"] {
+        assert!(
+            !policy.can_write_path_with_cwd(&extra_root.join(subpath), cwd.path()),
+            "expected implicit :workspace to preserve legacy metadata carveout for {subpath}, \
+             policy: {policy:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn empty_config_defaults_to_builtin_read_only_without_trust_decision() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    assert!(
+        policy.can_read_path_with_cwd(cwd.path(), cwd.path()),
+        "expected :read-only to allow reads, policy: {policy:?}"
+    );
+    assert!(
+        !policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+        "expected :read-only to deny writes, policy: {policy:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_permissions_can_select_builtin_no_sandbox_profile() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":danger-no-sandbox".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.permissions.permission_profile(),
+        PermissionProfile::Disabled
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn user_defined_permission_profile_names_cannot_use_builtin_prefix() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+
+    let err = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":custom".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    ":custom".to_string(),
+                    PermissionProfileToml::default(),
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("reserved profile name should be rejected");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "permissions profile `:custom` uses a reserved built-in profile prefix"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unknown_builtin_permission_profile_name_is_rejected() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+
+    let err = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":unknown".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("unknown built-in profile name should be rejected");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "default_permissions refers to unknown built-in profile `:unknown`"
     );
     Ok(())
 }
@@ -1555,6 +1941,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             status_line: None,
             terminal_title: None,
             theme: None,
+            keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow_max_rows: None,
         }
@@ -1630,15 +2017,15 @@ network_access = false  # This should be ignored.
     let sandbox_full_access_cfg = toml::from_str::<ConfigToml>(sandbox_full_access)
         .expect("TOML deserialization should succeed");
     let sandbox_mode_override = None;
-    let resolution = sandbox_full_access_cfg
-        .derive_sandbox_policy(
-            sandbox_mode_override,
-            /*profile_sandbox_mode*/ None,
-            WindowsSandboxLevel::Disabled,
-            /*active_project*/ None,
-            /*permission_profile_constraint*/ None,
-        )
-        .await;
+    let resolution = derive_legacy_sandbox_policy_for_test(
+        &sandbox_full_access_cfg,
+        sandbox_mode_override,
+        /*profile_sandbox_mode*/ None,
+        WindowsSandboxLevel::Disabled,
+        /*active_project*/ None,
+        /*permission_profile_constraint*/ None,
+    )
+    .await;
     assert_eq!(resolution, SandboxPolicy::DangerFullAccess);
 
     let sandbox_read_only = r#"
@@ -1651,15 +2038,15 @@ network_access = true  # This should be ignored.
     let sandbox_read_only_cfg = toml::from_str::<ConfigToml>(sandbox_read_only)
         .expect("TOML deserialization should succeed");
     let sandbox_mode_override = None;
-    let resolution = sandbox_read_only_cfg
-        .derive_sandbox_policy(
-            sandbox_mode_override,
-            /*profile_sandbox_mode*/ None,
-            WindowsSandboxLevel::Disabled,
-            /*active_project*/ None,
-            /*permission_profile_constraint*/ None,
-        )
-        .await;
+    let resolution = derive_legacy_sandbox_policy_for_test(
+        &sandbox_read_only_cfg,
+        sandbox_mode_override,
+        /*profile_sandbox_mode*/ None,
+        WindowsSandboxLevel::Disabled,
+        /*active_project*/ None,
+        /*permission_profile_constraint*/ None,
+    )
+    .await;
     assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
 
     let writable_root = test_absolute_path("/my/workspace");
@@ -1683,15 +2070,15 @@ trust_level = "trusted"
     let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(&sandbox_workspace_write)
         .expect("TOML deserialization should succeed");
     let sandbox_mode_override = None;
-    let resolution = sandbox_workspace_write_cfg
-        .derive_sandbox_policy(
-            sandbox_mode_override,
-            /*profile_sandbox_mode*/ None,
-            WindowsSandboxLevel::Disabled,
-            /*active_project*/ None,
-            /*permission_profile_constraint*/ None,
-        )
-        .await;
+    let resolution = derive_legacy_sandbox_policy_for_test(
+        &sandbox_workspace_write_cfg,
+        sandbox_mode_override,
+        /*profile_sandbox_mode*/ None,
+        WindowsSandboxLevel::Disabled,
+        /*active_project*/ None,
+        /*permission_profile_constraint*/ None,
+    )
+    .await;
     if cfg!(target_os = "windows") {
         assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
     } else {
@@ -1723,15 +2110,15 @@ exclude_slash_tmp = true
     let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(&sandbox_workspace_write)
         .expect("TOML deserialization should succeed");
     let sandbox_mode_override = None;
-    let resolution = sandbox_workspace_write_cfg
-        .derive_sandbox_policy(
-            sandbox_mode_override,
-            /*profile_sandbox_mode*/ None,
-            WindowsSandboxLevel::Disabled,
-            /*active_project*/ None,
-            /*permission_profile_constraint*/ None,
-        )
-        .await;
+    let resolution = derive_legacy_sandbox_policy_for_test(
+        &sandbox_workspace_write_cfg,
+        sandbox_mode_override,
+        /*profile_sandbox_mode*/ None,
+        WindowsSandboxLevel::Disabled,
+        /*active_project*/ None,
+        /*permission_profile_constraint*/ None,
+    )
+    .await;
     if cfg!(target_os = "windows") {
         assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
     } else {
@@ -1748,7 +2135,7 @@ exclude_slash_tmp = true
 }
 
 #[tokio::test]
-async fn legacy_sandbox_mode_config_builds_split_policies_without_drift() -> std::io::Result<()> {
+async fn legacy_sandbox_mode_builds_profiles_with_compatible_projection() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     let extra_root = test_absolute_path("/tmp/legacy-extra-root");
@@ -1793,26 +2180,91 @@ exclude_slash_tmp = true
         )
         .await?;
 
-        let sandbox_policy = &config.legacy_sandbox_policy();
+        let sandbox_policy = config.legacy_sandbox_policy();
+        let file_system_policy = config.permissions.file_system_sandbox_policy();
+        let network_policy = config.permissions.network_sandbox_policy();
+
         assert_eq!(
-            config.permissions.file_system_sandbox_policy(),
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd.path()),
-            "case `{name}` should preserve filesystem semantics from legacy config"
-        );
-        assert_eq!(
-            config.permissions.network_sandbox_policy(),
-            NetworkSandboxPolicy::from(sandbox_policy),
+            network_policy,
+            NetworkSandboxPolicy::from(&sandbox_policy),
             "case `{name}` should preserve network semantics from legacy config"
         );
         assert_eq!(
-            config
-                .permissions
-                .file_system_sandbox_policy()
-                .to_legacy_sandbox_policy(config.permissions.network_sandbox_policy(), cwd.path())
+            file_system_policy
+                .to_legacy_sandbox_policy(network_policy, cwd.path())
                 .unwrap_or_else(|err| panic!("case `{name}` should round-trip: {err}")),
-            sandbox_policy.clone(),
-            "case `{name}` should round-trip through split policies without drift"
+            sandbox_policy,
+            "case `{name}` should preserve its legacy compatibility projection"
         );
+
+        match name.as_str() {
+            "danger-full-access" | "read-only" => {
+                assert_eq!(
+                    file_system_policy,
+                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+                        &sandbox_policy,
+                        cwd.path()
+                    ),
+                    "case `{name}` should match the legacy filesystem projection exactly"
+                );
+            }
+            "workspace-write" => {
+                if cfg!(target_os = "windows") {
+                    assert_eq!(
+                        sandbox_policy,
+                        SandboxPolicy::new_read_only_policy(),
+                        "legacy workspace-write should keep the existing Windows downgrade when \
+                         the experimental Windows sandbox is disabled"
+                    );
+                    assert_eq!(
+                        file_system_policy,
+                        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+                            &sandbox_policy,
+                            cwd.path()
+                        ),
+                        "downgraded workspace-write should match the legacy read-only projection"
+                    );
+                    continue;
+                }
+                assert!(
+                    file_system_policy
+                        .entries
+                        .contains(&FileSystemSandboxEntry {
+                            path: FileSystemPath::Special {
+                                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                            },
+                            access: FileSystemAccessMode::Write,
+                        })
+                );
+                assert!(
+                    file_system_policy
+                        .entries
+                        .contains(&FileSystemSandboxEntry {
+                            path: FileSystemPath::Path {
+                                path: extra_root.clone(),
+                            },
+                            access: FileSystemAccessMode::Write,
+                        })
+                );
+                for subpath in [".git", ".agents", ".codex"] {
+                    assert!(
+                        file_system_policy
+                            .entries
+                            .contains(&FileSystemSandboxEntry {
+                                path: FileSystemPath::Special {
+                                    value: FileSystemSpecialPath::project_roots(Some(
+                                        subpath.into()
+                                    )),
+                                },
+                                access: FileSystemAccessMode::Read,
+                            }),
+                        "case `{name}` should preserve `{subpath}` as a symbolic project-root \
+                         metadata carveout"
+                    );
+                }
+            }
+            _ => unreachable!("unexpected test case `{name}`"),
+        }
     }
 
     Ok(())
@@ -5792,6 +6244,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tui_status_line: None,
             tui_terminal_title: None,
             tui_theme: None,
+            tui_keymap: TuiKeymap::default(),
             otel: OtelConfig::default(),
         },
         o3_profile_config
@@ -5985,6 +6438,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tui_status_line: None,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_keymap: TuiKeymap::default(),
         otel: OtelConfig::default(),
     };
 
@@ -6132,6 +6586,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tui_status_line: None,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_keymap: TuiKeymap::default(),
         otel: OtelConfig::default(),
     };
 
@@ -6264,6 +6719,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tui_status_line: None,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_keymap: TuiKeymap::default(),
         otel: OtelConfig::default(),
     };
 
@@ -6563,15 +7019,15 @@ trust_level = "untrusted"
         trust_level: Some(TrustLevel::Untrusted),
     };
 
-    let resolution = cfg
-        .derive_sandbox_policy(
-            /*sandbox_mode_override*/ None,
-            /*profile_sandbox_mode*/ None,
-            WindowsSandboxLevel::Disabled,
-            Some(&active_project),
-            /*permission_profile_constraint*/ None,
-        )
-        .await;
+    let resolution = derive_legacy_sandbox_policy_for_test(
+        &cfg,
+        /*sandbox_mode_override*/ None,
+        /*profile_sandbox_mode*/ None,
+        WindowsSandboxLevel::Disabled,
+        Some(&active_project),
+        /*permission_profile_constraint*/ None,
+    )
+    .await;
 
     // Verify that untrusted projects get WorkspaceWrite (or ReadOnly on Windows due to downgrade)
     if cfg!(target_os = "windows") {
@@ -6620,15 +7076,15 @@ async fn derive_sandbox_policy_falls_back_to_read_only_for_implicit_defaults() -
         }
     })?;
 
-    let resolution = cfg
-        .derive_sandbox_policy(
-            /*sandbox_mode_override*/ None,
-            /*profile_sandbox_mode*/ None,
-            WindowsSandboxLevel::Disabled,
-            Some(&active_project),
-            Some(&constrained),
-        )
-        .await;
+    let resolution = derive_legacy_sandbox_policy_for_test(
+        &cfg,
+        /*sandbox_mode_override*/ None,
+        /*profile_sandbox_mode*/ None,
+        WindowsSandboxLevel::Disabled,
+        Some(&active_project),
+        Some(&constrained),
+    )
+    .await;
 
     assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
     Ok(())
@@ -6676,15 +7132,15 @@ async fn derive_sandbox_policy_preserves_windows_downgrade_for_unsupported_fallb
         },
     )?;
 
-    let resolution = cfg
-        .derive_sandbox_policy(
-            /*sandbox_mode_override*/ None,
-            /*profile_sandbox_mode*/ None,
-            WindowsSandboxLevel::Disabled,
-            Some(&active_project),
-            Some(&constrained),
-        )
-        .await;
+    let resolution = derive_legacy_sandbox_policy_for_test(
+        &cfg,
+        /*sandbox_mode_override*/ None,
+        /*profile_sandbox_mode*/ None,
+        WindowsSandboxLevel::Disabled,
+        Some(&active_project),
+        Some(&constrained),
+    )
+    .await;
 
     if cfg!(target_os = "windows") {
         assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
@@ -7603,8 +8059,11 @@ async fn multi_agent_v2_config_from_feature_table() -> std::io::Result<()> {
         r#"[features.multi_agent_v2]
 enabled = true
 max_concurrent_threads_per_session = 5
+min_wait_timeout_ms = 2500
 usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
+root_agent_usage_hint_text = "Root guidance."
+subagent_usage_hint_text = "Subagent guidance."
 hide_spawn_agent_metadata = true
 "#,
     )?;
@@ -7617,11 +8076,20 @@ hide_spawn_agent_metadata = true
 
     assert!(config.features.enabled(Feature::MultiAgentV2));
     assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 5);
+    assert_eq!(config.multi_agent_v2.min_wait_timeout_ms, 2500);
     assert_eq!(config.agent_max_threads, Some(4));
     assert!(!config.multi_agent_v2.usage_hint_enabled);
     assert_eq!(
         config.multi_agent_v2.usage_hint_text.as_deref(),
         Some("Custom delegation guidance.")
+    );
+    assert_eq!(
+        config.multi_agent_v2.root_agent_usage_hint_text.as_deref(),
+        Some("Root guidance.")
+    );
+    assert_eq!(
+        config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
+        Some("Subagent guidance.")
     );
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
 
@@ -7637,14 +8105,20 @@ async fn profile_multi_agent_v2_config_overrides_base() -> std::io::Result<()> {
 
 [features.multi_agent_v2]
 max_concurrent_threads_per_session = 4
+min_wait_timeout_ms = 3000
 usage_hint_enabled = true
 usage_hint_text = "base hint"
+root_agent_usage_hint_text = "base root hint"
+subagent_usage_hint_text = "base subagent hint"
 hide_spawn_agent_metadata = true
 
 [profiles.no_hint.features.multi_agent_v2]
 max_concurrent_threads_per_session = 6
+min_wait_timeout_ms = 1500
 usage_hint_enabled = false
 usage_hint_text = "profile hint"
+root_agent_usage_hint_text = "profile root hint"
+subagent_usage_hint_text = "profile subagent hint"
 hide_spawn_agent_metadata = false
 "#,
     )?;
@@ -7656,10 +8130,19 @@ hide_spawn_agent_metadata = false
         .await?;
 
     assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 6);
+    assert_eq!(config.multi_agent_v2.min_wait_timeout_ms, 1500);
     assert!(!config.multi_agent_v2.usage_hint_enabled);
     assert_eq!(
         config.multi_agent_v2.usage_hint_text.as_deref(),
         Some("profile hint")
+    );
+    assert_eq!(
+        config.multi_agent_v2.root_agent_usage_hint_text.as_deref(),
+        Some("profile root hint")
+    );
+    assert_eq!(
+        config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
+        Some("profile subagent hint")
     );
     assert!(!config.multi_agent_v2.hide_spawn_agent_metadata);
 
@@ -7683,6 +8166,7 @@ enabled = true
         .await?;
 
     assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 4);
+    assert_eq!(config.multi_agent_v2.min_wait_timeout_ms, 10_000);
     assert_eq!(config.agent_max_threads, Some(3));
 
     Ok(())
@@ -7712,6 +8196,54 @@ max_threads = 3
     assert_eq!(
         err.to_string(),
         "agents.max_threads cannot be set when multi_agent_v2 is enabled"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_rejects_invalid_min_wait_timeout() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+min_wait_timeout_ms = 0
+"#,
+    )?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+        .expect_err("zero min_wait_timeout_ms should be rejected");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "features.multi_agent_v2.min_wait_timeout_ms must be at least 1"
+    );
+
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+min_wait_timeout_ms = 3600001
+"#,
+    )?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+        .expect_err("too large min_wait_timeout_ms should be rejected");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "features.multi_agent_v2.min_wait_timeout_ms must be at most 3600000"
     );
 
     Ok(())
@@ -7867,6 +8399,7 @@ discoverables = [
                     id: "   ".to_string(),
                 },
             ],
+            disabled_tools: Vec::new(),
         })
     );
 
@@ -7891,7 +8424,114 @@ discoverables = [
                     id: "plugin_alpha@openai-curated".to_string(),
                 },
             ],
+            disabled_tools: Vec::new(),
         }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_suggest_disabled_tools_load_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tool_suggest]
+disabled_tools = [
+  { type = "connector", id = " connector_calendar " },
+  { type = "connector", id = "connector_calendar" },
+  { type = "connector", id = "   " },
+  { type = "plugin", id = "slack@openai-curated" }
+]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.tool_suggest,
+        Some(ToolSuggestConfig {
+            discoverables: Vec::new(),
+            disabled_tools: vec![
+                ToolSuggestDisabledTool::connector(" connector_calendar "),
+                ToolSuggestDisabledTool::connector("connector_calendar"),
+                ToolSuggestDisabledTool::connector("   "),
+                ToolSuggestDisabledTool::plugin("slack@openai-curated"),
+            ],
+        })
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.tool_suggest,
+        ToolSuggestConfig {
+            discoverables: Vec::new(),
+            disabled_tools: vec![
+                ToolSuggestDisabledTool::connector("connector_calendar"),
+                ToolSuggestDisabledTool::plugin("slack@openai-curated"),
+            ],
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_suggest_disabled_tools_merge_across_config_layers() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"
+[projects."{workspace_key}"]
+trust_level = "trusted"
+
+[tool_suggest]
+disabled_tools = [
+  {{ type = "connector", id = " user_connector " }},
+  {{ type = "plugin", id = "shared_plugin" }},
+  {{ type = "connector", id = "project_connector" }},
+]
+"#
+        ),
+    )?;
+
+    let project_config_dir = workspace.path().join(".codex");
+    std::fs::create_dir_all(&project_config_dir)?;
+    std::fs::write(
+        project_config_dir.join(CONFIG_TOML_FILE),
+        r#"
+[tool_suggest]
+disabled_tools = [
+  { type = "connector", id = "project_connector" },
+  { type = "plugin", id = "project_plugin" },
+  { type = "plugin", id = "shared_plugin" },
+]
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(workspace.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.tool_suggest.disabled_tools,
+        vec![
+            ToolSuggestDisabledTool::connector("user_connector"),
+            ToolSuggestDisabledTool::plugin("shared_plugin"),
+            ToolSuggestDisabledTool::connector("project_connector"),
+            ToolSuggestDisabledTool::plugin("project_plugin"),
+        ]
     );
     Ok(())
 }

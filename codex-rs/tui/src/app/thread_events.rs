@@ -335,7 +335,6 @@ mod tests {
     use codex_config::types::ApprovalsReviewer;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::protocol::AskForApproval;
-    use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
@@ -350,8 +349,7 @@ mod tests {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: Some(PermissionProfile::read_only()),
+            permission_profile: PermissionProfile::read_only(),
             cwd: cwd.abs(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,

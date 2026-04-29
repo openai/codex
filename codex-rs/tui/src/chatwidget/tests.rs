@@ -65,6 +65,7 @@ pub(super) use codex_app_server_protocol::ItemCompletedNotification;
 pub(super) use codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification;
 pub(super) use codex_app_server_protocol::ItemGuardianApprovalReviewStartedNotification;
 pub(super) use codex_app_server_protocol::ItemStartedNotification;
+pub(super) use codex_app_server_protocol::MarketplaceAddResponse;
 pub(super) use codex_app_server_protocol::MarketplaceInterface;
 pub(super) use codex_app_server_protocol::McpServerStartupState;
 pub(super) use codex_app_server_protocol::McpServerStatusDetail;
@@ -283,6 +284,7 @@ mod slash_commands;
 mod status_and_layout;
 mod status_command_tests;
 mod status_surface_previews;
+mod terminal_title;
 
 pub(crate) use helpers::make_chatwidget_manual_with_sender;
 pub(crate) use helpers::set_chatgpt_auth;

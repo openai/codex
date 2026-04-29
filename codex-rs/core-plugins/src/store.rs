@@ -13,6 +13,7 @@ use std::path::PathBuf;
 
 pub const DEFAULT_PLUGIN_VERSION: &str = "local";
 pub const PLUGINS_CACHE_DIR: &str = "plugins/cache";
+pub const PLUGINS_DATA_DIR: &str = "plugins/data";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallResult {
@@ -24,6 +25,7 @@ pub struct PluginInstallResult {
 #[derive(Debug, Clone)]
 pub struct PluginStore {
     root: AbsolutePathBuf,
+    data_root: AbsolutePathBuf,
 }
 
 impl PluginStore {
@@ -35,8 +37,11 @@ impl PluginStore {
     pub fn try_new(codex_home: PathBuf) -> Result<Self, PluginStoreError> {
         let root = AbsolutePathBuf::from_absolute_path_checked(codex_home.join(PLUGINS_CACHE_DIR))
             .map_err(|err| PluginStoreError::io("failed to resolve plugin cache root", err))?;
+        let data_root =
+            AbsolutePathBuf::from_absolute_path_checked(codex_home.join(PLUGINS_DATA_DIR))
+                .map_err(|err| PluginStoreError::io("failed to resolve plugin data root", err))?;
 
-        Ok(Self { root })
+        Ok(Self { root, data_root })
     }
 
     pub fn root(&self) -> &AbsolutePathBuf {
@@ -51,6 +56,13 @@ impl PluginStore {
 
     pub fn plugin_root(&self, plugin_id: &PluginId, plugin_version: &str) -> AbsolutePathBuf {
         self.plugin_base_root(plugin_id).join(plugin_version)
+    }
+
+    pub fn plugin_data_root(&self, plugin_id: &PluginId) -> AbsolutePathBuf {
+        self.data_root.join(format!(
+            "{}-{}",
+            plugin_id.plugin_name, plugin_id.marketplace_name
+        ))
     }
 
     pub fn active_plugin_version(&self, plugin_id: &PluginId) -> Option<String> {
@@ -160,7 +172,7 @@ pub fn plugin_version_for_source(source_path: &Path) -> Result<String, PluginSto
     Ok(plugin_version)
 }
 
-fn validate_plugin_version_segment(plugin_version: &str) -> Result<(), String> {
+pub fn validate_plugin_version_segment(plugin_version: &str) -> Result<(), String> {
     if plugin_version.is_empty() {
         return Err("invalid plugin version: must not be empty".to_string());
     }

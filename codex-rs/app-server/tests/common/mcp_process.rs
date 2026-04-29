@@ -54,6 +54,7 @@ use codex_app_server_protocol::McpResourceReadParams;
 use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::ModelListParams;
+use codex_app_server_protocol::ModelProviderCapabilitiesReadParams;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginReadParams;
@@ -116,6 +117,15 @@ impl McpProcess {
 
     pub async fn new_without_managed_config(codex_home: &Path) -> anyhow::Result<Self> {
         Self::new_with_env(codex_home, &[(DISABLE_MANAGED_CONFIG_ENV_VAR, Some("1"))]).await
+    }
+
+    pub async fn new_without_managed_config_with_env(
+        codex_home: &Path,
+        env_overrides: &[(&str, Option<&str>)],
+    ) -> anyhow::Result<Self> {
+        let mut all_env_overrides = vec![(DISABLE_MANAGED_CONFIG_ENV_VAR, Some("1"))];
+        all_env_overrides.extend_from_slice(env_overrides);
+        Self::new_with_env(codex_home, &all_env_overrides).await
     }
 
     pub async fn new_with_plugin_startup_tasks(codex_home: &Path) -> anyhow::Result<Self> {
@@ -506,6 +516,16 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("model/list", params).await
+    }
+
+    /// Send a `modelProvider/capabilities/read` JSON-RPC request.
+    pub async fn send_model_provider_capabilities_read_request(
+        &mut self,
+        params: ModelProviderCapabilitiesReadParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("modelProvider/capabilities/read", params)
+            .await
     }
 
     /// Send an `experimentalFeature/list` JSON-RPC request.

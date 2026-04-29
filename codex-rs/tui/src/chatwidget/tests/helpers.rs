@@ -211,6 +211,7 @@ pub(super) async fn make_chatwidget_manual(
         stream_controller: None,
         plan_stream_controller: None,
         clipboard_lease: None,
+        copy_last_response_binding: crate::keymap::RuntimeKeymap::defaults().app.copy,
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         recent_auto_review_denials: RecentAutoReviewDenials::default(),
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
@@ -243,6 +244,7 @@ pub(super) async fn make_chatwidget_manual(
         plugin_install_apps_needing_auth: Vec::new(),
         plugin_install_auth_flow: None,
         plugins_active_tab_id: None,
+        newly_installed_marketplace_tab_id: None,
         connectors_prefetch_in_flight: false,
         connectors_force_refetch_pending: false,
         plugins_cache: PluginsCacheState::default(),
@@ -256,6 +258,7 @@ pub(super) async fn make_chatwidget_manual(
         pending_status_indicator_restore: false,
         suppress_queue_autosend: false,
         thread_id: None,
+        dismissed_plan_mode_nudge_scopes: HashSet::new(),
         last_turn_id: None,
         budget_limited_turn_ids: HashSet::new(),
         thread_name: None,
@@ -275,7 +278,8 @@ pub(super) async fn make_chatwidget_manual(
         rejected_steer_history_records: VecDeque::new(),
         pending_steers: VecDeque::new(),
         submit_pending_steers_after_interrupt: false,
-        queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
+        chat_keymap: crate::keymap::RuntimeKeymap::defaults().chat,
+        queued_message_edit_hint_binding: Some(crate::key_hint::alt(KeyCode::Up)),
         suppress_session_configured_redraw: false,
         suppress_initial_user_message_submit: false,
         pending_notification: None,
@@ -290,7 +294,6 @@ pub(super) async fn make_chatwidget_manual(
         last_plan_progress: None,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
-        last_separator_elapsed_secs: None,
         turn_runtime_metrics: RuntimeMetricsSummary::default(),
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
@@ -301,6 +304,7 @@ pub(super) async fn make_chatwidget_manual(
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         last_terminal_title: None,
+        last_terminal_title_requires_action: false,
         terminal_title_setup_original_items: None,
         terminal_title_animation_origin: Instant::now(),
         status_line_project_root_name_cache: None,
@@ -738,9 +742,10 @@ pub(super) async fn assert_shift_left_edits_most_recent_queued_message_for_termi
     terminal_info: TerminalInfo,
 ) {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_info);
+    chat.queued_message_edit_hint_binding =
+        Some(queued_message_edit_binding_for_terminal(terminal_info));
     chat.bottom_pane
-        .set_queued_message_edit_binding(chat.queued_message_edit_binding);
+        .set_queued_message_edit_binding(chat.queued_message_edit_hint_binding);
 
     // Simulate a running task so messages would normally be queued.
     chat.bottom_pane.set_task_running(/*running*/ true);

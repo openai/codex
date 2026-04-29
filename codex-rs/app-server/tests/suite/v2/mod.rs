@@ -26,6 +26,7 @@ mod mcp_server_status;
 mod mcp_tool;
 mod memory_reset;
 mod model_list;
+mod model_provider_capabilities_read;
 mod output_schema;
 mod plan_item;
 mod plugin_install;

@@ -211,9 +211,10 @@ pub struct ThreadManager {
     _test_codex_home_guard: Option<TempCodexHomeGuard>,
 }
 
-pub struct StartThreadWithToolsOptions {
+pub struct StartThreadOptions {
     pub config: Config,
     pub initial_history: InitialHistory,
+    pub session_source: Option<SessionSource>,
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub persist_extended_history: bool,
     pub metrics_service_name: Option<String>,
@@ -540,34 +541,39 @@ impl ThreadManager {
             self.state.environment_manager.as_ref(),
             &config.cwd,
         );
-        Box::pin(
-            self.start_thread_with_tools_and_service_name(StartThreadWithToolsOptions {
-                config,
-                initial_history: InitialHistory::New,
-                dynamic_tools,
-                persist_extended_history,
-                metrics_service_name: None,
-                parent_trace: None,
-                environments,
-            }),
-        )
+        Box::pin(self.start_thread_with_options(StartThreadOptions {
+            config,
+            initial_history: InitialHistory::New,
+            session_source: None,
+            dynamic_tools,
+            persist_extended_history,
+            metrics_service_name: None,
+            parent_trace: None,
+            environments,
+        }))
         .await
     }
 
-    pub async fn start_thread_with_tools_and_service_name(
+    pub async fn start_thread_with_options(
         &self,
-        options: StartThreadWithToolsOptions,
+        options: StartThreadOptions,
     ) -> CodexResult<NewThread> {
         let thread_store = configured_thread_store(&options.config);
-        Box::pin(self.state.spawn_thread(
+        let session_source = options
+            .session_source
+            .unwrap_or_else(|| self.state.session_source.clone());
+        Box::pin(self.state.spawn_thread_with_source(
             options.config,
             thread_store,
             options.initial_history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
+            session_source,
             options.dynamic_tools,
             options.persist_extended_history,
             options.metrics_service_name,
+            /*inherited_shell_snapshot*/ None,
+            /*inherited_exec_policy*/ None,
             options.parent_trace,
             options.environments,
             /*user_shell_override*/ None,
@@ -831,16 +837,23 @@ impl ThreadManager {
 
 impl ThreadManagerState {
     pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {
-        self.threads.read().await.keys().copied().collect()
+        self.threads
+            .read()
+            .await
+            .iter()
+            .filter_map(|(thread_id, thread)| {
+                (!thread.session_source.is_internal()).then_some(*thread_id)
+            })
+            .collect()
     }
 
     /// Fetch a thread by ID or return ThreadNotFound.
     pub(crate) async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
         let threads = self.threads.read().await;
-        threads
-            .get(&thread_id)
-            .cloned()
-            .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))
+        match threads.get(&thread_id) {
+            Some(thread) if !thread.session_source.is_internal() => Ok(thread.clone()),
+            Some(_) | None => Err(CodexErr::ThreadNotFound(thread_id)),
+        }
     }
 
     /// Send an operation to a thread by ID.
@@ -1063,6 +1076,7 @@ impl ThreadManagerState {
         let parent_rollout_thread_trace = self
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
+        let tracked_session_source = session_source.clone();
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
@@ -1091,7 +1105,7 @@ impl ThreadManagerState {
         })
         .await?;
         let new_thread = self
-            .finalize_thread_spawn(codex, thread_id, watch_registration)
+            .finalize_thread_spawn(codex, thread_id, tracked_session_source, watch_registration)
             .await?;
         if is_resumed_thread
             && let Err(err) = new_thread.thread.apply_goal_resume_runtime_effects().await
@@ -1105,6 +1119,7 @@ impl ThreadManagerState {
         &self,
         codex: Codex,
         thread_id: ThreadId,
+        session_source: SessionSource,
         watch_registration: crate::file_watcher::WatchRegistration,
     ) -> CodexResult<NewThread> {
         let event = codex.next_event().await?;
@@ -1121,6 +1136,7 @@ impl ThreadManagerState {
         let thread = Arc::new(CodexThread::new(
             codex,
             session_configured.rollout_path.clone(),
+            session_source,
             watch_registration,
         ));
         let mut threads = self.threads.write().await;

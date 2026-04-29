@@ -101,13 +101,29 @@ pub enum RawTraceEventPayload {
     },
     InferenceCompleted {
         inference_call_id: InferenceCallId,
+        /// Responses API `response.id`; used by `previous_response_id`.
         response_id: Option<String>,
+        /// Provider transport request id, such as `x-request-id`.
+        upstream_request_id: Option<String>,
         response_payload: RawPayloadRef,
     },
     InferenceFailed {
         inference_call_id: InferenceCallId,
+        /// Provider transport request id, such as `x-request-id`, when the
+        /// provider returned one before the stream failed.
+        upstream_request_id: Option<String>,
         error: String,
         /// Partial response payload, when stream events arrived before failure.
+        partial_response_payload: Option<RawPayloadRef>,
+    },
+    InferenceCancelled {
+        inference_call_id: InferenceCallId,
+        /// Provider transport request id, such as `x-request-id`, when observed
+        /// before Codex stopped consuming the stream.
+        upstream_request_id: Option<String>,
+        /// Why Codex stopped consuming the provider stream before a terminal response event.
+        reason: String,
+        /// Completed output items observed before cancellation, if any.
         partial_response_payload: Option<RawPayloadRef>,
     },
     ToolCallStarted {
@@ -250,6 +266,10 @@ impl RawTraceEventPayload {
                 ..
             } => vec![request_payload],
             RawTraceEventPayload::InferenceFailed {
+                partial_response_payload,
+                ..
+            }
+            | RawTraceEventPayload::InferenceCancelled {
                 partial_response_payload,
                 ..
             }

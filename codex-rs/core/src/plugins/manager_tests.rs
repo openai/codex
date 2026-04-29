@@ -221,6 +221,8 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
                 },
             )]),
             apps: vec![AppConnectorId("connector_example".to_string())],
+            hook_sources: Vec::new(),
+            hook_load_warnings: Vec::new(),
             error: None,
         }]
     );
@@ -789,6 +791,8 @@ async fn load_plugins_preserves_disabled_plugins_without_effective_contributions
             has_enabled_skills: false,
             mcp_servers: HashMap::new(),
             apps: Vec::new(),
+            hook_sources: Vec::new(),
+            hook_load_warnings: Vec::new(),
             error: None,
         }]
     );
@@ -906,6 +910,8 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         has_enabled_skills: false,
         mcp_servers: HashMap::new(),
         apps: Vec::new(),
+        hook_sources: Vec::new(),
+        hook_load_warnings: Vec::new(),
         error: None,
     };
     let summary = |config_name: &str, display_name: &str| PluginCapabilitySummary {

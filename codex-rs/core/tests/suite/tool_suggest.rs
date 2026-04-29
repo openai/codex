@@ -8,8 +8,8 @@ use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -111,10 +111,10 @@ async fn tool_suggest_is_available_without_search_tool_after_discovery_attempts(
         });
     let test = builder.build(&server).await?;
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "list tools",
         AskForApproval::Never,
-        SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 
