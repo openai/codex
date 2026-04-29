@@ -173,7 +173,6 @@ use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
-use crate::context_manager::truncate_function_output_payload;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
@@ -2359,8 +2358,7 @@ impl Session {
         items: &[ResponseItem],
     ) {
         self.record_into_history(items, turn_context).await;
-        self.persist_rollout_response_items(items, turn_context.truncation_policy)
-            .await;
+        self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
     }
 
@@ -2470,14 +2468,10 @@ impl Session {
         self.services.model_client.advance_window_generation();
     }
 
-    async fn persist_rollout_response_items(
-        &self,
-        items: &[ResponseItem],
-        policy: TruncationPolicy,
-    ) {
+    async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
         let rollout_items: Vec<RolloutItem> = items
             .iter()
-            .map(|item| response_item_for_rollout_storage(item, policy))
+            .cloned()
             .map(RolloutItem::ResponseItem)
             .collect();
         self.persist_rollout_items(&rollout_items).await;
@@ -3240,45 +3234,6 @@ impl Session {
 
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
-    }
-}
-
-fn response_item_for_rollout_storage(
-    item: &ResponseItem,
-    policy: TruncationPolicy,
-) -> ResponseItem {
-    // Keep persisted tool outputs aligned with the in-memory form the model sees in
-    // conversation history, which is also truncated. This intentionally reuses the
-    // same truncation helper.
-    //
-    // The goal is to prevent the rollout file from ballooning in size since tool
-    // outputs can be very large.
-    let policy_with_serialization_budget = policy * 1.2;
-    match item {
-        ResponseItem::FunctionCallOutput { call_id, output } => ResponseItem::FunctionCallOutput {
-            call_id: call_id.clone(),
-            output: truncate_function_output_payload(output, policy_with_serialization_budget),
-        },
-        ResponseItem::CustomToolCallOutput {
-            call_id,
-            name,
-            output,
-        } => ResponseItem::CustomToolCallOutput {
-            call_id: call_id.clone(),
-            name: name.clone(),
-            output: truncate_function_output_payload(output, policy_with_serialization_budget),
-        },
-        ResponseItem::Message { .. }
-        | ResponseItem::Reasoning { .. }
-        | ResponseItem::LocalShellCall { .. }
-        | ResponseItem::FunctionCall { .. }
-        | ResponseItem::ToolSearchCall { .. }
-        | ResponseItem::ToolSearchOutput { .. }
-        | ResponseItem::WebSearchCall { .. }
-        | ResponseItem::ImageGenerationCall { .. }
-        | ResponseItem::CustomToolCall { .. }
-        | ResponseItem::Compaction { .. }
-        | ResponseItem::Other => item.clone(),
     }
 }
 
