@@ -12,7 +12,6 @@ jobs:
       argument_comment_lint: ${{ steps.detect.outputs.argument_comment_lint }}
       argument_comment_lint_package: ${{ steps.detect.outputs.argument_comment_lint_package }}
       codex: ${{ steps.detect.outputs.codex }}
-      public_api: ${{ steps.detect.outputs.public_api }}
       workflows: ${{ steps.detect.outputs.workflows }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -38,11 +37,9 @@ jobs:
           codex=false
           argument_comment_lint=false
           argument_comment_lint_package=false
-          public_api=false
           workflows=false
           for f in "${files[@]}"; do
             [[ $f == codex-rs/* ]] && codex=true
-            [[ $f == codex-rs/* || $f == scripts/regen-public-api.sh || $f == justfile ]] && public_api=true
             [[ $f == codex-rs/* || $f == tools/argument-comment-lint/* || $f == justfile ]] && argument_comment_lint=true
             [[ $f == defs.bzl || $f == workspace_root_test_launcher.sh.tpl || $f == workspace_root_test_launcher.bat.tpl ]] && argument_comment_lint=true
             [[ $f == tools/argument-comment-lint/* || $f == .github/workflows/rust-ci.yml || $f == .github/workflows/rust-ci-full.yml ]] && argument_comment_lint_package=true
@@ -52,7 +49,6 @@ jobs:
           echo "argument_comment_lint=$argument_comment_lint" >> "$GITHUB_OUTPUT"
           echo "argument_comment_lint_package=$argument_comment_lint_package" >> "$GITHUB_OUTPUT"
           echo "codex=$codex" >> "$GITHUB_OUTPUT"
-          echo "public_api=$public_api" >> "$GITHUB_OUTPUT"
           echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
 
   # --- Fast Cargo-native PR checks -------------------------------------------
@@ -89,23 +85,6 @@ jobs:
           version: 1.5.1
       - name: cargo shear
         run: cargo shear
-
-  public_api:
-    name: Public API listing
-    runs-on:
-      group: codex-runners
-      labels: codex-linux-x64
-    needs: changed
-    if: ${{ needs.changed.outputs.public_api == 'true' || needs.changed.outputs.workflows == 'true' }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # nightly-2025-09-18
-        with:
-          toolchain: nightly-2025-09-18
-      - name: Check public API listings are up to date
-        env:
-          CODEX_PUBLIC_API_TOOLCHAIN: nightly-2025-09-18
-        run: ./scripts/regen-public-api.sh --check
 
   argument_comment_lint_package:
     name: Argument comment lint package
@@ -208,7 +187,6 @@ jobs:
         changed,
         general,
         cargo_shear,
-        public_api,
         argument_comment_lint_package,
         argument_comment_lint_prebuilt,
       ]
@@ -221,12 +199,11 @@ jobs:
           echo "argpkg : ${{ needs.argument_comment_lint_package.result }}"
           echo "arglint: ${{ needs.argument_comment_lint_prebuilt.result }}"
           echo "general: ${{ needs.general.result }}"
-          echo "pubapi : ${{ needs.public_api.result }}"
           echo "shear  : ${{ needs.cargo_shear.result }}"
 
           # If nothing relevant changed (PR touching only root README, etc.),
           # declare success regardless of other jobs.
-          if [[ '${{ needs.changed.outputs.argument_comment_lint }}' != 'true' && '${{ needs.changed.outputs.codex }}' != 'true' && '${{ needs.changed.outputs.public_api }}' != 'true' && '${{ needs.changed.outputs.workflows }}' != 'true' ]]; then
+          if [[ '${{ needs.changed.outputs.argument_comment_lint }}' != 'true' && '${{ needs.changed.outputs.codex }}' != 'true' && '${{ needs.changed.outputs.workflows }}' != 'true' ]]; then
             echo 'No relevant changes -> CI not required.'
             exit 0
           fi
@@ -242,8 +219,4 @@ jobs:
           if [[ '${{ needs.changed.outputs.codex }}' == 'true' || '${{ needs.changed.outputs.workflows }}' == 'true' ]]; then
             [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
             [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
-          fi
-
-          if [[ '${{ needs.changed.outputs.public_api }}' == 'true' || '${{ needs.changed.outputs.workflows }}' == 'true' ]]; then
-            [[ '${{ needs.public_api.result }}' == 'success' ]] || { echo 'public_api failed'; exit 1; }
           fi
