@@ -890,7 +890,10 @@ mod tests {
 
         manager
             .start(StartCommandExecParams {
-                outgoing: Arc::new(OutgoingMessageSender::new(tx)),
+                outgoing: Arc::new(OutgoingMessageSender::new(
+                    tx,
+                    codex_analytics::AnalyticsEventsClient::disabled(),
+                )),
                 request_id: request_id.clone(),
                 process_id: Some("proc-101".to_string()),
                 exec_request: ExecRequest::new(
