@@ -2,7 +2,7 @@
 set -euo pipefail
 
 public_api_crates=(
-  core
+  core-api
 )
 default_public_api_toolchain="nightly-2025-09-18"
 

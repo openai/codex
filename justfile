@@ -93,7 +93,7 @@ mcp-server-run *args:
 write-config-schema:
     cargo run -p codex-core --bin codex-write-config-schema
 
-# Regenerate checked-in public API listings. Currently supports: core.
+# Regenerate checked-in public API listings. Currently supports: core-api.
 regen-public-api *crates:
     {{ justfile_directory() }}/scripts/regen-public-api.sh "$@"
 

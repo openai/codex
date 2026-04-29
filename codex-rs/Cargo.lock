@@ -2465,6 +2465,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-core-api"
+version = "0.0.0"
+dependencies = [
+ "codex-analytics",
+ "codex-arg0",
+ "codex-config",
+ "codex-core",
+ "codex-exec-server",
+ "codex-features",
+ "codex-login",
+ "codex-model-provider-info",
+ "codex-models-manager",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+]
+
+[[package]]
 name = "codex-core-plugins"
 version = "0.0.0"
 dependencies = [
@@ -3483,18 +3500,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
- "codex-arg0",
- "codex-config",
- "codex-core",
- "codex-exec-server",
- "codex-features",
- "codex-login",
- "codex-model-provider-info",
- "codex-models-manager",
- "codex-protocol",
- "codex-rollout",
- "codex-thread-store",
- "codex-utils-absolute-path",
+ "codex-core-api",
  "tracing",
 ]
 

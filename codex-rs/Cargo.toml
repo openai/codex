@@ -31,6 +31,7 @@ members = [
     "shell-escalation",
     "skills",
     "core",
+    "core-api",
     "core-plugins",
     "core-skills",
     "hooks",
@@ -142,6 +143,7 @@ codex-code-mode = { path = "code-mode" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
 codex-core = { path = "core" }
+codex-core-api = { path = "core-api" }
 codex-core-plugins = { path = "core-plugins" }
 codex-core-skills = { path = "core-skills" }
 codex-device-key = { path = "device-key" }

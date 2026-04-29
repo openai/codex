@@ -1,7 +1,8 @@
 # ThreadManager Sample
 
-Small one-shot binary that starts a Codex thread with `ThreadManager`, submits a
-single user turn, and prints the final assistant message.
+Small one-shot binary that starts a Codex thread with `ThreadManager` from
+`codex-core-api`, submits a single user turn, and prints the final assistant
+message.
 
 ```sh
 cargo run -p codex-thread-manager-sample -- "Say hello"

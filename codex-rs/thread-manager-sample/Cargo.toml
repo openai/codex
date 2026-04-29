@@ -10,16 +10,8 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-codex-arg0 = { workspace = true }
-codex-config = { workspace = true }
-codex-core = { workspace = true }
-codex-exec-server = { workspace = true }
-codex-features = { workspace = true }
-codex-login = { workspace = true }
-codex-model-provider-info = { workspace = true }
-codex-models-manager = { workspace = true }
-codex-protocol = { workspace = true }
-codex-rollout = { workspace = true }
-codex-thread-store = { workspace = true }
-codex-utils-absolute-path = { workspace = true }
+# Keep this sample limited to a single Codex workspace dependency.
+# Add new Codex surface area to `codex-core-api` instead of depending on
+# additional `codex-*` crates here.
+codex-core-api = { workspace = true }
 tracing = { workspace = true }
