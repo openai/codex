@@ -307,7 +307,15 @@ async fn plugin_list_returns_empty_when_workspace_codex_plugins_disabled() -> Re
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    let home = codex_home.path().to_string_lossy().into_owned();
+    let mut mcp = McpProcess::new_without_managed_config_with_env(
+        codex_home.path(),
+        &[
+            ("HOME", Some(home.as_str())),
+            ("USERPROFILE", Some(home.as_str())),
+        ],
+    )
+    .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -388,7 +396,15 @@ async fn plugin_list_reuses_cached_workspace_codex_plugins_setting() -> Result<(
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    let home = codex_home.path().to_string_lossy().into_owned();
+    let mut mcp = McpProcess::new_without_managed_config_with_env(
+        codex_home.path(),
+        &[
+            ("HOME", Some(home.as_str())),
+            ("USERPROFILE", Some(home.as_str())),
+        ],
+    )
+    .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     for _ in 0..2 {

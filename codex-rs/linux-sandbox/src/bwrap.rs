@@ -1036,7 +1036,6 @@ mod tests {
     use codex_protocol::protocol::FileSystemSandboxEntry;
     use codex_protocol::protocol::FileSystemSandboxPolicy;
     use codex_protocol::protocol::FileSystemSpecialPath;
-    use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
@@ -1066,7 +1065,7 @@ mod tests {
         let command = vec!["/bin/true".to_string()];
         let args = create_bwrap_command_args(
             command.clone(),
-            &FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
+            &FileSystemSandboxPolicy::unrestricted(),
             Path::new("/"),
             Path::new("/"),
             BwrapOptions {
@@ -1085,7 +1084,7 @@ mod tests {
         let command = vec!["/bin/true".to_string()];
         let args = create_bwrap_command_args(
             command,
-            &FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
+            &FileSystemSandboxPolicy::unrestricted(),
             Path::new("/"),
             Path::new("/"),
             BwrapOptions {
@@ -1399,22 +1398,18 @@ mod tests {
         let missing_root = temp_dir.path().join("missing");
         std::fs::create_dir(&existing_root).expect("create existing root");
 
-        let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![
+        let policy = FileSystemSandboxPolicy::workspace_write(
+            &[
                 AbsolutePathBuf::try_from(existing_root.as_path()).expect("absolute existing root"),
                 AbsolutePathBuf::try_from(missing_root.as_path()).expect("absolute missing root"),
             ],
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        };
+            /*exclude_tmpdir_env_var*/ true,
+            /*exclude_slash_tmp*/ true,
+        );
 
-        let args = create_filesystem_args(
-            &FileSystemSandboxPolicy::from(&policy),
-            temp_dir.path(),
-            NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH,
-        )
-        .expect("filesystem args");
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
         let existing_root = path_to_string(&existing_root);
         let missing_root = path_to_string(&missing_root);
 
@@ -1532,15 +1527,14 @@ mod tests {
 
     #[test]
     fn mounts_dev_before_writable_dev_binds() {
-        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![AbsolutePathBuf::try_from(Path::new("/dev")).expect("/dev path")],
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        };
+        let sandbox_policy = FileSystemSandboxPolicy::workspace_write(
+            &[AbsolutePathBuf::try_from(Path::new("/dev")).expect("/dev path")],
+            /*exclude_tmpdir_env_var*/ true,
+            /*exclude_slash_tmp*/ true,
+        );
 
         let args = create_filesystem_args(
-            &FileSystemSandboxPolicy::from(&sandbox_policy),
+            &sandbox_policy,
             Path::new("/"),
             NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH,
         )

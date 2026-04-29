@@ -8,8 +8,8 @@ use anyhow::Result;
 use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::DOCUMENT_EXTRACT_TEXT_RESOURCE_URI;
 use core_test_support::responses::ev_assistant_message;
@@ -169,10 +169,10 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
     let test = builder.build(&server).await?;
     tokio::fs::write(test.cwd.path().join("report.txt"), b"hello world").await?;
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "Extract the report text with the app tool.",
         AskForApproval::Never,
-        SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 

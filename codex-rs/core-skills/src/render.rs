@@ -16,11 +16,12 @@ use codex_utils_output_truncation::approx_token_count;
 
 const DEFAULT_SKILL_METADATA_CHAR_BUDGET: usize = 8_000;
 const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 2;
-const SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS: usize = 10;
+const SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS: usize = 100;
 const APPROX_BYTES_PER_TOKEN: usize = 4;
-pub const SKILL_DESCRIPTION_TRUNCATED_WARNING_PREFIX: &str = "Warning: Exceeded skills context budget. Loaded skill descriptions were truncated by an average of";
+pub const SKILL_DESCRIPTION_TRUNCATED_WARNING: &str = "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.";
+pub const SKILL_DESCRIPTION_TRUNCATED_WARNING_WITH_PERCENT: &str = "Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.";
 pub const SKILL_DESCRIPTIONS_REMOVED_WARNING_PREFIX: &str =
-    "Warning: Exceeded skills context budget. All skill descriptions were removed and";
+    "Exceeded skills context budget. All skill descriptions were removed and";
 pub const SKILLS_INTRO_WITH_ABSOLUTE_PATHS: &str = "A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.";
 pub const SKILLS_INTRO_WITH_ALIASES: &str = "A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and a short path that can be expanded into an absolute path using the skill roots table.";
 pub const SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS: &str = r###"- Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.
@@ -230,11 +231,13 @@ fn build_available_skills_from_lines(
     } else if report.average_truncated_description_chars()
         > SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS
     {
-        Some(format!(
-            "{} {} characters per skill.",
-            budget_warning_prefix(budget, SKILL_DESCRIPTION_TRUNCATED_WARNING_PREFIX),
-            report.average_truncated_description_chars()
-        ))
+        Some(
+            match budget {
+                SkillMetadataBudget::Tokens(_) => SKILL_DESCRIPTION_TRUNCATED_WARNING_WITH_PERCENT,
+                SkillMetadataBudget::Characters(_) => SKILL_DESCRIPTION_TRUNCATED_WARNING,
+            }
+            .to_string(),
+        )
     } else {
         None
     };
@@ -431,13 +434,13 @@ fn skill_render_report(
 
 impl SkillRenderReport {
     fn average_truncated_description_chars(&self) -> usize {
-        if self.truncated_description_count == 0 {
+        if self.total_count == 0 || self.truncated_description_chars == 0 {
             return 0;
         }
 
         self.truncated_description_chars
-            .saturating_add(self.truncated_description_count.saturating_sub(1))
-            / self.truncated_description_count
+            .saturating_add(self.total_count.saturating_sub(1))
+            / self.total_count
     }
 }
 
@@ -1048,27 +1051,48 @@ mod tests {
 
     #[test]
     fn budgeted_rendering_warns_when_average_description_truncation_exceeds_threshold() {
-        let alpha =
-            make_skill_with_description("alpha-skill", SkillScope::Repo, "abcdefghijklmnop");
-        let beta = make_skill_with_description("beta-skill", SkillScope::Repo, "uvwxyzabcdefghij");
-        let minimum_cost = SkillLine::new(&alpha)
+        let long_description = "a".repeat(250);
+        let long_skill =
+            make_skill_with_description("long-skill", SkillScope::Repo, &long_description);
+        let empty_skill = make_skill_with_description("empty-skill", SkillScope::Repo, "");
+        let minimum_cost = SkillLine::new(&long_skill)
             .minimum_cost(SkillMetadataBudget::Characters(usize::MAX))
-            + SkillLine::new(&beta).minimum_cost(SkillMetadataBudget::Characters(usize::MAX));
-        let budget = SkillMetadataBudget::Characters(minimum_cost + 6);
+            + SkillLine::new(&empty_skill)
+                .minimum_cost(SkillMetadataBudget::Characters(usize::MAX));
+        let budget = SkillMetadataBudget::Characters(minimum_cost + 49);
 
-        let rendered = build_available_skills_from_metadata(&[alpha, beta], budget)
+        let rendered = build_available_skills_from_metadata(&[long_skill, empty_skill], budget)
             .expect("skills should render");
 
+        assert_eq!(rendered.report.total_count, 2);
         assert_eq!(rendered.report.included_count, 2);
         assert_eq!(rendered.report.omitted_count, 0);
-        assert_eq!(rendered.report.truncated_description_chars, 28);
-        assert_eq!(rendered.report.truncated_description_count, 2);
+        assert_eq!(rendered.report.truncated_description_chars, 202);
+        assert_eq!(rendered.report.truncated_description_count, 1);
         assert_eq!(
             rendered.warning_message,
             Some(
-                "Warning: Exceeded skills context budget. Loaded skill descriptions were truncated by an average of 14 characters per skill."
+                "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
                     .to_string()
             )
+        );
+    }
+
+    #[test]
+    fn budgeted_rendering_token_budget_truncation_warning_mentions_two_percent() {
+        let long_description = "a".repeat(1000);
+        let long_skill =
+            make_skill_with_description("long-skill", SkillScope::Repo, &long_description);
+        let minimum_cost =
+            SkillLine::new(&long_skill).minimum_cost(SkillMetadataBudget::Tokens(usize::MAX));
+        let budget = SkillMetadataBudget::Tokens(minimum_cost + 1);
+
+        let rendered = build_available_skills_from_metadata(&[long_skill], budget)
+            .expect("skills should render");
+
+        assert_eq!(
+            rendered.warning_message,
+            Some(SKILL_DESCRIPTION_TRUNCATED_WARNING_WITH_PERCENT.to_string())
         );
     }
 
@@ -1116,7 +1140,7 @@ mod tests {
         assert_eq!(
             rendered.warning_message,
             Some(
-                "Warning: Exceeded skills context budget. All skill descriptions were removed and 2 additional skills were not included in the model-visible skills list."
+                "Exceeded skills context budget. All skill descriptions were removed and 2 additional skills were not included in the model-visible skills list."
                     .to_string()
             )
         );
@@ -1145,7 +1169,7 @@ mod tests {
         assert_eq!(
             rendered.warning_message,
             Some(
-                "Warning: Exceeded skills context budget. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list."
+                "Exceeded skills context budget. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list."
                     .to_string()
             )
         );

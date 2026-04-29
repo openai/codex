@@ -1352,16 +1352,12 @@ async fn run_debug_prompt_input_command(
         ));
     }
 
-    let approval_policy = if shared.full_auto {
-        Some(AskForApproval::OnRequest)
-    } else if shared.dangerously_bypass_approvals_and_sandbox {
+    let approval_policy = if shared.dangerously_bypass_approvals_and_sandbox {
         Some(AskForApproval::Never)
     } else {
         interactive.approval_policy.map(Into::into)
     };
-    let sandbox_mode = if shared.full_auto {
-        Some(codex_protocol::config_types::SandboxMode::WorkspaceWrite)
-    } else if shared.dangerously_bypass_approvals_and_sandbox {
+    let sandbox_mode = if shared.dangerously_bypass_approvals_and_sandbox {
         Some(codex_protocol::config_types::SandboxMode::DangerFullAccess)
     } else {
         shared.sandbox_mode.map(Into::into)
@@ -1927,6 +1923,30 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_macos_parses_permissions_profile() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "sandbox",
+            "macos",
+            "--permissions-profile",
+            ":workspace",
+            "--",
+            "echo",
+        ])
+        .expect("parse");
+
+        let Some(Subcommand::Sandbox(SandboxArgs {
+            cmd: SandboxCommand::Macos(command),
+        })) = cli.subcommand
+        else {
+            panic!("expected sandbox macos command");
+        };
+
+        assert_eq!(command.permissions_profile.as_deref(), Some(":workspace"));
+        assert_eq!(command.command, vec!["echo"]);
+    }
+
+    #[test]
     fn plugin_marketplace_remove_parses_under_plugin() {
         let cli =
             MultitoolCli::try_parse_from(["codex", "plugin", "marketplace", "remove", "debug"])
@@ -1948,6 +1968,35 @@ mod tests {
         let remove_result =
             MultitoolCli::try_parse_from(["codex", "marketplace", "remove", "debug"]);
         assert!(remove_result.is_err());
+    }
+
+    #[test]
+    fn full_auto_no_longer_parses_at_top_level() {
+        let result = MultitoolCli::try_parse_from(["codex", "--full-auto"]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn exec_full_auto_reports_migration_path() {
+        let cli = MultitoolCli::try_parse_from(["codex", "exec", "--full-auto", "summarize"])
+            .expect("exec should accept removed flag long enough to report a migration path");
+        let Some(Subcommand::Exec(exec)) = cli.subcommand else {
+            panic!("expected exec subcommand");
+        };
+
+        assert_eq!(
+            exec.removed_full_auto_warning(),
+            Some("warning: `--full-auto` is deprecated; use `--sandbox workspace-write` instead.")
+        );
+    }
+
+    #[test]
+    fn sandbox_full_auto_no_longer_parses() {
+        let result =
+            MultitoolCli::try_parse_from(["codex", "sandbox", "linux", "--full-auto", "--"]);
+
+        assert!(result.is_err());
     }
 
     fn sample_exit_info(conversation_id: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {
@@ -2080,14 +2129,13 @@ mod tests {
     }
 
     #[test]
-    fn resume_merges_option_flags_and_full_auto() {
+    fn resume_merges_option_flags() {
         let interactive = finalize_resume_from_args(
             [
                 "codex",
                 "resume",
                 "sid",
                 "--oss",
-                "--full-auto",
                 "--search",
                 "--sandbox",
                 "workspace-write",
@@ -2116,7 +2164,6 @@ mod tests {
             interactive.approval_policy,
             Some(codex_utils_cli::ApprovalModeCliArg::OnRequest)
         );
-        assert!(interactive.full_auto);
         assert_eq!(
             interactive.cwd.as_deref(),
             Some(std::path::Path::new("/tmp"))

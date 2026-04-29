@@ -4,7 +4,7 @@ use crate::bwrap::WSL1_BWRAP_WARNING;
 use crate::bwrap::is_wsl1;
 use crate::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use crate::landlock::allow_network_for_proxy;
-use crate::landlock::create_linux_sandbox_command_args_for_policies;
+use crate::landlock::create_linux_sandbox_command_args_for_permission_profile;
 use crate::policy_transforms::effective_permission_profile;
 use crate::policy_transforms::should_require_platform_sandbox;
 use codex_network_proxy::NetworkProxy;
@@ -186,12 +186,6 @@ impl SandboxManager {
             effective_permission_profile(permissions, additional_permissions.as_ref());
         let (effective_file_system_policy, effective_network_policy) =
             effective_permission_profile.to_runtime_permissions();
-        let effective_policy = compatibility_sandbox_policy_for_permission_profile(
-            &effective_permission_profile,
-            &effective_file_system_policy,
-            effective_network_policy,
-            sandbox_policy_cwd,
-        );
         let mut argv = Vec::with_capacity(1 + command.args.len());
         argv.push(command.program);
         argv.extend(command.args.into_iter().map(OsString::from));
@@ -231,12 +225,10 @@ impl SandboxManager {
                     allow_proxy_network,
                     is_wsl1(),
                 )?;
-                let mut args = create_linux_sandbox_command_args_for_policies(
+                let mut args = create_linux_sandbox_command_args_for_permission_profile(
                     os_argv_to_strings(argv),
                     command.cwd.as_path(),
-                    &effective_policy,
-                    &effective_file_system_policy,
-                    effective_network_policy,
+                    &effective_permission_profile,
                     sandbox_policy_cwd,
                     use_legacy_landlock,
                     allow_proxy_network,

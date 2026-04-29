@@ -191,7 +191,7 @@ async fn live_app_server_warning_notification_renders_message() {
     chat.handle_server_notification(
         ServerNotification::Warning(WarningNotification {
             thread_id: None,
-            message: "Warning: Exceeded skills context budget of 2%. All skill descriptions were removed and 2 additional skills were not included in the model-visible skills list.".to_string(),
+            message: "Exceeded skills context budget of 2%. All skill descriptions were removed and 2 additional skills were not included in the model-visible skills list.".to_string(),
         }),
         /*replay_kind*/ None,
     );
@@ -201,7 +201,7 @@ async fn live_app_server_warning_notification_renders_message() {
     let rendered = lines_to_single_string(&cells[0]);
     let normalized = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        normalized.contains("Warning: Exceeded skills context budget of 2%."),
+        normalized.contains("Exceeded skills context budget of 2%."),
         "expected warning notification message, got {rendered}"
     );
     assert!(

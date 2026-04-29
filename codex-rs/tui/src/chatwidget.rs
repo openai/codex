@@ -422,13 +422,13 @@ use crate::streaming::controller::StreamController;
 
 use chrono::Local;
 use codex_file_search::FileMatch;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_approval_presets::ApprovalPreset;
 use codex_utils_approval_presets::builtin_approval_presets;
 use strum::IntoEnumIterator;
@@ -910,6 +910,7 @@ pub(crate) struct ChatWidget {
     plugin_install_apps_needing_auth: Vec<AppSummary>,
     plugin_install_auth_flow: Option<PluginInstallAuthFlowState>,
     plugins_active_tab_id: Option<String>,
+    newly_installed_marketplace_tab_id: Option<String>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -4973,7 +4974,7 @@ impl ChatWidget {
         }
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
-            Some(MessagePhase::FinalAnswer) | None => false,
+            Some(MessagePhase::FinalAnswer) | None => !self.pending_steers.is_empty(),
             Some(MessagePhase::Commentary) => true,
         };
         self.maybe_restore_status_indicator_after_stream_idle();
@@ -5599,6 +5600,7 @@ impl ChatWidget {
             plugin_install_apps_needing_auth: Vec::new(),
             plugin_install_auth_flow: None,
             plugins_active_tab_id: None,
+            newly_installed_marketplace_tab_id: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -6480,14 +6482,11 @@ impl ChatWidget {
             None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
             None => None,
         };
-        let permission_profile = Some(self.config.permissions.permission_profile());
+        let permission_profile = self.config.permissions.permission_profile();
         let op = AppCommand::user_turn(
             items,
             self.config.cwd.to_path_buf(),
             self.config.permissions.approval_policy.value(),
-            self.config
-                .permissions
-                .legacy_sandbox_policy(self.config.cwd.as_path()),
             permission_profile,
             effective_mode.model().to_string(),
             effective_mode.reasoning_effort(),
@@ -7262,6 +7261,7 @@ impl ChatWidget {
             | ServerNotification::McpToolCallProgress(_)
             | ServerNotification::McpServerOauthLoginCompleted(_)
             | ServerNotification::AppListUpdated(_)
+            | ServerNotification::RemoteControlStatusChanged(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::FsChanged(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
@@ -8567,7 +8567,7 @@ impl ChatWidget {
                     /*cwd*/ None,
                     /*approval_policy*/ None,
                     /*approvals_reviewer*/ None,
-                    /*sandbox_policy*/ None,
+                    /*permission_profile*/ None,
                     /*windows_sandbox_level*/ None,
                     Some(switch_model_for_events.clone()),
                     Some(Some(default_effort)),
@@ -8791,7 +8791,7 @@ impl ChatWidget {
                             /*cwd*/ None,
                             /*approval_policy*/ None,
                             /*approvals_reviewer*/ None,
-                            /*sandbox_policy*/ None,
+                            /*permission_profile*/ None,
                             /*windows_sandbox_level*/ None,
                             /*model*/ None,
                             /*effort*/ None,
@@ -9540,14 +9540,11 @@ impl ChatWidget {
         self.open_permissions_popup();
     }
 
-    /// Open a popup to choose the permissions mode (approval policy + sandbox policy).
+    /// Open a popup to choose the permissions mode.
     pub(crate) fn open_permissions_popup(&mut self) {
         let include_read_only = cfg!(target_os = "windows");
         let current_approval = self.config.permissions.approval_policy.value();
-        let current_sandbox = self
-            .config
-            .permissions
-            .legacy_sandbox_policy(self.config.cwd.as_path());
+        let current_permission_profile = self.config.permissions.permission_profile();
         let guardian_approval_enabled = self.config.features.enabled(Feature::GuardianApproval);
         let current_review_policy = self.config.approvals_reviewer;
         let mut items: Vec<SelectionItem> = Vec::new();
@@ -9653,7 +9650,7 @@ impl ChatWidget {
                     } else {
                         Self::approval_preset_actions(
                             preset.approval,
-                            preset.sandbox.clone(),
+                            preset.permission_profile.clone(),
                             base_name.clone(),
                             ApprovalsReviewer::User,
                         )
@@ -9663,7 +9660,7 @@ impl ChatWidget {
                 {
                     Self::approval_preset_actions(
                         preset.approval,
-                        preset.sandbox.clone(),
+                        preset.permission_profile.clone(),
                         base_name.clone(),
                         ApprovalsReviewer::User,
                     )
@@ -9671,7 +9668,7 @@ impl ChatWidget {
             } else {
                 Self::approval_preset_actions(
                     preset.approval,
-                    preset.sandbox.clone(),
+                    preset.permission_profile.clone(),
                     base_name.clone(),
                     ApprovalsReviewer::User,
                 )
@@ -9683,7 +9680,8 @@ impl ChatWidget {
                     is_current: current_review_policy == ApprovalsReviewer::User
                         && Self::preset_matches_current(
                             current_approval,
-                            &current_sandbox,
+                            &current_permission_profile,
+                            self.config.cwd.as_path(),
                             &preset,
                         ),
                     actions: default_actions,
@@ -9701,13 +9699,14 @@ impl ChatWidget {
                         ),
                         is_current: current_review_policy == ApprovalsReviewer::AutoReview
                             && Self::preset_matches_current(
-                                current_approval,
-                                &current_sandbox,
-                                &preset,
-                            ),
+                            current_approval,
+                            &current_permission_profile,
+                            self.config.cwd.as_path(),
+                            &preset,
+                        ),
                         actions: Self::approval_preset_actions(
                             preset.approval,
-                            preset.sandbox.clone(),
+                            preset.permission_profile.clone(),
                             "Auto-review".to_string(),
                             ApprovalsReviewer::AutoReview,
                         ),
@@ -9723,7 +9722,8 @@ impl ChatWidget {
                     description: base_description,
                     is_current: Self::preset_matches_current(
                         current_approval,
-                        &current_sandbox,
+                        &current_permission_profile,
+                        self.config.cwd.as_path(),
                         &preset,
                     ),
                     actions: default_actions,
@@ -9848,18 +9848,18 @@ impl ChatWidget {
 
     fn approval_preset_actions(
         approval: AskForApproval,
-        sandbox: SandboxPolicy,
+        permission_profile: PermissionProfile,
         label: String,
         approvals_reviewer: ApprovalsReviewer,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
-            let sandbox_clone = sandbox.clone();
+            let permission_profile_clone = permission_profile.clone();
             tx.send(AppEvent::CodexOp(
                 AppCommand::override_turn_context(
                     /*cwd*/ None,
                     Some(approval),
                     Some(approvals_reviewer),
-                    Some(sandbox_clone.clone()),
+                    Some(permission_profile_clone.clone()),
                     /*windows_sandbox_level*/ None,
                     /*model*/ None,
                     /*effort*/ None,
@@ -9871,7 +9871,7 @@ impl ChatWidget {
                 .into_core(),
             ));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
-            tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
+            tx.send(AppEvent::UpdatePermissionProfile(permission_profile_clone));
             tx.send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
             tx.send(AppEvent::InsertHistoryCell(Box::new(
                 history_cell::new_info_event(
@@ -9884,36 +9884,39 @@ impl ChatWidget {
 
     fn preset_matches_current(
         current_approval: AskForApproval,
-        current_sandbox: &SandboxPolicy,
+        current_permission_profile: &PermissionProfile,
+        cwd: &std::path::Path,
         preset: &ApprovalPreset,
     ) -> bool {
         if current_approval != preset.approval {
             return false;
         }
 
-        match (current_sandbox, &preset.sandbox) {
-            (SandboxPolicy::DangerFullAccess, SandboxPolicy::DangerFullAccess) => true,
-            (
-                SandboxPolicy::ReadOnly {
-                    network_access: current_network_access,
-                    ..
-                },
-                SandboxPolicy::ReadOnly {
-                    network_access: preset_network_access,
-                    ..
-                },
-            ) => current_network_access == preset_network_access,
-            (
-                SandboxPolicy::WorkspaceWrite {
-                    network_access: current_network_access,
-                    ..
-                },
-                SandboxPolicy::WorkspaceWrite {
-                    network_access: preset_network_access,
-                    ..
-                },
-            ) => current_network_access == preset_network_access,
-            _ => false,
+        match preset.id {
+            "full-access" => matches!(current_permission_profile, PermissionProfile::Disabled),
+            "read-only" => {
+                let file_system_policy = current_permission_profile.file_system_sandbox_policy();
+                matches!(
+                    current_permission_profile,
+                    PermissionProfile::Managed { .. }
+                ) && !file_system_policy.has_full_disk_write_access()
+                    && file_system_policy
+                        .get_writable_roots_with_cwd(cwd)
+                        .is_empty()
+                    && current_permission_profile.network_sandbox_policy()
+                        == preset.permission_profile.network_sandbox_policy()
+            }
+            "auto" => {
+                let file_system_policy = current_permission_profile.file_system_sandbox_policy();
+                matches!(
+                    current_permission_profile,
+                    PermissionProfile::Managed { .. }
+                ) && file_system_policy.can_write_path_with_cwd(cwd, cwd)
+                    && !file_system_policy.has_full_disk_write_access()
+                    && current_permission_profile.network_sandbox_policy()
+                        == preset.permission_profile.network_sandbox_policy()
+            }
+            _ => current_permission_profile == &preset.permission_profile,
         }
     }
 
@@ -9929,14 +9932,19 @@ impl ChatWidget {
         }
         let cwd = self.config.cwd.clone();
         let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
+        let Ok(policy) = self
+            .config
+            .permissions
+            .permission_profile()
+            .to_legacy_sandbox_policy(self.config.cwd.as_path())
+        else {
+            return Some((Vec::new(), 0, true));
+        };
         match codex_windows_sandbox::apply_world_writable_scan_and_denies(
             self.config.codex_home.as_path(),
             cwd.as_path(),
             &env_map,
-            &self
-                .config
-                .permissions
-                .legacy_sandbox_policy(self.config.cwd.as_path()),
+            &policy,
             Some(self.config.codex_home.as_path()),
         ) {
             Ok(_) => None,
@@ -9957,7 +9965,7 @@ impl ChatWidget {
     ) {
         let selected_name = preset.label.to_string();
         let approval = preset.approval;
-        let sandbox = preset.sandbox;
+        let permission_profile = preset.permission_profile;
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let title_line = Line::from("Enable full access?").bold();
         let info_line = Line::from(vec![
@@ -9974,7 +9982,7 @@ impl ChatWidget {
 
         let mut accept_actions = Self::approval_preset_actions(
             approval,
-            sandbox.clone(),
+            permission_profile.clone(),
             selected_name.clone(),
             ApprovalsReviewer::User,
         );
@@ -9984,7 +9992,7 @@ impl ChatWidget {
 
         let mut accept_and_remember_actions = Self::approval_preset_actions(
             approval,
-            sandbox,
+            permission_profile,
             selected_name,
             ApprovalsReviewer::User,
         );
@@ -10041,27 +10049,27 @@ impl ChatWidget {
         extra_count: usize,
         failed_scan: bool,
     ) {
-        let (approval, sandbox) = match &preset {
-            Some(p) => (Some(p.approval), Some(p.sandbox.clone())),
+        let (approval, permission_profile) = match &preset {
+            Some(p) => (Some(p.approval), Some(p.permission_profile.clone())),
             None => (None, None),
         };
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
-        let describe_policy = |policy: &SandboxPolicy| match policy {
-            SandboxPolicy::WorkspaceWrite { .. } => "Agent mode",
-            SandboxPolicy::ReadOnly { .. } => "Read-Only mode",
-            _ => "Agent mode",
+        let describe_profile = |profile: &PermissionProfile| {
+            if matches!(profile, PermissionProfile::Disabled) {
+                "Full Access mode"
+            } else if profile
+                .file_system_sandbox_policy()
+                .can_write_path_with_cwd(self.config.cwd.as_path(), self.config.cwd.as_path())
+            {
+                "Agent mode"
+            } else {
+                "Read-Only mode"
+            }
         };
         let mode_label = preset
             .as_ref()
-            .map(|p| describe_policy(&p.sandbox))
-            .unwrap_or_else(|| {
-                describe_policy(
-                    &self
-                        .config
-                        .permissions
-                        .legacy_sandbox_policy(self.config.cwd.as_path()),
-                )
-            });
+            .map(|p| describe_profile(&p.permission_profile))
+            .unwrap_or_else(|| describe_profile(&self.config.permissions.permission_profile()));
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
@@ -10093,8 +10101,9 @@ impl ChatWidget {
         }
         let header = ColumnRenderable::with(header_children);
 
-        // Build actions ensuring acknowledgement happens before applying the new sandbox policy,
-        // so downstream policy-change hooks don't re-trigger the warning.
+        // Build actions ensuring acknowledgement happens before applying the
+        // new permission profile, so downstream policy-change hooks don't
+        // re-trigger the warning.
         let mut accept_actions: Vec<SelectionAction> = Vec::new();
         // Suppress the immediate re-scan only when a preset will be applied (i.e., via /approvals or
         // /permissions), to avoid duplicate warnings from the ensuing policy change.
@@ -10103,10 +10112,10 @@ impl ChatWidget {
                 tx.send(AppEvent::SkipNextWorldWritableScan);
             }));
         }
-        if let (Some(approval), Some(sandbox)) = (approval, sandbox.clone()) {
+        if let (Some(approval), Some(permission_profile)) = (approval, permission_profile.clone()) {
             accept_actions.extend(Self::approval_preset_actions(
                 approval,
-                sandbox,
+                permission_profile,
                 mode_label.to_string(),
                 ApprovalsReviewer::User,
             ));
@@ -10117,10 +10126,10 @@ impl ChatWidget {
             tx.send(AppEvent::UpdateWorldWritableWarningAcknowledged(true));
             tx.send(AppEvent::PersistWorldWritableWarningAcknowledged);
         }));
-        if let (Some(approval), Some(sandbox)) = (approval, sandbox) {
+        if let (Some(approval), Some(permission_profile)) = (approval, permission_profile) {
             accept_and_remember_actions.extend(Self::approval_preset_actions(
                 approval,
-                sandbox,
+                permission_profile,
                 mode_label.to_string(),
                 ApprovalsReviewer::User,
             ));
@@ -10439,12 +10448,13 @@ impl ChatWidget {
         }
     }
 
-    /// Set the sandbox policy in the widget's config copy.
+    /// Set the permission profile in the widget's config copy.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
-        self.config
-            .permissions
-            .set_legacy_sandbox_policy(policy, self.config.cwd.as_path())
+    pub(crate) fn set_permission_profile(
+        &mut self,
+        profile: PermissionProfile,
+    ) -> ConstraintResult<()> {
+        self.config.permissions.set_permission_profile(profile)
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -10701,7 +10711,7 @@ impl ChatWidget {
                 /*cwd*/ None,
                 /*approval_policy*/ None,
                 /*approvals_reviewer*/ None,
-                /*sandbox_policy*/ None,
+                /*permission_profile*/ None,
                 /*windows_sandbox_level*/ None,
                 /*model*/ None,
                 /*effort*/ None,

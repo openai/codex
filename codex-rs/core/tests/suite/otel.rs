@@ -1,10 +1,10 @@
 use codex_core::config::Constrained;
 use codex_features::Feature;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -1196,8 +1196,9 @@ async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
         .with_config(|config| {
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config
-                .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess)
-                .expect("set sandbox policy");
+                .permissions
+                .set_permission_profile(PermissionProfile::Disabled)
+                .expect("set permission profile");
         })
         .build(&server)
         .await

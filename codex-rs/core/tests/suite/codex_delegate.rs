@@ -1,12 +1,12 @@
 use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
-use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -65,8 +65,9 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         config
-            .set_legacy_sandbox_policy(SandboxPolicy::new_read_only_policy())
-            .expect("set sandbox policy");
+            .permissions
+            .set_permission_profile(PermissionProfile::read_only())
+            .expect("set permission profile");
     });
     let test = builder.build(&server).await.expect("build test codex");
 
@@ -149,8 +150,9 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         // Use a restricted sandbox so patch approval is required
         config
-            .set_legacy_sandbox_policy(SandboxPolicy::new_read_only_policy())
-            .expect("set sandbox policy");
+            .permissions
+            .set_permission_profile(PermissionProfile::read_only())
+            .expect("set permission profile");
         config.include_apply_patch_tool = true;
     });
     let test = builder.build(&server).await.expect("build test codex");

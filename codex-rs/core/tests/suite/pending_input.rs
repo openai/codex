@@ -3,11 +3,11 @@ use std::sync::Arc;
 use codex_core::CodexThread;
 use codex_protocol::AgentPath;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -25,6 +25,7 @@ use core_test_support::streaming_sse::StreamingSseServer;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -108,6 +109,8 @@ async fn submit_user_input(codex: &CodexThread, text: &str) {
 }
 
 async fn submit_danger_full_access_user_turn(test: &TestCodex, text: &str) {
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
     test.codex
         .submit(Op::UserTurn {
             environments: None,
@@ -119,8 +122,8 @@ async fn submit_danger_full_access_user_turn(test: &TestCodex, text: &str) {
             cwd: test.config.cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
+            sandbox_policy,
+            permission_profile,
             model: test.session_configured.model.clone(),
             effort: None,
             summary: None,

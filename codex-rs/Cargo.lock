@@ -1853,6 +1853,7 @@ dependencies = [
  "codex-core-plugins",
  "codex-device-key",
  "codex-exec-server",
+ "codex-external-agent-migration",
  "codex-external-agent-sessions",
  "codex-features",
  "codex-feedback",
@@ -2684,6 +2685,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-external-agent-migration"
+version = "0.0.0"
+dependencies = [
+ "codex-hooks",
+ "pretty_assertions",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "toml 0.9.11+spec-1.1.0",
+]
+
+[[package]]
 name = "codex-external-agent-sessions"
 version = "0.0.0"
 dependencies = [
@@ -2780,6 +2793,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "codex-config",
+ "codex-plugin",
  "codex-protocol",
  "codex-utils-absolute-path",
  "futures",
@@ -3151,6 +3165,7 @@ dependencies = [
 name = "codex-plugin"
 version = "0.0.0"
 dependencies = [
+ "codex-config",
  "codex-utils-absolute-path",
  "codex-utils-plugins",
  "thiserror 2.0.18",

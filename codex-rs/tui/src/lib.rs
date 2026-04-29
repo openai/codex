@@ -150,6 +150,7 @@ mod npm_registry;
 pub(crate) mod onboarding;
 mod oss_selection;
 mod pager_overlay;
+mod permission_compat;
 pub(crate) mod public_widgets;
 mod render;
 mod resize_reflow_cap;
@@ -696,12 +697,7 @@ pub async fn run_main(
         .cwd
         .clone()
         .filter(|_| matches!(app_server_target, AppServerTarget::Remote { .. }));
-    let (sandbox_mode, approval_policy) = if cli.full_auto {
-        (
-            Some(SandboxMode::WorkspaceWrite),
-            Some(AskForApproval::OnRequest),
-        )
-    } else if cli.dangerously_bypass_approvals_and_sandbox {
+    let (sandbox_mode, approval_policy) = if cli.dangerously_bypass_approvals_and_sandbox {
         (
             Some(SandboxMode::DangerFullAccess),
             Some(AskForApproval::Never),
@@ -745,12 +741,15 @@ pub async fn run_main(
         }
     };
 
-    let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::from_env(
-        ExecServerRuntimePaths::from_optional_paths(
-            arg0_paths.codex_self_exe.clone(),
-            arg0_paths.codex_linux_sandbox_exe.clone(),
-        )?,
-    )));
+    let environment_manager = Arc::new(
+        EnvironmentManager::new(EnvironmentManagerArgs::new(
+            ExecServerRuntimePaths::from_optional_paths(
+                arg0_paths.codex_self_exe.clone(),
+                arg0_paths.codex_linux_sandbox_exe.clone(),
+            )?,
+        ))
+        .await,
+    );
     let cwd = cli.cwd.clone();
     let config_cwd =
         config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
@@ -882,9 +881,8 @@ pub async fn run_main(
 
     if let Some(warning) = add_dir_warning_message(
         &cli.add_dir,
-        &config
-            .permissions
-            .legacy_sandbox_policy(config.cwd.as_path()),
+        &config.permissions.permission_profile(),
+        config.cwd.as_path(),
     ) {
         #[allow(clippy::print_stderr)]
         {
@@ -2017,14 +2015,14 @@ mod tests {
             Path::new("/definitely/not/local/to/this/test")
         };
         let target = AppServerTarget::Embedded;
-        let environment_manager =
-            EnvironmentManager::new(codex_exec_server::EnvironmentManagerArgs {
-                exec_server_url: Some("ws://127.0.0.1:8765".to_string()),
-                local_runtime_paths: ExecServerRuntimePaths::new(
-                    std::env::current_exe().expect("current exe"),
-                    /*codex_linux_sandbox_exe*/ None,
-                )?,
-            });
+        let environment_manager = EnvironmentManager::create_for_tests(
+            Some("ws://127.0.0.1:8765".to_string()),
+            ExecServerRuntimePaths::new(
+                std::env::current_exe().expect("current exe"),
+                /*codex_linux_sandbox_exe*/ None,
+            )?,
+        )
+        .await;
 
         let config_cwd =
             config_cwd_for_app_server_target(Some(remote_only_cwd), &target, &environment_manager)?;
@@ -2211,6 +2209,10 @@ mod tests {
             .model
             .clone()
             .unwrap_or_else(|| "gpt-5.1".to_string());
+        let permission_profile = config.permissions.permission_profile();
+        let sandbox_policy = permission_profile
+            .to_legacy_sandbox_policy(config.cwd.as_path())
+            .expect("configured permissions must have a legacy compatibility projection");
         TurnContextItem {
             turn_id: None,
             trace_id: None,
@@ -2218,10 +2220,8 @@ mod tests {
             current_date: None,
             timezone: None,
             approval_policy: config.permissions.approval_policy.value(),
-            sandbox_policy: config
-                .permissions
-                .legacy_sandbox_policy(config.cwd.as_path()),
-            permission_profile: None,
+            sandbox_policy,
+            permission_profile: Some(permission_profile),
             network: None,
             file_system_sandbox_policy: None,
             model,

@@ -948,6 +948,65 @@ async fn idle_commit_ticks_do_not_restore_status_without_commentary_completion()
 }
 
 #[tokio::test]
+async fn final_answer_completion_restores_status_indicator_for_pending_steer() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.on_task_started();
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+
+    chat.on_agent_message_delta("Long output line 1\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+    chat.on_agent_message_delta("Long output line 2\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
+
+    chat.bottom_pane.set_composer_text(
+        "Please summarize the rest more briefly.".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.pending_steers.len(), 1);
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(
+        items,
+        vec![UserInput::Text {
+            text: "Please summarize the rest more briefly.".to_string(),
+            text_elements: Vec::new(),
+        }]
+    );
+
+    complete_assistant_message(
+        &mut chat,
+        "msg-final",
+        "Long output line 1\nLong output line 2\n",
+        Some(MessagePhase::FinalAnswer),
+    );
+
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
+
+    complete_user_message(
+        &mut chat,
+        "user-steer",
+        "Please summarize the rest more briefly.",
+    );
+
+    assert!(chat.pending_steers.is_empty());
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
+}
+
+#[tokio::test]
 async fn commentary_completion_restores_status_indicator_before_exec_begin() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

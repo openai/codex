@@ -4,10 +4,10 @@
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_features::Feature;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
@@ -21,6 +21,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::time::Duration;
@@ -125,6 +126,9 @@ async fn responses_api_parent_and_subagent_requests_include_identity_headers() -
 
 async fn submit_turn_with_timeout(test: &TestCodex, prompt: &str) -> Result<()> {
     let session_model = test.session_configured.model.clone();
+    let cwd = test.config.cwd.to_path_buf();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::workspace_write(), cwd.as_path());
     test.codex
         .submit(Op::UserTurn {
             environments: None,
@@ -133,16 +137,11 @@ async fn submit_turn_with_timeout(test: &TestCodex, prompt: &str) -> Result<()> 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: test.config.cwd.to_path_buf(),
+            cwd,
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::WorkspaceWrite {
-                writable_roots: Vec::new(),
-                network_access: false,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            },
-            permission_profile: None,
+            sandbox_policy,
+            permission_profile,
             model: session_model,
             effort: None,
             summary: None,

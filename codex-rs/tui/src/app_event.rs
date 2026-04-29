@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::PluginInstallResponse;
@@ -41,9 +42,9 @@ use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
 
@@ -285,6 +286,27 @@ pub(crate) enum AppEvent {
     PluginsLoaded {
         cwd: PathBuf,
         result: Result<PluginListResponse, String>,
+    },
+
+    /// Open the prompt for adding a marketplace source.
+    OpenMarketplaceAddPrompt,
+
+    /// Replace the plugins popup with a marketplace-add loading state.
+    OpenMarketplaceAddLoading {
+        source: String,
+    },
+
+    /// Add a marketplace from the provided source.
+    FetchMarketplaceAdd {
+        cwd: PathBuf,
+        source: String,
+    },
+
+    /// Result of adding a marketplace.
+    MarketplaceAddLoaded {
+        cwd: PathBuf,
+        source: String,
+        result: Result<MarketplaceAddResponse, String>,
     },
 
     /// Replace the plugins popup with a plugin-detail loading state.
@@ -581,8 +603,8 @@ pub(crate) enum AppEvent {
     /// Update the current approval policy in the running app and widget.
     UpdateAskForApprovalPolicy(AskForApproval),
 
-    /// Update the current sandbox policy in the running app and widget.
-    UpdateSandboxPolicy(SandboxPolicy),
+    /// Update the current permission profile in the running app and widget.
+    UpdatePermissionProfile(PermissionProfile),
 
     /// Update the current approvals reviewer in the running app and widget.
     UpdateApprovalsReviewer(ApprovalsReviewer),

@@ -463,6 +463,9 @@
             "personality": {
               "type": "boolean"
             },
+            "plugin_hooks": {
+              "type": "boolean"
+            },
             "plugins": {
               "type": "boolean"
             },
@@ -1336,6 +1339,12 @@
           "minimum": 1.0,
           "type": "integer"
         },
+        "min_wait_timeout_ms": {
+          "format": "int64",
+          "maximum": 3600000.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
         "root_agent_usage_hint_text": {
           "type": "string"
         },
@@ -2160,6 +2169,13 @@
     "ToolSuggestConfig": {
       "additionalProperties": false,
       "properties": {
+        "disabled_tools": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ToolSuggestDisabledTool"
+          },
+          "type": "array"
+        },
         "discoverables": {
           "default": [],
           "items": {
@@ -2168,6 +2184,22 @@
           "type": "array"
         }
       },
+      "type": "object"
+    },
+    "ToolSuggestDisabledTool": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/definitions/ToolSuggestDiscoverableType"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
       "type": "object"
     },
     "ToolSuggestDiscoverable": {
@@ -3371,6 +3403,9 @@
           "$ref": "#/definitions/FeatureToml_for_MultiAgentV2ConfigToml"
         },
         "personality": {
+          "type": "boolean"
+        },
+        "plugin_hooks": {
           "type": "boolean"
         },
         "plugins": {

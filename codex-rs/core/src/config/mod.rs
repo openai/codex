@@ -8,6 +8,7 @@ use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_config::CloudRequirementsLoader;
+use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirements;
@@ -46,6 +47,7 @@ use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
 use codex_config::types::ToolSuggestConfig;
+use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
@@ -95,6 +97,7 @@ use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
@@ -156,6 +159,8 @@ impl Default for GhostSnapshotConfig {
 pub(crate) const AGENTS_MD_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usize = 4;
+pub(crate) const DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
+pub(crate) const MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
@@ -753,6 +758,7 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MultiAgentV2Config {
     pub max_concurrent_threads_per_session: usize,
+    pub min_wait_timeout_ms: i64,
     pub usage_hint_enabled: bool,
     pub usage_hint_text: Option<String>,
     pub root_agent_usage_hint_text: Option<String>,
@@ -765,6 +771,7 @@ impl Default for MultiAgentV2Config {
         Self {
             max_concurrent_threads_per_session:
                 DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION,
+            min_wait_timeout_ms: DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS,
             usage_hint_enabled: true,
             usage_hint_text: None,
             root_agent_usage_hint_text: None,
@@ -1412,10 +1419,29 @@ pub struct AgentRoleConfig {
     pub nickname_candidates: Option<Vec<String>>,
 }
 
-fn resolve_tool_suggest_config(config_toml: &ConfigToml) -> ToolSuggestConfig {
-    let discoverables = config_toml
-        .tool_suggest
-        .as_ref()
+fn resolve_tool_suggest_config(
+    config_toml: &ConfigToml,
+    config_layer_stack: &ConfigLayerStack,
+) -> ToolSuggestConfig {
+    resolve_tool_suggest_config_from_config(config_toml.tool_suggest.as_ref(), config_layer_stack)
+}
+
+pub(crate) fn resolve_tool_suggest_config_from_layer_stack(
+    config_layer_stack: &ConfigLayerStack,
+) -> ToolSuggestConfig {
+    let tool_suggest = config_layer_stack
+        .effective_config()
+        .get("tool_suggest")
+        .cloned()
+        .and_then(|value| value.try_into::<ToolSuggestConfig>().ok());
+    resolve_tool_suggest_config_from_config(tool_suggest.as_ref(), config_layer_stack)
+}
+
+fn resolve_tool_suggest_config_from_config(
+    tool_suggest: Option<&ToolSuggestConfig>,
+    config_layer_stack: &ConfigLayerStack,
+) -> ToolSuggestConfig {
+    let discoverables = tool_suggest
         .into_iter()
         .flat_map(|tool_suggest| tool_suggest.discoverables.iter())
         .filter_map(|discoverable| {
@@ -1430,8 +1456,47 @@ fn resolve_tool_suggest_config(config_toml: &ConfigToml) -> ToolSuggestConfig {
             }
         })
         .collect();
+    let mut seen_disabled_tools = HashSet::new();
+    let mut disabled_tools = Vec::new();
+    let mut add_disabled_tool = |disabled_tool: ToolSuggestDisabledTool| {
+        if let Some(disabled_tool) = disabled_tool.normalized()
+            && seen_disabled_tools.insert(disabled_tool.clone())
+        {
+            disabled_tools.push(disabled_tool);
+        }
+    };
 
-    ToolSuggestConfig { discoverables }
+    let layers = config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    );
+    if layers.is_empty() {
+        for disabled_tool in tool_suggest
+            .into_iter()
+            .flat_map(|tool_suggest| tool_suggest.disabled_tools.iter().cloned())
+        {
+            add_disabled_tool(disabled_tool);
+        }
+    } else {
+        for layer in layers {
+            let Some(tool_suggest) = layer
+                .config
+                .get("tool_suggest")
+                .cloned()
+                .and_then(|value| value.try_into::<ToolSuggestConfig>().ok())
+            else {
+                continue;
+            };
+            for disabled_tool in tool_suggest.disabled_tools {
+                add_disabled_tool(disabled_tool);
+            }
+        }
+    }
+
+    ToolSuggestConfig {
+        discoverables,
+        disabled_tools,
+    }
 }
 
 fn thread_store_config(
@@ -1467,7 +1532,30 @@ fn resolve_permission_config_syntax(
     sandbox_mode_override: Option<SandboxMode>,
     profile_sandbox_mode: Option<SandboxMode>,
 ) -> Option<PermissionConfigSyntax> {
-    if sandbox_mode_override.is_some() || profile_sandbox_mode.is_some() {
+    if sandbox_mode_override.is_some() {
+        return Some(PermissionConfigSyntax::Legacy);
+    }
+
+    let session_flags_select_profiles = config_layer_stack
+        .get_layers(
+            ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            /*include_disabled*/ false,
+        )
+        .into_iter()
+        .find(|layer| matches!(layer.name, ConfigLayerSource::SessionFlags))
+        .and_then(|layer| {
+            layer
+                .config
+                .clone()
+                .try_into::<PermissionSelectionToml>()
+                .ok()
+        })
+        .is_some_and(|selection| selection.default_permissions.is_some());
+    if session_flags_select_profiles {
+        return Some(PermissionConfigSyntax::Profiles);
+    }
+
+    if profile_sandbox_mode.is_some() {
         return Some(PermissionConfigSyntax::Legacy);
     }
 
@@ -1638,6 +1726,10 @@ fn resolve_multi_agent_v2_config(
         .and_then(|config| config.max_concurrent_threads_per_session)
         .or_else(|| base.and_then(|config| config.max_concurrent_threads_per_session))
         .unwrap_or(default.max_concurrent_threads_per_session);
+    let min_wait_timeout_ms = profile
+        .and_then(|config| config.min_wait_timeout_ms)
+        .or_else(|| base.and_then(|config| config.min_wait_timeout_ms))
+        .unwrap_or(default.min_wait_timeout_ms);
     let usage_hint_enabled = profile
         .and_then(|config| config.usage_hint_enabled)
         .or_else(|| base.and_then(|config| config.usage_hint_enabled))
@@ -1664,6 +1756,7 @@ fn resolve_multi_agent_v2_config(
 
     MultiAgentV2Config {
         max_concurrent_threads_per_session,
+        min_wait_timeout_ms,
         usage_hint_enabled,
         usage_hint_text,
         root_agent_usage_hint_text,
@@ -1831,7 +1924,7 @@ impl Config {
                 .clone(),
             None => ConfigProfile::default(),
         };
-        let tool_suggest = resolve_tool_suggest_config(&cfg);
+        let tool_suggest = resolve_tool_suggest_config(&cfg, &config_layer_stack);
         let feature_overrides = FeatureOverrides {
             include_apply_patch_tool: include_apply_patch_tool_override,
             web_search_request: override_tools_web_search_request,
@@ -2184,6 +2277,20 @@ impl Config {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "features.multi_agent_v2.max_concurrent_threads_per_session must be at least 1",
+            ));
+        }
+        if multi_agent_v2.min_wait_timeout_ms <= 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "features.multi_agent_v2.min_wait_timeout_ms must be at least 1",
+            ));
+        }
+        if multi_agent_v2.min_wait_timeout_ms > MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "features.multi_agent_v2.min_wait_timeout_ms must be at most {MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS}"
+                ),
             ));
         }
         let agent_max_threads_from_config = cfg.agents.as_ref().and_then(|agents| agents.max_threads);

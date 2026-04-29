@@ -1144,6 +1144,84 @@ fn test_build_specs_mcp_tools_converted() {
 }
 
 #[test]
+fn namespace_specs_are_hidden_when_namespace_tools_are_disabled() {
+    let model_info = model_info();
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    tools_config.namespace_tools = false;
+
+    let (tools, handlers) = build_specs(
+        &tools_config,
+        Some(HashMap::from([(
+            ToolName::namespaced("mcp__sample__", "echo"),
+            mcp_tool("echo", "Echo", serde_json::json!({"type": "object"})),
+        )])),
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    assert_lacks_tool_name(&tools, "mcp__sample__");
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::namespaced("mcp__sample__", "echo"),
+        kind: ToolHandlerKind::Mcp,
+    }));
+}
+
+#[test]
+fn namespaced_dynamic_specs_are_hidden_when_namespace_tools_are_disabled() {
+    let model_info = model_info();
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    tools_config.namespace_tools = false;
+    let dynamic_tools = vec![
+        DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
+            name: "automation_update".to_string(),
+            description: "Create or update automations.".to_string(),
+            input_schema: json!({"type": "object", "properties": {}}),
+            defer_loading: false,
+        },
+        DynamicToolSpec {
+            namespace: None,
+            name: "plain_dynamic".to_string(),
+            description: "Plain dynamic tool.".to_string(),
+            input_schema: json!({"type": "object", "properties": {}}),
+            defer_loading: false,
+        },
+    ];
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &dynamic_tools,
+    );
+
+    assert_lacks_tool_name(&tools, "codex_app");
+    assert_contains_tool_names(&tools, &["plain_dynamic"]);
+}
+
+#[test]
 fn test_build_specs_mcp_namespace_description_falls_back_when_missing() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
@@ -1399,6 +1477,44 @@ fn search_tool_requires_model_capability_and_enabled_feature() {
 }
 
 #[test]
+fn search_tool_is_hidden_when_only_deferred_namespace_tools_are_available() {
+    let model_info = search_capable_model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ToolSearch);
+    let available_models = Vec::new();
+    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    tools_config.namespace_tools = false;
+
+    let (tools, handlers) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        Some(vec![deferred_mcp_tool(
+            "_create_event",
+            "mcp__codex_apps__calendar",
+            CODEX_APPS_MCP_SERVER_NAME,
+            Some("Calendar"),
+            Some("Plan events and manage your calendar."),
+        )]),
+        &[],
+    );
+
+    assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
+    assert!(!handlers.contains(&ToolHandlerSpec {
+        name: ToolName::plain(TOOL_SEARCH_TOOL_NAME),
+        kind: ToolHandlerKind::ToolSearch,
+    }));
+}
+
+#[test]
 fn search_tool_registers_for_deferred_dynamic_tools() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
@@ -1481,6 +1597,55 @@ fn search_tool_registers_for_deferred_dynamic_tools() {
     assert!(handlers.contains(&ToolHandlerSpec {
         name: ToolName::namespaced("codex_app", "automation_list"),
         kind: ToolHandlerKind::DynamicTool,
+    }));
+}
+
+#[test]
+fn search_tool_keeps_plain_deferred_dynamic_tools_when_namespace_tools_are_disabled() {
+    let model_info = search_capable_model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ToolSearch);
+    let available_models = Vec::new();
+    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    tools_config.namespace_tools = false;
+    let dynamic_tools = vec![
+        DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
+            name: "automation_update".to_string(),
+            description: "Create or update automations.".to_string(),
+            input_schema: json!({"type": "object", "properties": {}}),
+            defer_loading: true,
+        },
+        DynamicToolSpec {
+            namespace: None,
+            name: "plain_dynamic".to_string(),
+            description: "Plain dynamic tool.".to_string(),
+            input_schema: json!({"type": "object", "properties": {}}),
+            defer_loading: true,
+        },
+    ];
+
+    let (tools, handlers) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &dynamic_tools,
+    );
+
+    assert_contains_tool_names(&tools, &[TOOL_SEARCH_TOOL_NAME, "plain_dynamic"]);
+    assert_lacks_tool_name(&tools, "codex_app");
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::plain(TOOL_SEARCH_TOOL_NAME),
+        kind: ToolHandlerKind::ToolSearch,
     }));
 }
 

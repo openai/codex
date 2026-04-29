@@ -35,6 +35,16 @@ pub struct Cli {
     #[arg(long = "ignore-rules", global = true, default_value_t = false)]
     pub ignore_rules: bool,
 
+    /// Legacy compatibility trap for the removed `--full-auto` flag.
+    #[arg(
+        long = "full-auto",
+        hide = true,
+        global = true,
+        default_value_t = false,
+        conflicts_with = "dangerously_bypass_approvals_and_sandbox"
+    )]
+    pub removed_full_auto: bool,
+
     /// Path to a JSON Schema file describing the model's final response shape.
     #[arg(long = "output-schema", value_name = "FILE")]
     pub output_schema: Option<PathBuf>,
@@ -85,6 +95,18 @@ impl std::ops::DerefMut for Cli {
     }
 }
 
+impl Cli {
+    pub fn removed_full_auto_warning(&self) -> Option<&'static str> {
+        if self.removed_full_auto {
+            return Some(
+                "warning: `--full-auto` is deprecated; use `--sandbox workspace-write` instead.",
+            );
+        }
+
+        None
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct ExecSharedCliOptions(SharedCliOptions);
 
@@ -130,7 +152,6 @@ impl FromArgMatches for ExecSharedCliOptions {
 
 fn mark_exec_global_args(cmd: clap::Command) -> clap::Command {
     cmd.mut_arg("model", |arg| arg.global(true))
-        .mut_arg("full_auto", |arg| arg.global(true))
         .mut_arg("dangerously_bypass_approvals_and_sandbox", |arg| {
             arg.global(true)
         })

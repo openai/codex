@@ -13,12 +13,14 @@ use chrono::TimeZone;
 use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CreditsSnapshot;
+use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use insta::assert_snapshot;
@@ -27,11 +29,21 @@ use ratatui::prelude::*;
 use tempfile::TempDir;
 
 async fn test_config(temp_home: &TempDir) -> Config {
-    ConfigBuilder::default()
+    let mut config = ConfigBuilder::default()
         .codex_home(temp_home.path().to_path_buf())
         .build()
         .await
-        .expect("load config")
+        .expect("load config");
+    config
+        .permissions
+        .set_permission_profile(PermissionProfile::workspace_write_with(
+            &[],
+            NetworkSandboxPolicy::Enabled,
+            /*exclude_tmpdir_env_var*/ false,
+            /*exclude_slash_tmp*/ false,
+        ))
+        .expect("set permission profile");
+    config
 }
 
 fn test_status_account_display() -> Option<StatusAccountDisplay> {
@@ -90,6 +102,41 @@ fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) ->
         .timestamp()
 }
 
+fn permissions_text_for(config: &Config) -> Option<String> {
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+        .single()
+        .expect("timestamp");
+    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let composite = new_status_output(
+        config,
+        test_status_account_display().as_ref(),
+        /*token_info*/ None,
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
+        None,
+        captured_at,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+    );
+    render_lines(&composite.display_lines(/*width*/ 80))
+        .iter()
+        .find(|line| line.contains("Permissions:"))
+        .and_then(|line| {
+            line.split("Permissions:")
+                .nth(1)
+                .map(str::trim)
+                .map(|text| text.trim_end_matches('│'))
+                .map(str::trim)
+                .map(ToString::to_string)
+        })
+}
+
 #[tokio::test]
 async fn status_snapshot_includes_reasoning_details() {
     let temp_home = TempDir::new().expect("temp home");
@@ -99,13 +146,9 @@ async fn status_snapshot_includes_reasoning_details() {
     config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
     config.cwd = test_path_buf("/workspace/tests").abs();
     config
-        .set_legacy_sandbox_policy(SandboxPolicy::WorkspaceWrite {
-            writable_roots: Vec::new(),
-            network_access: false,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
-        })
-        .expect("set sandbox policy");
+        .permissions
+        .set_permission_profile(PermissionProfile::workspace_write())
+        .expect("set permission profile");
 
     let account_display = test_status_account_display();
     let usage = TokenUsage {
@@ -181,52 +224,64 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
         .expect("set approval policy");
     config.cwd = test_path_buf("/workspace/tests").abs();
     config
-        .set_legacy_sandbox_policy(SandboxPolicy::WorkspaceWrite {
-            writable_roots: Vec::new(),
-            network_access: true,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
-        })
-        .expect("set sandbox policy");
-
-    let account_display = test_status_account_display();
-    let usage = TokenUsage::default();
-    let captured_at = chrono::Local
-        .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
-        .single()
-        .expect("timestamp");
-    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
-
-    let composite = new_status_output(
-        &config,
-        account_display.as_ref(),
-        /*token_info*/ None,
-        &usage,
-        &None,
-        /*thread_name*/ None,
-        /*forked_from*/ None,
-        /*rate_limits*/ None,
-        None,
-        captured_at,
-        &model_slug,
-        /*collaboration_mode*/ None,
-        /*reasoning_effort_override*/ None,
-    );
-    let rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
-    let permissions_line = rendered_lines
-        .iter()
-        .find(|line| line.contains("Permissions:"))
-        .expect("permissions line");
-    let permissions_text = permissions_line
-        .split("Permissions:")
-        .nth(1)
-        .map(str::trim)
-        .map(|text| text.trim_end_matches('│'))
-        .map(str::trim);
+        .permissions
+        .set_permission_profile(PermissionProfile::workspace_write_with(
+            &[],
+            NetworkSandboxPolicy::Enabled,
+            /*exclude_tmpdir_env_var*/ false,
+            /*exclude_slash_tmp*/ false,
+        ))
+        .expect("set permission profile");
 
     assert_eq!(
-        permissions_text,
+        permissions_text_for(&config).as_deref(),
         Some("Custom (workspace-write with network access, on-request)")
+    );
+}
+
+#[tokio::test]
+async fn status_permissions_full_disk_managed_with_network_is_danger_full_access() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    config
+        .permissions
+        .set_permission_profile(PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Unrestricted,
+            network: NetworkSandboxPolicy::Enabled,
+        })
+        .expect("set permission profile");
+
+    assert_eq!(
+        permissions_text_for(&config).as_deref(),
+        Some("Custom (danger-full-access, on-request)")
+    );
+}
+
+#[tokio::test]
+async fn status_permissions_full_disk_managed_without_network_is_external_sandbox() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    config
+        .permissions
+        .set_permission_profile(PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Unrestricted,
+            network: NetworkSandboxPolicy::Restricted,
+        })
+        .expect("set permission profile");
+
+    assert_eq!(
+        permissions_text_for(&config).as_deref(),
+        Some("Custom (external-sandbox, on-request)")
     );
 }
 

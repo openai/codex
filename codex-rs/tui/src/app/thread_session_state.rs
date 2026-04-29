@@ -110,7 +110,6 @@ mod tests {
     use codex_protocol::protocol::FileSystemSandboxPolicy;
     use codex_protocol::protocol::FileSystemSpecialPath;
     use codex_protocol::protocol::NetworkSandboxPolicy;
-    use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
@@ -174,23 +173,15 @@ mod tests {
         app.config.permissions.approval_policy =
             codex_config::Constrained::allow_any(AskForApproval::OnRequest);
         app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-        let expected_sandbox_policy = SandboxPolicy::new_workspace_write_policy();
-        let expected_file_system_policy =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                &expected_sandbox_policy,
-                &main_session.cwd,
-            );
-        let expected_permission_profile = PermissionProfile::from_runtime_permissions(
-            &expected_file_system_policy,
-            NetworkSandboxPolicy::from(&expected_sandbox_policy),
-        );
+        let expected_permission_profile = PermissionProfile::workspace_write();
         app.chat_widget.handle_thread_session(main_session.clone());
         app.chat_widget
-            .set_sandbox_policy(expected_sandbox_policy.clone())
-            .expect("set widget sandbox policy");
+            .set_permission_profile(expected_permission_profile.clone())
+            .expect("set widget permission profile");
         app.config
-            .set_legacy_sandbox_policy(expected_sandbox_policy.clone())
-            .expect("set sandbox policy");
+            .permissions
+            .set_permission_profile(expected_permission_profile.clone())
+            .expect("set permission profile");
 
         app.sync_active_thread_permission_settings_to_cached_session()
             .await;

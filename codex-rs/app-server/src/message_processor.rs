@@ -48,6 +48,7 @@ use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
+use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCError;
@@ -55,6 +56,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::ModelProviderCapabilitiesReadResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
@@ -75,6 +77,7 @@ use codex_login::default_client::USER_AGENT_SUFFIX;
 use codex_login::default_client::get_codex_user_agent;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::default_client::set_default_originator;
+use codex_model_provider::create_model_provider;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
@@ -937,6 +940,13 @@ impl MessageProcessor {
                     )
                     .await;
             }
+            ClientRequest::ModelProviderCapabilitiesRead {
+                request_id,
+                params: _,
+            } => {
+                self.handle_model_provider_capabilities_read(request_id_for_connection(request_id))
+                    .await;
+            }
             other => {
                 // Box the delegated future so this wrapper's async state machine does not
                 // inline the full `CodexMessageProcessor::process_request` future, which
@@ -954,6 +964,24 @@ impl MessageProcessor {
             }
         }
         Ok(())
+    }
+
+    async fn handle_model_provider_capabilities_read(&self, request_id: ConnectionRequestId) {
+        let result = async {
+            let config = self
+                .config_api
+                .load_latest_config(/*fallback_cwd*/ None)
+                .await?;
+            let provider = create_model_provider(config.model_provider, /*auth_manager*/ None);
+            let capabilities = provider.capabilities();
+            Ok::<_, JSONRPCErrorError>(ModelProviderCapabilitiesReadResponse {
+                namespace_tools: capabilities.namespace_tools,
+                image_generation: capabilities.image_generation,
+                web_search: capabilities.web_search,
+            })
+        }
+        .await;
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn handle_config_value_write(
@@ -1172,6 +1200,7 @@ impl MessageProcessor {
         request_id: ConnectionRequestId,
         params: ExternalAgentConfigImportParams,
     ) -> Result<(), JSONRPCErrorError> {
+        let needs_runtime_refresh = migration_items_need_runtime_refresh(&params.migration_items);
         let has_plugin_imports = params.migration_items.iter().any(|item| {
             matches!(
                 item.item_type,
@@ -1182,7 +1211,7 @@ impl MessageProcessor {
             .external_agent_config_api
             .prepare_pending_session_imports(&params)?;
         let pending_plugin_imports = self.external_agent_config_api.import(params).await?;
-        if has_plugin_imports {
+        if needs_runtime_refresh {
             self.handle_config_mutation().await;
         }
         for pending_session_import in pending_session_imports {
@@ -1241,5 +1270,60 @@ impl MessageProcessor {
     }
 }
 
+fn migration_items_need_runtime_refresh(items: &[ExternalAgentConfigMigrationItem]) -> bool {
+    items.iter().any(|item| {
+        matches!(
+            item.item_type,
+            ExternalAgentConfigMigrationItemType::Config
+                | ExternalAgentConfigMigrationItemType::Skills
+                | ExternalAgentConfigMigrationItemType::McpServerConfig
+                | ExternalAgentConfigMigrationItemType::Hooks
+                | ExternalAgentConfigMigrationItemType::Commands
+                | ExternalAgentConfigMigrationItemType::Plugins
+        )
+    })
+}
+
 #[cfg(test)]
 mod tracing_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn migration_item(
+        item_type: ExternalAgentConfigMigrationItemType,
+    ) -> ExternalAgentConfigMigrationItem {
+        ExternalAgentConfigMigrationItem {
+            item_type,
+            description: String::new(),
+            cwd: None,
+            details: None,
+        }
+    }
+
+    #[test]
+    fn migration_items_that_update_runtime_sources_trigger_refresh() {
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::Config,
+        )]));
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::Skills,
+        )]));
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::McpServerConfig,
+        )]));
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::Hooks,
+        )]));
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::Commands,
+        )]));
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::Plugins,
+        )]));
+        assert!(!migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::Sessions,
+        )]));
+    }
+}

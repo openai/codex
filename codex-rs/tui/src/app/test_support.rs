@@ -24,7 +24,7 @@ pub(super) async fn make_test_app() -> App {
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),
         runtime_approval_policy_override: None,
-        runtime_sandbox_policy_override: None,
+        runtime_permission_profile_override: None,
         file_search,
         transcript_cells: Vec::new(),
         overlay: None,

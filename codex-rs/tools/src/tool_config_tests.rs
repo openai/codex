@@ -231,3 +231,35 @@ fn image_generation_requires_feature_and_supported_model() {
     assert!(!auth_disallowed_tools_config.image_gen_tool);
     assert!(!unsupported_tools_config.image_gen_tool);
 }
+
+#[test]
+fn provider_capability_methods_disable_provider_bound_tool_surfaces() {
+    let model_info = model_info();
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    tools_config.search_tool = true;
+    tools_config.tool_suggest = true;
+    tools_config.image_gen_tool = true;
+    tools_config.namespace_tools = true;
+
+    let tools_config = tools_config
+        .with_namespace_tools_capability(/*namespace_tools*/ false)
+        .with_image_generation_capability(/*image_generation*/ false)
+        .with_web_search_capability(/*web_search*/ false);
+
+    assert!(tools_config.search_tool);
+    assert!(tools_config.tool_suggest);
+    assert!(!tools_config.image_gen_tool);
+    assert!(!tools_config.namespace_tools);
+    assert_eq!(tools_config.web_search_mode, None);
+}

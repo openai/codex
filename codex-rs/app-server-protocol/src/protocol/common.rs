@@ -642,6 +642,11 @@ client_request_definitions! {
         serialization: None,
         response: v2::ModelListResponse,
     },
+    ModelProviderCapabilitiesRead => "modelProvider/capabilities/read" {
+        params: v2::ModelProviderCapabilitiesReadParams,
+        serialization: None,
+        response: v2::ModelProviderCapabilitiesReadResponse,
+    },
     ExperimentalFeatureList => "experimentalFeature/list" {
         params: v2::ExperimentalFeatureListParams,
         serialization: global("config"),
@@ -1258,6 +1263,7 @@ server_notification_definitions! {
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
     AppListUpdated => "app/list/updated" (v2::AppListUpdatedNotification),
+    RemoteControlStatusChanged => "remoteControl/status/changed" (v2::RemoteControlStatusChangedNotification),
     ExternalAgentConfigImportCompleted => "externalAgentConfig/import/completed" (v2::ExternalAgentConfigImportCompletedNotification),
     FsChanged => "fs/changed" (v2::FsChangedNotification),
     ReasoningSummaryTextDelta => "item/reasoning/summaryTextDelta" (v2::ReasoningSummaryTextDeltaNotification),
@@ -2236,6 +2242,23 @@ mod tests {
                     "cursor": null,
                     "includeHidden": null
                 }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_model_provider_capabilities_read() -> Result<()> {
+        let request = ClientRequest::ModelProviderCapabilitiesRead {
+            request_id: RequestId::Integer(7),
+            params: v2::ModelProviderCapabilitiesReadParams {},
+        };
+        assert_eq!(
+            json!({
+                "method": "modelProvider/capabilities/read",
+                "id": 7,
+                "params": {}
             }),
             serde_json::to_value(&request)?,
         );

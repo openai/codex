@@ -61,7 +61,6 @@ pub(crate) fn selected_primary_environment(
 
 #[cfg(test)]
 mod tests {
-    use codex_exec_server::EnvironmentManagerArgs;
     use codex_exec_server::ExecServerRuntimePaths;
     use codex_exec_server::REMOTE_ENVIRONMENT_ID;
     use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -81,10 +80,11 @@ mod tests {
     #[tokio::test]
     async fn default_thread_environment_selections_use_manager_default_id() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
-        let manager = EnvironmentManager::new(EnvironmentManagerArgs {
-            exec_server_url: Some("ws://127.0.0.1:8765".to_string()),
-            local_runtime_paths: test_runtime_paths(),
-        });
+        let manager = EnvironmentManager::create_for_tests(
+            Some("ws://127.0.0.1:8765".to_string()),
+            test_runtime_paths(),
+        )
+        .await;
 
         assert_eq!(
             default_thread_environment_selections(&manager, &cwd),
@@ -98,10 +98,7 @@ mod tests {
     #[tokio::test]
     async fn default_thread_environment_selections_empty_when_default_disabled() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
-        let manager = EnvironmentManager::new(EnvironmentManagerArgs {
-            exec_server_url: Some("none".to_string()),
-            local_runtime_paths: test_runtime_paths(),
-        });
+        let manager = EnvironmentManager::disabled_for_tests(test_runtime_paths());
 
         assert_eq!(
             default_thread_environment_selections(&manager, &cwd),

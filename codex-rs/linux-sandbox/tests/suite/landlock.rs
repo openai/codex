@@ -11,14 +11,12 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -83,37 +81,32 @@ async fn run_cmd_result_with_writable_roots(
     use_legacy_landlock: bool,
     network_access: bool,
 ) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
-    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: writable_roots
-            .iter()
-            .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
-            .collect(),
-        network_access,
+    let writable_roots = writable_roots
+        .iter()
+        .map(|path| AbsolutePathBuf::try_from(path.as_path()).unwrap())
+        .collect::<Vec<_>>();
+    let permission_profile = PermissionProfile::workspace_write_with(
+        &writable_roots,
+        if network_access {
+            NetworkSandboxPolicy::Enabled
+        } else {
+            NetworkSandboxPolicy::Restricted
+        },
         // Exclude tmp-related folders from writable roots because we need a
         // folder that is writable by tests but that we intentionally disallow
         // writing to in the sandbox.
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    };
-    let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
-    let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-    run_cmd_result_with_policies(
-        cmd,
-        sandbox_policy,
-        file_system_sandbox_policy,
-        network_sandbox_policy,
-        timeout_ms,
-        use_legacy_landlock,
-    )
-    .await
+        /*exclude_tmpdir_env_var*/
+        true,
+        /*exclude_slash_tmp*/ true,
+    );
+    run_cmd_result_with_permission_profile(cmd, permission_profile, timeout_ms, use_legacy_landlock)
+        .await
 }
 
 #[expect(clippy::expect_used)]
-async fn run_cmd_result_with_policies(
+async fn run_cmd_result_with_permission_profile(
     cmd: &[&str],
-    sandbox_policy: SandboxPolicy,
-    file_system_sandbox_policy: FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
+    permission_profile: PermissionProfile,
     timeout_ms: u64,
     use_legacy_landlock: bool,
 ) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
@@ -134,11 +127,6 @@ async fn run_cmd_result_with_policies(
     };
     let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
-    let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-        SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-        &file_system_sandbox_policy,
-        network_sandbox_policy,
-    );
 
     process_exec_tool_call(
         params,
@@ -396,10 +384,9 @@ async fn assert_network_blocked(cmd: &[&str]) {
         arg0: None,
     };
 
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     let codex_linux_sandbox_exe: Option<PathBuf> = Some(PathBuf::from(sandbox_program));
-    let permission_profile = PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy);
+    let permission_profile = PermissionProfile::read_only();
     let result = process_exec_tool_call(
         params,
         &permission_profile,
@@ -561,12 +548,6 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
         .expect("sandbox helper should have a parent")
         .to_path_buf();
 
-    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![AbsolutePathBuf::try_from(tmpdir.path()).expect("absolute tempdir")],
-        network_access: true,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    };
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -594,16 +575,18 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
             access: FileSystemAccessMode::None,
         },
     ]);
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Enabled,
+    );
     let output = expect_denied(
-        run_cmd_result_with_policies(
+        run_cmd_result_with_permission_profile(
             &[
                 "bash",
                 "-lc",
                 &format!("echo denied > {}", blocked_target.to_string_lossy()),
             ],
-            sandbox_policy,
-            file_system_sandbox_policy,
-            NetworkSandboxPolicy::Enabled,
+            permission_profile,
             LONG_TIMEOUT_MS,
             /*use_legacy_landlock*/ false,
         )
@@ -633,12 +616,6 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
         .expect("sandbox helper should have a parent")
         .to_path_buf();
 
-    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![AbsolutePathBuf::try_from(tmpdir.path()).expect("absolute tempdir")],
-        network_access: true,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    };
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -672,7 +649,11 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
             access: FileSystemAccessMode::Write,
         },
     ]);
-    let output = run_cmd_result_with_policies(
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Enabled,
+    );
+    let output = run_cmd_result_with_permission_profile(
         &[
             "bash",
             "-lc",
@@ -682,9 +663,7 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
                 allowed_target.to_string_lossy()
             ),
         ],
-        sandbox_policy,
-        file_system_sandbox_policy,
-        NetworkSandboxPolicy::Enabled,
+        permission_profile,
         LONG_TIMEOUT_MS,
         /*use_legacy_landlock*/ false,
     )
@@ -708,9 +687,6 @@ async fn sandbox_blocks_root_read_carveouts_under_bwrap() {
     let blocked_target = blocked.join("secret.txt");
     std::fs::write(&blocked_target, "secret").expect("seed blocked file");
 
-    let sandbox_policy = SandboxPolicy::ReadOnly {
-        network_access: true,
-    };
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -725,16 +701,18 @@ async fn sandbox_blocks_root_read_carveouts_under_bwrap() {
             access: FileSystemAccessMode::None,
         },
     ]);
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Enabled,
+    );
     let output = expect_denied(
-        run_cmd_result_with_policies(
+        run_cmd_result_with_permission_profile(
             &[
                 "bash",
                 "-lc",
                 &format!("cat {}", blocked_target.to_string_lossy()),
             ],
-            sandbox_policy,
-            file_system_sandbox_policy,
-            NetworkSandboxPolicy::Enabled,
+            permission_profile,
             LONG_TIMEOUT_MS,
             /*use_legacy_landlock*/ false,
         )
