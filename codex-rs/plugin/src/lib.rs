@@ -42,6 +42,9 @@ pub struct PluginHookSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginTelemetryMetadata {
     pub plugin_id: PluginId,
+    /// Optional event-facing id when the analytics source has a more specific
+    /// upstream identifier than the local plugin cache id.
+    pub analytics_plugin_id: Option<String>,
     pub capability_summary: Option<PluginCapabilitySummary>,
 }
 
@@ -49,6 +52,7 @@ impl PluginTelemetryMetadata {
     pub fn from_plugin_id(plugin_id: &PluginId) -> Self {
         Self {
             plugin_id: plugin_id.clone(),
+            analytics_plugin_id: None,
             capability_summary: None,
         }
     }
@@ -60,6 +64,7 @@ impl PluginCapabilitySummary {
             .ok()
             .map(|plugin_id| PluginTelemetryMetadata {
                 plugin_id,
+                analytics_plugin_id: None,
                 capability_summary: Some(self.clone()),
             })
     }

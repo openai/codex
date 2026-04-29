@@ -1497,6 +1497,25 @@ fn plugin_management_event_serializes_expected_shape() {
 }
 
 #[test]
+fn plugin_management_event_can_use_analytics_plugin_id_override() {
+    let mut plugin = sample_plugin_metadata();
+    plugin.analytics_plugin_id = Some("plugins~Plugin_remote".to_string());
+    let event = TrackEventRequest::PluginInstalled(CodexPluginEventRequest {
+        event_type: "codex_plugin_installed",
+        event_params: codex_plugin_metadata(plugin),
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize plugin installed event");
+
+    assert_eq!(
+        payload["event_params"]["plugin_id"],
+        "plugins~Plugin_remote"
+    );
+    assert_eq!(payload["event_params"]["plugin_name"], "sample");
+    assert_eq!(payload["event_params"]["marketplace_name"], "test");
+}
+
+#[test]
 fn hook_run_event_serializes_expected_shape() {
     let tracking = TrackEventsContext {
         model_slug: "gpt-5".to_string(),
@@ -2482,6 +2501,7 @@ async fn turn_completed_without_started_notification_emits_null_started_at() {
 fn sample_plugin_metadata() -> PluginTelemetryMetadata {
     PluginTelemetryMetadata {
         plugin_id: PluginId::parse("sample@test").expect("valid plugin id"),
+        analytics_plugin_id: None,
         capability_summary: Some(PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
             display_name: "sample".to_string(),

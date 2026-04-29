@@ -635,22 +635,7 @@ async fn plugin_install_tracks_analytics_event() -> Result<()> {
     let response: PluginInstallResponse = to_response(response)?;
     assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
 
-    let payload = timeout(DEFAULT_TIMEOUT, async {
-        loop {
-            let Some(requests) = analytics_server.received_requests().await else {
-                tokio::time::sleep(Duration::from_millis(25)).await;
-                continue;
-            };
-            if let Some(request) = requests.iter().find(|request| {
-                request.method == "POST" && request.url.path() == "/codex/analytics-events/events"
-            }) {
-                break request.body.clone();
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await?;
-    let payload: serde_json::Value = serde_json::from_slice(&payload).expect("analytics payload");
+    let payload = wait_for_plugin_analytics_payload(&analytics_server).await?;
     assert_eq!(
         payload,
         json!({
@@ -661,6 +646,59 @@ async fn plugin_install_tracks_analytics_event() -> Result<()> {
                     "plugin_name": "sample-plugin",
                     "marketplace_name": "debug",
                     "has_skills": false,
+                    "mcp_server_count": 0,
+                    "connector_ids": [],
+                    "product_client_id": DEFAULT_CLIENT_NAME,
+                }
+            }]
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_install_tracks_remote_plugin_analytics_event() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    let bundle_url = mount_remote_plugin_bundle(
+        &server,
+        /*status_code*/ 200,
+        remote_plugin_bundle_tar_gz_bytes("linear")?,
+    )
+    .await;
+    configure_remote_plugin_test(codex_home.path(), &server)?;
+    mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", Some(&bundle_url)).await;
+    mount_empty_remote_installed_plugins(&server).await;
+    mount_remote_plugin_install(&server, REMOTE_PLUGIN_ID).await;
+    mount_backend_analytics_events(&server).await;
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))],
+    )
+    .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginInstallResponse = to_response(response)?;
+    assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
+
+    let payload = wait_for_plugin_analytics_payload(&server).await?;
+    assert_eq!(
+        payload,
+        json!({
+            "events": [{
+                "event_type": "codex_plugin_installed",
+                "event_params": {
+                    "plugin_id": REMOTE_PLUGIN_ID,
+                    "plugin_name": "linear",
+                    "marketplace_name": "chatgpt-global",
+                    "has_skills": true,
                     "mcp_server_count": 0,
                     "connector_ids": [],
                     "product_client_id": DEFAULT_CLIENT_NAME,
@@ -1148,6 +1186,37 @@ fn write_analytics_config(codex_home: &std::path::Path, base_url: &str) -> std::
         codex_home.join("config.toml"),
         format!("chatgpt_base_url = \"{base_url}\"\n"),
     )
+}
+
+async fn mount_backend_analytics_events(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/backend-api/codex/analytics-events/events"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"status":"ok"}"#))
+        .mount(server)
+        .await;
+}
+
+async fn wait_for_plugin_analytics_payload(server: &MockServer) -> Result<serde_json::Value> {
+    timeout(DEFAULT_TIMEOUT, async {
+        loop {
+            let Some(requests) = server.received_requests().await else {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                continue;
+            };
+            if let Some(request) = requests.iter().find(|request| {
+                request.method == "POST"
+                    && request
+                        .url
+                        .path()
+                        .ends_with("/codex/analytics-events/events")
+            }) {
+                return serde_json::from_slice(&request.body)
+                    .map_err(|err| anyhow::anyhow!("invalid analytics payload: {err}"));
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await?
 }
 
 fn write_remote_plugin_catalog_config(
