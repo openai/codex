@@ -6,6 +6,7 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use codex_otel::OtelMetricsSettings;
 use codex_windows_sandbox::LOG_FILE_NAME;
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
@@ -65,7 +66,6 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 
 const DENY_ACCESS: i32 = 3;
-const DEFAULT_ANALYTICS_ENABLED: bool = false;
 
 mod read_acl_mutex;
 mod sandbox_users;
@@ -90,8 +90,8 @@ struct Payload {
     proxy_ports: Vec<u16>,
     #[serde(default)]
     allow_local_binding: bool,
-    #[serde(default = "default_analytics_enabled")]
-    analytics_enabled: bool,
+    #[serde(default)]
+    otel: Option<OtelMetricsSettings>,
     real_user: String,
     #[serde(default)]
     mode: SetupMode,
@@ -105,10 +105,6 @@ enum SetupMode {
     #[default]
     Full,
     ReadAclsOnly,
-}
-
-fn default_analytics_enabled() -> bool {
-    DEFAULT_ANALYTICS_ENABLED
 }
 
 fn log_line(log: &mut File, msg: &str) -> Result<()> {
@@ -612,7 +608,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         install_wfp_filters(
             &payload.codex_home,
             &payload.offline_username,
-            payload.analytics_enabled,
+            payload.otel.as_ref(),
             |message| {
                 let _ = log_line(log, message);
             },
@@ -918,6 +914,9 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
 mod tests {
     use super::Payload;
     use super::SETUP_VERSION;
+    use codex_otel::OtelExporter;
+    use codex_otel::OtelMetricsSettings;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
 
     fn payload_json() -> serde_json::Value {
@@ -935,18 +934,27 @@ mod tests {
     }
 
     #[test]
-    fn payload_defaults_analytics_disabled() {
+    fn payload_defaults_otel_absent() {
         let payload: Payload = serde_json::from_value(payload_json()).expect("payload");
 
-        assert!(!payload.analytics_enabled);
+        assert_eq!(payload.otel, None);
     }
 
     #[test]
-    fn payload_accepts_analytics_enabled() {
+    fn payload_accepts_otel_settings() {
         let mut payload = payload_json();
-        payload["analytics_enabled"] = json!(true);
+        payload["otel"] = json!({
+            "environment": "prod",
+            "metrics_exporter": "None",
+        });
         let payload: Payload = serde_json::from_value(payload).expect("payload");
 
-        assert!(payload.analytics_enabled);
+        assert_eq!(
+            payload.otel,
+            Some(OtelMetricsSettings {
+                environment: "prod".to_string(),
+                metrics_exporter: OtelExporter::None,
+            })
+        );
     }
 }
