@@ -2,77 +2,25 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 
+use crate::Environment;
 use crate::ExecServerError;
+use crate::ExecServerRuntimePaths;
 use crate::environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
+use crate::environment::LOCAL_ENVIRONMENT_ID;
 use crate::environment::REMOTE_ENVIRONMENT_ID;
 
-/// Provider-supplied environment definition consumed by `EnvironmentManager`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EnvironmentConfiguration {
-    pub exec_server_url: String,
-}
-
-/// Provider-supplied environment snapshot consumed by `EnvironmentManager`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EnvironmentConfigurations {
-    environments: HashMap<String, EnvironmentConfiguration>,
-}
-
-impl EnvironmentConfigurations {
-    pub fn new(
-        mut environments: HashMap<String, EnvironmentConfiguration>,
-    ) -> Result<Self, ExecServerError> {
-        for (id, configuration) in &mut environments {
-            if id.is_empty() {
-                return Err(ExecServerError::Protocol(
-                    "environment configuration id cannot be empty".to_string(),
-                ));
-            }
-
-            match normalize_exec_server_url(Some(configuration.exec_server_url.clone())) {
-                (Some(exec_server_url), false) => {
-                    configuration.exec_server_url = exec_server_url;
-                }
-                (None, false) | (None, true) | (Some(_), true) => {
-                    return Err(ExecServerError::Protocol(format!(
-                        "environment configuration `{id}` must set a remote exec-server URL"
-                    )));
-                }
-            }
-        }
-
-        Ok(Self { environments })
-    }
-
-    pub fn empty() -> Self {
-        Self {
-            environments: HashMap::new(),
-        }
-    }
-
-    pub(crate) fn remote(exec_server_url: String) -> Self {
-        Self {
-            environments: HashMap::from([(
-                REMOTE_ENVIRONMENT_ID.to_string(),
-                EnvironmentConfiguration { exec_server_url },
-            )]),
-        }
-    }
-
-    pub(crate) fn into_environments(self) -> HashMap<String, EnvironmentConfiguration> {
-        self.environments
-    }
-}
-
-/// Lists the concrete environment configurations available to Codex.
+/// Lists the concrete environments available to Codex.
 ///
-/// Implementations should return the provider-owned portion of the startup
-/// snapshot that `EnvironmentManager` will cache. The local environment is
-/// always supplied by `EnvironmentManager`.
+/// Implementations should return the provider-owned startup snapshot that
+/// `EnvironmentManager` will cache. Providers that want the local environment to
+/// be addressable by id should include it explicitly in the returned map.
 #[async_trait]
 pub trait EnvironmentProvider: Send + Sync {
-    /// Returns the environment configurations available for a new manager.
-    async fn get_environments(&self) -> Result<EnvironmentConfigurations, ExecServerError>;
+    /// Returns the environments available for a new manager.
+    async fn get_environments(
+        &self,
+        local_runtime_paths: &ExecServerRuntimePaths,
+    ) -> Result<HashMap<String, Environment>, ExecServerError>;
 }
 
 /// Default provider backed by `CODEX_EXEC_SERVER_URL`.
@@ -92,21 +40,34 @@ impl DefaultEnvironmentProvider {
         Self::new(std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok())
     }
 
-    pub(crate) async fn environment_configurations(&self) -> EnvironmentConfigurations {
+    pub(crate) fn environments(
+        &self,
+        local_runtime_paths: &ExecServerRuntimePaths,
+    ) -> HashMap<String, Environment> {
+        let mut environments = HashMap::from([(
+            LOCAL_ENVIRONMENT_ID.to_string(),
+            Environment::local(local_runtime_paths.clone()),
+        )]);
         let exec_server_url = normalize_exec_server_url(self.exec_server_url.clone()).0;
 
         if let Some(exec_server_url) = exec_server_url {
-            EnvironmentConfigurations::remote(exec_server_url)
-        } else {
-            EnvironmentConfigurations::empty()
+            environments.insert(
+                REMOTE_ENVIRONMENT_ID.to_string(),
+                Environment::remote_inner(exec_server_url, Some(local_runtime_paths.clone())),
+            );
         }
+
+        environments
     }
 }
 
 #[async_trait]
 impl EnvironmentProvider for DefaultEnvironmentProvider {
-    async fn get_environments(&self) -> Result<EnvironmentConfigurations, ExecServerError> {
-        Ok(self.environment_configurations().await)
+    async fn get_environments(
+        &self,
+        local_runtime_paths: &ExecServerRuntimePaths,
+    ) -> Result<HashMap<String, Environment>, ExecServerError> {
+        Ok(self.environments(local_runtime_paths))
     }
 }
 
@@ -123,98 +84,89 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+    use crate::ExecServerRuntimePaths;
+
+    fn test_runtime_paths() -> ExecServerRuntimePaths {
+        ExecServerRuntimePaths::new(
+            std::env::current_exe().expect("current exe"),
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .expect("runtime paths")
+    }
 
     #[tokio::test]
-    async fn default_provider_returns_no_provider_environment_when_url_is_missing() {
+    async fn default_provider_returns_local_environment_when_url_is_missing() {
         let provider = DefaultEnvironmentProvider::new(/*exec_server_url*/ None);
+        let runtime_paths = test_runtime_paths();
+        let environments = provider
+            .get_environments(&runtime_paths)
+            .await
+            .expect("environments");
 
+        assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
         assert_eq!(
-            provider.get_environments().await.expect("environments"),
-            EnvironmentConfigurations::empty()
+            environments[LOCAL_ENVIRONMENT_ID].local_runtime_paths(),
+            Some(&runtime_paths)
         );
+        assert!(!environments.contains_key(REMOTE_ENVIRONMENT_ID));
     }
 
     #[tokio::test]
-    async fn default_provider_returns_no_provider_environment_when_url_is_empty() {
+    async fn default_provider_returns_local_environment_when_url_is_empty() {
         let provider = DefaultEnvironmentProvider::new(Some(String::new()));
+        let runtime_paths = test_runtime_paths();
+        let environments = provider
+            .get_environments(&runtime_paths)
+            .await
+            .expect("environments");
 
-        assert_eq!(
-            provider.get_environments().await.expect("environments"),
-            EnvironmentConfigurations::empty()
-        );
+        assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
+        assert!(!environments.contains_key(REMOTE_ENVIRONMENT_ID));
     }
 
     #[tokio::test]
-    async fn default_provider_returns_no_provider_environment_for_none_value() {
+    async fn default_provider_returns_local_environment_for_none_value() {
         let provider = DefaultEnvironmentProvider::new(Some("none".to_string()));
+        let runtime_paths = test_runtime_paths();
+        let environments = provider
+            .get_environments(&runtime_paths)
+            .await
+            .expect("environments");
 
-        assert_eq!(
-            provider.get_environments().await.expect("environments"),
-            EnvironmentConfigurations::empty()
-        );
+        assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
+        assert!(!environments.contains_key(REMOTE_ENVIRONMENT_ID));
     }
 
     #[tokio::test]
     async fn default_provider_adds_remote_environment_for_websocket_url() {
         let provider = DefaultEnvironmentProvider::new(Some("ws://127.0.0.1:8765".to_string()));
+        let runtime_paths = test_runtime_paths();
+        let environments = provider
+            .get_environments(&runtime_paths)
+            .await
+            .expect("environments");
 
+        assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
+        let remote_environment = &environments[REMOTE_ENVIRONMENT_ID];
+        assert!(remote_environment.is_remote());
         assert_eq!(
-            provider.get_environments().await.expect("environments"),
-            EnvironmentConfigurations::new(HashMap::from([(
-                REMOTE_ENVIRONMENT_ID.to_string(),
-                EnvironmentConfiguration {
-                    exec_server_url: "ws://127.0.0.1:8765".to_string(),
-                },
-            )]))
-            .expect("environment configurations")
+            remote_environment.exec_server_url(),
+            Some("ws://127.0.0.1:8765")
         );
     }
 
-    #[test]
-    fn environment_configurations_rejects_empty_exec_server_url() {
-        let err = EnvironmentConfigurations::new(HashMap::from([(
-            REMOTE_ENVIRONMENT_ID.to_string(),
-            EnvironmentConfiguration {
-                exec_server_url: String::new(),
-            },
-        )]))
-        .expect_err("empty URL should fail");
+    #[tokio::test]
+    async fn default_provider_normalizes_exec_server_url() {
+        let provider = DefaultEnvironmentProvider::new(Some(" ws://127.0.0.1:8765 ".to_string()));
+        let runtime_paths = test_runtime_paths();
+        let environments = provider
+            .get_environments(&runtime_paths)
+            .await
+            .expect("environments");
 
         assert_eq!(
-            err.to_string(),
-            "exec-server protocol error: environment configuration `remote` must set a remote exec-server URL"
-        );
-    }
-
-    #[test]
-    fn environment_configurations_rejects_disabled_exec_server_url() {
-        let err = EnvironmentConfigurations::new(HashMap::from([(
-            REMOTE_ENVIRONMENT_ID.to_string(),
-            EnvironmentConfiguration {
-                exec_server_url: "none".to_string(),
-            },
-        )]))
-        .expect_err("disabled URL should fail");
-
-        assert_eq!(
-            err.to_string(),
-            "exec-server protocol error: environment configuration `remote` must set a remote exec-server URL"
-        );
-    }
-
-    #[test]
-    fn environment_configurations_normalizes_exec_server_url() {
-        let configurations = EnvironmentConfigurations::new(HashMap::from([(
-            REMOTE_ENVIRONMENT_ID.to_string(),
-            EnvironmentConfiguration {
-                exec_server_url: " ws://127.0.0.1:8765 ".to_string(),
-            },
-        )]))
-        .expect("environment configurations");
-
-        assert_eq!(
-            configurations,
-            EnvironmentConfigurations::remote("ws://127.0.0.1:8765".to_string())
+            environments[REMOTE_ENVIRONMENT_ID].exec_server_url(),
+            Some("ws://127.0.0.1:8765")
         );
     }
 }
