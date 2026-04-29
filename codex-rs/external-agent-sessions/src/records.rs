@@ -24,6 +24,7 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
     let reader = BufReader::new(file);
     let mut cwd = None;
     let mut custom_title = None;
+    let mut ai_title = None;
     let mut title = None;
     let mut latest_timestamp = None;
     let mut saw_message = false;
@@ -45,6 +46,9 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
         }
         if let Some(title) = custom_title_from_record(&record) {
             custom_title = Some(title.to_string());
+        }
+        if let Some(title) = ai_title_from_record(&record) {
+            ai_title = Some(title.to_string());
         }
         let Some(message) = conversation_message_from_record(&record) else {
             continue;
@@ -73,17 +77,14 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
         migration: ExternalAgentSessionMigration {
             path: path.to_path_buf(),
             cwd,
-            title: custom_title.or(title),
+            title: custom_title.or(ai_title).or(title),
         },
     }))
 }
 
-pub(super) fn custom_title_from_records(records: &[JsonValue]) -> Option<String> {
-    records
-        .iter()
-        .filter_map(custom_title_from_record)
-        .next_back()
-        .map(ToOwned::to_owned)
+pub(super) fn source_title_from_records(records: &[JsonValue]) -> Option<String> {
+    latest_title_from_records(records, custom_title_from_record)
+        .or_else(|| latest_title_from_records(records, ai_title_from_record))
 }
 
 pub(super) fn read_records(path: &Path) -> io::Result<Vec<JsonValue>> {
@@ -120,9 +121,28 @@ pub(super) fn conversation_messages(records: &[JsonValue]) -> Vec<ConversationMe
         .collect()
 }
 
+fn latest_title_from_records<'a>(
+    records: &'a [JsonValue],
+    title_from_record: impl Fn(&'a JsonValue) -> Option<&'a str>,
+) -> Option<String> {
+    records
+        .iter()
+        .filter_map(title_from_record)
+        .next_back()
+        .map(ToOwned::to_owned)
+}
+
 fn custom_title_from_record(record: &JsonValue) -> Option<&str> {
-    (record.get("type").and_then(JsonValue::as_str) == Some("custom-title"))
-        .then(|| record.get("customTitle").and_then(JsonValue::as_str))
+    title_from_record(record, "custom-title", "customTitle")
+}
+
+fn ai_title_from_record(record: &JsonValue) -> Option<&str> {
+    title_from_record(record, "ai-title", "aiTitle")
+}
+
+fn title_from_record<'a>(record: &'a JsonValue, record_type: &str, field: &str) -> Option<&'a str> {
+    (record.get("type").and_then(JsonValue::as_str) == Some(record_type))
+        .then(|| record.get(field).and_then(JsonValue::as_str))
         .flatten()
         .map(str::trim)
         .filter(|title| !title.is_empty())
