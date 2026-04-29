@@ -581,6 +581,7 @@ async fn load_debug_sandbox_config_with_codex_home(
     codex_linux_sandbox_exe: Option<PathBuf>,
     codex_home: Option<PathBuf>,
 ) -> anyhow::Result<Config> {
+    let uses_legacy_sandbox_mode_override = cli_overrides_use_legacy_sandbox_mode(&cli_overrides);
     let config = build_debug_sandbox_config(
         cli_overrides.clone(),
         ConfigOverrides {
@@ -591,7 +592,7 @@ async fn load_debug_sandbox_config_with_codex_home(
     )
     .await?;
 
-    if config_uses_permission_profiles(&config) {
+    if config_uses_permission_profiles(&config) || uses_legacy_sandbox_mode_override {
         return Ok(config);
     }
 
@@ -632,9 +633,14 @@ fn config_uses_permission_profiles(config: &Config) -> bool {
         .is_some()
 }
 
+fn cli_overrides_use_legacy_sandbox_mode(cli_overrides: &[(String, TomlValue)]) -> bool {
+    cli_overrides.iter().any(|(key, _)| key == "sandbox_mode")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
     fn escape_toml_path(path: &std::path::Path) -> String {
@@ -708,6 +714,86 @@ mod tests {
         assert_ne!(
             config.permissions.file_system_sandbox_policy(),
             legacy_config.permissions.file_system_sandbox_policy(),
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debug_sandbox_honors_explicit_legacy_sandbox_mode() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let codex_home_path = codex_home.path().to_path_buf();
+        let cli_overrides = vec![(
+            "sandbox_mode".to_string(),
+            TomlValue::String("workspace-write".to_string()),
+        )];
+
+        let workspace_write_config = build_debug_sandbox_config(
+            cli_overrides.clone(),
+            ConfigOverrides::default(),
+            Some(codex_home_path.clone()),
+        )
+        .await?;
+        let read_only_config = build_debug_sandbox_config(
+            Vec::new(),
+            ConfigOverrides {
+                sandbox_mode: Some(SandboxMode::ReadOnly),
+                ..Default::default()
+            },
+            Some(codex_home_path.clone()),
+        )
+        .await?;
+
+        let config = load_debug_sandbox_config_with_codex_home(
+            cli_overrides,
+            /*codex_linux_sandbox_exe*/ None,
+            Some(codex_home_path),
+        )
+        .await?;
+
+        assert_ne!(
+            workspace_write_config
+                .permissions
+                .file_system_sandbox_policy(),
+            read_only_config.permissions.file_system_sandbox_policy(),
+            "test fixture should distinguish explicit workspace-write from read-only"
+        );
+        assert_eq!(
+            config.permissions.file_system_sandbox_policy(),
+            workspace_write_config
+                .permissions
+                .file_system_sandbox_policy(),
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debug_sandbox_defaults_legacy_configs_to_read_only() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let codex_home_path = codex_home.path().to_path_buf();
+
+        let read_only_config = build_debug_sandbox_config(
+            Vec::new(),
+            ConfigOverrides {
+                sandbox_mode: Some(SandboxMode::ReadOnly),
+                ..Default::default()
+            },
+            Some(codex_home_path.clone()),
+        )
+        .await?;
+
+        let config = load_debug_sandbox_config_with_codex_home(
+            Vec::new(),
+            /*codex_linux_sandbox_exe*/ None,
+            Some(codex_home_path),
+        )
+        .await?;
+
+        assert!(!config_uses_permission_profiles(&config));
+        assert_eq!(
+            config.permissions.file_system_sandbox_policy(),
+            read_only_config.permissions.file_system_sandbox_policy(),
         );
 
         Ok(())
