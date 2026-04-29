@@ -338,12 +338,18 @@ pub struct FeedbackSnapshot {
     pub thread_id: String,
 }
 
+pub struct FeedbackAttachmentPath {
+    pub path: PathBuf,
+    /// Optional filename to use for the uploaded attachment instead of `path`'s basename.
+    pub attachment_filename_override: Option<String>,
+}
+
 pub struct FeedbackUploadOptions<'a> {
     pub classification: &'a str,
     pub reason: Option<&'a str>,
     pub tags: Option<&'a BTreeMap<String, String>>,
     pub include_logs: bool,
-    pub extra_attachment_paths: &'a [PathBuf],
+    pub extra_attachment_paths: &'a [FeedbackAttachmentPath],
     pub session_source: Option<SessionSource>,
     pub logs_override: Option<Vec<u8>>,
 }
@@ -501,7 +507,7 @@ impl FeedbackSnapshot {
     fn feedback_attachments(
         &self,
         include_logs: bool,
-        extra_attachment_paths: &[PathBuf],
+        extra_attachment_paths: &[FeedbackAttachmentPath],
         logs_override: Option<Vec<u8>>,
     ) -> Vec<sentry::protocol::Attachment> {
         use sentry::protocol::Attachment;
@@ -526,22 +532,28 @@ impl FeedbackSnapshot {
             });
         }
 
-        for path in extra_attachment_paths {
-            let data = match fs::read(path) {
+        for attachment_path in extra_attachment_paths {
+            let data = match fs::read(&attachment_path.path) {
                 Ok(data) => data,
                 Err(err) => {
                     tracing::warn!(
-                        path = %path.display(),
+                        path = %attachment_path.path.display(),
                         error = %err,
                         "failed to read log attachment; skipping"
                     );
                     continue;
                 }
             };
-            let filename = path
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "extra-log.log".to_string());
+            let filename = attachment_path
+                .attachment_filename_override
+                .clone()
+                .unwrap_or_else(|| {
+                    attachment_path
+                        .path
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "extra-log.log".to_string())
+                });
             attachments.push(Attachment {
                 buffer: data,
                 filename,
@@ -676,6 +688,10 @@ mod tests {
     fn feedback_attachments_gate_connectivity_diagnostics() {
         let extra_filename = format!("codex-feedback-extra-{}.jsonl", ThreadId::new());
         let extra_path = std::env::temp_dir().join(&extra_filename);
+        let extra_attachment_path = FeedbackAttachmentPath {
+            path: extra_path.clone(),
+            attachment_filename_override: None,
+        };
         fs::write(&extra_path, "rollout").expect("extra attachment should be written");
 
         let snapshot_with_diagnostics = CodexFeedback::new()
@@ -688,7 +704,7 @@ mod tests {
 
         let attachments_with_diagnostics = snapshot_with_diagnostics.feedback_attachments(
             /*include_logs*/ true,
-            std::slice::from_ref(&extra_path),
+            std::slice::from_ref(&extra_attachment_path),
             Some(vec![1]),
         );
 
@@ -715,6 +731,7 @@ mod tests {
         );
         let attachments_without_diagnostics = CodexFeedback::new()
             .snapshot(/*session_id*/ None)
+            .with_feedback_diagnostics(FeedbackDiagnostics::default())
             .feedback_attachments(/*include_logs*/ true, &[], Some(vec![1]));
 
         assert_eq!(

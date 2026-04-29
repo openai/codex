@@ -52,7 +52,7 @@ async fn approving_recent_denial_emits_structured_core_op_once() {
         rx.try_recv(),
         Ok(AppEvent::SubmitThreadOp {
             thread_id: submitted_thread_id,
-            op: Op::ApproveGuardianDeniedAction { event }
+            op: AppCommand::ApproveGuardianDeniedAction { event }
         }) if submitted_thread_id == thread_id
                 && event.id == "auto-review-recent-1"
                 && event.status == GuardianAssessmentStatus::Denied

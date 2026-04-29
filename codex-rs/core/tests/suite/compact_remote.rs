@@ -441,6 +441,7 @@ async fn remote_compact_filters_deferred_dynamic_tools() -> Result<()> {
         .thread_manager
         .start_thread_with_tools(
             test.config.clone(),
+            codex_core::thread_store_from_config(&test.config),
             dynamic_tools,
             /*persist_extended_history*/ false,
         )

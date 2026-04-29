@@ -46,8 +46,6 @@ use codex_protocol::protocol::ElicitationAction;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
-#[cfg(test)]
-use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -1017,6 +1015,7 @@ fn elicitation_options(keymap: &ApprovalKeymap) -> Vec<ApprovalOption> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_command::AppCommand;
     use crate::app_event::AppEvent;
     use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::NetworkPermissions;
@@ -1166,7 +1165,7 @@ mod tests {
         let mut decision = None;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::ExecApproval { decision: d, .. },
+                op: AppCommand::ExecApproval { decision: d, .. },
                 ..
             } = ev
             {
@@ -1197,7 +1196,7 @@ mod tests {
         let mut decision = None;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::ResolveElicitation { decision: d, .. },
+                op: AppCommand::ResolveElicitation { decision: d, .. },
                 ..
             } = ev
             {
@@ -1250,7 +1249,7 @@ mod tests {
         let mut saw_denied = false;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::ExecApproval { decision, .. },
+                op: AppCommand::ExecApproval { decision, .. },
                 ..
             } = ev
             {
@@ -1298,7 +1297,7 @@ mod tests {
         let mut saw_deny = false;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::ExecApproval { decision, .. },
+                op: AppCommand::ExecApproval { decision, .. },
                 ..
             } = ev
             {
@@ -1461,7 +1460,7 @@ mod tests {
         let mut saw_op = false;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::ExecApproval { decision, .. },
+                op: AppCommand::ExecApproval { decision, .. },
                 ..
             } = ev
             {
@@ -1706,7 +1705,7 @@ mod tests {
         let mut saw_op = false;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::RequestPermissionsResponse { response, .. },
+                op: AppCommand::RequestPermissionsResponse { response, .. },
                 ..
             } = ev
             {
@@ -1741,7 +1740,7 @@ mod tests {
         let mut saw_op = false;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::RequestPermissionsResponse { response, .. },
+                op: AppCommand::RequestPermissionsResponse { response, .. },
                 ..
             } = ev
             {
@@ -1769,7 +1768,7 @@ mod tests {
         let mut saw_op = false;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::RequestPermissionsResponse { response, .. },
+                op: AppCommand::RequestPermissionsResponse { response, .. },
                 ..
             } = ev
             {
@@ -2032,7 +2031,7 @@ mod tests {
         let mut decision = None;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::ResolveElicitation { decision: d, .. },
+                op: AppCommand::ResolveElicitation { decision: d, .. },
                 ..
             } = ev
             {
@@ -2066,7 +2065,7 @@ mod tests {
         let mut esc_decision = None;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::ResolveElicitation { decision, .. },
+                op: AppCommand::ResolveElicitation { decision, .. },
                 ..
             } = ev
             {
@@ -2096,7 +2095,7 @@ mod tests {
         let mut n_decision = None;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::ResolveElicitation { decision, .. },
+                op: AppCommand::ResolveElicitation { decision, .. },
                 ..
             } = ev
             {
@@ -2122,7 +2121,7 @@ mod tests {
         let mut decision = None;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::ExecApproval { decision: d, .. },
+                op: AppCommand::ExecApproval { decision: d, .. },
                 ..
             } = ev
             {

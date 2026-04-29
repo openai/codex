@@ -294,6 +294,7 @@ use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::Stage;
 use codex_feedback::CodexFeedback;
+use codex_feedback::FeedbackAttachmentPath;
 use codex_feedback::FeedbackUploadOptions;
 use codex_git_utils::git_diff_to_remote;
 use codex_git_utils::resolve_root_git_project_for_trust;
@@ -690,7 +691,7 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) log_db: Option<LogDbLayer>,
 }
 
-fn configured_thread_store(config: &Config) -> Arc<dyn ThreadStore> {
+fn thread_store_from_config(config: &Config) -> Arc<dyn ThreadStore> {
     match &config.experimental_thread_store {
         ThreadStoreConfig::Local => Arc::new(configured_local_thread_store(config)),
         ThreadStoreConfig::Remote { endpoint } => Arc::new(RemoteThreadStore::new(endpoint)),
@@ -719,6 +720,35 @@ impl CodexMessageProcessor {
 
     pub(crate) fn handle_config_mutation(&self) {
         self.clear_plugin_related_caches();
+    }
+
+    pub(crate) fn effective_plugins_changed_callback(
+        &self,
+        config: Config,
+    ) -> Arc<dyn Fn() + Send + Sync> {
+        let thread_manager = Arc::clone(&self.thread_manager);
+        Arc::new(move || {
+            Self::spawn_effective_plugins_changed_task(Arc::clone(&thread_manager), config.clone());
+        })
+    }
+
+    fn on_effective_plugins_changed(&self, config: Config) {
+        Self::spawn_effective_plugins_changed_task(Arc::clone(&self.thread_manager), config);
+    }
+
+    fn spawn_effective_plugins_changed_task(thread_manager: Arc<ThreadManager>, config: Config) {
+        tokio::spawn(async move {
+            thread_manager.plugins_manager().clear_cache();
+            thread_manager.skills_manager().clear_cache();
+            if thread_manager.list_thread_ids().await.is_empty() {
+                return;
+            }
+            if let Err(err) =
+                Self::queue_mcp_server_refresh_for_config(&thread_manager, &config).await
+            {
+                warn!("failed to queue MCP refresh after effective plugins changed: {err:?}");
+            }
+        });
     }
 
     fn clear_plugin_related_caches(&self) {
@@ -789,7 +819,7 @@ impl CodexMessageProcessor {
             outgoing: outgoing.clone(),
             analytics_events_client,
             arg0_paths,
-            thread_store: configured_thread_store(&config),
+            thread_store: thread_store_from_config(&config),
             config,
             config_manager,
             active_login: Arc::new(Mutex::new(None)),
@@ -2506,6 +2536,7 @@ impl CodexMessageProcessor {
         let imported_thread = self
             .thread_manager
             .start_thread_with_options(StartThreadOptions {
+                thread_store: thread_store_from_config(&config),
                 config,
                 initial_history: InitialHistory::Forked(rollout_items),
                 session_source: None,
@@ -2703,6 +2734,7 @@ impl CodexMessageProcessor {
             } = listener_task_context
                 .thread_manager
                 .start_thread_with_options(StartThreadOptions {
+                    thread_store: thread_store_from_config(&config),
                     config,
                     initial_history: match session_start_source
                         .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
@@ -4275,7 +4307,8 @@ impl CodexMessageProcessor {
         match self
             .thread_manager
             .resume_thread_with_history(
-                config,
+                config.clone(),
+                thread_store_from_config(&config),
                 thread_history,
                 self.auth_manager.clone(),
                 persist_extended_history,
@@ -4849,7 +4882,7 @@ impl CodexMessageProcessor {
 
             let fallback_model_provider = config.model_provider_id.clone();
             let instruction_sources = Self::instruction_sources_from_config(&config).await;
-            let fork_thread_store = configured_thread_store(&config);
+            let fork_thread_store = thread_store_from_config(&config);
 
             let NewThread {
                 thread_id,
@@ -4861,6 +4894,7 @@ impl CodexMessageProcessor {
                 .fork_thread_from_history(
                     ForkSnapshot::Interrupted,
                     config,
+                    fork_thread_store.clone(),
                     InitialHistory::Resumed(ResumedHistory {
                         conversation_id: source_thread_id,
                         history: history_items.clone(),
@@ -5364,7 +5398,7 @@ impl CodexMessageProcessor {
     async fn mcp_server_refresh(&self, request_id: ConnectionRequestId, _params: Option<()>) {
         let result = async {
             let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-            self.queue_mcp_server_refresh_for_config(&config).await?;
+            Self::queue_mcp_server_refresh_for_config(&self.thread_manager, &config).await?;
             Ok::<_, JSONRPCErrorError>(McpServerRefreshResponse {})
         }
         .await;
@@ -5372,11 +5406,10 @@ impl CodexMessageProcessor {
     }
 
     async fn queue_mcp_server_refresh_for_config(
-        &self,
+        thread_manager: &Arc<ThreadManager>,
         config: &Config,
     ) -> Result<(), JSONRPCErrorError> {
-        let configured_servers = self
-            .thread_manager
+        let configured_servers = thread_manager
             .mcp_manager()
             .configured_servers(config)
             .await;
@@ -5412,7 +5445,6 @@ impl CodexMessageProcessor {
 
         // Refresh requests are queued per thread; each thread rebuilds MCP connections on its next
         // active turn to avoid work for threads that never resume.
-        let thread_manager = Arc::clone(&self.thread_manager);
         thread_manager.refresh_mcp_servers(refresh_config).await;
         Ok(())
     }
@@ -6261,12 +6293,13 @@ impl CodexMessageProcessor {
                     continue;
                 }
             };
-            let effective_skill_roots = plugins_manager
-                .effective_skill_roots_for_layer_stack(
-                    &config_layer_stack,
-                    config.features.enabled(Feature::Plugins) && workspace_codex_plugins_enabled,
-                )
-                .await;
+            let effective_skill_roots = if workspace_codex_plugins_enabled {
+                plugins_manager
+                    .effective_skill_roots_for_layer_stack(&config_layer_stack, &config)
+                    .await
+            } else {
+                Vec::new()
+            };
             let skills_input = codex_core::skills::SkillsLoadInput::new(
                 cwd_abs.clone(),
                 effective_skill_roots,
@@ -7077,7 +7110,8 @@ impl CodexMessageProcessor {
             .thread_manager
             .fork_thread(
                 ForkSnapshot::Interrupted,
-                config,
+                config.clone(),
+                thread_store_from_config(&config),
                 rollout_path,
                 /*persist_extended_history*/ false,
                 self.request_trace_context(request_id).await,
@@ -7837,14 +7871,33 @@ impl CodexMessageProcessor {
                     continue;
                 };
                 if seen_attachment_paths.insert(rollout_path.clone()) {
-                    attachment_paths.push(rollout_path);
+                    attachment_paths.push(FeedbackAttachmentPath {
+                        path: rollout_path,
+                        attachment_filename_override: None,
+                    });
                 }
+            }
+            if let Some(conversation_id) = conversation_id
+                && let Ok(conversation) = self.thread_manager.get_thread(conversation_id).await
+                && let Some(guardian_rollout_path) =
+                    conversation.guardian_trunk_rollout_path().await
+                && seen_attachment_paths.insert(guardian_rollout_path.clone())
+            {
+                attachment_paths.push(FeedbackAttachmentPath {
+                    path: guardian_rollout_path,
+                    attachment_filename_override: Some(auto_review_rollout_filename(
+                        conversation_id,
+                    )),
+                });
             }
         }
         if let Some(extra_log_files) = extra_log_files {
             for extra_log_file in extra_log_files {
                 if seen_attachment_paths.insert(extra_log_file.clone()) {
-                    attachment_paths.push(extra_log_file);
+                    attachment_paths.push(FeedbackAttachmentPath {
+                        path: extra_log_file,
+                        attachment_filename_override: None,
+                    });
                 }
             }
         }
@@ -7987,6 +8040,10 @@ impl CodexMessageProcessor {
             .send_error(request_id, internal_error(message))
             .await;
     }
+}
+
+fn auto_review_rollout_filename(thread_id: ThreadId) -> String {
+    format!("auto-review-rollout-{thread_id}.jsonl")
 }
 
 fn normalize_thread_list_cwd_filters(

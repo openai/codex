@@ -45,7 +45,7 @@ fn goal_summary_lines(goal: &AppThreadGoal) -> Vec<Line<'static>> {
     }
     let command_hint = match goal.status {
         AppThreadGoalStatus::Active => "Commands: /goal pause, /goal clear",
-        AppThreadGoalStatus::Paused => "Commands: /goal unpause, /goal clear",
+        AppThreadGoalStatus::Paused => "Commands: /goal resume, /goal clear",
         AppThreadGoalStatus::BudgetLimited | AppThreadGoalStatus::Complete => {
             "Commands: /goal clear"
         }

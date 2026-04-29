@@ -311,10 +311,15 @@ impl MessageProcessor {
         });
         if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
             // Keep plugin startup warmups aligned at app-server startup.
-            // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
+            let on_effective_plugins_changed =
+                codex_message_processor.effective_plugins_changed_callback((*config).clone());
             thread_manager
                 .plugins_manager()
-                .maybe_start_plugin_startup_tasks_for_config(&config, auth_manager.clone());
+                .maybe_start_plugin_startup_tasks_for_config(
+                    &config,
+                    auth_manager.clone(),
+                    Some(on_effective_plugins_changed),
+                );
         }
         let config_api = ConfigApi::new(
             config_manager,

@@ -97,6 +97,7 @@ members = [
     "state",
     "terminal-detection",
     "test-binary-support",
+    "thread-manager-sample",
     "thread-store",
     "uds",
     "codex-experimental-api-macros",

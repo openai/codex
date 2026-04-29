@@ -259,6 +259,18 @@ impl Drop for EphemeralReviewCleanup {
 }
 
 impl GuardianReviewSessionManager {
+    pub(crate) async fn trunk_rollout_path(&self) -> Option<PathBuf> {
+        let trunk = self.state.lock().await.trunk.clone()?;
+        trunk.codex.session.ensure_rollout_materialized().await;
+        match trunk.codex.session.current_rollout_path().await {
+            Ok(path) => path,
+            Err(err) => {
+                warn!("failed to resolve guardian trunk rollout path: {err}");
+                None
+            }
+        }
+    }
+
     pub(crate) async fn shutdown(&self) {
         let (review_session, ephemeral_reviews) = {
             let mut state = self.state.lock().await;
