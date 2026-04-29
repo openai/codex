@@ -6319,19 +6319,21 @@ impl CodexMessageProcessor {
             cwds
         };
 
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let auth = self.auth_manager.auth().await;
-        let workspace_codex_plugins_enabled = self
-            .workspace_codex_plugins_enabled(&config, auth.as_ref())
-            .await;
-        let plugins_enabled =
-            config.features.enabled(Feature::Plugins) && workspace_codex_plugins_enabled;
         let plugins_manager = self.thread_manager.plugins_manager();
         let mut data = Vec::new();
         for cwd in cwds {
-            let (_, config_layer_stack) = match self.resolve_cwd_config(&cwd).await {
-                Ok(resolved) => resolved,
-                Err(message) => {
+            let config = match self
+                .config_manager
+                .load_for_cwd(
+                    /*request_overrides*/ None,
+                    ConfigOverrides::default(),
+                    Some(cwd.clone()),
+                )
+                .await
+            {
+                Ok(config) => config,
+                Err(err) => {
                     let error_path = cwd.clone();
                     data.push(codex_app_server_protocol::HooksListEntry {
                         cwd,
@@ -6339,16 +6341,21 @@ impl CodexMessageProcessor {
                         warnings: Vec::new(),
                         errors: vec![codex_app_server_protocol::HookErrorInfo {
                             path: error_path,
-                            message,
+                            message: err.to_string(),
                         }],
                     });
                     continue;
                 }
             };
+            let workspace_codex_plugins_enabled = self
+                .workspace_codex_plugins_enabled(&config, auth.as_ref())
+                .await;
+            let plugins_enabled =
+                config.features.enabled(Feature::Plugins) && workspace_codex_plugins_enabled;
             let plugin_outcome = if config.features.enabled(Feature::PluginHooks) {
                 plugins_manager
                     .plugins_for_layer_stack(
-                        &config_layer_stack,
+                        &config.config_layer_stack,
                         plugins_enabled,
                         /*plugin_hooks_feature_enabled*/ true,
                     )
@@ -6358,7 +6365,7 @@ impl CodexMessageProcessor {
             };
             let hooks = codex_hooks::list_hooks(codex_hooks::HooksConfig {
                 feature_enabled: config.features.enabled(Feature::CodexHooks),
-                config_layer_stack: Some(config_layer_stack),
+                config_layer_stack: Some(config.config_layer_stack),
                 plugin_hook_sources: plugin_outcome.effective_plugin_hook_sources(),
                 plugin_hook_load_warnings: plugin_outcome.effective_plugin_hook_warnings(),
                 ..Default::default()

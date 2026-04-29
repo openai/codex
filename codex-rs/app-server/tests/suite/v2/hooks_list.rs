@@ -12,6 +12,8 @@ use codex_app_server_protocol::HooksListParams;
 use codex_app_server_protocol::HooksListResponse;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_core::config::set_project_trust_level;
+use codex_protocol::config_types::TrustLevel;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -199,6 +201,86 @@ async fn hooks_list_shows_plugin_hook_load_warnings() -> Result<()> {
         data[0].warnings[0].contains("failed to parse plugin hooks config"),
         "unexpected warnings: {:?}",
         data[0].warnings
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn hooks_list_uses_each_cwds_effective_feature_enablement() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[features]
+codex_hooks = false
+"#,
+    )?;
+    std::fs::create_dir_all(workspace.path().join(".git"))?;
+    std::fs::create_dir_all(workspace.path().join(".codex"))?;
+    std::fs::write(
+        workspace.path().join(".codex/config.toml"),
+        r#"[features]
+codex_hooks = true
+
+[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo project hook"
+timeout = 5
+"#,
+    )?;
+    set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_hooks_list_request(HooksListParams {
+            cwds: vec![
+                codex_home.path().to_path_buf(),
+                workspace.path().to_path_buf(),
+            ],
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let HooksListResponse { data } = to_response(response)?;
+    assert_eq!(
+        data,
+        vec![
+            HooksListEntry {
+                cwd: codex_home.path().to_path_buf(),
+                hooks: Vec::new(),
+                warnings: Vec::new(),
+                errors: Vec::new(),
+            },
+            HooksListEntry {
+                cwd: workspace.path().to_path_buf(),
+                hooks: vec![HookMetadata {
+                    event_name: HookEventName::PreToolUse,
+                    handler_type: HookHandlerType::Command,
+                    matcher: Some("Bash".to_string()),
+                    command: Some("echo project hook".to_string()),
+                    timeout_sec: 5,
+                    status_message: None,
+                    source_path: AbsolutePathBuf::try_from(
+                        workspace.path().join(".codex/config.toml"),
+                    )?,
+                    source: HookSource::Project,
+                    plugin_id: None,
+                    display_order: 0,
+                }],
+                warnings: Vec::new(),
+                errors: Vec::new(),
+            },
+        ]
     );
     Ok(())
 }
