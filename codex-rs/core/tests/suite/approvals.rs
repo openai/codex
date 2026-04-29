@@ -95,6 +95,10 @@ enum ActionKind {
     RunCommand {
         command: &'static str,
     },
+    RunCommandWithPrefixRule {
+        command: &'static str,
+        prefix_rule: &'static [&'static str],
+    },
     RunUnifiedExecCommand {
         command: &'static str,
         justification: Option<&'static str>,
@@ -200,6 +204,19 @@ impl ActionKind {
                     command,
                     /*timeout_ms*/ 30_000,
                     sandbox_permissions,
+                )?;
+                Ok((event, Some(command.to_string())))
+            }
+            ActionKind::RunCommandWithPrefixRule {
+                command,
+                prefix_rule,
+            } => {
+                let event = shell_event_with_prefix_rule(
+                    call_id,
+                    command,
+                    /*timeout_ms*/ 30_000,
+                    sandbox_permissions,
+                    Some(prefix_rule.iter().map(|part| (*part).to_string()).collect()),
                 )?;
                 Ok((event, Some(command.to_string())))
             }
@@ -900,6 +917,25 @@ fn scenarios() -> Vec<ScenarioSpec> {
             sandbox_policy: workspace_write(false),
             action: ActionKind::RunCommand {
                 command: r#"cat < "hello" > /var/test.txt"#,
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::Denied,
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
+            },
+        },
+        ScenarioSpec {
+            name: "cat_heredoc_file_redirect_prefix_rule_requires_escalation_approval",
+            approval_policy: OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommandWithPrefixRule {
+                command: "cat <<'EOF' > /tmp/out.txt\nhello\nEOF",
+                prefix_rule: &["cat"],
             },
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             features: vec![],
@@ -1702,7 +1738,8 @@ fn scenario_group(scenario: &ScenarioSpec) -> ScenarioGroup {
         ActionKind::WriteFile { .. }
         | ActionKind::FetchUrlNoProxy { .. }
         | ActionKind::FetchUrl { .. }
-        | ActionKind::RunCommand { .. } => match &scenario.sandbox_policy {
+        | ActionKind::RunCommand { .. }
+        | ActionKind::RunCommandWithPrefixRule { .. } => match &scenario.sandbox_policy {
             SandboxPolicy::DangerFullAccess => ScenarioGroup::DangerFullAccess,
             SandboxPolicy::ReadOnly { .. } => ScenarioGroup::ReadOnly,
             SandboxPolicy::WorkspaceWrite { .. } => ScenarioGroup::WorkspaceWrite,
