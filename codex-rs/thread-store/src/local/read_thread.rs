@@ -82,6 +82,22 @@ pub(super) async fn read_thread_by_rollout_path(
             message: format!("thread {} is archived", thread.thread_id),
         });
     }
+    if let Some(metadata) = read_sqlite_metadata(store, thread.thread_id).await {
+        let existing_git_info = thread.git_info.take();
+        let (fallback_sha, fallback_branch, fallback_origin_url) = match existing_git_info {
+            Some(info) => (
+                info.commit_hash.map(|sha| sha.0),
+                info.branch,
+                info.repository_url,
+            ),
+            None => (None, None, None),
+        };
+        thread.git_info = git_info_from_parts(
+            metadata.git_sha.or(fallback_sha),
+            metadata.git_branch.or(fallback_branch),
+            metadata.git_origin_url.or(fallback_origin_url),
+        );
+    }
     attach_history_if_requested(&mut thread, include_history).await?;
     Ok(thread)
 }
@@ -431,6 +447,55 @@ mod tests {
             Some(std::fs::canonicalize(active_path).expect("canonical path"))
         );
         assert_eq!(thread.preview, "Hello from user");
+    }
+
+    #[tokio::test]
+    async fn read_thread_by_rollout_path_prefers_sqlite_git_info() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let store = LocalThreadStore::new(config.clone());
+        let uuid = Uuid::from_u128(223);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let active_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let mut builder = ThreadMetadataBuilder::new(
+            thread_id,
+            active_path.clone(),
+            Utc::now(),
+            SessionSource::Cli,
+        );
+        builder.model_provider = Some(config.model_provider_id.clone());
+        builder.git_branch = Some("sqlite-branch".to_string());
+        runtime
+            .upsert_thread(&builder.build(config.model_provider_id.as_str()))
+            .await
+            .expect("state db upsert should succeed");
+
+        let thread = store
+            .read_thread_by_rollout_path(
+                active_path,
+                /*include_archived*/ false,
+                /*include_history*/ false,
+            )
+            .await
+            .expect("read thread by rollout path");
+
+        let git_info = thread.git_info.expect("git info should be present");
+        assert_eq!(git_info.branch.as_deref(), Some("sqlite-branch"));
+        assert_eq!(
+            git_info.commit_hash.as_ref().map(|sha| sha.0.as_str()),
+            Some("abcdef")
+        );
+        assert_eq!(
+            git_info.repository_url.as_deref(),
+            Some("https://example.com/repo.git")
+        );
     }
 
     #[tokio::test]
