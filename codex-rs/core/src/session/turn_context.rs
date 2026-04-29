@@ -173,6 +173,7 @@ impl TurnContext {
             /*developer_instructions*/ None,
         );
         let features = self.features.clone();
+        let provider_capabilities = self.provider.capabilities();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             available_models: &models_manager
@@ -187,7 +188,9 @@ impl TurnContext {
             permission_profile: &self.permission_profile,
             windows_sandbox_level: self.windows_sandbox_level,
         })
-        .with_capability_bounds(tool_capability_bounds(self.provider.capabilities()))
+        .with_namespace_tools_capability(provider_capabilities.namespace_tools)
+        .with_image_generation_capability(provider_capabilities.image_generation)
+        .with_web_search_capability(provider_capabilities.web_search)
         .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
@@ -443,6 +446,7 @@ impl Session {
             image_generation_tool_auth_allowed(auth_manager.as_deref());
         let auth_manager_for_context = auth_manager.clone();
         let provider_for_context = create_model_provider(provider, auth_manager);
+        let provider_capabilities = provider_for_context.capabilities();
         let session_telemetry_for_context = session_telemetry;
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
@@ -454,7 +458,9 @@ impl Session {
             permission_profile: &session_configuration.permission_profile(),
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         })
-        .with_capability_bounds(tool_capability_bounds(provider_for_context.capabilities()))
+        .with_namespace_tools_capability(provider_capabilities.namespace_tools)
+        .with_image_generation_capability(provider_capabilities.image_generation)
+        .with_web_search_capability(provider_capabilities.web_search)
         .with_unified_exec_shell_mode_for_session(
             crate::tools::spec::tool_user_shell_type(user_shell),
             shell_zsh_path,

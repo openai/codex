@@ -455,7 +455,7 @@ mod tests {
         assert_eq!(
             model_ids,
             vec![
-                "openai.gpt-5.4",
+                "openai.gpt-5.4-cmb",
                 "openai.gpt-oss-120b",
                 "openai.gpt-oss-20b"
             ]
@@ -468,7 +468,7 @@ mod tests {
             .find(|preset| preset.is_default)
             .expect("Bedrock catalog should have a default model");
 
-        assert_eq!(default_model.model, "openai.gpt-5.4");
+        assert_eq!(default_model.model, "openai.gpt-5.4-cmb");
     }
 
     #[tokio::test]

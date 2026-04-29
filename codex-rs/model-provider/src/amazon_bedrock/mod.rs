@@ -122,7 +122,7 @@ mod tests {
 
         assert_eq!(
             api_provider.base_url,
-            "https://bedrock-mantle.eu-central-1.api.aws/api/openai"
+            "https://bedrock-mantle.eu-central-1.api.aws/v1"
         );
     }
 
@@ -136,8 +136,8 @@ mod tests {
             provider.capabilities(),
             ProviderCapabilities {
                 namespace_tools: false,
-                image_generation: true,
-                web_search: true,
+                image_generation: false,
+                web_search: false,
             }
         );
     }

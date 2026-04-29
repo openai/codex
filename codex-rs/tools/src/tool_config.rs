@@ -115,23 +115,6 @@ pub struct ToolsConfig {
     pub agent_type_description: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ToolCapabilityBounds {
-    pub namespace_tools: bool,
-    pub image_generation: bool,
-    pub web_search: bool,
-}
-
-impl Default for ToolCapabilityBounds {
-    fn default() -> Self {
-        Self {
-            namespace_tools: true,
-            image_generation: true,
-            web_search: true,
-        }
-    }
-}
-
 pub struct ToolsConfigParams<'a> {
     pub model_info: &'a ModelInfo,
     pub available_models: &'a [ModelPreset],
@@ -258,14 +241,22 @@ impl ToolsConfig {
         self
     }
 
-    pub fn with_capability_bounds(mut self, bounds: ToolCapabilityBounds) -> Self {
-        if !bounds.namespace_tools {
+    pub fn with_namespace_tools_capability(mut self, namespace_tools: bool) -> Self {
+        if !namespace_tools {
             self.namespace_tools = false;
         }
-        if !bounds.image_generation {
+        self
+    }
+
+    pub fn with_image_generation_capability(mut self, image_generation: bool) -> Self {
+        if !image_generation {
             self.image_gen_tool = false;
         }
-        if !bounds.web_search {
+        self
+    }
+
+    pub fn with_web_search_capability(mut self, web_search: bool) -> Self {
+        if !web_search {
             self.web_search_mode = None;
         }
         self
