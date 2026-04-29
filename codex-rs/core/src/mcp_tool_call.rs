@@ -60,6 +60,9 @@ use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
+use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use serde::Serialize;
@@ -81,6 +84,9 @@ const MCP_RESULT_TELEMETRY_TARGET_ID_SPAN_ATTR: &str = "codex.mcp.target.id";
 const MCP_RESULT_TELEMETRY_SERVER_USER_FLOW_SPAN_ATTR: &str =
     "codex.mcp.server_user_flow.triggered";
 const MCP_RESULT_TELEMETRY_TARGET_ID_MAX_CHARS: usize = 256;
+const MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES: usize = DEFAULT_OUTPUT_BYTES_CAP;
+const MCP_TOOL_CALL_EVENT_RESULT_TRUNCATED_PREFIX: &str =
+    "MCP tool result exceeded rollout storage limit; showing truncated serialized result:\n";
 
 /// Handles the specified tool call dispatches the appropriate
 /// `McpToolCallBegin` and `McpToolCallEnd` events to the `Session`.
@@ -361,7 +367,7 @@ async fn handle_approved_mcp_tool_call(
         invocation,
         mcp_app_resource_uri,
         duration,
-        result: result.clone(),
+        result: truncate_mcp_tool_result_for_event(&result),
     });
     notify_mcp_tool_call_event(sess, turn_context, tool_call_end_event.clone()).await;
     maybe_track_codex_app_used(sess, turn_context, &server, &tool_name).await;
@@ -645,6 +651,61 @@ fn sanitize_mcp_tool_result_for_model(
         is_error: call_tool_result.is_error,
         meta: call_tool_result.meta,
     })
+}
+
+fn truncate_mcp_tool_result_for_event(
+    result: &Result<CallToolResult, String>,
+) -> Result<CallToolResult, String> {
+    match result {
+        Ok(call_tool_result) => Ok(truncate_call_tool_result_for_event(call_tool_result)),
+        Err(message) => Err(truncate_mcp_tool_error_for_event(message)),
+    }
+}
+
+fn truncate_mcp_tool_error_for_event(message: &str) -> String {
+    let mut content_budget = MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES;
+    loop {
+        let truncated = truncate_text(message, TruncationPolicy::Bytes(content_budget));
+        if truncated.len() <= MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES || content_budget == 0 {
+            return truncated;
+        }
+        content_budget =
+            content_budget.saturating_sub(truncated.len() - MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES);
+    }
+}
+
+fn truncate_call_tool_result_for_event(result: &CallToolResult) -> CallToolResult {
+    let Ok(serialized) = serde_json::to_string(result) else {
+        return result.clone();
+    };
+    if serialized.len() <= MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES {
+        return result.clone();
+    }
+
+    let mut content_budget = MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES
+        .saturating_sub(MCP_TOOL_CALL_EVENT_RESULT_TRUNCATED_PREFIX.len());
+    loop {
+        let truncated = truncate_text(&serialized, TruncationPolicy::Bytes(content_budget));
+        let candidate = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": format!("{MCP_TOOL_CALL_EVENT_RESULT_TRUNCATED_PREFIX}{truncated}"),
+            })],
+            structured_content: None,
+            is_error: result.is_error,
+            meta: None,
+        };
+
+        let Ok(candidate_serialized) = serde_json::to_string(&candidate) else {
+            return candidate;
+        };
+        if candidate_serialized.len() <= MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES || content_budget == 0
+        {
+            return candidate;
+        }
+        content_budget = content_budget
+            .saturating_sub(candidate_serialized.len() - MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES);
+    }
 }
 
 async fn notify_mcp_tool_call_event(sess: &Session, turn_context: &TurnContext, event: EventMsg) {
@@ -1858,7 +1919,7 @@ async fn notify_mcp_tool_call_skip(
         invocation,
         mcp_app_resource_uri,
         duration: Duration::ZERO,
-        result: Err(message.clone()),
+        result: truncate_mcp_tool_result_for_event(&Err(message.clone())),
     });
     notify_mcp_tool_call_event(sess, turn_context, tool_call_end_event).await;
     Err(message)
