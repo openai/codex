@@ -756,13 +756,23 @@ mod tests {
         )
         .await?;
 
-        assert_ne!(
-            workspace_write_config
-                .permissions
-                .file_system_sandbox_policy(),
-            read_only_config.permissions.file_system_sandbox_policy(),
-            "test fixture should distinguish explicit workspace-write from read-only"
-        );
+        if cfg!(target_os = "windows") {
+            assert_eq!(
+                workspace_write_config
+                    .permissions
+                    .file_system_sandbox_policy(),
+                read_only_config.permissions.file_system_sandbox_policy(),
+                "workspace-write downgrades to read-only when the Windows sandbox is disabled"
+            );
+        } else {
+            assert_ne!(
+                workspace_write_config
+                    .permissions
+                    .file_system_sandbox_policy(),
+                read_only_config.permissions.file_system_sandbox_policy(),
+                "test fixture should distinguish explicit workspace-write from read-only"
+            );
+        }
         assert_eq!(
             config.permissions.file_system_sandbox_policy(),
             workspace_write_config
