@@ -39,12 +39,10 @@ use codex_core::config::find_codex_home;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
-use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::default_client::set_default_originator;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_model_provider_info::built_in_model_providers;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
@@ -117,11 +115,6 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         &config,
         auth_manager,
         SessionSource::Exec,
-        CollaborationModesConfig {
-            default_mode_request_user_input: config
-                .features
-                .enabled(Feature::DefaultModeRequestUserInput),
-        },
         environment_manager,
         /*analytics_events_client*/ None,
     );
