@@ -77,7 +77,7 @@ impl OtelProvider {
                 settings.environment.clone(),
                 settings.service_name.clone(),
                 settings.service_version.clone(),
-                metric_exporter.clone(),
+                metric_exporter,
             );
             if settings.runtime_metrics {
                 config = config.with_runtime_reader();
