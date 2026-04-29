@@ -42,7 +42,7 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::ClientResponse;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CollaborationModeListResponse;
@@ -2118,7 +2118,7 @@ impl CodexMessageProcessor {
         let result = self
             .exec_one_off_command_inner(request_id.clone(), params)
             .await
-            .map(|()| None::<serde_json::Value>);
+            .map(|()| None::<ClientResponsePayload>);
         self.send_optional_result(request_id, result).await;
     }
 
@@ -2856,16 +2856,6 @@ impl CodexMessageProcessor {
         match result {
             Ok((response, notif)) => {
                 listener_task_context
-                    .analytics_events_client
-                    .track_response(
-                        request_id.connection_id.0,
-                        ClientResponse::ThreadStart {
-                            request_id: request_id.request_id.clone(),
-                            response: response.clone(),
-                        },
-                    );
-
-                listener_task_context
                     .outgoing
                     .send_response(request_id, response)
                     .instrument(tracing::info_span!(
@@ -3544,7 +3534,7 @@ impl CodexMessageProcessor {
         let result = self
             .thread_rollback_start(&request_id, params)
             .await
-            .map(|()| None::<serde_json::Value>);
+            .map(|()| None::<ClientResponsePayload>);
         self.send_optional_result(request_id, result).await;
     }
 
@@ -4401,13 +4391,6 @@ impl CodexMessageProcessor {
                     permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
                 };
-                self.analytics_events_client.track_response(
-                    request_id.connection_id.0,
-                    ClientResponse::ThreadResume {
-                        request_id: request_id.request_id.clone(),
-                        response: response.clone(),
-                    },
-                );
 
                 let connection_id = request_id.connection_id;
                 let token_usage_thread = include_turns.then(|| response.thread.clone());
@@ -5020,14 +5003,6 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        self.analytics_events_client.track_response(
-            request_id.connection_id.0,
-            ClientResponse::ThreadFork {
-                request_id: request_id.request_id.clone(),
-                response: response.clone(),
-            },
-        );
-
         let connection_id = request_id.connection_id;
         let token_usage_thread = include_turns.then(|| response.thread.clone());
         self.outgoing.send_response(request_id, response).await;
@@ -5811,7 +5786,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         result: Result<Option<T>, JSONRPCErrorError>,
     ) where
-        T: serde::Serialize,
+        T: Into<ClientResponsePayload>,
     {
         match result {
             Ok(Some(response)) => self.outgoing.send_response(request_id, response).await,
@@ -6645,13 +6620,6 @@ impl CodexMessageProcessor {
 
         match result {
             Ok(response) => {
-                self.analytics_events_client.track_response(
-                    request_id.connection_id.0,
-                    ClientResponse::TurnStart {
-                        request_id: request_id.request_id.clone(),
-                        response: response.clone(),
-                    },
-                );
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(error) => {
@@ -6822,13 +6790,6 @@ impl CodexMessageProcessor {
 
         match result {
             Ok(response) => {
-                self.analytics_events_client.track_response(
-                    request_id.connection_id.0,
-                    ClientResponse::TurnSteer {
-                        request_id: request_id.request_id.clone(),
-                        response: response.clone(),
-                    },
-                );
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(error) => {
@@ -10650,7 +10611,10 @@ mod tests {
         let connection_id = ConnectionId(7);
 
         let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(8);
-        let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            outgoing_tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
         let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
             outgoing.clone(),
             vec![connection_id],
