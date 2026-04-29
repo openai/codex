@@ -58,7 +58,7 @@ where
         ShellEnvironmentPolicyInherit::None => HashMap::new(),
         ShellEnvironmentPolicyInherit::Core => {
             #[cfg(not(target_os = "windows"))]
-            let core_env_vars = UNIX_CORE_VARS;
+            let core_env_vars = UNIX_CORE_ENV_VARS;
             #[cfg(target_os = "windows")]
             let core_env_vars = WINDOWS_CORE_ENV_VARS;
 
@@ -110,7 +110,7 @@ where
 }
 
 #[cfg(not(target_os = "windows"))]
-const UNIX_CORE_VARS: &[&str] = &[
+const UNIX_CORE_ENV_VARS: &[&str] = &[
     "PATH",
     "SHELL",
     "TMPDIR",
