@@ -61,13 +61,7 @@ pub(crate) async fn handle_message_string_tool(
     target: String,
     message: String,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
-    handle_message_submission(
-        invocation,
-        mode,
-        target,
-        message_content(message)?,
-    )
-    .await
+    handle_message_submission(invocation, mode, target, message_content(message)?).await
 }
 
 async fn handle_message_submission(
