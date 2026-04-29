@@ -740,6 +740,29 @@ async fn evaluates_heredoc_script_against_prefix_rules() {
 }
 
 #[tokio::test]
+async fn forbidden_prefix_rule_still_applies_to_heredoc_script() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: Some(r#"prefix_rule(pattern=["python3"], decision="forbidden")"#.to_string()),
+            command: vec![
+                "bash".to_string(),
+                "-lc".to_string(),
+                "python3 <<'PY'\nprint('hello')\nPY".to_string(),
+            ],
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            file_system_sandbox_policy: workspace_write_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::Forbidden {
+            reason: "`bash -lc \"python3 <<'PY'\nprint('hello')\nPY\"` rejected: policy forbids commands starting with `python3`".to_string(),
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn omits_auto_amendment_for_heredoc_fallback_prompts() {
     assert_exec_approval_requirement_for_command(
         ExecApprovalRequirementScenario {
@@ -782,6 +805,54 @@ async fn drops_requested_amendment_for_heredoc_fallback_prompts_when_it_wont_mat
                 "-m".to_string(),
                 "pip".to_string(),
             ]),
+        },
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn heredoc_redirect_without_escalation_runs_inside_sandbox() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: None,
+            command: vec![
+                "zsh".to_string(),
+                "-lc".to_string(),
+                "cat <<'EOF' > /some/important/folder/test.txt\nhello world\nEOF".to_string(),
+            ],
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            file_system_sandbox_policy: workspace_write_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn heredoc_redirect_with_escalation_requires_approval() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: Some(r#"prefix_rule(pattern=["cat"], decision="allow")"#.to_string()),
+            command: vec![
+                "zsh".to_string(),
+                "-lc".to_string(),
+                "cat <<'EOF' > /some/important/folder/test.txt\nhello world\nEOF".to_string(),
+            ],
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            file_system_sandbox_policy: workspace_write_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            prefix_rule: None,
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,

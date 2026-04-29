@@ -37,6 +37,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use codex_shell_command::bash::parse_shell_lc_plain_commands;
 use codex_shell_command::bash::parse_shell_lc_single_command_prefix;
+use codex_shell_command::bash::shell_lc_contains_file_redirect;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use shlex::try_join as shlex_try_join;
 
@@ -707,6 +708,9 @@ fn commands_for_exec_policy(command: &[String]) -> (Vec<Vec<String>>, bool) {
 
     if let Some(single_command) = parse_shell_lc_single_command_prefix(command) {
         return (vec![single_command], true);
+    }
+    if shell_lc_contains_file_redirect(command) {
+        return (vec![command.to_vec()], true);
     }
 
     (vec![command.to_vec()], false)
