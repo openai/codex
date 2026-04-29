@@ -195,13 +195,11 @@ impl SessionConfiguration {
             .cwd
             .as_ref()
             .map(|cwd| {
-                AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(
-                    cwd.as_path(),
-                ))
-                .unwrap_or_else(|e| {
-                    warn!("failed to normalize update cwd: {cwd:?}: {e}");
-                    self.cwd.clone()
-                })
+                crate::environment_selection::primary_selected_cwd_or_fallback(
+                    &self.environments,
+                    &self.cwd,
+                )
+                .join(normalize_for_native_workdir(cwd.as_path()))
             })
             .unwrap_or_else(|| self.cwd.clone());
 
@@ -948,13 +946,7 @@ impl Session {
                 INITIAL_SUBMIT_ID.to_owned(),
                 tx_event.clone(),
                 session_configuration.permission_profile(),
-                McpRuntimeEnvironment::new(
-                    sess.services
-                        .environment_manager
-                        .default_environment()
-                        .unwrap_or_else(|| sess.services.environment_manager.local_environment()),
-                    session_configuration.cwd.to_path_buf(),
-                ),
+                sess.mcp_runtime_environment_for_configuration(&session_configuration),
                 config.codex_home.to_path_buf(),
                 codex_apps_tools_cache_key(auth),
                 tool_plugin_provenance,

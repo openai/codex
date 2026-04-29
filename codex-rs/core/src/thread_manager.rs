@@ -1098,13 +1098,20 @@ impl ThreadManagerState {
                 threads.remove(&resumed.conversation_id);
             }
         }
+        validate_environment_selections(self.environment_manager.as_ref(), &environments)?;
         let environment =
             selected_primary_environment(self.environment_manager.as_ref(), &environments)?;
+        let effective_cwd = environments
+            .first()
+            .map(|environment| environment.cwd.clone())
+            .unwrap_or_else(|| config.cwd.clone());
+        let mut load_config = config.clone();
+        load_config.cwd = effective_cwd;
         let watch_registration = match environment.as_ref() {
             Some(environment) if !environment.is_remote() => {
                 self.skills_watcher
                     .register_config(
-                        &config,
+                        &load_config,
                         self.skills_manager.as_ref(),
                         self.plugins_manager.as_ref(),
                         Some(environment.get_filesystem()),

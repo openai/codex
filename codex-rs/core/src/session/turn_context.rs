@@ -59,7 +59,6 @@ pub(crate) struct TurnContext {
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
-    pub(crate) environment: Option<Arc<Environment>>,
     pub(crate) environments: Vec<TurnEnvironment>,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
@@ -104,6 +103,10 @@ impl TurnContext {
 
     pub(crate) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
         self.permission_profile.network_sandbox_policy()
+    }
+
+    pub(crate) fn primary_environment(&self) -> Option<&TurnEnvironment> {
+        self.environments.first()
     }
 
     pub(crate) fn sandbox_policy(&self) -> SandboxPolicy {
@@ -230,7 +233,6 @@ impl TurnContext {
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
-            environment: self.environment.clone(),
             environments: self.environments.clone(),
             cwd: self.cwd.clone(),
             current_date: self.current_date.clone(),
@@ -432,7 +434,6 @@ impl Session {
         model_info: ModelInfo,
         models_manager: &SharedModelsManager,
         network: Option<NetworkProxy>,
-        environment: Option<Arc<Environment>>,
         environments: Vec<TurnEnvironment>,
         cwd: AbsolutePathBuf,
         sub_id: String,
@@ -474,7 +475,7 @@ impl Session {
         )
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
-        .with_has_environment(environment.is_some())
+        .with_has_environment(!environments.is_empty())
         .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(per_turn_config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)
@@ -522,7 +523,6 @@ impl Session {
             reasoning_effort,
             reasoning_summary,
             session_source,
-            environment,
             environments,
             cwd,
             current_date: Some(current_date),
@@ -641,6 +641,10 @@ impl Session {
         &self,
         environments: &[TurnEnvironmentSelection],
     ) -> CodexResult<Vec<TurnEnvironment>> {
+        crate::environment_selection::validate_environment_selections(
+            self.services.environment_manager.as_ref(),
+            environments,
+        )?;
         let mut turn_environments = Vec::with_capacity(environments.len());
         for selected_environment in environments {
             let environment_id = selected_environment.environment_id.clone();
@@ -672,8 +676,6 @@ impl Session {
         turn_environments: Vec<TurnEnvironment>,
     ) -> Arc<TurnContext> {
         let primary_turn_environment = turn_environments.first();
-        let environment = primary_turn_environment
-            .map(|turn_environment| Arc::clone(&turn_environment.environment));
         let cwd = primary_turn_environment
             .map(|turn_environment| turn_environment.cwd.clone())
             .unwrap_or_else(|| session_configuration.cwd.clone());
@@ -700,9 +702,8 @@ impl Session {
             .await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-        let fs = environment
-            .as_ref()
-            .map(|environment| environment.get_filesystem());
+        let fs = primary_turn_environment
+            .map(|turn_environment| turn_environment.environment.get_filesystem());
         let skills_outcome = Arc::new(
             self.services
                 .skills_manager
@@ -731,7 +732,6 @@ impl Session {
                     )
                     .then(|| started_proxy.proxy())
                 }),
-            environment,
             turn_environments,
             cwd,
             sub_id,

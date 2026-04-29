@@ -88,16 +88,18 @@ impl ToolHandler for ViewImageHandler {
         };
 
         let abs_path = turn.resolve_path(Some(args.path));
-        let Some(environment) = turn.environment.as_ref() else {
+        let Some(environment) = turn.primary_environment() else {
             return Err(FunctionCallError::RespondToModel(
                 "view_image is unavailable in this session".to_string(),
             ));
         };
         let sandbox = environment
+            .environment
             .is_remote()
             .then(|| turn.file_system_sandbox_context(/*additional_permissions*/ None));
 
         let metadata = environment
+            .environment
             .get_filesystem()
             .get_metadata(&abs_path, sandbox.as_ref())
             .await
@@ -115,6 +117,7 @@ impl ToolHandler for ViewImageHandler {
             )));
         }
         let file_bytes = environment
+            .environment
             .get_filesystem()
             .read_file(&abs_path, sandbox.as_ref())
             .await

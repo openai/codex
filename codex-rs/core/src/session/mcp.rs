@@ -1,6 +1,51 @@
 use super::*;
 
 impl Session {
+    pub(crate) fn mcp_runtime_environment_for_turn_context(
+        &self,
+        turn_context: &TurnContext,
+    ) -> McpRuntimeEnvironment {
+        if let Some(turn_environment) = turn_context.primary_environment() {
+            return McpRuntimeEnvironment::new(
+                Arc::clone(&turn_environment.environment),
+                turn_environment.cwd.to_path_buf(),
+            );
+        }
+
+        McpRuntimeEnvironment::new(
+            self.services.environment_manager.local_environment(),
+            turn_context.cwd.to_path_buf(),
+        )
+    }
+
+    pub(crate) fn mcp_runtime_environment_for_configuration(
+        &self,
+        session_configuration: &SessionConfiguration,
+    ) -> McpRuntimeEnvironment {
+        if let Some(selected_environment) = session_configuration.environments.first() {
+            if let Some(environment) = self
+                .services
+                .environment_manager
+                .get_environment(&selected_environment.environment_id)
+            {
+                return McpRuntimeEnvironment::new(
+                    environment,
+                    selected_environment.cwd.to_path_buf(),
+                );
+            }
+
+            warn!(
+                "unknown stored MCP environment id `{}`; falling back to local environment",
+                selected_environment.environment_id
+            );
+        }
+
+        McpRuntimeEnvironment::new(
+            self.services.environment_manager.local_environment(),
+            session_configuration.cwd.to_path_buf(),
+        )
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
@@ -234,13 +279,7 @@ impl Session {
             turn_context.sub_id.clone(),
             self.get_tx_event(),
             turn_context.permission_profile(),
-            McpRuntimeEnvironment::new(
-                turn_context
-                    .environment
-                    .clone()
-                    .unwrap_or_else(|| self.services.environment_manager.local_environment()),
-                turn_context.cwd.to_path_buf(),
-            ),
+            self.mcp_runtime_environment_for_turn_context(turn_context),
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
             tool_plugin_provenance,

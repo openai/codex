@@ -30,6 +30,7 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
+use crate::environment_selection::primary_selected_cwd_or_fallback;
 use crate::environment_selection::selected_primary_environment;
 use crate::environment_selection::validate_environment_selections;
 use crate::exec_policy::ExecPolicyManager;
@@ -476,13 +477,15 @@ impl Codex {
         validate_environment_selections(environment_manager.as_ref(), &environments)?;
         let environment =
             selected_primary_environment(environment_manager.as_ref(), &environments)?;
+        let mut load_config = config.clone();
+        load_config.cwd = primary_selected_cwd_or_fallback(&environments, &config.cwd);
         let fs = environment
             .as_ref()
             .map(|environment| environment.get_filesystem());
-        let plugins_input = config.plugins_config_input();
+        let plugins_input = load_config.plugins_config_input();
         let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
-        let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
+        let skills_input = skills_load_input_from_config(&load_config, effective_skill_roots);
         let loaded_skills = skills_manager.skills_for_config(&skills_input, fs).await;
 
         for err in &loaded_skills.errors {
@@ -501,7 +504,7 @@ impl Codex {
             let _ = config.features.disable(Feature::Collab);
         }
 
-        let user_instructions = AgentsMdManager::new(&config)
+        let user_instructions = AgentsMdManager::new(&load_config)
             .user_instructions(environment.as_deref())
             .await;
 

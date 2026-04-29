@@ -50,11 +50,11 @@ impl McpRuntimeEnvironment {
         }
     }
 
-    pub(crate) fn environment(&self) -> Arc<Environment> {
+    pub fn environment(&self) -> Arc<Environment> {
         Arc::clone(&self.environment)
     }
 
-    pub(crate) fn fallback_cwd(&self) -> PathBuf {
+    pub fn fallback_cwd(&self) -> PathBuf {
         self.fallback_cwd.clone()
     }
 }

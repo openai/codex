@@ -412,12 +412,12 @@ impl ShellHandler {
         } = args;
 
         let mut exec_params = exec_params;
-        let Some(environment) = turn.environment.as_ref() else {
+        let Some(turn_environment) = turn.primary_environment() else {
             return Err(FunctionCallError::RespondToModel(
                 "shell is unavailable in this session".to_string(),
             ));
         };
-        let fs = environment.get_filesystem();
+        let fs = turn_environment.environment.get_filesystem();
 
         let dependency_env = session.dependency_env().await;
         if !dependency_env.is_empty() {

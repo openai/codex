@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use codex_exec_server::Environment;
@@ -25,7 +26,14 @@ pub(crate) fn validate_environment_selections(
     environment_manager: &EnvironmentManager,
     environments: &[TurnEnvironmentSelection],
 ) -> CodexResult<()> {
+    let mut seen_environment_ids = HashSet::with_capacity(environments.len());
     for selected_environment in environments {
+        if !seen_environment_ids.insert(selected_environment.environment_id.as_str()) {
+            return Err(CodexErr::InvalidRequest(format!(
+                "duplicate turn environment id `{}`",
+                selected_environment.environment_id
+            )));
+        }
         if environment_manager
             .get_environment(&selected_environment.environment_id)
             .is_none()
@@ -57,6 +65,16 @@ pub(crate) fn selected_primary_environment(
                 })
         })
         .transpose()
+}
+
+pub(crate) fn primary_selected_cwd_or_fallback(
+    environments: &[TurnEnvironmentSelection],
+    fallback_cwd: &AbsolutePathBuf,
+) -> AbsolutePathBuf {
+    environments
+        .first()
+        .map(|selected_environment| selected_environment.cwd.clone())
+        .unwrap_or_else(|| fallback_cwd.clone())
 }
 
 #[cfg(test)]
@@ -104,5 +122,52 @@ mod tests {
             default_thread_environment_selections(&manager, &cwd),
             Vec::<TurnEnvironmentSelection>::new()
         );
+    }
+
+    #[tokio::test]
+    async fn validate_environment_selections_rejects_duplicate_ids() {
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let manager = EnvironmentManager::default_for_tests();
+
+        let err = validate_environment_selections(
+            &manager,
+            &[
+                TurnEnvironmentSelection {
+                    environment_id: "local".to_string(),
+                    cwd: cwd.clone(),
+                },
+                TurnEnvironmentSelection {
+                    environment_id: "local".to_string(),
+                    cwd: cwd.join("other"),
+                },
+            ],
+        )
+        .expect_err("duplicate environment id should fail");
+
+        assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn primary_selected_cwd_or_fallback_uses_first_selection() {
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let selected_cwd = cwd.join("selected");
+
+        assert_eq!(
+            primary_selected_cwd_or_fallback(
+                &[TurnEnvironmentSelection {
+                    environment_id: "local".to_string(),
+                    cwd: selected_cwd.clone(),
+                }],
+                &cwd,
+            ),
+            selected_cwd
+        );
+    }
+
+    #[test]
+    fn primary_selected_cwd_or_fallback_uses_fallback_without_selections() {
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+
+        assert_eq!(primary_selected_cwd_or_fallback(&[], &cwd), cwd);
     }
 }
