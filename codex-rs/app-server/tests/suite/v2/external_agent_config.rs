@@ -313,7 +313,17 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     .await??;
     let response: ThreadReadResponse = to_response(response)?;
     assert_eq!(response.thread.turns.len(), 1);
-    assert_eq!(response.thread.turns[0].items.len(), 2);
+    let items = &response.thread.turns[0].items;
+    assert_eq!(items.len(), 3);
+    assert_eq!(
+        items.last(),
+        Some(&ThreadItem::AgentMessage {
+            id: "item-3".into(),
+            text: "<EXTERNAL SESSION IMPORTED>".into(),
+            phase: None,
+            memory_citation: None,
+        })
+    );
 
     let request_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
