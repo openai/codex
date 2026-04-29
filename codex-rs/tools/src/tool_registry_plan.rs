@@ -313,7 +313,7 @@ pub fn build_tool_registry_plan(
     {
         plan.push_spec(
             create_tool_suggest_tool(&collect_tool_suggest_entries(discoverable_tools)),
-            /*supports_parallel_tool_calls*/ false,
+            /*supports_parallel_tool_calls*/ true,
             /*code_mode_enabled*/ false,
         );
         plan.register_handler(TOOL_SUGGEST_TOOL_NAME, ToolHandlerKind::ToolSuggest);

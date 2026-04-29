@@ -1722,7 +1722,7 @@ fn tool_suggest_can_be_registered_without_search_tool() {
 
     assert_contains_tool_names(&tools, &[TOOL_SUGGEST_TOOL_NAME]);
     let tool_suggest = find_tool(&tools, TOOL_SUGGEST_TOOL_NAME);
-    assert!(!tool_suggest.supports_parallel_tool_calls);
+    assert!(tool_suggest.supports_parallel_tool_calls);
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
 
     let ToolSpec::Function(ResponsesApiTool { description, .. }) = &tool_suggest.spec else {
