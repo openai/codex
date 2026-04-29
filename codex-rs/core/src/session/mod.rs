@@ -3248,13 +3248,10 @@ fn response_item_for_rollout_storage(
     policy: TruncationPolicy,
 ) -> ResponseItem {
     // Keep persisted tool outputs aligned with the truncated form the model
-    // sees in conversation history.
+    // sees in conversation history. This intentionally reuses the same output
+    // truncation helper.
     //
-    // This intentionally reuses the same output truncation helper, but does
-    // not run full prompt normalization such as orphan-output cleanup or
-    // image stripping.
-    //
-    // The main goal is to prevent the rollout file from growing too quickly
+    // The goal is to prevent the rollout file from growing too quickly
     // since tool outputs can be very large.
     let policy_with_serialization_budget = policy * 1.2;
     match item {

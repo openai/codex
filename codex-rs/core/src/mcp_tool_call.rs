@@ -85,8 +85,6 @@ const MCP_RESULT_TELEMETRY_SERVER_USER_FLOW_SPAN_ATTR: &str =
     "codex.mcp.server_user_flow.triggered";
 const MCP_RESULT_TELEMETRY_TARGET_ID_MAX_CHARS: usize = 256;
 const MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES: usize = DEFAULT_OUTPUT_BYTES_CAP;
-const MCP_TOOL_CALL_EVENT_RESULT_TRUNCATED_PREFIX: &str =
-    "MCP tool result exceeded rollout storage limit; showing truncated serialized result:\n";
 
 /// Handles the specified tool call dispatches the appropriate
 /// `McpToolCallBegin` and `McpToolCallEnd` events to the `Session`.
@@ -676,13 +674,14 @@ fn truncate_mcp_tool_result_for_event(
             // The preview is itself serialized into a JSON string, so quotes and
             // backslashes can be escaped again and the stored event may end up
             // somewhat larger than this byte budget.
-            let content_budget = MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES
-                .saturating_sub(MCP_TOOL_CALL_EVENT_RESULT_TRUNCATED_PREFIX.len());
-            let truncated = truncate_text(&serialized, TruncationPolicy::Bytes(content_budget));
+            let truncated = truncate_text(
+                &serialized,
+                TruncationPolicy::Bytes(MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES),
+            );
             Ok(CallToolResult {
                 content: vec![serde_json::json!({
                     "type": "text",
-                    "text": format!("{MCP_TOOL_CALL_EVENT_RESULT_TRUNCATED_PREFIX}{truncated}"),
+                    "text": truncated,
                 })],
                 structured_content: None,
                 is_error: call_tool_result.is_error,

@@ -861,10 +861,7 @@ fn truncate_mcp_tool_result_for_event_bounds_large_result() {
         got.content[0]
             .get("text")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|text| {
-                text.starts_with(MCP_TOOL_CALL_EVENT_RESULT_TRUNCATED_PREFIX)
-                    && text.contains("truncated")
-            }),
+            .is_some_and(|text| text.contains("truncated")),
         "large event result should contain a truncation marker: {got:?}"
     );
 }
