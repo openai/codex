@@ -450,7 +450,7 @@ fn spawn_host_bridge(endpoint: SocketAddr, uds_path: &Path) -> io::Result<libc::
 }
 
 fn run_host_bridge(endpoint: SocketAddr, uds_path: &Path, ready_fd: libc::c_int) -> io::Result<()> {
-    set_parent_death_signal()?;
+    harden_bridge_process()?;
     if uds_path.exists() {
         std::fs::remove_file(uds_path)?;
     }
@@ -501,7 +501,7 @@ fn spawn_local_bridge(uds_path: &Path) -> io::Result<u16> {
 }
 
 fn run_local_bridge(uds_path: &Path, ready_fd: libc::c_int) -> io::Result<()> {
-    set_parent_death_signal()?;
+    harden_bridge_process()?;
     let listener = bind_local_loopback_listener()?;
     let port = listener.local_addr()?.port();
 
@@ -612,6 +612,11 @@ fn set_parent_death_signal() -> io::Result<()> {
     } else {
         Ok(())
     }
+}
+
+fn harden_bridge_process() -> io::Result<()> {
+    set_parent_death_signal()?;
+    codex_process_hardening::disable_process_dumping()
 }
 
 fn proxy_bidirectional(mut tcp_stream: TcpStream, mut unix_stream: UnixStream) -> io::Result<()> {

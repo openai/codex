@@ -226,33 +226,10 @@ impl TraceReducer {
                     },
                 )?;
             }
-            RawTraceEventPayload::InferenceCompleted {
-                inference_call_id,
-                response_id,
-                response_payload,
-            } => {
-                self.complete_inference_call(
-                    event.seq,
-                    event.wall_time_unix_ms,
-                    inference_call_id,
-                    ExecutionStatus::Completed,
-                    response_id,
-                    Some(response_payload),
-                )?;
-            }
-            RawTraceEventPayload::InferenceFailed {
-                inference_call_id,
-                partial_response_payload,
-                ..
-            } => {
-                self.complete_inference_call(
-                    event.seq,
-                    event.wall_time_unix_ms,
-                    inference_call_id,
-                    ExecutionStatus::Failed,
-                    /*response_id*/ None,
-                    partial_response_payload,
-                )?;
+            payload @ (RawTraceEventPayload::InferenceCompleted { .. }
+            | RawTraceEventPayload::InferenceFailed { .. }
+            | RawTraceEventPayload::InferenceCancelled { .. }) => {
+                self.complete_inference_call(event.seq, event.wall_time_unix_ms, payload)?;
             }
             RawTraceEventPayload::ProtocolEventObserved { .. } => {
                 // Protocol wrappers are raw debug breadcrumbs. Typed hooks own

@@ -2,27 +2,41 @@ use crate::config::external_agent_config::ExternalAgentConfigDetectOptions;
 use crate::config::external_agent_config::ExternalAgentConfigMigrationItem as CoreMigrationItem;
 use crate::config::external_agent_config::ExternalAgentConfigMigrationItemType as CoreMigrationItemType;
 use crate::config::external_agent_config::ExternalAgentConfigService;
+use crate::config::external_agent_config::NamedMigration as CoreNamedMigration;
 use crate::config::external_agent_config::PendingPluginImport;
 use crate::error_code::internal_error;
+use crate::error_code::invalid_params;
+use codex_app_server_protocol::CommandMigration;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
+use codex_app_server_protocol::HookMigration;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::McpServerMigration;
 use codex_app_server_protocol::MigrationDetails;
 use codex_app_server_protocol::PluginsMigration;
+use codex_app_server_protocol::SubagentMigration;
+use codex_external_agent_sessions::ExternalAgentSessionMigration as CoreSessionMigration;
+use codex_external_agent_sessions::PendingSessionImport;
+use codex_external_agent_sessions::PrepareSessionImportsError;
+use codex_external_agent_sessions::prepare_pending_session_imports;
+use codex_external_agent_sessions::record_imported_session;
+use codex_protocol::ThreadId;
 use std::path::PathBuf;
 
 #[derive(Clone)]
 pub(crate) struct ExternalAgentConfigApi {
+    codex_home: PathBuf,
     migration_service: ExternalAgentConfigService,
 }
 
 impl ExternalAgentConfigApi {
     pub(crate) fn new(codex_home: PathBuf) -> Self {
         Self {
-            migration_service: ExternalAgentConfigService::new(codex_home),
+            migration_service: ExternalAgentConfigService::new(codex_home.clone()),
+            codex_home,
         }
     }
 
@@ -59,6 +73,16 @@ impl ExternalAgentConfigApi {
                         CoreMigrationItemType::McpServerConfig => {
                             ExternalAgentConfigMigrationItemType::McpServerConfig
                         }
+                        CoreMigrationItemType::Subagents => {
+                            ExternalAgentConfigMigrationItemType::Subagents
+                        }
+                        CoreMigrationItemType::Hooks => ExternalAgentConfigMigrationItemType::Hooks,
+                        CoreMigrationItemType::Commands => {
+                            ExternalAgentConfigMigrationItemType::Commands
+                        }
+                        CoreMigrationItemType::Sessions => {
+                            ExternalAgentConfigMigrationItemType::Sessions
+                        }
                     },
                     description: migration_item.description,
                     cwd: migration_item.cwd,
@@ -71,10 +95,101 @@ impl ExternalAgentConfigApi {
                                 plugin_names: plugin.plugin_names,
                             })
                             .collect(),
+                        sessions: details
+                            .sessions
+                            .into_iter()
+                            .map(|session| codex_app_server_protocol::SessionMigration {
+                                path: session.path,
+                                cwd: session.cwd,
+                                title: session.title,
+                            })
+                            .collect(),
+                        mcp_servers: details
+                            .mcp_servers
+                            .into_iter()
+                            .map(|mcp_server| McpServerMigration {
+                                name: mcp_server.name,
+                            })
+                            .collect(),
+                        hooks: details
+                            .hooks
+                            .into_iter()
+                            .map(|hook| HookMigration { name: hook.name })
+                            .collect(),
+                        subagents: details
+                            .subagents
+                            .into_iter()
+                            .map(|subagent| SubagentMigration {
+                                name: subagent.name,
+                            })
+                            .collect(),
+                        commands: details
+                            .commands
+                            .into_iter()
+                            .map(|command| CommandMigration { name: command.name })
+                            .collect(),
                     }),
                 })
                 .collect(),
         })
+    }
+
+    pub(crate) fn detect_recent_sessions(
+        &self,
+    ) -> Result<Vec<CoreSessionMigration>, JSONRPCErrorError> {
+        self.migration_service
+            .detect_recent_sessions()
+            .map_err(|err| internal_error(err.to_string()))
+    }
+
+    pub(crate) fn prepare_pending_session_imports(
+        &self,
+        params: &ExternalAgentConfigImportParams,
+    ) -> Result<Vec<PendingSessionImport>, JSONRPCErrorError> {
+        let sessions = params
+            .migration_items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.item_type,
+                    ExternalAgentConfigMigrationItemType::Sessions
+                )
+            })
+            .filter_map(|item| item.details.as_ref())
+            .flat_map(|details| details.sessions.clone())
+            .map(|session| CoreSessionMigration {
+                path: session.path,
+                cwd: session.cwd,
+                title: session.title,
+            })
+            .collect::<Vec<_>>();
+        let detected_sessions = if sessions.is_empty() {
+            Vec::new()
+        } else {
+            self.detect_recent_sessions()?
+        };
+        prepare_pending_session_imports(&self.codex_home, sessions, detected_sessions).map_err(
+            |err| match err {
+                PrepareSessionImportsError::SessionNotDetected(_) => {
+                    invalid_params(err.to_string())
+                }
+            },
+        )
+    }
+
+    pub(crate) fn record_imported_session(
+        &self,
+        source_path: &std::path::Path,
+        imported_thread_id: ThreadId,
+    ) {
+        if let Err(err) = record_imported_session(&self.codex_home, source_path, imported_thread_id)
+        {
+            tracing::warn!(
+                error = %err,
+                path = %source_path.display(),
+                "external agent session import ledger update failed"
+            );
+        }
     }
 
     pub(crate) async fn import(
@@ -103,6 +218,18 @@ impl ExternalAgentConfigApi {
                             ExternalAgentConfigMigrationItemType::McpServerConfig => {
                                 CoreMigrationItemType::McpServerConfig
                             }
+                            ExternalAgentConfigMigrationItemType::Subagents => {
+                                CoreMigrationItemType::Subagents
+                            }
+                            ExternalAgentConfigMigrationItemType::Hooks => {
+                                CoreMigrationItemType::Hooks
+                            }
+                            ExternalAgentConfigMigrationItemType::Commands => {
+                                CoreMigrationItemType::Commands
+                            }
+                            ExternalAgentConfigMigrationItemType::Sessions => {
+                                CoreMigrationItemType::Sessions
+                            }
                         },
                         description: migration_item.description,
                         cwd: migration_item.cwd,
@@ -117,6 +244,39 @@ impl ExternalAgentConfigApi {
                                             plugin_names: plugin.plugin_names,
                                         }
                                     })
+                                    .collect(),
+                                sessions: details
+                                    .sessions
+                                    .into_iter()
+                                    .map(|session| CoreSessionMigration {
+                                        path: session.path,
+                                        cwd: session.cwd,
+                                        title: session.title,
+                                    })
+                                    .collect(),
+                                mcp_servers: details
+                                    .mcp_servers
+                                    .into_iter()
+                                    .map(|mcp_server| CoreNamedMigration {
+                                        name: mcp_server.name,
+                                    })
+                                    .collect(),
+                                hooks: details
+                                    .hooks
+                                    .into_iter()
+                                    .map(|hook| CoreNamedMigration { name: hook.name })
+                                    .collect(),
+                                subagents: details
+                                    .subagents
+                                    .into_iter()
+                                    .map(|subagent| CoreNamedMigration {
+                                        name: subagent.name,
+                                    })
+                                    .collect(),
+                                commands: details
+                                    .commands
+                                    .into_iter()
+                                    .map(|command| CoreNamedMigration { name: command.name })
                                     .collect(),
                             }
                         }),

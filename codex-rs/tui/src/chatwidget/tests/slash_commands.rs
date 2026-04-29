@@ -51,7 +51,7 @@ async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
 
     assert!(chat.bottom_pane.is_task_running());
     match rx.try_recv() {
-        Ok(AppEvent::CodexOp(Op::Compact)) => {}
+        Ok(AppEvent::CodexOp(AppCommand::Compact)) => {}
         other => panic!("expected compact op to be submitted, got {other:?}"),
     }
 
@@ -103,7 +103,7 @@ async fn queued_slash_compact_dispatches_after_active_turn() {
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, AppEvent::CodexOp(Op::Compact))),
+            .any(|event| matches!(event, AppEvent::CodexOp(AppCommand::Compact))),
         "expected queued /compact to submit compact op; events: {events:?}"
     );
 }
@@ -446,7 +446,7 @@ async fn queued_bare_rename_drains_next_input_after_name_update() {
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::CodexOp(Op::SetThreadName { name }) if name == "Queued rename"
+            AppEvent::CodexOp(AppCommand::SetThreadName { name }) if name == "Queued rename"
         )),
         "expected rename prompt to submit thread name; events: {events:?}"
     );
@@ -500,7 +500,7 @@ async fn queued_inline_rename_does_not_drain_again_before_turn_started() {
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::CodexOp(Op::SetThreadName { name }) if name == "Queued rename"
+            AppEvent::CodexOp(AppCommand::SetThreadName { name }) if name == "Queued rename"
         )),
         "expected queued /rename to submit thread name; events: {events:?}"
     );
@@ -810,7 +810,7 @@ async fn goal_control_slash_commands_emit_goal_events() {
     let cases = [
         ("/goal clear", None),
         ("/goal pause", Some(AppThreadGoalStatus::Paused)),
-        ("/goal unpause", Some(AppThreadGoalStatus::Active)),
+        ("/goal resume", Some(AppThreadGoalStatus::Active)),
     ];
 
     for (command, status) in cases {
@@ -1137,7 +1137,7 @@ async fn slash_rename_prefills_existing_thread_name() {
 
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::CodexOp(Op::SetThreadName { name })) if name == "Current project title"
+        Ok(AppEvent::CodexOp(AppCommand::SetThreadName { name })) if name == "Current project title"
     );
 }
 
@@ -1338,6 +1338,65 @@ async fn ctrl_o_copy_reports_when_no_agent_response_exists() {
     assert!(
         rendered.contains("No agent response to copy"),
         "expected no-output message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn keymap_capture_can_capture_current_copy_shortcut() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let runtime_keymap = crate::keymap::RuntimeKeymap::defaults();
+    chat.open_keymap_capture(
+        "composer".to_string(),
+        "submit".to_string(),
+        crate::app_event::KeymapEditIntent::ReplaceAll,
+        &runtime_keymap,
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+
+    let AppEvent::KeymapCaptured {
+        context,
+        action,
+        key,
+        intent,
+    } = rx.try_recv().expect("captured key event")
+    else {
+        panic!("expected keymap capture event");
+    };
+    assert_eq!(context, "composer");
+    assert_eq!(action, "submit");
+    assert_eq!(key, "ctrl-o");
+    assert_eq!(intent, crate::app_event::KeymapEditIntent::ReplaceAll);
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "copy shortcut should not run while key capture is active"
+    );
+}
+
+#[tokio::test]
+async fn copy_shortcut_can_be_remapped() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut keymap_config = chat.config_ref().tui_keymap.clone();
+    keymap_config.global.copy = Some(codex_config::types::KeybindingsSpec::One(
+        codex_config::types::KeybindingSpec("ctrl-x".to_string()),
+    ));
+    let runtime_keymap =
+        crate::keymap::RuntimeKeymap::from_config(&keymap_config).expect("valid copy remap");
+    chat.apply_keymap_update(keymap_config, &runtime_keymap);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "old copy shortcut should no longer copy"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one info message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("No agent response to copy"),
+        "expected remapped copy shortcut to run, got {rendered:?}"
     );
 }
 
@@ -1997,7 +2056,7 @@ async fn fast_slash_command_updates_and_persists_local_service_tier() {
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::CodexOp(Op::OverrideTurnContext {
+            AppEvent::CodexOp(AppCommand::OverrideTurnContext {
                 service_tier: Some(Some(ServiceTier::Fast)),
                 ..
             })
@@ -2069,7 +2128,7 @@ async fn queued_fast_slash_applies_before_next_queued_message() {
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::CodexOp(Op::OverrideTurnContext {
+            AppEvent::CodexOp(AppCommand::OverrideTurnContext {
                 service_tier: Some(Some(ServiceTier::Fast)),
                 ..
             })
@@ -2108,7 +2167,7 @@ async fn user_turn_sends_standard_override_after_fast_is_turned_off() {
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::CodexOp(Op::OverrideTurnContext {
+            AppEvent::CodexOp(AppCommand::OverrideTurnContext {
                 service_tier: Some(None),
                 ..
             })

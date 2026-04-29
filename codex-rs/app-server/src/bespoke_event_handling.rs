@@ -178,6 +178,7 @@ pub(crate) async fn apply_bespoke_event_handling(
     outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<tokio::sync::Mutex<ThreadState>>,
     thread_watch_manager: ThreadWatchManager,
+    thread_list_state_permit: Arc<tokio::sync::Semaphore>,
     api_version: ApiVersion,
     fallback_model_provider: String,
     codex_home: &Path,
@@ -1874,6 +1875,20 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
 
             if let Some(request_id) = pending {
+                let _thread_list_state_permit = match thread_list_state_permit.acquire().await {
+                    Ok(permit) => permit,
+                    Err(err) => {
+                        outgoing
+                            .send_error(
+                                request_id,
+                                internal_error(format!(
+                                    "failed to acquire thread list state permit: {err}"
+                                )),
+                            )
+                            .await;
+                        return;
+                    }
+                };
                 let Some(rollout_path) = conversation.rollout_path() else {
                     outgoing
                         .send_error(
@@ -3271,6 +3286,7 @@ mod tests {
                 self.outgoing.clone(),
                 self.thread_state.clone(),
                 self.thread_watch_manager.clone(),
+                Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
                 ApiVersion::V2,
                 "test-provider".to_string(),
                 &self.codex_home,
@@ -3575,7 +3591,12 @@ mod tests {
             thread_id: conversation_id,
             thread: conversation,
             ..
-        } = thread_manager.start_thread(config).await?;
+        } = thread_manager
+            .start_thread(
+                config.clone(),
+                codex_core::thread_store_from_config(&config),
+            )
+            .await?;
         let thread_state = new_thread_state();
         let thread_watch_manager = ThreadWatchManager::new();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);

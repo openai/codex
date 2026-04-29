@@ -245,7 +245,7 @@ fn test_create_amazon_bedrock_provider() {
         ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
         ModelProviderInfo {
             name: "Amazon Bedrock".to_string(),
-            base_url: Some("https://bedrock-mantle.us-east-1.api.aws/v1".to_string()),
+            base_url: Some("https://bedrock-mantle.us-east-1.api.aws/openai/v1".to_string()),
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,

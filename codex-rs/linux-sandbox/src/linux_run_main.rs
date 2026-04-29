@@ -10,14 +10,14 @@ use std::path::PathBuf;
 use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
 use crate::bwrap::create_bwrap_command_args;
-use crate::landlock::apply_sandbox_policy_to_current_thread;
+use crate::landlock::apply_permission_profile_to_current_thread;
 use crate::launcher::exec_bwrap;
 use crate::launcher::preferred_bwrap_supports_argv0;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 
 #[derive(Debug, Parser)]
@@ -41,18 +41,13 @@ pub struct LandlockCommand {
     #[arg(long = "command-cwd", hide = true)]
     pub command_cwd: Option<PathBuf>,
 
-    /// Legacy compatibility policy.
-    ///
-    /// Newer callers pass split filesystem/network policies as well so the
-    /// helper can migrate incrementally without breaking older invocations.
-    #[arg(long = "sandbox-policy", hide = true)]
-    pub sandbox_policy: Option<SandboxPolicy>,
-
-    #[arg(long = "file-system-sandbox-policy", hide = true)]
-    pub file_system_sandbox_policy: Option<FileSystemSandboxPolicy>,
-
-    #[arg(long = "network-sandbox-policy", hide = true)]
-    pub network_sandbox_policy: Option<NetworkSandboxPolicy>,
+    /// Canonical runtime permissions for the command.
+    #[arg(
+        long = "permission-profile",
+        hide = true,
+        value_parser = parse_permission_profile
+    )]
+    pub permission_profile: Option<PermissionProfile>,
 
     /// Opt-in: use the legacy Landlock Linux sandbox fallback.
     ///
@@ -102,9 +97,7 @@ pub fn run_main() -> ! {
     let LandlockCommand {
         sandbox_policy_cwd,
         command_cwd,
-        sandbox_policy,
-        file_system_sandbox_policy,
-        network_sandbox_policy,
+        permission_profile,
         use_legacy_landlock,
         apply_seccomp_then_exec,
         allow_network_for_proxy,
@@ -117,17 +110,11 @@ pub fn run_main() -> ! {
         panic!("No command specified to execute.");
     }
     ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec, use_legacy_landlock);
-    let EffectiveSandboxPolicies {
-        sandbox_policy,
+    let EffectivePermissions {
+        permission_profile,
         file_system_sandbox_policy,
         network_sandbox_policy,
-    } = resolve_sandbox_policies(
-        sandbox_policy_cwd.as_path(),
-        sandbox_policy,
-        file_system_sandbox_policy,
-        network_sandbox_policy,
-    )
-    .unwrap_or_else(|err| panic!("{err}"));
+    } = resolve_permission_profile(permission_profile).unwrap_or_else(|err| panic!("{err}"));
     ensure_legacy_landlock_mode_supports_policy(
         use_legacy_landlock,
         &file_system_sandbox_policy,
@@ -147,9 +134,8 @@ pub fn run_main() -> ! {
             }
         }
         let proxy_routing_active = allow_network_for_proxy;
-        if let Err(e) = apply_sandbox_policy_to_current_thread(
-            &sandbox_policy,
-            network_sandbox_policy,
+        if let Err(e) = apply_permission_profile_to_current_thread(
+            &permission_profile,
             &sandbox_policy_cwd,
             /*apply_landlock_fs*/ false,
             allow_network_for_proxy,
@@ -161,9 +147,8 @@ pub fn run_main() -> ! {
     }
 
     if file_system_sandbox_policy.has_full_disk_write_access() && !allow_network_for_proxy {
-        if let Err(e) = apply_sandbox_policy_to_current_thread(
-            &sandbox_policy,
-            network_sandbox_policy,
+        if let Err(e) = apply_permission_profile_to_current_thread(
+            &permission_profile,
             &sandbox_policy_cwd,
             /*apply_landlock_fs*/ false,
             allow_network_for_proxy,
@@ -189,9 +174,7 @@ pub fn run_main() -> ! {
         let inner = build_inner_seccomp_command(InnerSeccompCommandArgs {
             sandbox_policy_cwd: &sandbox_policy_cwd,
             command_cwd: command_cwd.as_deref(),
-            sandbox_policy: &sandbox_policy,
-            file_system_sandbox_policy: &file_system_sandbox_policy,
-            network_sandbox_policy,
+            permission_profile: &permission_profile,
             allow_network_for_proxy,
             proxy_route_spec,
             command,
@@ -208,9 +191,8 @@ pub fn run_main() -> ! {
     }
 
     // Legacy path: Landlock enforcement only, when bwrap sandboxing is not enabled.
-    if let Err(e) = apply_sandbox_policy_to_current_thread(
-        &sandbox_policy,
-        network_sandbox_policy,
+    if let Err(e) = apply_permission_profile_to_current_thread(
+        &permission_profile,
         &sandbox_policy_cwd,
         /*apply_landlock_fs*/ true,
         allow_network_for_proxy,
@@ -222,164 +204,41 @@ pub fn run_main() -> ! {
 }
 
 #[derive(Debug, Clone)]
-struct EffectiveSandboxPolicies {
-    sandbox_policy: SandboxPolicy,
+struct EffectivePermissions {
+    permission_profile: PermissionProfile,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum ResolveSandboxPoliciesError {
-    PartialSplitPolicies,
-    SplitPoliciesRequireDirectRuntimeEnforcement(String),
-    FailedToDeriveLegacyPolicy(String),
-    MismatchedLegacyPolicy {
-        provided: SandboxPolicy,
-        derived: SandboxPolicy,
-    },
+enum ResolvePermissionProfileError {
     MissingConfiguration,
 }
 
-impl fmt::Display for ResolveSandboxPoliciesError {
+impl fmt::Display for ResolvePermissionProfileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::PartialSplitPolicies => {
-                write!(
-                    f,
-                    "file-system and network sandbox policies must be provided together"
-                )
-            }
-            Self::SplitPoliciesRequireDirectRuntimeEnforcement(err) => {
-                write!(
-                    f,
-                    "split sandbox policies require direct runtime enforcement and cannot be paired with legacy sandbox policy: {err}"
-                )
-            }
-            Self::FailedToDeriveLegacyPolicy(err) => {
-                write!(
-                    f,
-                    "failed to derive legacy sandbox policy from split policies: {err}"
-                )
-            }
-            Self::MismatchedLegacyPolicy { provided, derived } => {
-                write!(
-                    f,
-                    "legacy sandbox policy must match split sandbox policies: provided={provided:?}, derived={derived:?}"
-                )
-            }
-            Self::MissingConfiguration => write!(f, "missing sandbox policy configuration"),
+            Self::MissingConfiguration => write!(f, "missing permission profile configuration"),
         }
     }
 }
 
-fn resolve_sandbox_policies(
-    sandbox_policy_cwd: &Path,
-    sandbox_policy: Option<SandboxPolicy>,
-    file_system_sandbox_policy: Option<FileSystemSandboxPolicy>,
-    network_sandbox_policy: Option<NetworkSandboxPolicy>,
-) -> Result<EffectiveSandboxPolicies, ResolveSandboxPoliciesError> {
-    // Accept either a fully legacy policy, a fully split policy pair, or all
-    // three views together. Reject partial split-policy input so the helper
-    // never runs with mismatched filesystem/network state.
-    let split_policies = match (file_system_sandbox_policy, network_sandbox_policy) {
-        (Some(file_system_sandbox_policy), Some(network_sandbox_policy)) => {
-            Some((file_system_sandbox_policy, network_sandbox_policy))
-        }
-        (None, None) => None,
-        _ => return Err(ResolveSandboxPoliciesError::PartialSplitPolicies),
-    };
-
-    match (sandbox_policy, split_policies) {
-        (Some(sandbox_policy), Some((file_system_sandbox_policy, network_sandbox_policy))) => {
-            if file_system_sandbox_policy
-                .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd)
-            {
-                return Ok(EffectiveSandboxPolicies {
-                    sandbox_policy,
-                    file_system_sandbox_policy,
-                    network_sandbox_policy,
-                });
-            }
-            let derived_legacy_policy = file_system_sandbox_policy
-                .to_legacy_sandbox_policy(network_sandbox_policy, sandbox_policy_cwd)
-                .map_err(|err| {
-                    ResolveSandboxPoliciesError::SplitPoliciesRequireDirectRuntimeEnforcement(
-                        err.to_string(),
-                    )
-                })?;
-            if !legacy_sandbox_policies_match_semantics(
-                &sandbox_policy,
-                &derived_legacy_policy,
-                sandbox_policy_cwd,
-            ) {
-                return Err(ResolveSandboxPoliciesError::MismatchedLegacyPolicy {
-                    provided: sandbox_policy,
-                    derived: derived_legacy_policy,
-                });
-            }
-            Ok(EffectiveSandboxPolicies {
-                sandbox_policy,
-                file_system_sandbox_policy,
-                network_sandbox_policy,
-            })
-        }
-        (Some(sandbox_policy), None) => Ok(EffectiveSandboxPolicies {
-            file_system_sandbox_policy: FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                &sandbox_policy,
-                sandbox_policy_cwd,
-            ),
-            network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
-            sandbox_policy,
-        }),
-        (None, Some((file_system_sandbox_policy, network_sandbox_policy))) => {
-            let sandbox_policy = file_system_sandbox_policy
-                .to_legacy_sandbox_policy(network_sandbox_policy, sandbox_policy_cwd)
-                .map_err(|err| {
-                    ResolveSandboxPoliciesError::FailedToDeriveLegacyPolicy(err.to_string())
-                })?;
-            Ok(EffectiveSandboxPolicies {
-                sandbox_policy,
-                file_system_sandbox_policy,
-                network_sandbox_policy,
-            })
-        }
-        (None, None) => Err(ResolveSandboxPoliciesError::MissingConfiguration),
-    }
+fn parse_permission_profile(value: &str) -> std::result::Result<PermissionProfile, String> {
+    serde_json::from_str(value).map_err(|err| format!("invalid permission profile JSON: {err}"))
 }
 
-fn legacy_sandbox_policies_match_semantics(
-    provided: &SandboxPolicy,
-    derived: &SandboxPolicy,
-    sandbox_policy_cwd: &Path,
-) -> bool {
-    NetworkSandboxPolicy::from(provided) == NetworkSandboxPolicy::from(derived)
-        && file_system_sandbox_policies_match_semantics(
-            &FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                provided,
-                sandbox_policy_cwd,
-            ),
-            &FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                derived,
-                sandbox_policy_cwd,
-            ),
-            sandbox_policy_cwd,
-        )
-}
-
-fn file_system_sandbox_policies_match_semantics(
-    provided: &FileSystemSandboxPolicy,
-    derived: &FileSystemSandboxPolicy,
-    sandbox_policy_cwd: &Path,
-) -> bool {
-    provided.has_full_disk_read_access() == derived.has_full_disk_read_access()
-        && provided.has_full_disk_write_access() == derived.has_full_disk_write_access()
-        && provided.include_platform_defaults() == derived.include_platform_defaults()
-        && provided.get_readable_roots_with_cwd(sandbox_policy_cwd)
-            == derived.get_readable_roots_with_cwd(sandbox_policy_cwd)
-        && provided.get_writable_roots_with_cwd(sandbox_policy_cwd)
-            == derived.get_writable_roots_with_cwd(sandbox_policy_cwd)
-        && provided.get_unreadable_roots_with_cwd(sandbox_policy_cwd)
-            == derived.get_unreadable_roots_with_cwd(sandbox_policy_cwd)
+fn resolve_permission_profile(
+    permission_profile: Option<PermissionProfile>,
+) -> Result<EffectivePermissions, ResolvePermissionProfileError> {
+    let permission_profile =
+        permission_profile.ok_or(ResolvePermissionProfileError::MissingConfiguration)?;
+    let (file_system_sandbox_policy, network_sandbox_policy) =
+        permission_profile.to_runtime_permissions();
+    Ok(EffectivePermissions {
+        permission_profile,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+    })
 }
 
 fn ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec: bool, use_legacy_landlock: bool) {
@@ -399,7 +258,7 @@ fn ensure_legacy_landlock_mode_supports_policy(
             .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd)
     {
         panic!(
-            "split sandbox policies requiring direct runtime enforcement are incompatible with --use-legacy-landlock"
+            "permission profiles requiring direct runtime enforcement are incompatible with --use-legacy-landlock"
         );
     }
 }
@@ -656,9 +515,7 @@ fn is_proc_mount_failure(stderr: &str) -> bool {
 struct InnerSeccompCommandArgs<'a> {
     sandbox_policy_cwd: &'a Path,
     command_cwd: Option<&'a Path>,
-    sandbox_policy: &'a SandboxPolicy,
-    file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
+    permission_profile: &'a PermissionProfile,
     allow_network_for_proxy: bool,
     proxy_route_spec: Option<String>,
     command: Vec<String>,
@@ -669,9 +526,7 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
     let InnerSeccompCommandArgs {
         sandbox_policy_cwd,
         command_cwd,
-        sandbox_policy,
-        file_system_sandbox_policy,
-        network_sandbox_policy,
+        permission_profile,
         allow_network_for_proxy,
         proxy_route_spec,
         command,
@@ -680,17 +535,9 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
         Ok(path) => path,
         Err(err) => panic!("failed to resolve current executable path: {err}"),
     };
-    let policy_json = match serde_json::to_string(sandbox_policy) {
+    let permission_profile_json = match serde_json::to_string(permission_profile) {
         Ok(json) => json,
-        Err(err) => panic!("failed to serialize sandbox policy: {err}"),
-    };
-    let file_system_policy_json = match serde_json::to_string(file_system_sandbox_policy) {
-        Ok(json) => json,
-        Err(err) => panic!("failed to serialize filesystem sandbox policy: {err}"),
-    };
-    let network_policy_json = match serde_json::to_string(&network_sandbox_policy) {
-        Ok(json) => json,
-        Err(err) => panic!("failed to serialize network sandbox policy: {err}"),
+        Err(err) => panic!("failed to serialize permission profile: {err}"),
     };
 
     let mut inner = vec![
@@ -703,12 +550,8 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
         inner.push(command_cwd.to_string_lossy().to_string());
     }
     inner.extend([
-        "--sandbox-policy".to_string(),
-        policy_json,
-        "--file-system-sandbox-policy".to_string(),
-        file_system_policy_json,
-        "--network-sandbox-policy".to_string(),
-        network_policy_json,
+        "--permission-profile".to_string(),
+        permission_profile_json,
         "--apply-seccomp-then-exec".to_string(),
     ]);
     if allow_network_for_proxy {
@@ -746,5 +589,6 @@ fn exec_or_panic(command: Vec<String>) -> ! {
     panic!("Failed to execvp {}: {err}", command[0].as_str());
 }
 
+#[cfg(test)]
 #[path = "linux_run_main_tests.rs"]
 mod tests;

@@ -5,6 +5,7 @@ use codex_core::NewThread;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ThreadManager;
+use codex_core::thread_store_from_config;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -1090,13 +1091,17 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
 
-    let auth_manager =
-        match CodexAuth::from_auth_storage(codex_home.path(), AuthCredentialsStoreMode::File).await
-        {
-            Ok(Some(auth)) => codex_core::test_support::auth_manager_from_auth(auth),
-            Ok(None) => panic!("No CodexAuth found in codex_home"),
-            Err(e) => panic!("Failed to load CodexAuth: {e}"),
-        };
+    let auth_manager = match CodexAuth::from_auth_storage(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    {
+        Ok(Some(auth)) => codex_core::test_support::auth_manager_from_auth(auth),
+        Ok(None) => panic!("No CodexAuth found in codex_home"),
+        Err(e) => panic!("Failed to load CodexAuth: {e}"),
+    };
     let thread_manager = ThreadManager::new(
         &config,
         auth_manager,
@@ -1110,7 +1115,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         /*analytics_events_client*/ None,
     );
     let NewThread { thread: codex, .. } = thread_manager
-        .start_thread(config)
+        .start_thread(config.clone(), thread_store_from_config(&config))
         .await
         .expect("create new conversation");
 

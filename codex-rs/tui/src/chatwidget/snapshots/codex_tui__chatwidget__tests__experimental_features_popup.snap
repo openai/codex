@@ -1,11 +1,13 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: popup
 ---
   Experimental features
   Toggle experimental features. Changes are saved to config.toml.
 
-› [ ] Ghost snapshots  Capture undo snapshots each turn.
+› [ ] JavaScript REPL  Enable a persistent Node-backed JavaScript REPL for
+                       interactive website debugging and other inline
+                       JavaScript execution capabilities.
   [x] Shell tool       Allow the model to run shell commands.
 
   Press space to select or enter to save for next conversation

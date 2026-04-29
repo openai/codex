@@ -46,6 +46,7 @@ pub enum KnownPlan {
     EnterpriseCbpUsageBased,
     #[serde(alias = "hc")]
     Enterprise,
+    #[serde(alias = "education")]
     Edu,
 }
 
@@ -117,4 +118,24 @@ pub enum RefreshTokenFailedReason {
     Exhausted,
     Revoked,
     Other,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KnownPlan;
+    use super::PlanType;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn plan_type_deserializes_raw_aliases() {
+        assert_eq!(
+            serde_json::from_str::<PlanType>("\"hc\"").expect("hc should deserialize"),
+            PlanType::Known(KnownPlan::Enterprise)
+        );
+        assert_eq!(
+            serde_json::from_str::<PlanType>("\"education\"")
+                .expect("education should deserialize"),
+            PlanType::Known(KnownPlan::Edu)
+        );
+    }
 }

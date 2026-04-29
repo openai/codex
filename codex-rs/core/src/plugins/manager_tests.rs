@@ -18,6 +18,7 @@ use codex_config::McpServerConfig;
 use codex_config::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core_plugins::installed_marketplaces::marketplace_install_root;
+use codex_core_plugins::loader::load_plugins_from_layer_stack;
 use codex_core_plugins::loader::refresh_non_curated_plugin_cache;
 use codex_core_plugins::loader::refresh_non_curated_plugin_cache_force_reinstall;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
@@ -221,6 +222,8 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
                 },
             )]),
             apps: vec![AppConnectorId("connector_example".to_string())],
+            hook_sources: Vec::new(),
+            hook_load_warnings: Vec::new(),
             error: None,
         }]
     );
@@ -312,6 +315,67 @@ approval_mode = "approve"
             approval_mode: Some(AppToolApproval::Approve),
         })
     );
+}
+
+#[tokio::test]
+async fn remote_installed_cache_adds_plugin_skill_roots_without_marketplace_config() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_base = codex_home
+        .path()
+        .join("plugins/cache/chatgpt-global/linear");
+    write_plugin(&plugin_base, "local", "linear");
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = true
+"#,
+    );
+
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    manager.write_remote_installed_plugins_cache(vec![
+        codex_core_plugins::remote::RemoteInstalledPlugin {
+            marketplace_name: "chatgpt-global".to_string(),
+            id: "plugins~Plugin_linear".to_string(),
+            name: "linear".to_string(),
+            enabled: true,
+        },
+    ]);
+
+    let outcome = manager.plugins_for_config(&config).await;
+    assert_eq!(
+        outcome.effective_skill_roots(),
+        vec![AbsolutePathBuf::try_from(plugin_base.join("local/skills")).unwrap()]
+    );
+    assert_eq!(outcome.plugins().len(), 1);
+    assert_eq!(outcome.plugins()[0].config_name, "linear@chatgpt-global");
+}
+
+#[tokio::test]
+async fn remote_installed_cache_ignores_plugins_missing_local_cache() {
+    let codex_home = TempDir::new().unwrap();
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = true
+"#,
+    );
+
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    manager.write_remote_installed_plugins_cache(vec![
+        codex_core_plugins::remote::RemoteInstalledPlugin {
+            marketplace_name: "chatgpt-global".to_string(),
+            id: "plugins~Plugin_linear".to_string(),
+            name: "linear".to_string(),
+            enabled: true,
+        },
+    ]);
+
+    let outcome = manager.plugins_for_config(&config).await;
+    assert_eq!(outcome, PluginLoadOutcome::default());
 }
 
 #[tokio::test]
@@ -789,6 +853,8 @@ async fn load_plugins_preserves_disabled_plugins_without_effective_contributions
             has_enabled_skills: false,
             mcp_servers: HashMap::new(),
             apps: Vec::new(),
+            hook_sources: Vec::new(),
+            hook_load_warnings: Vec::new(),
             error: None,
         }]
     );
@@ -906,6 +972,8 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         has_enabled_skills: false,
         mcp_servers: HashMap::new(),
         apps: Vec::new(),
+        hook_sources: Vec::new(),
+        hook_load_warnings: Vec::new(),
         error: None,
     };
     let summary = |config_name: &str, display_name: &str| PluginCapabilitySummary {
@@ -3364,6 +3432,7 @@ async fn load_plugins_ignores_project_config_files() {
 
     let outcome = load_plugins_from_layer_stack(
         &stack,
+        std::collections::HashMap::new(),
         &PluginStore::new(codex_home.path().to_path_buf()),
         Some(Product::Codex),
     )

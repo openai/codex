@@ -15,14 +15,12 @@
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
-use crossterm::event::KeyModifiers;
 use strum::IntoEnumIterator;
 
 use super::ChatWidget;
 use crate::app_event::AppEvent;
+use crate::key_hint::KeyBindingListExt;
 
 /// Direction requested by a reasoning-level shortcut.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32,18 +30,6 @@ pub(super) enum ReasoningShortcutDirection {
 }
 
 impl ReasoningShortcutDirection {
-    fn from_key_event(key_event: KeyEvent) -> Option<Self> {
-        if key_event.kind != KeyEventKind::Press || key_event.modifiers != KeyModifiers::ALT {
-            return None;
-        }
-
-        match key_event.code {
-            KeyCode::Char(',') => Some(Self::Lower),
-            KeyCode::Char('.') => Some(Self::Raise),
-            _ => None,
-        }
-    }
-
     fn bound_message(self, effort: ReasoningEffortConfig) -> String {
         let label = ChatWidget::reasoning_effort_label(effort).to_lowercase();
         match self {
@@ -66,7 +52,19 @@ impl ChatWidget {
     /// persisting them. In Plan mode, shortcuts apply only to the active
     /// Plan-mode override and skip the global-vs-Plan scope prompt.
     pub(super) fn handle_reasoning_shortcut(&mut self, key_event: KeyEvent) -> bool {
-        let Some(direction) = ReasoningShortcutDirection::from_key_event(key_event) else {
+        let direction = if self
+            .chat_keymap
+            .decrease_reasoning_effort
+            .is_pressed(key_event)
+        {
+            ReasoningShortcutDirection::Lower
+        } else if self
+            .chat_keymap
+            .increase_reasoning_effort
+            .is_pressed(key_event)
+        {
+            ReasoningShortcutDirection::Raise
+        } else {
             return false;
         };
 

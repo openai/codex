@@ -367,6 +367,8 @@ async fn run_inserter(
 ) {
     let mut buffer = Vec::with_capacity(config.batch_size);
     let mut ticker = tokio::time::interval(config.flush_interval);
+    // Consume the immediate startup tick so entries flush after the interval.
+    ticker.tick().await;
     loop {
         tokio::select! {
             maybe_command = receiver.recv() => {
@@ -645,7 +647,6 @@ mod tests {
                 flush_interval: std::time::Duration::from_secs(60),
             },
         );
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         let guard = tracing_subscriber::registry()
             .with(

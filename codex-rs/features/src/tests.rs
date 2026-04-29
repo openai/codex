@@ -55,6 +55,12 @@ fn use_linux_sandbox_bwrap_is_removed_and_disabled_by_default() {
 }
 
 #[test]
+fn undo_is_removed_and_disabled_by_default() {
+    assert_eq!(Feature::GhostCommit.stage(), Stage::Removed);
+    assert_eq!(Feature::GhostCommit.default_enabled(), false);
+}
+
+#[test]
 fn image_detail_original_is_removed_and_disabled_by_default() {
     assert_eq!(Feature::ImageDetailOriginal.stage(), Stage::Removed);
     assert_eq!(Feature::ImageDetailOriginal.default_enabled(), false);
@@ -350,6 +356,22 @@ fn from_sources_ignores_removed_image_detail_original_feature_key() {
 }
 
 #[test]
+fn from_sources_ignores_removed_undo_feature_key() {
+    let features_toml = FeaturesToml::from(BTreeMap::from([("undo".to_string(), true)]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+}
+
+#[test]
 fn from_sources_ignores_removed_js_repl_feature_keys() {
     let features_toml = FeaturesToml::from(BTreeMap::from([
         ("js_repl".to_string(), true),
@@ -391,8 +413,11 @@ fn multi_agent_v2_feature_config_deserializes_table() {
 [multi_agent_v2]
 enabled = true
 max_concurrent_threads_per_session = 4
+min_wait_timeout_ms = 2500
 usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
+root_agent_usage_hint_text = "Root guidance."
+subagent_usage_hint_text = "Subagent guidance."
 hide_spawn_agent_metadata = true
 "#,
     )
@@ -407,8 +432,11 @@ hide_spawn_agent_metadata = true
         Some(crate::FeatureToml::Config(crate::MultiAgentV2ConfigToml {
             enabled: Some(true),
             max_concurrent_threads_per_session: Some(4),
+            min_wait_timeout_ms: Some(2500),
             usage_hint_enabled: Some(false),
             usage_hint_text: Some("Custom delegation guidance.".to_string()),
+            root_agent_usage_hint_text: Some("Root guidance.".to_string()),
+            subagent_usage_hint_text: Some("Subagent guidance.".to_string()),
             hide_spawn_agent_metadata: Some(true),
         }))
     );
@@ -439,8 +467,11 @@ usage_hint_enabled = false
         Some(crate::FeatureToml::Config(crate::MultiAgentV2ConfigToml {
             enabled: None,
             max_concurrent_threads_per_session: None,
+            min_wait_timeout_ms: None,
             usage_hint_enabled: Some(false),
             usage_hint_text: None,
+            root_agent_usage_hint_text: None,
+            subagent_usage_hint_text: None,
             hide_spawn_agent_metadata: None,
         }))
     );

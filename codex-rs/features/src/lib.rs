@@ -71,7 +71,8 @@ impl Stage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Feature {
     // Stable.
-    /// Create a ghost commit at each turn.
+    /// Removed compatibility flag retained as a no-op so old configs can
+    /// still parse `undo`.
     GhostCommit,
     /// Enable the default shell tool.
     ShellTool,
@@ -146,6 +147,8 @@ pub enum Feature {
     SpawnCsv,
     /// Enable apps.
     Apps,
+    /// Enable MCP apps.
+    EnableMcpApps,
     /// Enable the tool_search tool for apps.
     ToolSearch,
     /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
@@ -156,6 +159,8 @@ pub enum Feature {
     ToolSuggest,
     /// Enable plugins.
     Plugins,
+    /// Enable plugin-bundled lifecycle hooks.
+    PluginHooks,
     /// Allow the in-app browser pane in desktop apps.
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
@@ -390,6 +395,9 @@ impl Features {
                 "tui_app_server" => {
                     continue;
                 }
+                "undo" => {
+                    continue;
+                }
                 "js_repl" => {
                     continue;
                 }
@@ -618,7 +626,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GhostCommit,
         key: "undo",
-        stage: Stage::Stable,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -835,6 +843,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::EnableMcpApps,
+        key: "enable_mcp_apps",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ToolSearch,
         key: "tool_search",
         stage: Stage::Stable,
@@ -863,6 +877,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "plugins",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::PluginHooks,
+        key: "plugin_hooks",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::InAppBrowser,

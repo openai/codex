@@ -263,14 +263,18 @@ pub fn build_tool_registry_plan(
     let deferred_dynamic_tools = params
         .dynamic_tools
         .iter()
-        .filter(|tool| tool.defer_loading)
+        .filter(|tool| tool.defer_loading && (config.namespace_tools || tool.namespace.is_none()))
         .collect::<Vec<_>>();
+    let deferred_mcp_tools_for_search = if config.namespace_tools {
+        params.deferred_mcp_tools
+    } else {
+        None
+    };
 
     if config.search_tool
-        && (params.deferred_mcp_tools.is_some() || !deferred_dynamic_tools.is_empty())
+        && (deferred_mcp_tools_for_search.is_some() || !deferred_dynamic_tools.is_empty())
     {
-        let mut search_source_infos = params
-            .deferred_mcp_tools
+        let mut search_source_infos = deferred_mcp_tools_for_search
             .map(|deferred_mcp_tools| {
                 collect_tool_search_source_infos(deferred_mcp_tools.iter().map(|tool| {
                     ToolSearchSource {
@@ -296,7 +300,7 @@ pub fn build_tool_registry_plan(
         );
         plan.register_handler(TOOL_SEARCH_TOOL_NAME, ToolHandlerKind::ToolSearch);
 
-        if let Some(deferred_mcp_tools) = params.deferred_mcp_tools {
+        if let Some(deferred_mcp_tools) = deferred_mcp_tools_for_search {
             for tool in deferred_mcp_tools {
                 plan.register_handler(tool.name.clone(), ToolHandlerKind::Mcp);
             }
@@ -587,6 +591,11 @@ pub fn build_tool_registry_plan(
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
+    }
+
+    if !config.namespace_tools {
+        plan.specs
+            .retain(|configured_tool| !matches!(&configured_tool.spec, ToolSpec::Namespace(_)));
     }
 
     plan

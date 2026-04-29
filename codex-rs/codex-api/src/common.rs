@@ -287,6 +287,8 @@ pub fn create_text_param_for_request(
 
 pub struct ResponseStream {
     pub rx_event: mpsc::Receiver<Result<ResponseEvent, ApiError>>,
+    /// Server-assigned `x-request-id` response header, when present.
+    pub upstream_request_id: Option<String>,
 }
 
 impl Stream for ResponseStream {

@@ -5,6 +5,8 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
 use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use super::TurnTimingState;
 use super::response_item_records_turn_ttft;
@@ -73,6 +75,27 @@ async fn turn_timing_state_records_ttfm_independently_of_ttft() {
             }))
             .await,
         None
+    );
+}
+
+#[tokio::test]
+async fn turn_timing_state_records_turn_started_epoch_millis() {
+    let state = TurnTimingState::default();
+    let before = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after unix epoch")
+        .as_millis();
+
+    let started_at_unix_ms = state.mark_turn_started(Instant::now()).await;
+
+    let after = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after unix epoch")
+        .as_millis();
+    assert!(u128::try_from(started_at_unix_ms).is_ok_and(|ms| before <= ms && ms <= after));
+    assert_eq!(
+        state.started_at_unix_secs().await,
+        Some(started_at_unix_ms / 1000)
     );
 }
 

@@ -61,6 +61,17 @@ pub(crate) fn pre_main_hardening_linux() {
     remove_env_vars_with_prefix(b"LD_");
 }
 
+/// Mark the current Linux process non-dumpable so same-user processes cannot attach with ptrace.
+#[cfg(target_os = "linux")]
+pub fn disable_process_dumping() -> std::io::Result<()> {
+    let ret_code = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+    if ret_code == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
 #[cfg(any(target_os = "freebsd", target_os = "openbsd"))]
 pub(crate) fn pre_main_hardening_bsd() {
     // FreeBSD/OpenBSD: set RLIMIT_CORE to 0 and clear LD_* env vars

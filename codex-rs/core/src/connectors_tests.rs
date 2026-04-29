@@ -1112,6 +1112,35 @@ discoverables = [
     );
 }
 
+#[tokio::test]
+async fn tool_suggest_connector_ids_exclude_disabled_tool_suggestions() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[tool_suggest]
+discoverables = [
+  { type = "connector", id = "connector_calendar" },
+  { type = "connector", id = "connector_gmail" }
+]
+disabled_tools = [
+  { type = "connector", id = "connector_calendar" }
+]
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+
+    assert_eq!(
+        tool_suggest_connector_ids(&config).await,
+        HashSet::from(["connector_gmail".to_string()])
+    );
+}
+
 #[test]
 fn filter_tool_suggest_discoverable_connectors_keeps_only_plugin_backed_uninstalled_apps() {
     let filtered = filter_tool_suggest_discoverable_connectors(

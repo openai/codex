@@ -120,11 +120,12 @@ Primary inputs (always read these, if exists):
 Under `{{ memory_root }}/`:
 
 - `raw_memories.md`
-  - mechanical merge of `raw_memories` from Phase 1; ordered latest-first.
-  - Use this recency ordering as a major heuristic when choosing what to promote, expand, or deprecate.
-  - Default scan order: top-to-bottom. In INCREMENTAL UPDATE mode, bias attention toward the newest
-    portion first, then expand to older entries with enough coverage to avoid missing important older
-    context.
+  - mechanical merge of selected `raw_memories` from Phase 1; ordered by stable ascending thread id.
+  - Do not treat file order as recency or importance; use `updated_at`, workspace diff context,
+    and rollout content when choosing what to promote, expand, or deprecate.
+  - Default scan order: top-to-bottom. In INCREMENTAL UPDATE mode, use the workspace diff to find
+    changed entries first, then expand to unchanged entries with enough coverage to avoid missing
+    important older context.
   - source of rollout-level metadata needed for MEMORY.md `### rollout_summary_files`
     annotations;
     you should be able to find `cwd`, `rollout_path`, and `updated_at` there.
@@ -154,7 +155,7 @@ Incremental update and forgetting mechanism:
 
 - Use the git-style diff in `{{ phase2_workspace_diff_file }}` to identify relevant changed
   sections and deleted inputs.
-- Every changes in `{{ phase2_workspace_diff_file }}` are authoritative and must propagated and consolidated. If a 
+- Every changes in `{{ phase2_workspace_diff_file }}` are authoritative and must propagated and consolidated. If a
   changes appears to be randomly placed in the files, it is probably a user change and you shouldn't just drop it.
   Make sure to add it to the overall memories consolidation
 - Do not open raw sessions / original rollout transcripts.

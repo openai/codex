@@ -13,6 +13,7 @@ use crate::model::InferenceCall;
 use crate::model::InferenceCallId;
 use crate::payload::RawPayloadRef;
 use crate::raw_event::RawEventSeq;
+use crate::raw_event::RawTraceEventPayload;
 
 /// Raw inference-start fields after dispatch has stripped the common event envelope.
 ///
@@ -91,6 +92,7 @@ impl TraceReducer {
                 },
                 model: started.model,
                 provider_name: started.provider_name,
+                response_id: None,
                 upstream_request_id: None,
                 request_item_ids,
                 response_item_ids: Vec::new(),
@@ -103,16 +105,83 @@ impl TraceReducer {
         Ok(())
     }
 
+    /// Closes any inference streams that are still live when the owning turn ends.
+    ///
+    /// Normal completion events close the active inference before the turn ends.
+    /// If a call is still `Running`, Codex stopped observing that provider stream
+    /// earlier and the reduced graph should not present it as live.
+    pub(super) fn close_running_inference_calls_for_turn_end(
+        &mut self,
+        seq: RawEventSeq,
+        wall_time_unix_ms: i64,
+        codex_turn_id: &str,
+        turn_status: &ExecutionStatus,
+    ) {
+        let inference_status = match turn_status {
+            ExecutionStatus::Running => return,
+            ExecutionStatus::Completed | ExecutionStatus::Cancelled => ExecutionStatus::Cancelled,
+            ExecutionStatus::Failed => ExecutionStatus::Failed,
+            ExecutionStatus::Aborted => ExecutionStatus::Aborted,
+        };
+        for inference in self.rollout.inference_calls.values_mut() {
+            if inference.codex_turn_id == codex_turn_id
+                && inference.execution.status == ExecutionStatus::Running
+            {
+                inference.execution.ended_at_unix_ms = Some(wall_time_unix_ms);
+                inference.execution.ended_seq = Some(seq);
+                inference.execution.status = inference_status.clone();
+            }
+        }
+    }
+
     /// Completes an inference call and, when present, reduces response output items.
     pub(super) fn complete_inference_call(
         &mut self,
         seq: RawEventSeq,
         wall_time_unix_ms: i64,
-        inference_call_id: InferenceCallId,
-        status: ExecutionStatus,
-        response_id: Option<String>,
-        response_payload: Option<RawPayloadRef>,
+        payload: RawTraceEventPayload,
     ) -> Result<()> {
+        let (inference_call_id, status, response_id, upstream_request_id, response_payload) =
+            match payload {
+                RawTraceEventPayload::InferenceCompleted {
+                    inference_call_id,
+                    response_id,
+                    upstream_request_id,
+                    response_payload,
+                } => (
+                    inference_call_id,
+                    ExecutionStatus::Completed,
+                    response_id,
+                    upstream_request_id,
+                    Some(response_payload),
+                ),
+                RawTraceEventPayload::InferenceFailed {
+                    inference_call_id,
+                    upstream_request_id,
+                    partial_response_payload,
+                    ..
+                } => (
+                    inference_call_id,
+                    ExecutionStatus::Failed,
+                    None,
+                    upstream_request_id,
+                    partial_response_payload,
+                ),
+                RawTraceEventPayload::InferenceCancelled {
+                    inference_call_id,
+                    upstream_request_id,
+                    partial_response_payload,
+                    ..
+                } => (
+                    inference_call_id,
+                    ExecutionStatus::Cancelled,
+                    None,
+                    upstream_request_id,
+                    partial_response_payload,
+                ),
+                _ => bail!("complete_inference_call received a non-terminal inference event"),
+            };
+
         if !self
             .rollout
             .inference_calls
@@ -127,17 +196,36 @@ impl TraceReducer {
                 self.reduce_inference_response(wall_time_unix_ms, &inference_call_id, payload)
             })
             .transpose()?;
-        let Some(inference) = self.rollout.inference_calls.get_mut(&inference_call_id) else {
-            bail!("inference call {inference_call_id} disappeared during response reduction");
-        };
-        inference.execution.ended_at_unix_ms = Some(wall_time_unix_ms);
-        inference.execution.ended_seq = Some(seq);
-        inference.execution.status = status;
-        inference.upstream_request_id = response_id;
-        inference.raw_response_payload_id = response_payload.map(|payload| payload.raw_payload_id);
-        if let Some(response_item_ids) = response_item_ids {
-            inference.response_item_ids = response_item_ids;
+        {
+            let Some(inference) = self.rollout.inference_calls.get_mut(&inference_call_id) else {
+                bail!("inference call {inference_call_id} disappeared during response reduction");
+            };
+            inference.response_id = response_id;
+            // Turn-end cleanup can close a stream before the async mapper observes
+            // cancellation. Preserve that terminal status while still retaining any
+            // late partial response evidence from the mapper.
+            if inference.execution.status == ExecutionStatus::Running {
+                inference.execution.ended_at_unix_ms = Some(wall_time_unix_ms);
+                inference.execution.ended_seq = Some(seq);
+                inference.execution.status = status;
+            }
+            // Turn-end cleanup can mark an inference terminal before the stream
+            // mapper records its late partial payload. Keep the server request
+            // id from that late payload even when the status is already closed.
+            if let Some(upstream_request_id) = upstream_request_id {
+                inference.upstream_request_id = Some(upstream_request_id);
+            }
+            if let Some(response_payload) = response_payload {
+                inference.raw_response_payload_id = Some(response_payload.raw_payload_id);
+            }
+            if let Some(response_item_ids) = response_item_ids {
+                inference.response_item_ids = response_item_ids;
+            }
         }
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "inference_tests.rs"]
+mod tests;

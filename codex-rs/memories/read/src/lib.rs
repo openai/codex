@@ -5,6 +5,7 @@
 //! not depend on the memory write pipeline.
 
 pub mod citations;
+mod metrics;
 mod prompts;
 pub mod usage;
 

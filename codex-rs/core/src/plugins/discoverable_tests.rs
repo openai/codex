@@ -231,6 +231,31 @@ async fn list_tool_suggest_discoverable_plugins_omits_installed_curated_plugins(
 }
 
 #[tokio::test]
+async fn list_tool_suggest_discoverable_plugins_omits_disabled_tool_suggestions() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let curated_root = curated_plugins_repo_path(codex_home.path());
+    write_openai_curated_marketplace(&curated_root, &["slack"]);
+    write_file(
+        &codex_home.path().join(crate::config::CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[tool_suggest]
+disabled_tools = [
+  { type = "plugin", id = "slack@openai-curated" }
+]
+"#,
+    );
+
+    let config = load_plugins_config(codex_home.path()).await;
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .await
+        .unwrap();
+
+    assert_eq!(discoverable_plugins, Vec::<DiscoverablePluginInfo>::new());
+}
+
+#[tokio::test]
 async fn list_tool_suggest_discoverable_plugins_includes_configured_plugin_ids() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());
