@@ -6,7 +6,7 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use codex_otel::OtelMetricsSettings;
+use codex_otel::StatsigMetricsSettings;
 use codex_windows_sandbox::LOG_FILE_NAME;
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
@@ -91,7 +91,7 @@ struct Payload {
     #[serde(default)]
     allow_local_binding: bool,
     #[serde(default)]
-    otel: Option<OtelMetricsSettings>,
+    otel: Option<StatsigMetricsSettings>,
     real_user: String,
     #[serde(default)]
     mode: SetupMode,
@@ -914,8 +914,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
 mod tests {
     use super::Payload;
     use super::SETUP_VERSION;
-    use codex_otel::OtelExporter;
-    use codex_otel::OtelMetricsSettings;
+    use codex_otel::StatsigMetricsSettings;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
@@ -945,15 +944,13 @@ mod tests {
         let mut payload = payload_json();
         payload["otel"] = json!({
             "environment": "prod",
-            "metrics_exporter": "None",
         });
         let payload: Payload = serde_json::from_value(payload).expect("payload");
 
         assert_eq!(
             payload.otel,
-            Some(OtelMetricsSettings {
+            Some(StatsigMetricsSettings {
                 environment: "prod".to_string(),
-                metrics_exporter: OtelExporter::None,
             })
         );
     }

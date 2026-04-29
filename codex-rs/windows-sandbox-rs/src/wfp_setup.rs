@@ -2,9 +2,9 @@ use crate::install_wfp_filters_for_account;
 use crate::setup_error::sanitize_setup_metric_tag_value;
 use anyhow::Result;
 use codex_otel::OtelExporter;
-use codex_otel::OtelMetricsSettings;
 use codex_otel::OtelProvider;
 use codex_otel::OtelSettings;
+use codex_otel::StatsigMetricsSettings;
 use std::path::Path;
 
 const WFP_SETUP_SERVICE_NAME: &str = "codex-windows-sandbox-setup";
@@ -36,14 +36,15 @@ fn panic_payload_to_string(panic_payload: Box<dyn std::any::Any + Send>) -> Stri
 
 fn build_wfp_metrics_provider(
     codex_home: &Path,
-    otel: Option<&OtelMetricsSettings>,
+    otel: Option<&StatsigMetricsSettings>,
 ) -> Result<Option<OtelProvider>> {
     let Some(otel) = otel else {
         return Ok(None);
     };
     // The setup helper cannot call codex-core's OTEL builder because core
-    // depends on this crate, so the parent process passes the already-resolved
-    // metrics settings in the elevation payload.
+    // depends on this crate, so the parent process passes only the resolved
+    // Statsig environment in the elevation payload. Other exporters are
+    // intentionally omitted from this helper path.
     OtelProvider::from(&OtelSettings {
         environment: otel.environment.clone(),
         service_name: WFP_SETUP_SERVICE_NAME.to_string(),
@@ -51,7 +52,7 @@ fn build_wfp_metrics_provider(
         codex_home: codex_home.to_path_buf(),
         exporter: OtelExporter::None,
         trace_exporter: OtelExporter::None,
-        metrics_exporter: otel.metrics_exporter.clone(),
+        metrics_exporter: OtelExporter::Statsig,
         runtime_metrics: false,
     })
     .map_err(|err| anyhow::anyhow!("failed to initialize WFP setup metrics provider: {err}"))
@@ -59,7 +60,7 @@ fn build_wfp_metrics_provider(
 
 fn emit_wfp_setup_metric(
     codex_home: &Path,
-    otel: Option<&OtelMetricsSettings>,
+    otel: Option<&StatsigMetricsSettings>,
     metric: &WfpSetupMetric,
 ) -> Result<()> {
     let Some(provider) = build_wfp_metrics_provider(codex_home, otel)? else {
@@ -95,7 +96,7 @@ fn emit_wfp_setup_metric(
 
 fn emit_wfp_setup_metric_safely<F>(
     codex_home: &Path,
-    otel: Option<&OtelMetricsSettings>,
+    otel: Option<&StatsigMetricsSettings>,
     offline_username: &str,
     metric: &WfpSetupMetric,
     log: &mut F,
@@ -122,7 +123,7 @@ fn emit_wfp_setup_metric_safely<F>(
 pub fn install_wfp_filters<F>(
     codex_home: &Path,
     offline_username: &str,
-    otel: Option<&OtelMetricsSettings>,
+    otel: Option<&StatsigMetricsSettings>,
     mut log: F,
 ) where
     F: FnMut(&str),

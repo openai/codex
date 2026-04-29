@@ -422,7 +422,7 @@ struct ElevationPayload {
     proxy_ports: Vec<u16>,
     #[serde(default)]
     allow_local_binding: bool,
-    otel: Option<codex_otel::OtelMetricsSettings>,
+    otel: Option<codex_otel::StatsigMetricsSettings>,
     real_user: String,
     #[serde(default)]
     refresh_only: bool,
@@ -736,7 +736,7 @@ pub fn run_elevated_setup(
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
-        otel: codex_otel::global_metrics_settings(),
+        otel: codex_otel::global_statsig_metrics_settings(),
         refresh_only: false,
     };
     let needs_elevation = !is_elevated().map_err(|err| {

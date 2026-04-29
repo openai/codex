@@ -13,9 +13,9 @@ use strum_macros::Display;
 
 pub use crate::config::OtelExporter;
 pub use crate::config::OtelHttpProtocol;
-pub use crate::config::OtelMetricsSettings;
 pub use crate::config::OtelSettings;
 pub use crate::config::OtelTlsConfig;
+pub use crate::config::StatsigMetricsSettings;
 pub use crate::events::session_telemetry::AuthEnvTelemetryMetadata;
 pub use crate::events::session_telemetry::SessionTelemetry;
 pub use crate::events::session_telemetry::SessionTelemetryMetadata;
@@ -67,8 +67,8 @@ pub fn start_global_timer(name: &str, tags: &[(&str, &str)]) -> MetricsResult<Ti
     metrics.start_timer(name, tags)
 }
 
-/// Returns the resolved metrics settings for the globally installed OTEL
-/// metrics client, if metrics export is enabled.
-pub fn global_metrics_settings() -> Option<OtelMetricsSettings> {
-    crate::metrics::global_settings()
+/// Returns the resolved Statsig metrics settings for the globally installed
+/// OTEL metrics client, if the active metrics exporter is Statsig.
+pub fn global_statsig_metrics_settings() -> Option<StatsigMetricsSettings> {
+    crate::metrics::global_statsig_settings()
 }

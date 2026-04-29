@@ -46,15 +46,15 @@ pub struct OtelSettings {
     pub runtime_metrics: bool,
 }
 
-/// Resolved metrics settings that another process can use to recreate the
-/// active metrics exporter configuration.
+/// Resolved Statsig metrics settings that another process can use to recreate
+/// the built-in metrics exporter configuration without receiving generic
+/// exporter credentials in-process.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OtelMetricsSettings {
+pub struct StatsigMetricsSettings {
     pub environment: String,
-    pub metrics_exporter: OtelExporter,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub enum OtelHttpProtocol {
     /// HTTP protocol with binary protobuf
     Binary,
@@ -62,14 +62,14 @@ pub enum OtelHttpProtocol {
     Json,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default)]
 pub struct OtelTlsConfig {
     pub ca_certificate: Option<AbsolutePathBuf>,
     pub client_certificate: Option<AbsolutePathBuf>,
     pub client_private_key: Option<AbsolutePathBuf>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub enum OtelExporter {
     None,
     /// Statsig metrics ingestion exporter using Codex-internal defaults.
@@ -92,10 +92,7 @@ pub enum OtelExporter {
 #[cfg(test)]
 mod tests {
     use super::OtelExporter;
-    use super::OtelMetricsSettings;
     use super::resolve_exporter;
-    use pretty_assertions::assert_eq;
-    use std::collections::HashMap;
 
     #[test]
     fn statsig_default_metrics_exporter_is_disabled_in_debug_builds() {
@@ -103,24 +100,5 @@ mod tests {
             resolve_exporter(&OtelExporter::Statsig),
             OtelExporter::None
         ));
-    }
-
-    #[test]
-    fn otel_metrics_settings_serde_round_trip() {
-        let settings = OtelMetricsSettings {
-            environment: "prod".to_string(),
-            metrics_exporter: OtelExporter::OtlpHttp {
-                endpoint: "https://example.test/v1/metrics".to_string(),
-                headers: HashMap::from([("authorization".to_string(), "Bearer token".to_string())]),
-                protocol: super::OtelHttpProtocol::Json,
-                tls: None,
-            },
-        };
-
-        let serialized = serde_json::to_string(&settings).expect("serialize settings");
-        let deserialized: OtelMetricsSettings =
-            serde_json::from_str(&serialized).expect("deserialize settings");
-
-        assert_eq!(deserialized, settings);
     }
 }
