@@ -111,7 +111,6 @@ pub use tool_discovery::DiscoverableToolAction;
 pub use tool_discovery::DiscoverableToolType;
 pub use tool_discovery::TOOL_SEARCH_DEFAULT_LIMIT;
 pub use tool_discovery::TOOL_SEARCH_TOOL_NAME;
-pub use tool_discovery::TOOL_SUGGEST_NAMESPACE_NAME;
 pub use tool_discovery::TOOL_SUGGEST_TOOL_NAME;
 pub use tool_discovery::ToolSearchResultSource;
 pub use tool_discovery::ToolSearchSource;

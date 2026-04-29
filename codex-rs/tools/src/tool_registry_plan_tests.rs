@@ -1556,15 +1556,18 @@ fn tool_suggest_can_be_registered_without_search_tool() {
     );
 
     assert_contains_tool_names(&tools, &[TOOL_SUGGEST_TOOL_NAME]);
+    let tool_suggest = find_tool(&tools, TOOL_SUGGEST_TOOL_NAME);
+    assert!(!tool_suggest.supports_parallel_tool_calls);
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
 
-    let ResponsesApiTool { description, .. } =
-        find_namespace_function_tool(&tools, TOOL_SUGGEST_NAMESPACE_NAME, TOOL_SUGGEST_TOOL_NAME);
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) = &tool_suggest.spec else {
+        panic!("expected function tool");
+    };
     assert!(description.contains(
-        "Suggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin"
+        "Use this tool only to ask the user to install or enable one known plugin or connector from the list below. The list contains known candidates that are not currently installed or not currently enabled."
     ));
     assert!(description.contains(
-        "You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `tool_search` (if available) and other means."
+        "The tool is not found or made callable through a targeted `tool_search` result when `tool_search` is available and relevant."
     ));
 }
 
@@ -1617,17 +1620,21 @@ fn tool_suggest_description_lists_discoverable_tools() {
         &[],
     );
     assert!(handlers.contains(&ToolHandlerSpec {
-        name: ToolName::namespaced(TOOL_SUGGEST_NAMESPACE_NAME, TOOL_SUGGEST_TOOL_NAME),
+        name: ToolName::plain(TOOL_SUGGEST_TOOL_NAME),
         kind: ToolHandlerKind::ToolSuggest,
     }));
 
-    let ResponsesApiTool {
+    let tool_suggest = find_tool(&tools, TOOL_SUGGEST_TOOL_NAME);
+    let ToolSpec::Function(ResponsesApiTool {
         description,
         parameters,
         ..
-    } = find_namespace_function_tool(&tools, TOOL_SUGGEST_NAMESPACE_NAME, TOOL_SUGGEST_TOOL_NAME);
+    }) = &tool_suggest.spec
+    else {
+        panic!("expected function tool");
+    };
     assert!(description.contains(
-        "Suggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin"
+        "Use this tool only to ask the user to install or enable one known plugin or connector from the list below. The list contains known candidates that are not currently installed or not currently enabled."
     ));
     assert!(description.contains("Google Calendar"));
     assert!(description.contains("Gmail"));
@@ -1641,25 +1648,29 @@ fn tool_suggest_description_lists_discoverable_tools() {
     );
     assert!(
         description.contains(
-            "You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `tool_search` (if available) and other means."
+            "The user explicitly wants a specific tool, plugin, connector, or app capability that is not already available in the current context or active `tools` list."
         )
     );
     assert!(description.contains(
-        "For connectors/apps that are not installed but needed for an installed plugin, suggest to install them if the task requirements match precisely."
+        "The tool is not found or made callable through a targeted `tool_search` result when `tool_search` is available and relevant."
     ));
     assert!(description.contains(
-        "For plugins that are not installed but discoverable, only suggest discoverable and installable plugins when the user's intent very explicitly and unambiguously matches that plugin itself."
+        "The tool is one of the known installable or enableable plugins or connectors listed below. Only ask to install or enable tools from this list."
     ));
     assert!(description.contains(
-        "Do not suggest a plugin just because one of its connectors or capabilities seems relevant."
+        "Do not use tool suggestion for adjacent capabilities, broad recommendations, or tools that merely seem useful."
     ));
     assert!(description.contains(
-        "Apply the stricter explicit-and-unambiguous rule for *discoverable tools* like plugin install suggestions; *missing tools* like connector install suggestions continue to use the normal clear-fit standard."
+        "Do not use tool suggestion if the needed tool is already available, found through `tool_search`, or callable after discovery."
     ));
-    assert!(description.contains("DO NOT explore or recommend tools that are not on this list."));
+    assert!(
+        description
+            .contains("do not run broad or speculative searches just to satisfy this condition.")
+    );
+    assert!(description.contains("Only proceed when one listed plugin or connector exactly fits."));
     assert!(!description.contains("{{discoverable_tools}}"));
     assert!(!description.contains("tool_search fails to find a good match"));
-    let (_, required) = expect_object_schema(parameters);
+    let (properties, required) = expect_object_schema(parameters);
     assert_eq!(
         required,
         Some(&vec![
@@ -1668,6 +1679,16 @@ fn tool_suggest_description_lists_discoverable_tools() {
             "tool_id".to_string(),
             "suggest_reason".to_string(),
         ])
+    );
+    let tool_id_schema = properties.get("tool_id").expect("tool_id schema");
+    let expected_tool_ids = vec![
+        json!("connector_2128aebfecb84f64a069897515042a44"),
+        json!("connector_68df038e0ba48191908c8434991bbac2"),
+        json!("sample@test"),
+    ];
+    assert_eq!(
+        tool_id_schema.enum_values.as_ref(),
+        Some(&expected_tool_ids)
     );
 }
 

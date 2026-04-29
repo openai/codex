@@ -47,31 +47,13 @@ fn function_tool_description(body: &Value, name: &str) -> Option<String> {
         .and_then(Value::as_array)
         .and_then(|tools| {
             tools.iter().find_map(|tool| {
-                if tool.get("name").and_then(Value::as_str) != Some(name) {
-                    return None;
+                if tool.get("name").and_then(Value::as_str) == Some(name) {
+                    tool.get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                } else {
+                    None
                 }
-
-                if tool.get("type").and_then(Value::as_str) == Some("namespace") {
-                    return tool.get("tools").and_then(Value::as_array).and_then(
-                        |namespace_tools| {
-                            namespace_tools.iter().find_map(|namespace_tool| {
-                                if namespace_tool.get("name").and_then(Value::as_str) == Some(name)
-                                {
-                                    namespace_tool
-                                        .get("description")
-                                        .and_then(Value::as_str)
-                                        .map(str::to_string)
-                                } else {
-                                    None
-                                }
-                            })
-                        },
-                    );
-                }
-
-                tool.get("description")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
             })
         })
 }
@@ -149,12 +131,12 @@ async fn tool_suggest_is_available_without_search_tool_after_discovery_attempts(
 
     let description =
         function_tool_description(&body, TOOL_SUGGEST_TOOL_NAME).expect("description");
-    assert!(
-        description.contains(
-            "You've already tried to find a matching available tool for the user's request"
-        )
-    );
-    assert!(description.contains("This includes `tool_search` (if available) and other means."));
+    assert!(description.contains(
+        "Use this tool only to ask the user to install or enable one known plugin or connector from the list below"
+    ));
+    assert!(description.contains(
+        "The tool is not found or made callable through a targeted `tool_search` result when `tool_search` is available and relevant."
+    ));
     assert!(!description.contains("tool_search fails to find a good match"));
 
     Ok(())
