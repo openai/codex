@@ -2,6 +2,7 @@
 members = [
     "aws-auth",
     "analytics",
+    "agent-graph-store",
     "agent-identity",
     "backend-client",
     "ansi-escape",
@@ -31,6 +32,7 @@ members = [
     "shell-escalation",
     "skills",
     "core",
+    "core-api",
     "core-plugins",
     "core-skills",
     "hooks",
@@ -119,6 +121,7 @@ license = "Apache-2.0"
 # Internal
 app_test_support = { path = "app-server/tests/common" }
 codex-analytics = { path = "analytics" }
+codex-agent-graph-store = { path = "agent-graph-store" }
 codex-agent-identity = { path = "agent-identity" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
@@ -142,6 +145,7 @@ codex-code-mode = { path = "code-mode" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
 codex-core = { path = "core" }
+codex-core-api = { path = "core-api" }
 codex-core-plugins = { path = "core-plugins" }
 codex-core-skills = { path = "core-skills" }
 codex-device-key = { path = "device-key" }
@@ -450,6 +454,7 @@ unwrap_used = "deny"
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
 ignored = [
+    "codex-agent-graph-store",
     "icu_provider",
     "openssl-sys",
     "codex-utils-readiness",

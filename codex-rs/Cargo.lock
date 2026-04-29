@@ -1749,6 +1749,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-agent-graph-store"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-protocol",
+ "codex-state",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "codex-agent-identity"
 version = "0.0.0"
 dependencies = [
@@ -2462,6 +2477,23 @@ dependencies = [
  "whoami",
  "wiremock",
  "zstd 0.13.3",
+]
+
+[[package]]
+name = "codex-core-api"
+version = "0.0.0"
+dependencies = [
+ "codex-analytics",
+ "codex-arg0",
+ "codex-config",
+ "codex-core",
+ "codex-exec-server",
+ "codex-features",
+ "codex-login",
+ "codex-model-provider-info",
+ "codex-models-manager",
+ "codex-protocol",
+ "codex-utils-absolute-path",
 ]
 
 [[package]]
@@ -3481,18 +3513,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
- "codex-arg0",
- "codex-config",
- "codex-core",
- "codex-exec-server",
- "codex-features",
- "codex-login",
- "codex-model-provider-info",
- "codex-models-manager",
- "codex-protocol",
- "codex-rollout",
- "codex-thread-store",
- "codex-utils-absolute-path",
+ "codex-core-api",
  "tracing",
 ]
 
@@ -3854,6 +3875,8 @@ version = "0.0.0"
 dependencies = [
  "pretty_assertions",
  "regex-lite",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -12,6 +12,7 @@ use codex_config::ConfigLayerStack;
 use codex_config::HooksFile;
 use codex_config::types::McpServerConfig;
 use codex_config::types::PluginConfig;
+use codex_config::types::PluginMcpServerConfig;
 use codex_core_skills::SkillMetadata;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_core_skills::config_rules::resolve_disabled_skill_paths;
@@ -175,6 +176,7 @@ pub fn remote_installed_plugins_to_config(
                 plugin_id.as_key(),
                 PluginConfig {
                     enabled: plugin.enabled,
+                    mcp_servers: HashMap::new(),
                 },
             ))
         })
@@ -575,7 +577,10 @@ async fn load_plugin(
     let mut mcp_servers = HashMap::new();
     for mcp_config_path in plugin_mcp_config_paths(plugin_root.as_path(), manifest_paths) {
         let plugin_mcp = load_mcp_servers_from_file(plugin_root.as_path(), &mcp_config_path).await;
-        for (name, config) in plugin_mcp.mcp_servers {
+        for (name, mut config) in plugin_mcp.mcp_servers {
+            if let Some(policy) = plugin.mcp_servers.get(&name) {
+                apply_plugin_mcp_server_policy(&mut config, policy);
+            }
             if mcp_servers.insert(name.clone(), config).is_some() {
                 warn!(
                     plugin = %plugin_root.display(),
@@ -597,6 +602,25 @@ async fn load_plugin(
     loaded_plugin.hook_sources = hook_sources;
     loaded_plugin.hook_load_warnings = hook_load_warnings;
     loaded_plugin
+}
+
+fn apply_plugin_mcp_server_policy(config: &mut McpServerConfig, policy: &PluginMcpServerConfig) {
+    config.enabled = policy.enabled;
+    if let Some(approval_mode) = policy.default_tools_approval_mode {
+        config.default_tools_approval_mode = Some(approval_mode);
+    }
+    if let Some(enabled_tools) = &policy.enabled_tools {
+        config.enabled_tools = Some(enabled_tools.clone());
+    }
+    if let Some(disabled_tools) = &policy.disabled_tools {
+        config.disabled_tools = Some(disabled_tools.clone());
+    }
+    for (tool_name, tool_policy) in &policy.tools {
+        let tool_config = config.tools.entry(tool_name.clone()).or_default();
+        if let Some(approval_mode) = tool_policy.approval_mode {
+            tool_config.approval_mode = Some(approval_mode);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

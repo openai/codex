@@ -2404,6 +2404,258 @@ fn filter_mcp_servers_by_allowlist_blocks_all_when_empty() {
     );
 }
 
+#[test]
+fn filter_plugin_mcp_servers_by_allowlist_enforces_plugin_and_identity_rules() {
+    const MATCHED_SERVER: &str = "matched-should-allow";
+    const MISMATCHED_SERVER: &str = "mismatched-should-disable";
+    const UNLISTED_SERVER: &str = "unlisted-should-disable";
+    const GOOD_CMD: &str = "good-cmd";
+
+    let mut servers = HashMap::from([
+        (MATCHED_SERVER.to_string(), stdio_mcp(GOOD_CMD)),
+        (MISMATCHED_SERVER.to_string(), stdio_mcp("bad-cmd")),
+        (
+            UNLISTED_SERVER.to_string(),
+            http_mcp("https://example.com/mcp"),
+        ),
+    ]);
+    let source = RequirementSource::CloudRequirements;
+    let requirements = Sourced::new(
+        BTreeMap::from([(
+            "sample@test".to_string(),
+            codex_config::PluginRequirementsToml {
+                mcp_servers: Some(BTreeMap::from([
+                    (
+                        MATCHED_SERVER.to_string(),
+                        McpServerRequirement {
+                            identity: McpServerIdentity::Command {
+                                command: GOOD_CMD.to_string(),
+                            },
+                        },
+                    ),
+                    (
+                        MISMATCHED_SERVER.to_string(),
+                        McpServerRequirement {
+                            identity: McpServerIdentity::Command {
+                                command: GOOD_CMD.to_string(),
+                            },
+                        },
+                    ),
+                ])),
+            },
+        )]),
+        source.clone(),
+    );
+
+    filter_plugin_mcp_servers_by_requirements("sample@test", &mut servers, Some(&requirements));
+
+    let reason = Some(McpServerDisabledReason::Requirements { source });
+    assert_eq!(
+        servers
+            .iter()
+            .map(|(name, server)| (
+                name.clone(),
+                (server.enabled, server.disabled_reason.clone())
+            ))
+            .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
+        HashMap::from([
+            (MATCHED_SERVER.to_string(), (true, None)),
+            (MISMATCHED_SERVER.to_string(), (false, reason.clone())),
+            (UNLISTED_SERVER.to_string(), (false, reason)),
+        ])
+    );
+}
+
+#[test]
+fn filter_plugin_mcp_servers_by_allowlist_blocks_unlisted_plugin() {
+    let mut servers = HashMap::from([("server-a".to_string(), stdio_mcp("cmd-a"))]);
+    let source = RequirementSource::CloudRequirements;
+    let requirements = Sourced::new(
+        BTreeMap::from([(
+            "other@test".to_string(),
+            codex_config::PluginRequirementsToml {
+                mcp_servers: Some(BTreeMap::from([(
+                    "server-a".to_string(),
+                    McpServerRequirement {
+                        identity: McpServerIdentity::Command {
+                            command: "cmd-a".to_string(),
+                        },
+                    },
+                )])),
+            },
+        )]),
+        source.clone(),
+    );
+
+    filter_plugin_mcp_servers_by_requirements("sample@test", &mut servers, Some(&requirements));
+
+    assert_eq!(
+        servers
+            .iter()
+            .map(|(name, server)| (
+                name.clone(),
+                (server.enabled, server.disabled_reason.clone())
+            ))
+            .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
+        HashMap::from([(
+            "server-a".to_string(),
+            (
+                false,
+                Some(McpServerDisabledReason::Requirements { source })
+            )
+        )])
+    );
+}
+
+#[tokio::test]
+async fn to_mcp_config_applies_plugin_mcp_cloud_requirements() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "sample": {
+      "type": "http",
+      "url": "https://sample.example/mcp"
+    },
+    "unlisted": {
+      "type": "http",
+      "url": "https://unlisted.example/mcp"
+    }
+  }
+}"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[features]
+plugins = true
+
+[plugins."sample@test"]
+enabled = true
+"#,
+    )?;
+
+    let requirements = codex_config::ConfigRequirementsToml {
+        plugins: Some(BTreeMap::from([(
+            "sample@test".to_string(),
+            codex_config::PluginRequirementsToml {
+                mcp_servers: Some(BTreeMap::from([(
+                    "sample".to_string(),
+                    McpServerRequirement {
+                        identity: McpServerIdentity::Url {
+                            url: "https://sample.example/mcp".to_string(),
+                        },
+                    },
+                )])),
+            },
+        )])),
+        ..Default::default()
+    };
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_requirements(CloudRequirementsLoader::new(async move {
+            Ok(Some(requirements))
+        }))
+        .build()
+        .await?;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+
+    assert_eq!(
+        mcp_config
+            .configured_mcp_servers
+            .get("sample")
+            .map(|server| (server.enabled, server.disabled_reason.clone())),
+        Some((true, None))
+    );
+    assert_eq!(
+        mcp_config
+            .configured_mcp_servers
+            .get("unlisted")
+            .map(|server| (server.enabled, server.disabled_reason.clone())),
+        Some((
+            false,
+            Some(McpServerDisabledReason::Requirements {
+                source: RequirementSource::CloudRequirements,
+            })
+        ))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_mcp_config_empty_mcp_requirements_disable_plugin_mcps() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "sample": {
+      "type": "http",
+      "url": "https://sample.example/mcp"
+    }
+  }
+}"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[features]
+plugins = true
+
+[plugins."sample@test"]
+enabled = true
+"#,
+    )?;
+
+    let requirements = codex_config::ConfigRequirementsToml {
+        mcp_servers: Some(BTreeMap::new()),
+        ..Default::default()
+    };
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_requirements(CloudRequirementsLoader::new(async move {
+            Ok(Some(requirements))
+        }))
+        .build()
+        .await?;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+
+    assert_eq!(
+        mcp_config
+            .configured_mcp_servers
+            .get("sample")
+            .map(|server| (server.enabled, server.disabled_reason.clone())),
+        Some((
+            false,
+            Some(McpServerDisabledReason::Requirements {
+                source: RequirementSource::CloudRequirements,
+            })
+        ))
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<()> {
     let temp_dir = TempDir::new()?;
@@ -3241,8 +3493,13 @@ async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<(
     .await?;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
+    config.apps_mcp_path_override = Some("/custom/mcp".to_string());
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(mcp_config.apps_enabled);
+    assert_eq!(
+        mcp_config.apps_mcp_path_override.as_deref(),
+        Some("/custom/mcp")
+    );
 
     let _ = config.features.disable(Feature::Apps);
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
@@ -5945,6 +6202,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            apps_mcp_path_override: None,
             realtime_audio: RealtimeAudioConfig::default(),
             experimental_realtime_start_instructions: None,
             experimental_realtime_ws_base_url: None,
@@ -6139,6 +6397,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         model_verbosity: None,
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+        apps_mcp_path_override: None,
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
@@ -6287,6 +6546,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         model_verbosity: None,
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+        apps_mcp_path_override: None,
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
@@ -6420,6 +6680,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         model_verbosity: Some(Verbosity::High),
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+        apps_mcp_path_override: None,
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
@@ -6490,6 +6751,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         feature_requirements: None,
         hooks: None,
         mcp_servers: None,
+        plugins: None,
         apps: None,
         rules: None,
         enforce_residency: None,
@@ -7059,6 +7321,32 @@ allow_login_shell = false
 }
 
 #[tokio::test]
+async fn config_loads_apps_mcp_path_override_from_feature_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let toml = r#"
+model = "gpt-5.4"
+
+[features.apps_mcp_path_override]
+path = "/custom/mcp"
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for apps MCP feature");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.apps_mcp_path_override.as_deref(),
+        Some("/custom/mcp")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn config_loads_mcp_oauth_callback_url_from_toml() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let toml = r#"
@@ -7175,6 +7463,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         feature_requirements: None,
         hooks: None,
         mcp_servers: None,
+        plugins: None,
         apps: None,
         rules: None,
         enforce_residency: None,
