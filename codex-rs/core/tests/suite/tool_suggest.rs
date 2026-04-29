@@ -135,7 +135,7 @@ async fn tool_suggest_is_available_without_search_tool_after_discovery_attempts(
         "Use this tool only to ask the user to install or enable one known plugin or connector from the list below"
     ));
     assert!(description.contains(
-        "The tool is not found or made callable through a targeted `tool_search` result when `tool_search` is available and relevant."
+        "If `tool_search` is available, it has already been called and did not find or make the requested tool callable."
     ));
     assert!(!description.contains("tool_search fails to find a good match"));
 

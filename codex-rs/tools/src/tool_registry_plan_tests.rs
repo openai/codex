@@ -1567,7 +1567,7 @@ fn tool_suggest_can_be_registered_without_search_tool() {
         "Use this tool only to ask the user to install or enable one known plugin or connector from the list below. The list contains known candidates that are not currently installed or not currently enabled."
     ));
     assert!(description.contains(
-        "The tool is not found or made callable through a targeted `tool_search` result when `tool_search` is available and relevant."
+        "If `tool_search` is available, it has already been called and did not find or make the requested tool callable."
     ));
 }
 
@@ -1652,7 +1652,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
         )
     );
     assert!(description.contains(
-        "The tool is not found or made callable through a targeted `tool_search` result when `tool_search` is available and relevant."
+        "If `tool_search` is available, it has already been called and did not find or make the requested tool callable."
     ));
     assert!(description.contains(
         "The tool is one of the known installable or enableable plugins or connectors listed below. Only ask to install or enable tools from this list."
@@ -1663,10 +1663,11 @@ fn tool_suggest_description_lists_discoverable_tools() {
     assert!(description.contains(
         "Do not use tool suggestion if the needed tool is already available, found through `tool_search`, or callable after discovery."
     ));
-    assert!(
-        description
-            .contains("do not run broad or speculative searches just to satisfy this condition.")
-    );
+    assert!(description.contains(
+        "If `tool_search` is available, call `tool_search` before calling `tool_suggest`."
+    ));
+    assert!(!description.contains("targeted lookup"));
+    assert!(!description.contains("broad or speculative searches"));
     assert!(description.contains("Only proceed when one listed plugin or connector exactly fits."));
     assert!(!description.contains("{{discoverable_tools}}"));
     assert!(!description.contains("tool_search fails to find a good match"));
