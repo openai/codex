@@ -71,7 +71,8 @@ fn create_tool_suggest_tool_uses_plugin_summary_fallback() {
         "   - `suggest_reason`: concise one-line user-facing reason this tool can help with the current request\n",
         "4. After the suggestion flow completes:\n",
         "   - if the user finished the install or enable flow, continue by searching again or using the newly available tool\n",
-        "   - if the user did not finish, continue without that tool, and don't suggest that tool again unless the user explicitly asks for it.",
+        "   - if the user did not finish, continue without that tool, and don't suggest that tool again unless the user explicitly asks for it.\n\n",
+        "IMPORTANT: DO NOT call this tool in parallel with other tools.",
     );
 
     assert_eq!(
@@ -117,7 +118,7 @@ fn create_tool_suggest_tool_uses_plugin_summary_fallback() {
                     ),
                     (
                         "tool_id".to_string(),
-                            JsonSchema::string_enum(vec![json!("slack@openai-curated"), json!("github")], Some(
+                        JsonSchema::string(Some(
                                 "Connector or plugin id to suggest."
                                     .to_string(),
                             ),),

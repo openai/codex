@@ -24,3 +24,5 @@ Workflow:
 4. After the suggestion flow completes:
    - if the user finished the install or enable flow, continue by searching again or using the newly available tool
    - if the user did not finish, continue without that tool, and don't suggest that tool again unless the user explicitly asks for it.
+
+IMPORTANT: DO NOT call this tool in parallel with other tools.

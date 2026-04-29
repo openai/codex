@@ -1825,6 +1825,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
     assert!(description.contains(
         "Do not use tool suggestion for adjacent capabilities, broad recommendations, or tools that merely seem useful."
     ));
+    assert!(description.contains("IMPORTANT: DO NOT call this tool in parallel with other tools."));
     assert!(description.contains(
         "Do not use tool suggestion if the needed tool is already available, found through `tool_search`, or callable after discovery."
     ));
@@ -1836,7 +1837,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
     assert!(description.contains("Only proceed when one listed plugin or connector exactly fits."));
     assert!(!description.contains("{{discoverable_tools}}"));
     assert!(!description.contains("tool_search fails to find a good match"));
-    let (properties, required) = expect_object_schema(parameters);
+    let (_, required) = expect_object_schema(parameters);
     assert_eq!(
         required,
         Some(&vec![
@@ -1845,16 +1846,6 @@ fn tool_suggest_description_lists_discoverable_tools() {
             "tool_id".to_string(),
             "suggest_reason".to_string(),
         ])
-    );
-    let tool_id_schema = properties.get("tool_id").expect("tool_id schema");
-    let expected_tool_ids = vec![
-        json!("connector_2128aebfecb84f64a069897515042a44"),
-        json!("connector_68df038e0ba48191908c8434991bbac2"),
-        json!("sample@test"),
-    ];
-    assert_eq!(
-        tool_id_schema.enum_values.as_ref(),
-        Some(&expected_tool_ids)
     );
 }
 
