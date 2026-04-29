@@ -1207,30 +1207,28 @@ impl MessageProcessor {
                 ExternalAgentConfigMigrationItemType::Plugins
             )
         });
+        let has_session_imports = params.migration_items.iter().any(|item| {
+            matches!(
+                item.item_type,
+                ExternalAgentConfigMigrationItemType::Sessions
+            )
+        });
         let pending_session_imports = self
             .external_agent_config_api
-            .prepare_pending_session_imports(&params)?;
+            .validate_pending_session_imports(&params)?;
         let pending_plugin_imports = self.external_agent_config_api.import(params).await?;
         if needs_runtime_refresh {
             self.handle_config_mutation().await;
-        }
-        for pending_session_import in pending_session_imports {
-            let imported_thread_id = self
-                .codex_message_processor
-                .import_external_agent_session(pending_session_import.session)
-                .await?;
-            self.external_agent_config_api
-                .record_imported_session(&pending_session_import.source_path, imported_thread_id);
         }
         self.outgoing
             .send_response(request_id, ExternalAgentConfigImportResponse {})
             .await;
 
-        if !has_plugin_imports {
+        if !has_plugin_imports && !has_session_imports {
             return Ok(());
         }
 
-        if pending_plugin_imports.is_empty() {
+        if pending_plugin_imports.is_empty() && pending_session_imports.is_empty() {
             self.outgoing
                 .send_server_notification(ServerNotification::ExternalAgentConfigImportCompleted(
                     ExternalAgentConfigImportCompletedNotification {},
@@ -1240,25 +1238,64 @@ impl MessageProcessor {
         }
 
         let external_agent_config_api = self.external_agent_config_api.clone();
+        let session_import_permits = external_agent_config_api.session_import_permits();
+        let codex_message_processor = self.codex_message_processor.clone();
         let outgoing = Arc::clone(&self.outgoing);
         let thread_manager = Arc::clone(&self.thread_manager);
         tokio::spawn(async move {
-            for pending_plugin_import in pending_plugin_imports {
-                match external_agent_config_api
-                    .complete_pending_plugin_import(pending_plugin_import)
-                    .await
-                {
-                    Ok(()) => {}
-                    Err(error) => {
-                        tracing::warn!(
-                            error = %error.message,
-                            "external agent config plugin import failed"
-                        );
+            let session_external_agent_config_api = external_agent_config_api.clone();
+            let plugin_external_agent_config_api = external_agent_config_api;
+            let session_imports = async move {
+                if !pending_session_imports.is_empty() {
+                    let Ok(_session_import_permit) = session_import_permits.acquire_owned().await
+                    else {
+                        return;
+                    };
+                    let pending_session_imports = session_external_agent_config_api
+                        .prepare_validated_session_imports(pending_session_imports);
+                    for pending_session_import in pending_session_imports {
+                        match codex_message_processor
+                            .import_external_agent_session(pending_session_import.session)
+                            .await
+                        {
+                            Ok(imported_thread_id) => {
+                                session_external_agent_config_api.record_imported_session(
+                                    &pending_session_import.source_path,
+                                    imported_thread_id,
+                                );
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    error = %error.message,
+                                    path = %pending_session_import.source_path.display(),
+                                    "external agent session import failed"
+                                );
+                            }
+                        }
                     }
                 }
+            };
+            let plugin_imports = async move {
+                for pending_plugin_import in pending_plugin_imports {
+                    match plugin_external_agent_config_api
+                        .complete_pending_plugin_import(pending_plugin_import)
+                        .await
+                    {
+                        Ok(()) => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                error = %error.message,
+                                "external agent config plugin import failed"
+                            );
+                        }
+                    }
+                }
+            };
+            tokio::join!(session_imports, plugin_imports);
+            if has_plugin_imports {
+                thread_manager.plugins_manager().clear_cache();
+                thread_manager.skills_manager().clear_cache();
             }
-            thread_manager.plugins_manager().clear_cache();
-            thread_manager.skills_manager().clear_cache();
             outgoing
                 .send_server_notification(ServerNotification::ExternalAgentConfigImportCompleted(
                     ExternalAgentConfigImportCompletedNotification {},

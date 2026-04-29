@@ -513,6 +513,7 @@ impl Drop for ActiveLogin {
 }
 
 /// Handles JSON-RPC messages for Codex threads (and legacy conversation APIs).
+#[derive(Clone)]
 pub(crate) struct CodexMessageProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,

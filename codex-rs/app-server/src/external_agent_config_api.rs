@@ -20,16 +20,19 @@ use codex_app_server_protocol::PluginsMigration;
 use codex_app_server_protocol::SubagentMigration;
 use codex_external_agent_sessions::ExternalAgentSessionMigration as CoreSessionMigration;
 use codex_external_agent_sessions::PendingSessionImport;
-use codex_external_agent_sessions::PrepareSessionImportsError;
-use codex_external_agent_sessions::prepare_pending_session_imports;
+use codex_external_agent_sessions::prepare_validated_session_imports;
 use codex_external_agent_sessions::record_imported_session;
 use codex_protocol::ThreadId;
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 #[derive(Clone)]
 pub(crate) struct ExternalAgentConfigApi {
     codex_home: PathBuf,
     migration_service: ExternalAgentConfigService,
+    session_import_permits: Arc<Semaphore>,
 }
 
 impl ExternalAgentConfigApi {
@@ -37,6 +40,7 @@ impl ExternalAgentConfigApi {
         Self {
             migration_service: ExternalAgentConfigService::new(codex_home.clone()),
             codex_home,
+            session_import_permits: Arc::new(Semaphore::new(1)),
         }
     }
 
@@ -134,18 +138,10 @@ impl ExternalAgentConfigApi {
         })
     }
 
-    pub(crate) fn detect_recent_sessions(
-        &self,
-    ) -> Result<Vec<CoreSessionMigration>, JSONRPCErrorError> {
-        self.migration_service
-            .detect_recent_sessions()
-            .map_err(|err| internal_error(err.to_string()))
-    }
-
-    pub(crate) fn prepare_pending_session_imports(
+    pub(crate) fn validate_pending_session_imports(
         &self,
         params: &ExternalAgentConfigImportParams,
-    ) -> Result<Vec<PendingSessionImport>, JSONRPCErrorError> {
+    ) -> Result<Vec<CoreSessionMigration>, JSONRPCErrorError> {
         let sessions = params
             .migration_items
             .iter()
@@ -163,18 +159,32 @@ impl ExternalAgentConfigApi {
                 title: session.title,
             })
             .collect::<Vec<_>>();
-        let detected_sessions = if sessions.is_empty() {
-            Vec::new()
-        } else {
-            self.detect_recent_sessions()?
-        };
-        prepare_pending_session_imports(&self.codex_home, sessions, detected_sessions).map_err(
-            |err| match err {
-                PrepareSessionImportsError::SessionNotDetected(_) => {
-                    invalid_params(err.to_string())
-                }
-            },
-        )
+        let mut selected_session_paths = HashSet::new();
+        let mut selected_sessions = Vec::new();
+        for session in sessions {
+            let Some(canonical_path) = self
+                .migration_service
+                .external_agent_session_source_path(&session.path)
+                .map_err(|err| internal_error(err.to_string()))?
+            else {
+                return Err(session_not_detected_error(&session.path));
+            };
+            if selected_session_paths.insert(canonical_path) {
+                selected_sessions.push(session);
+            }
+        }
+        Ok(selected_sessions)
+    }
+
+    pub(crate) fn prepare_validated_session_imports(
+        &self,
+        sessions: Vec<CoreSessionMigration>,
+    ) -> Vec<PendingSessionImport> {
+        prepare_validated_session_imports(&self.codex_home, sessions)
+    }
+
+    pub(crate) fn session_import_permits(&self) -> Arc<Semaphore> {
+        Arc::clone(&self.session_import_permits)
     }
 
     pub(crate) fn record_imported_session(
@@ -300,4 +310,11 @@ impl ExternalAgentConfigApi {
             .map(|_| ())
             .map_err(|err| internal_error(err.to_string()))
     }
+}
+
+fn session_not_detected_error(path: &std::path::Path) -> JSONRPCErrorError {
+    invalid_params(format!(
+        "external agent session was not detected for import: {}",
+        path.display()
+    ))
 }

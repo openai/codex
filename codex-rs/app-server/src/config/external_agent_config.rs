@@ -144,8 +144,24 @@ impl ExternalAgentConfigService {
         Ok(items)
     }
 
-    pub(crate) fn detect_recent_sessions(&self) -> io::Result<Vec<ExternalAgentSessionMigration>> {
-        detect_recent_sessions(&self.external_agent_home, &self.codex_home)
+    pub(crate) fn external_agent_session_source_path(
+        &self,
+        path: &Path,
+    ) -> io::Result<Option<PathBuf>> {
+        if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+            return Ok(None);
+        }
+        let path = match fs::canonicalize(path) {
+            Ok(path) => path,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        let projects_root = match fs::canonicalize(self.external_agent_home.join("projects")) {
+            Ok(projects_root) => projects_root,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        Ok(path.starts_with(projects_root).then_some(path))
     }
 
     pub(crate) async fn import(
