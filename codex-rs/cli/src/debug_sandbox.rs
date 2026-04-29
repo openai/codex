@@ -22,7 +22,6 @@ use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_permission
 use codex_sandboxing::seatbelt::CreateSeatbeltCommandArgsParams;
 #[cfg(target_os = "macos")]
 use codex_sandboxing::seatbelt::create_seatbelt_command_args;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use tokio::process::Child;
