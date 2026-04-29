@@ -12,7 +12,7 @@ use crate::chatgpt_client::chatgpt_get_request_with_timeout;
 
 const WORKSPACE_SETTINGS_TIMEOUT: Duration = Duration::from_secs(10);
 const WORKSPACE_SETTINGS_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
-const CODEX_PLUGINS_BETA_SETTING: &str = "plugins";
+const CODEX_PLUGINS_BETA_SETTING: &str = "enable_plugins";
 
 #[derive(Debug, Deserialize)]
 struct WorkspaceSettingsResponse {
