@@ -1567,7 +1567,7 @@ fn tool_suggest_can_be_registered_without_search_tool() {
         "Use this tool only to ask the user to install or enable one known plugin or connector from the list below. The list contains known candidates that are not currently installed or not currently enabled."
     ));
     assert!(description.contains(
-        "If `tool_search` is available, it has already been called and did not find or make the requested tool callable."
+        "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
     ));
 }
 
@@ -1648,11 +1648,11 @@ fn tool_suggest_description_lists_discoverable_tools() {
     );
     assert!(
         description.contains(
-            "The user explicitly wants a specific tool, plugin, connector, or app capability that is not already available in the current context or active `tools` list."
+            "The user explicitly wants a specific plugin or connector that is not already available in the current context or active `tools` list."
         )
     );
     assert!(description.contains(
-        "If `tool_search` is available, it has already been called and did not find or make the requested tool callable."
+        "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
     ));
     assert!(description.contains(
         "The tool is one of the known installable or enableable plugins or connectors listed below. Only ask to install or enable tools from this list."

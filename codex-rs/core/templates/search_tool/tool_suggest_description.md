@@ -3,8 +3,8 @@
 Use this tool only to ask the user to install or enable one known plugin or connector from the list below. The list contains known candidates that are not currently installed or not currently enabled.
 
 Use this ONLY when all of the following are true:
-- The user explicitly wants a specific tool, plugin, connector, or app capability that is not already available in the current context or active `tools` list.
-- If `tool_search` is available, it has already been called and did not find or make the requested tool callable.
+- The user explicitly wants a specific plugin or connector that is not already available in the current context or active `tools` list.
+- `tool_search` is not available, or it has already been called and did not find or make the requested tool callable.
 - The tool is one of the known installable or enableable plugins or connectors listed below. Only ask to install or enable tools from this list.
 
 Do not use tool suggestion for adjacent capabilities, broad recommendations, or tools that merely seem useful. The user's intent must clearly match one listed tool.
