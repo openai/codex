@@ -663,6 +663,9 @@ fn rewrite_hook_command(command: &str, target_config_dir: Option<&Path>) -> Stri
     let Some(target_config_dir) = target_config_dir else {
         return command.to_string();
     };
+    if looks_like_windows_hook_command(command) {
+        return command.to_string();
+    }
     let target_hooks_dir = target_config_dir.join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR);
     let source_hooks_path = format!(
         "{}/{EXTERNAL_AGENT_HOOKS_SUBDIR}/",
@@ -690,27 +693,13 @@ fn replace_quoted_hook_paths(
         let end = content_start + relative_end;
         let content = &rewritten[content_start..end];
         if let Some(source_hooks_start) = content.find(source_hooks_path) {
-            if !is_pure_shell_path_content(content, source_hooks_start) {
-                if quote == '"' {
-                    let replacement =
-                        replace_unquoted_hook_paths(content, source_hooks_path, target_hooks_dir);
-                    rewritten.replace_range(content_start..end, &replacement);
-                    search_start = content_start + replacement.len();
-                } else {
-                    search_start = end + quote.len_utf8();
-                }
-                continue;
-            }
             let suffix_start = source_hooks_start + source_hooks_path.len();
             let suffix = &content[suffix_start..];
-            let replacement = if quote == '"' && suffix_needs_shell_expansion(suffix) {
-                format!(
-                    "\"{}/{}\"",
-                    target_hooks_dir.to_string_lossy().replace('"', "\\\""),
-                    suffix.replace('"', "\\\"")
-                )
-            } else {
-                target_hook_path_replacement(target_hooks_dir, suffix)
+            let Some(replacement) =
+                target_hook_path_replacement(target_hooks_dir, content, source_hooks_start, suffix)
+            else {
+                search_start = end + quote.len_utf8();
+                continue;
             };
             rewritten.replace_range(start..end + quote.len_utf8(), &replacement);
             search_start = start + replacement.len();
@@ -733,10 +722,19 @@ fn replace_unquoted_hook_paths(
     {
         let path_start = shell_path_start(&rewritten, source_hooks_start);
         let path_end = shell_path_end(&rewritten, source_hooks_start + source_hooks_path.len());
+        let path = rewritten[path_start..path_end].to_string();
         let suffix = rewritten[source_hooks_start + source_hooks_path.len()..path_end].to_string();
-        let replacement = target_hook_path_replacement(target_hooks_dir, &suffix);
-        rewritten.replace_range(path_start..path_end, &replacement);
-        search_start = path_start + replacement.len();
+        if let Some(replacement) = target_hook_path_replacement(
+            target_hooks_dir,
+            &path,
+            source_hooks_start - path_start,
+            &suffix,
+        ) {
+            rewritten.replace_range(path_start..path_end, &replacement);
+            search_start = path_start + replacement.len();
+        } else {
+            search_start = source_hooks_start + source_hooks_path.len();
+        }
     }
     rewritten
 }
@@ -779,9 +777,9 @@ fn find_unquoted_source_hook_path(
 }
 
 fn is_pure_shell_path_content(content: &str, source_hooks_start: usize) -> bool {
-    !content[..source_hooks_start]
-        .chars()
-        .any(is_shell_path_boundary)
+    let prefix = &content[..source_hooks_start];
+    (prefix.is_empty() || prefix == "./" || prefix.ends_with('/'))
+        && !prefix.chars().any(is_shell_path_boundary)
 }
 
 fn shell_path_start(command: &str, end: usize) -> usize {
@@ -811,45 +809,40 @@ fn shell_path_end(command: &str, start: usize) -> usize {
 }
 
 fn is_shell_path_boundary(ch: char) -> bool {
-    ch.is_whitespace() || matches!(ch, '=' | ';' | '|' | '&' | '<' | '>' | '(' | ')')
+    ch.is_whitespace() || matches!(ch, ';' | '|' | '&' | '<' | '>' | '(' | ')')
 }
 
-fn target_hook_path_replacement(target_hooks_dir: &Path, suffix: &str) -> String {
-    if suffix_needs_shell_expansion(suffix) {
-        format!(
-            "{}/{}",
-            shell_single_quote(target_hooks_dir.to_string_lossy().as_ref()),
-            suffix
-        )
-    } else {
-        let suffix = shell_unescape_path_token(suffix);
-        shell_single_quote(target_hooks_dir.join(suffix).to_string_lossy().as_ref())
+fn target_hook_path_replacement(
+    target_hooks_dir: &Path,
+    path: &str,
+    source_hooks_start: usize,
+    suffix: &str,
+) -> Option<String> {
+    if !is_pure_shell_path_content(path, source_hooks_start) || !is_static_hook_path_suffix(suffix)
+    {
+        return None;
     }
+    Some(shell_single_quote(
+        target_hooks_dir.join(suffix).to_string_lossy().as_ref(),
+    ))
 }
 
-fn suffix_needs_shell_expansion(suffix: &str) -> bool {
-    suffix
-        .chars()
-        .any(|ch| matches!(ch, '$' | '`' | '*' | '?' | '['))
+fn is_static_hook_path_suffix(suffix: &str) -> bool {
+    !suffix.is_empty()
+        && !suffix
+            .chars()
+            .any(|ch| matches!(ch, '\\' | '$' | '`' | '*' | '?' | '['))
 }
 
-fn shell_unescape_path_token(value: &str) -> String {
-    let mut unescaped = String::with_capacity(value.len());
-    let mut escaped = false;
-    for ch in value.chars() {
-        if escaped {
-            unescaped.push(ch);
-            escaped = false;
-        } else if ch == '\\' {
-            escaped = true;
-        } else {
-            unescaped.push(ch);
-        }
-    }
-    if escaped {
-        unescaped.push('\\');
-    }
-    unescaped
+fn looks_like_windows_hook_command(command: &str) -> bool {
+    let source_hooks_backslash_path = format!(
+        r"{}\{EXTERNAL_AGENT_HOOKS_SUBDIR}\",
+        external_agent_config_dir()
+    );
+    let project_dir_env_var = external_agent_project_dir_env_var();
+    command.contains(&source_hooks_backslash_path)
+        || command.contains(&format!("%{project_dir_env_var}%"))
+        || command.contains(&format!("$env:{project_dir_env_var}"))
 }
 
 fn shell_single_quote(value: &str) -> String {
@@ -1358,7 +1351,6 @@ fn external_agent_project_config_file() -> String {
     format!(".{SOURCE_EXTERNAL_AGENT_NAME}.json")
 }
 
-#[cfg(test)]
 fn external_agent_project_dir_env_var() -> String {
     format!(
         "{}_PROJECT_DIR",
@@ -1996,54 +1988,50 @@ Review carefully."""
                 &format!("bash -lc \"python3 {source_hooks_path}/check.py\""),
                 Some(Path::new("/repo/.codex")),
             ),
-            format!(
-                "bash -lc \"python3 {}\"",
-                shell_single_quote(
-                    Path::new("/repo/.codex")
-                        .join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR)
-                        .join("check.py")
-                        .to_string_lossy()
-                        .as_ref()
-                )
-            )
+            format!("bash -lc \"python3 {source_hooks_path}/check.py\"")
         );
         assert_eq!(
             rewrite_hook_command(
                 &format!("HOOK={source_hooks_path}/check.py python3 \"$HOOK\""),
                 Some(Path::new("/repo/.codex")),
             ),
-            format!(
-                "HOOK={} python3 \"$HOOK\"",
-                shell_single_quote(
-                    Path::new("/repo/.codex")
-                        .join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR)
-                        .join("check.py")
-                        .to_string_lossy()
-                        .as_ref()
-                )
-            )
+            format!("HOOK={source_hooks_path}/check.py python3 \"$HOOK\"")
         );
         assert_eq!(
             rewrite_hook_command(
                 &format!("python3 {source_hooks_path}/${{SCRIPT}}.py"),
                 Some(Path::new("/repo/.codex")),
             ),
-            format!(
-                "python3 {}/${{SCRIPT}}.py",
-                shell_single_quote(
-                    Path::new("/repo/.codex")
-                        .join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR)
-                        .to_string_lossy()
-                        .as_ref()
-                )
-            )
+            format!("python3 {source_hooks_path}/${{SCRIPT}}.py")
         );
         assert_eq!(
             rewrite_hook_command(
                 &format!("python3 {source_hooks_path}/my\\ script.py"),
                 Some(Path::new("/repo/.codex")),
             ),
-            migrated_quoted_hook_command("my script.py")
+            format!("python3 {source_hooks_path}/my\\ script.py")
+        );
+        assert_eq!(
+            rewrite_hook_command(
+                &format!("python3 .{SOURCE_EXTERNAL_AGENT_NAME}\\hooks\\check.py"),
+                Some(Path::new("/repo/.codex")),
+            ),
+            format!("python3 .{}\\hooks\\check.py", SOURCE_EXTERNAL_AGENT_NAME)
+        );
+        assert_eq!(
+            rewrite_hook_command(
+                &format!(
+                    "python3 \"%{}%\\{}\\hooks\\check.py\"",
+                    project_dir_env_var,
+                    external_agent_config_dir()
+                ),
+                Some(Path::new("/repo/.codex")),
+            ),
+            format!(
+                "python3 \"%{}%\\{}\\hooks\\check.py\"",
+                project_dir_env_var,
+                external_agent_config_dir()
+            )
         );
         assert_eq!(
             rewrite_hook_command(
