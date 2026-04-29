@@ -3478,6 +3478,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-thread-manager-sample"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-arg0",
+ "codex-config",
+ "codex-core",
+ "codex-exec-server",
+ "codex-features",
+ "codex-login",
+ "codex-model-provider-info",
+ "codex-models-manager",
+ "codex-protocol",
+ "codex-rollout",
+ "codex-thread-store",
+ "codex-utils-absolute-path",
+ "tracing",
+]
+
+[[package]]
 name = "codex-thread-store"
 version = "0.0.0"
 dependencies = [

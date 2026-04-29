@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use codex_config::types::ApprovalsReviewer;
 use codex_protocol::approvals::ElicitationAction;
+use codex_protocol::approvals::GuardianAssessmentEvent;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -104,6 +105,9 @@ pub(crate) enum AppCommand {
     Review {
         review_request: ReviewRequest,
     },
+    ApproveGuardianDeniedAction {
+        event: GuardianAssessmentEvent,
+    },
     Other(Op),
 }
 
@@ -185,6 +189,9 @@ pub(crate) enum AppCommandView<'a> {
     },
     Review {
         review_request: &'a ReviewRequest,
+    },
+    ApproveGuardianDeniedAction {
+        event: &'a GuardianAssessmentEvent,
     },
     Other(&'a Op),
 }
@@ -450,6 +457,9 @@ impl AppCommand {
             Self::Shutdown => Op::Shutdown,
             Self::ThreadRollback { num_turns } => Op::ThreadRollback { num_turns },
             Self::Review { review_request } => Op::Review { review_request },
+            Self::ApproveGuardianDeniedAction { event } => {
+                Op::ApproveGuardianDeniedAction { event }
+            }
             Self::Other(op) => op,
         }
     }
@@ -568,6 +578,9 @@ impl AppCommand {
                 num_turns: *num_turns,
             },
             Self::Review { review_request } => AppCommandView::Review { review_request },
+            Self::ApproveGuardianDeniedAction { event } => {
+                AppCommandView::ApproveGuardianDeniedAction { event }
+            }
             Self::Other(op) => AppCommandView::Other(op),
         }
     }
@@ -716,8 +729,23 @@ impl From<Op> for AppCommand {
             Op::Shutdown => Self::Shutdown,
             Op::ThreadRollback { num_turns } => Self::ThreadRollback { num_turns },
             Op::Review { review_request } => Self::Review { review_request },
+            Op::ApproveGuardianDeniedAction { event } => {
+                Self::ApproveGuardianDeniedAction { event }
+            }
             op => Self::Other(op),
         }
+    }
+}
+
+impl PartialEq<Op> for AppCommand {
+    fn eq(&self, other: &Op) -> bool {
+        self.clone().into_core() == *other
+    }
+}
+
+impl PartialEq<AppCommand> for Op {
+    fn eq(&self, other: &AppCommand) -> bool {
+        *self == other.clone().into_core()
     }
 }
 

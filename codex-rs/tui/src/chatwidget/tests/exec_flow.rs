@@ -114,7 +114,7 @@ async fn exec_approval_uses_approval_id_when_present() {
     let mut found = false;
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::SubmitThreadOp {
-            op: Op::ExecApproval { id, decision, .. },
+            op: AppCommand::ExecApproval { id, decision, .. },
             ..
         } = app_ev
         {
@@ -1712,7 +1712,7 @@ async fn apply_patch_approval_sends_op_with_call_id() {
     let mut found = false;
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::SubmitThreadOp {
-            op: Op::PatchApproval { id, decision },
+            op: AppCommand::PatchApproval { id, decision },
             ..
         } = app_ev
         {
@@ -1751,7 +1751,7 @@ async fn apply_patch_full_flow_integration_like() {
     let mut maybe_op: Option<Op> = None;
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::SubmitThreadOp { op, .. } = app_ev {
-            maybe_op = Some(op);
+            maybe_op = Some(op.into_core());
             break;
         }
     }

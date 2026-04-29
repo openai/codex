@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::MentionBinding;
@@ -598,10 +599,9 @@ impl ChatComposerHistory {
                         boundary_if_exhausted,
                     });
                 }
-                app_event_tx.send(AppEvent::CodexOp(Op::GetHistoryEntryRequest {
-                    offset,
-                    log_id,
-                }));
+                app_event_tx.send(AppEvent::CodexOp(AppCommand::from(
+                    Op::GetHistoryEntryRequest { offset, log_id },
+                )));
                 return HistorySearchResult::Pending;
             }
 
@@ -719,10 +719,12 @@ impl ChatComposerHistory {
             self.last_history_text = Some(entry.text.clone());
             return Some(entry);
         } else if let Some(log_id) = self.history_log_id {
-            app_event_tx.send(AppEvent::CodexOp(Op::GetHistoryEntryRequest {
-                offset: global_idx,
-                log_id,
-            }));
+            app_event_tx.send(AppEvent::CodexOp(AppCommand::from(
+                Op::GetHistoryEntryRequest {
+                    offset: global_idx,
+                    log_id,
+                },
+            )));
         }
         None
     }

@@ -162,7 +162,8 @@ fn fork_thread_accepts_legacy_usize_snapshot_argument() {
     ) {
         let _future = manager.fork_thread(
             usize::MAX,
-            config,
+            config.clone(),
+            thread_store_from_config(&config),
             path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -263,12 +264,12 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
     let thread_1 = manager
-        .start_thread(config.clone())
+        .start_thread(config.clone(), thread_store_from_config(&config))
         .await
         .expect("start first thread")
         .thread_id;
     let thread_2 = manager
-        .start_thread(config)
+        .start_thread(config.clone(), thread_store_from_config(&config))
         .await
         .expect("start second thread")
         .thread_id;
@@ -314,6 +315,7 @@ async fn start_thread_accepts_explicit_environment_when_default_environment_is_d
 
     let thread = manager
         .start_thread_with_options(StartThreadOptions {
+            thread_store: thread_store_from_config(&config),
             config: config.clone(),
             initial_history: InitialHistory::New,
             session_source: None,
@@ -346,8 +348,10 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
         config.codex_home.to_path_buf(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
+    let thread_store = thread_store_from_config(&config);
     let thread = manager
         .start_thread_with_options(StartThreadOptions {
+            thread_store,
             config,
             initial_history: InitialHistory::New,
             session_source: Some(SessionSource::Internal(
@@ -399,9 +403,11 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         cwd: selected_cwd.clone(),
     }];
     let default_cwd = config.cwd.clone();
+    let thread_store = thread_store_from_config(&config);
 
     let source = manager
         .start_thread_with_options(StartThreadOptions {
+            thread_store: Arc::clone(&thread_store),
             config: config.clone(),
             initial_history: InitialHistory::New,
             session_source: None,
@@ -423,10 +429,17 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .thread
         .rollout_path()
         .expect("source rollout path should exist");
+    source
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown source thread before resume");
+    let _ = manager.remove_thread(&source.thread_id).await;
 
     let resumed = manager
         .resume_thread_from_rollout(
             config.clone(),
+            Arc::clone(&thread_store),
             rollout_path.clone(),
             auth_manager,
             /*parent_trace*/ None,
@@ -448,6 +461,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .fork_thread(
             ForkSnapshot::Interrupted,
             config,
+            thread_store,
             rollout_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -704,6 +718,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
     let source = manager
         .resume_thread_with_history(
             config.clone(),
+            thread_store_from_config(&config),
             InitialHistory::Forked(vec![
                 RolloutItem::ResponseItem(user_msg("hello")),
                 RolloutItem::ResponseItem(assistant_msg("partial")),
@@ -729,7 +744,8 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
     let forked = manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            config,
+            config.clone(),
+            thread_store_from_config(&config),
             source_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -806,6 +822,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
     let source = manager
         .resume_thread_with_history(
             config.clone(),
+            thread_store_from_config(&config),
             InitialHistory::Forked(vec![
                 RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                     turn_id: "turn-explicit".to_string(),
@@ -842,7 +859,8 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
     let forked = manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            config,
+            config.clone(),
+            thread_store_from_config(&config),
             source_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -897,6 +915,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let source = manager
         .resume_thread_with_history(
             config.clone(),
+            thread_store_from_config(&config),
             InitialHistory::Forked(vec![
                 RolloutItem::ResponseItem(user_msg("hello")),
                 RolloutItem::ResponseItem(assistant_msg("partial")),
@@ -921,6 +940,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         .fork_thread(
             ForkSnapshot::Interrupted,
             config.clone(),
+            thread_store_from_config(&config),
             source_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -960,7 +980,8 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let reforked = manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            config,
+            config.clone(),
+            thread_store_from_config(&config),
             forked_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -1033,6 +1054,7 @@ async fn resumed_thread_activates_paused_goal_and_continues_on_request() -> anyh
     let source = manager
         .resume_thread_with_history(
             config.clone(),
+            thread_store_from_config(&config),
             InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("keep working"))]),
             auth_manager.clone(),
             /*persist_extended_history*/ false,
@@ -1061,7 +1083,8 @@ async fn resumed_thread_activates_paused_goal_and_continues_on_request() -> anyh
 
     let resumed = manager
         .resume_thread_from_rollout(
-            config,
+            config.clone(),
+            thread_store_from_config(&config),
             source_path,
             auth_manager,
             /*parent_trace*/ None,
