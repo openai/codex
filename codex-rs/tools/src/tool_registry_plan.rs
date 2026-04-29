@@ -303,6 +303,15 @@ pub fn build_tool_registry_plan(
         }
     }
 
+    tracing::debug!(
+        tool_suggest_enabled = config.tool_suggest,
+        discoverable_tools_present = params.discoverable_tools.is_some(),
+        discoverable_tool_count = params
+            .discoverable_tools
+            .map_or(0, <[crate::DiscoverableTool]>::len),
+        "evaluating tool_suggest registration"
+    );
+
     if config.tool_suggest
         && let Some(discoverable_tools) =
             params.discoverable_tools.filter(|tools| !tools.is_empty())

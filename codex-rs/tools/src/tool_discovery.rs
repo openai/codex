@@ -272,11 +272,6 @@ pub fn collect_tool_search_source_infos<'a>(
 }
 
 pub fn create_tool_suggest_tool(discoverable_tools: &[ToolSuggestEntry]) -> ToolSpec {
-    let discoverable_tool_ids = discoverable_tools
-        .iter()
-        .map(|tool| tool.id.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
     let discoverable_tool_id_values = discoverable_tools
         .iter()
         .map(|tool| serde_json::Value::String(tool.id.clone()))
@@ -297,9 +292,10 @@ pub fn create_tool_suggest_tool(discoverable_tools: &[ToolSuggestEntry]) -> Tool
         ),
         (
             "tool_id".to_string(),
-            JsonSchema::string_enum(discoverable_tool_id_values, Some(format!(
-                "Connector or plugin id to suggest. Must be one of: {discoverable_tool_ids}."
-            ))),
+            JsonSchema::string_enum(
+                discoverable_tool_id_values,
+                Some("Connector or plugin id to suggest.".to_string()),
+            ),
         ),
         (
             "suggest_reason".to_string(),

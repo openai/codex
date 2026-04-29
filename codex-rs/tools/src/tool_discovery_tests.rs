@@ -117,8 +117,8 @@ fn create_tool_suggest_tool_uses_plugin_summary_fallback() {
                     ),
                     (
                         "tool_id".to_string(),
-                        JsonSchema::string_enum(vec![json!("slack@openai-curated"), json!("github")], Some(
-                                "Connector or plugin id to suggest. Must be one of: slack@openai-curated, github."
+                            JsonSchema::string_enum(vec![json!("slack@openai-curated"), json!("github")], Some(
+                                "Connector or plugin id to suggest."
                                     .to_string(),
                             ),),
                     ),
