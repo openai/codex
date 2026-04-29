@@ -291,6 +291,7 @@ impl NetworkApprovalService {
         let calls = self.calls.lock().await;
         // Blocked proxy requests are not attributed to a specific tool call. Only pick an owner
         // when there is exactly one candidate; with concurrent calls, canceling one would be a guess.
+        // TODO: Carry blocked-request attribution so concurrent active calls can be handled safely.
         if calls.active_calls.len() == 1 {
             return calls.active_calls.values().next().cloned();
         }
