@@ -37,7 +37,7 @@ pub(super) fn region_from_config(aws: &ModelProviderAwsAuthInfo) -> Option<Strin
 
 pub(super) fn base_url(region: &str) -> Result<String> {
     if BEDROCK_MANTLE_SUPPORTED_REGIONS.contains(&region) {
-        Ok(format!("https://bedrock-mantle.{region}.api.aws/v1"))
+        Ok(format!("https://bedrock-mantle.{region}.api.aws/openai/v1"))
     } else {
         Err(CodexErr::Fatal(format!(
             "Amazon Bedrock Mantle does not support region `{region}`"
@@ -55,7 +55,7 @@ mod tests {
     fn base_url_uses_region_endpoint() {
         assert_eq!(
             base_url("ap-northeast-1").expect("supported region"),
-            "https://bedrock-mantle.ap-northeast-1.api.aws/v1"
+            "https://bedrock-mantle.ap-northeast-1.api.aws/openai/v1"
         );
     }
 

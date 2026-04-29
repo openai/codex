@@ -122,7 +122,7 @@ mod tests {
 
         assert_eq!(
             api_provider.base_url,
-            "https://bedrock-mantle.eu-central-1.api.aws/v1"
+            "https://bedrock-mantle.eu-central-1.api.aws/openai/v1"
         );
     }
 
