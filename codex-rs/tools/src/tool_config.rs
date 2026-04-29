@@ -116,23 +116,6 @@ pub struct ToolsConfig {
     pub agent_type_description: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ToolCapabilityBounds {
-    pub namespace_tools: bool,
-    pub image_generation: bool,
-    pub web_search: bool,
-}
-
-impl Default for ToolCapabilityBounds {
-    fn default() -> Self {
-        Self {
-            namespace_tools: true,
-            image_generation: true,
-            web_search: true,
-        }
-    }
-}
-
 pub struct ToolsConfigParams<'a> {
     pub model_info: &'a ModelInfo,
     pub available_models: &'a [ModelPreset],

@@ -303,7 +303,6 @@ use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_git_utils::get_git_repo_root;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::with_codex_apps_mcp;
-use codex_model_provider::ProviderCapabilities;
 use codex_otel::SessionTelemetry;
 use codex_otel::THREAD_STARTED_METRIC;
 use codex_otel::TelemetryAuthMode;
@@ -353,7 +352,6 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
-use codex_tools::ToolCapabilityBounds;
 use codex_tools::ToolsConfig;
 use codex_tools::ToolsConfigParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -372,14 +370,6 @@ pub struct Codex {
     // Shared future for the background submission loop completion so multiple
     // callers can wait for shutdown.
     pub(crate) session_loop_termination: SessionLoopTermination,
-}
-
-fn tool_capability_bounds(capabilities: ProviderCapabilities) -> ToolCapabilityBounds {
-    ToolCapabilityBounds {
-        namespace_tools: capabilities.namespace_tools,
-        image_generation: capabilities.image_generation,
-        web_search: capabilities.web_search,
-    }
 }
 
 pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;

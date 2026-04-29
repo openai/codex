@@ -233,11 +233,7 @@ fn image_generation_requires_feature_and_supported_model() {
 }
 
 #[test]
-<<<<<<< HEAD
 fn provider_capability_methods_disable_provider_bound_tool_surfaces() {
-=======
-fn capability_bounds_disable_provider_bound_tool_surfaces() {
->>>>>>> f6c251ef58 (changes)
     let model_info = model_info();
     let features = Features::with_defaults();
     let available_models = Vec::new();
