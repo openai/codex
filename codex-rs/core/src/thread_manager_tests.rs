@@ -6,7 +6,6 @@ use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_features::Feature;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -388,7 +387,6 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
-        CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     );
@@ -485,7 +483,6 @@ async fn new_uses_active_provider_for_model_refresh() {
         &config,
         auth_manager,
         SessionSource::Exec,
-        CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     );
@@ -696,7 +693,6 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
-        CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     );
@@ -798,7 +794,6 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
-        CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     );
@@ -889,7 +884,6 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
-        CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     );
@@ -1025,7 +1019,6 @@ async fn resumed_thread_activates_paused_goal_and_continues_on_request() -> anyh
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
-        CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     );

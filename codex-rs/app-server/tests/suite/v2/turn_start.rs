@@ -969,7 +969,7 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
         codex_home.path(),
         &server.uri(),
         "never",
-        &BTreeMap::from([(Feature::DefaultModeRequestUserInput, true)]),
+        &BTreeMap::default(),
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -1029,13 +1029,15 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
     let payload = request.body_json();
     assert_eq!(payload["model"].as_str(), Some("mock-model-collab"));
     let payload_text = payload.to_string();
-    assert!(payload_text.contains("The `request_user_input` tool is available in Default mode."));
+    assert!(payload_text.contains(
+        "Use the `request_user_input` tool only when it is listed in the available tools"
+    ));
 
     Ok(())
 }
 
 #[tokio::test]
-async fn turn_start_uses_thread_feature_overrides_for_collaboration_mode_instructions_v2()
+async fn turn_start_uses_thread_feature_overrides_for_request_user_input_tool_description_v2()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1114,7 +1116,7 @@ async fn turn_start_uses_thread_feature_overrides_for_collaboration_mode_instruc
 
     let request = response_mock.single_request();
     let payload_text = request.body_json().to_string();
-    assert!(payload_text.contains("The `request_user_input` tool is available in Default mode."));
+    assert!(payload_text.contains("This tool is only available in Default or Plan mode."));
 
     Ok(())
 }

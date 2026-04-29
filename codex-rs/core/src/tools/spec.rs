@@ -166,7 +166,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let shell_command_handler = Arc::new(ShellCommandHandler::from(config.shell_command_backend));
     let request_permissions_handler = Arc::new(RequestPermissionsHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
-        default_mode_request_user_input: config.default_mode_request_user_input,
+        available_modes: config.request_user_input_available_modes.clone(),
     });
     let deferred_dynamic_tools = dynamic_tools
         .iter()

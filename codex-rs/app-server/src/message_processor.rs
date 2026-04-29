@@ -78,7 +78,6 @@ use codex_login::default_client::get_codex_user_agent;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::default_client::set_default_originator;
 use codex_model_provider::create_model_provider;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
@@ -292,11 +291,6 @@ impl MessageProcessor {
             config.as_ref(),
             auth_manager.clone(),
             session_source,
-            CollaborationModesConfig {
-                default_mode_request_user_input: config
-                    .features
-                    .enabled(Feature::DefaultModeRequestUserInput),
-            },
             environment_manager,
             Some(analytics_events_client.clone()),
         ));

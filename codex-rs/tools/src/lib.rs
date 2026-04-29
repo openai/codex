@@ -83,6 +83,7 @@ pub use plan_tool::create_update_plan_tool;
 pub use request_user_input_tool::REQUEST_USER_INPUT_TOOL_NAME;
 pub use request_user_input_tool::create_request_user_input_tool;
 pub use request_user_input_tool::normalize_request_user_input_args;
+pub use request_user_input_tool::request_user_input_available_modes;
 pub use request_user_input_tool::request_user_input_tool_description;
 pub use request_user_input_tool::request_user_input_unavailable_message;
 pub use responses_api::FreeformTool;

@@ -149,7 +149,7 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
 }
 
 #[test]
-fn subagents_keep_request_user_input_mode_config_and_agent_jobs_workers_opt_in_by_label() {
+fn subagents_keep_request_user_input_config_and_agent_jobs_workers_opt_in_by_label() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::DefaultModeRequestUserInput);
@@ -169,7 +169,10 @@ fn subagents_keep_request_user_input_mode_config_and_agent_jobs_workers_opt_in_b
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
-    assert!(tools_config.default_mode_request_user_input);
+    assert_eq!(
+        tools_config.request_user_input_available_modes,
+        request_user_input_available_modes(&features)
+    );
     assert!(tools_config.agent_jobs_tools);
     assert!(tools_config.agent_jobs_worker_tools);
 }

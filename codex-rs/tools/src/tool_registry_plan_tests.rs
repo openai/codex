@@ -19,9 +19,11 @@ use crate::ToolRegistryPlanMcpTool;
 use crate::ToolsConfigParams;
 use crate::WaitAgentTimeoutOptions;
 use crate::mcp_call_tool_result_output_schema;
+use crate::request_user_input_available_modes;
 use codex_app_server_protocol::AppInfo;
 use codex_features::Feature;
 use codex_features::Features;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -88,7 +90,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         }),
         create_write_stdin_tool(),
         create_update_plan_tool(),
-        request_user_input_tool_spec(/*default_mode_request_user_input*/ false),
+        request_user_input_tool_spec(&request_user_input_available_modes(&features)),
         create_apply_patch_freeform_tool(),
         ToolSpec::WebSearch {
             external_web_access: Some(true),
@@ -586,7 +588,7 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
     let request_user_input_tool = find_tool(&tools, REQUEST_USER_INPUT_TOOL_NAME);
     assert_eq!(
         request_user_input_tool.spec,
-        request_user_input_tool_spec(/*default_mode_request_user_input*/ false)
+        request_user_input_tool_spec(&request_user_input_available_modes(&features))
     );
 
     features.enable(Feature::DefaultModeRequestUserInput);
@@ -609,7 +611,7 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
     let request_user_input_tool = find_tool(&tools, REQUEST_USER_INPUT_TOOL_NAME);
     assert_eq!(
         request_user_input_tool.spec,
-        request_user_input_tool_spec(/*default_mode_request_user_input*/ true)
+        request_user_input_tool_spec(&request_user_input_available_modes(&features))
     );
 }
 
@@ -2343,10 +2345,8 @@ fn assert_lacks_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
     );
 }
 
-fn request_user_input_tool_spec(default_mode_request_user_input: bool) -> ToolSpec {
-    create_request_user_input_tool(request_user_input_tool_description(
-        default_mode_request_user_input,
-    ))
+fn request_user_input_tool_spec(available_modes: &[ModeKind]) -> ToolSpec {
+    create_request_user_input_tool(request_user_input_tool_description(available_modes))
 }
 
 fn spawn_agent_tool_options(config: &ToolsConfig) -> SpawnAgentToolOptions<'_> {

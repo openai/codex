@@ -28,7 +28,6 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::ThreadId;
@@ -244,13 +243,11 @@ pub(crate) struct ThreadManagerState {
 pub fn build_models_manager(
     config: &Config,
     auth_manager: Arc<AuthManager>,
-    collaboration_modes_config: CollaborationModesConfig,
 ) -> SharedModelsManager {
     let provider = create_model_provider(config.model_provider.clone(), Some(auth_manager));
     provider.models_manager(
         config.codex_home.to_path_buf(),
         config.model_catalog.clone(),
-        collaboration_modes_config,
     )
 }
 
@@ -270,7 +267,6 @@ impl ThreadManager {
         config: &Config,
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
-        collaboration_modes_config: CollaborationModesConfig,
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
     ) -> Self {
@@ -292,11 +288,7 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: build_models_manager(
-                    config,
-                    auth_manager.clone(),
-                    collaboration_modes_config,
-                ),
+                models_manager: build_models_manager(config, auth_manager.clone()),
                 environment_manager,
                 skills_manager,
                 plugins_manager,
@@ -367,11 +359,7 @@ impl ThreadManager {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: create_model_provider(provider, Some(auth_manager.clone()))
-                    .models_manager(
-                        codex_home,
-                        /*config_model_catalog*/ None,
-                        CollaborationModesConfig::default(),
-                    ),
+                    .models_manager(codex_home, /*config_model_catalog*/ None),
                 environment_manager,
                 skills_manager,
                 plugins_manager,

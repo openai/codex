@@ -318,7 +318,6 @@ use codex_mcp::resolve_oauth_scopes;
 use codex_memories_write::clear_memory_roots_contents;
 use codex_model_provider::ProviderAccountError;
 use codex_model_provider::create_model_provider;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -851,15 +850,13 @@ impl CodexMessageProcessor {
     fn normalize_turn_start_collaboration_mode(
         &self,
         mut collaboration_mode: CollaborationMode,
-        collaboration_modes_config: CollaborationModesConfig,
     ) -> CollaborationMode {
         if collaboration_mode.settings.developer_instructions.is_none()
-            && let Some(instructions) =
-                builtin_collaboration_mode_presets(collaboration_modes_config)
-                    .into_iter()
-                    .find(|preset| preset.mode == Some(collaboration_mode.mode))
-                    .and_then(|preset| preset.developer_instructions.flatten())
-                    .filter(|instructions| !instructions.is_empty())
+            && let Some(instructions) = builtin_collaboration_mode_presets()
+                .into_iter()
+                .find(|preset| preset.mode == Some(collaboration_mode.mode))
+                .and_then(|preset| preset.developer_instructions.flatten())
+                .filter(|instructions| !instructions.is_empty())
         {
             collaboration_mode.settings.developer_instructions = Some(instructions);
         }
@@ -6457,13 +6454,9 @@ impl CodexMessageProcessor {
                 self.track_error_response(&request_id, error, /*error_type*/ None);
             })?;
 
-            let collaboration_modes_config = CollaborationModesConfig {
-                default_mode_request_user_input: thread
-                    .enabled(Feature::DefaultModeRequestUserInput),
-            };
-            let collaboration_mode = params.collaboration_mode.map(|mode| {
-                self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
-            });
+            let collaboration_mode = params
+                .collaboration_mode
+                .map(|mode| self.normalize_turn_start_collaboration_mode(mode));
             let environments: Option<Vec<TurnEnvironmentSelection>> =
                 params.environments.map(|environments| {
                     environments

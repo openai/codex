@@ -8,7 +8,6 @@ use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_exec_server::ExecutorFileSystem;
 use codex_login::CodexAuth;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Op;
@@ -239,7 +238,6 @@ async fn list_skills_skips_cwd_roots_when_environment_disabled() -> Result<()> {
         &config,
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("dummy")),
         SessionSource::Exec,
-        CollaborationModesConfig::default(),
         Arc::new(EnvironmentManager::disabled_for_tests(
             ExecServerRuntimePaths::new(
                 std::env::current_exe()?,

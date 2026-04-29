@@ -1,6 +1,8 @@
 use crate::can_request_original_image_detail;
+use crate::request_user_input_available_modes;
 use codex_features::Feature;
 use codex_features::Features;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -109,7 +111,7 @@ pub struct ToolsConfig {
     pub spawn_agent_usage_hint_text: Option<String>,
     pub max_concurrent_threads_per_session: Option<usize>,
     pub wait_agent_min_timeout_ms: Option<i64>,
-    pub default_mode_request_user_input: bool,
+    pub request_user_input_available_modes: Vec<ModeKind>,
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
@@ -146,8 +148,6 @@ impl ToolsConfig {
         let include_goal_tools = features.enabled(Feature::Goals);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
-        let include_default_mode_request_user_input =
-            features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool =
             model_info.supports_search_tool && features.enabled(Feature::ToolSearch);
         let include_tool_suggest = features.enabled(Feature::ToolSuggest)
@@ -230,7 +230,7 @@ impl ToolsConfig {
             spawn_agent_usage_hint_text: None,
             max_concurrent_threads_per_session: None,
             wait_agent_min_timeout_ms: None,
-            default_mode_request_user_input: include_default_mode_request_user_input,
+            request_user_input_available_modes: request_user_input_available_modes(features),
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,

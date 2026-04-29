@@ -126,15 +126,9 @@ pub(super) fn test_session_telemetry(config: &Config, model: &str) -> SessionTel
     )
 }
 
-pub(super) fn test_model_catalog(config: &Config) -> Arc<ModelCatalog> {
-    let collaboration_modes_config = CollaborationModesConfig {
-        default_mode_request_user_input: config
-            .features
-            .enabled(Feature::DefaultModeRequestUserInput),
-    };
+pub(super) fn test_model_catalog(_config: &Config) -> Arc<ModelCatalog> {
     Arc::new(ModelCatalog::new(
         crate::legacy_core::test_support::all_model_presets().clone(),
-        collaboration_modes_config,
     ))
 }
 
@@ -429,15 +423,7 @@ pub(crate) fn set_fast_mode_test_catalog(chat: &mut ChatWidget) {
     .map(Into::into)
     .collect();
 
-    chat.model_catalog = Arc::new(ModelCatalog::new(
-        models,
-        CollaborationModesConfig {
-            default_mode_request_user_input: chat
-                .config
-                .features
-                .enabled(Feature::DefaultModeRequestUserInput),
-        },
-    ));
+    chat.model_catalog = Arc::new(ModelCatalog::new(models));
 }
 
 pub(crate) async fn make_chatwidget_manual_with_sender() -> (
