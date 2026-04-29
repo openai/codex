@@ -3247,12 +3247,12 @@ fn response_item_for_rollout_storage(
     item: &ResponseItem,
     policy: TruncationPolicy,
 ) -> ResponseItem {
-    // Keep persisted tool outputs aligned with the truncated form the model
-    // sees in conversation history. This intentionally reuses the same output
-    // truncation helper.
+    // Keep persisted tool outputs aligned with the in-memory form the model sees in
+    // conversation history, which is also truncated. This intentionally reuses the
+    // same truncation helper.
     //
-    // The goal is to prevent the rollout file from growing too quickly
-    // since tool outputs can be very large.
+    // The goal is to prevent the rollout file from ballooning in size since tool
+    // outputs can be very large.
     let policy_with_serialization_budget = policy * 1.2;
     match item {
         ResponseItem::FunctionCallOutput { call_id, output } => ResponseItem::FunctionCallOutput {
