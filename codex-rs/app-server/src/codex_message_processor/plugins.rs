@@ -3,7 +3,65 @@ use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use codex_app_server_protocol::PluginInstallPolicy;
 
+fn maybe_start_remote_installed_plugin_bundle_sync_for_config(
+    thread_manager: Arc<ThreadManager>,
+    config: Config,
+    auth: Option<CodexAuth>,
+    on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+) {
+    if !config.features.enabled(Feature::Plugins) || !config.features.enabled(Feature::RemotePlugin)
+    {
+        return;
+    }
+
+    let remote_plugin_service_config = RemotePluginServiceConfig {
+        chatgpt_base_url: config.chatgpt_base_url.clone(),
+    };
+    let plugins_manager = thread_manager.plugins_manager();
+    let config_for_refresh = config.clone();
+    let auth_for_refresh = auth.clone();
+    let on_local_cache_changed = Arc::new(move || {
+        plugins_manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
+            &config_for_refresh,
+            auth_for_refresh.clone(),
+            on_effective_plugins_changed.clone(),
+        );
+    });
+
+    codex_core_plugins::remote::maybe_start_remote_installed_plugin_bundle_sync(
+        config.codex_home.to_path_buf(),
+        remote_plugin_service_config,
+        auth,
+        Some(on_local_cache_changed),
+    );
+}
+
 impl CodexMessageProcessor {
+    pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync_with_auth_manager(
+        &self,
+        config: Config,
+        auth_manager: Arc<AuthManager>,
+    ) {
+        if !config.features.enabled(Feature::Plugins)
+            || !config.features.enabled(Feature::RemotePlugin)
+        {
+            return;
+        }
+
+        let thread_manager = Arc::clone(&self.thread_manager);
+        let on_effective_plugins_changed =
+            Some(self.effective_plugins_changed_callback(config.clone()));
+        tokio::spawn(async move {
+            let auth = auth_manager.auth().await;
+            maybe_start_remote_installed_plugin_bundle_sync_for_config(
+                thread_manager,
+                config,
+                auth,
+                on_effective_plugins_changed,
+            );
+        });
+    }
+
     pub(super) async fn plugin_list(
         &self,
         request_id: ConnectionRequestId,
@@ -38,11 +96,19 @@ impl CodexMessageProcessor {
             return Ok(empty_response());
         }
         let plugins_input = config.plugins_config_input();
+        let on_effective_plugins_changed =
+            Some(self.effective_plugins_changed_callback(config.clone()));
         plugins_manager.maybe_start_plugin_list_background_tasks_for_config(
             &plugins_input,
             auth.clone(),
             &roots,
-            Some(self.effective_plugins_changed_callback(config.clone())),
+            on_effective_plugins_changed.clone(),
+        );
+        maybe_start_remote_installed_plugin_bundle_sync_for_config(
+            Arc::clone(&self.thread_manager),
+            config.clone(),
+            auth.clone(),
+            on_effective_plugins_changed,
         );
 
         let config_for_marketplace_listing = plugins_input.clone();

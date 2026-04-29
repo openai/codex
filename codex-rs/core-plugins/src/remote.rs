@@ -1,5 +1,6 @@
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
+use crate::store::PluginStoreError;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInterface;
@@ -13,8 +14,14 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Duration;
+use tracing::info;
+use tracing::warn;
 
 mod share;
 
@@ -31,6 +38,10 @@ pub const REMOTE_WORKSPACE_MARKETPLACE_DISPLAY_NAME: &str = "ChatGPT Workspace P
 const REMOTE_PLUGIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
 const REMOTE_PLUGIN_LIST_PAGE_LIMIT: u32 = 200;
 const MAX_REMOTE_DEFAULT_PROMPT_LEN: usize = 128;
+
+static REMOTE_INSTALLED_PLUGIN_BUNDLE_SYNC_IN_FLIGHT: OnceLock<
+    Mutex<HashSet<RemoteInstalledPluginBundleSyncKey>>,
+> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemotePluginServiceConfig {
@@ -158,6 +169,42 @@ pub enum RemotePluginCatalogError {
 
     #[error("{0}")]
     CacheRemove(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RemoteInstalledPluginBundleSyncOutcome {
+    pub installed_plugin_ids: Vec<String>,
+    pub removed_cache_plugin_ids: Vec<String>,
+    pub failed_remote_plugin_ids: Vec<String>,
+}
+
+impl RemoteInstalledPluginBundleSyncOutcome {
+    pub fn changed_local_cache(&self) -> bool {
+        !self.installed_plugin_ids.is_empty() || !self.removed_cache_plugin_ids.is_empty()
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RemoteInstalledPluginBundleSyncError {
+    #[error("{0}")]
+    Catalog(#[from] RemotePluginCatalogError),
+
+    #[error("{0}")]
+    Store(#[from] PluginStoreError),
+
+    #[error("failed to join stale remote plugin cache cleanup task: {0}")]
+    Join(#[from] tokio::task::JoinError),
+
+    #[error("failed to remove stale remote plugin cache entries: {0}")]
+    CacheRemove(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct RemoteInstalledPluginBundleSyncKey {
+    codex_home: PathBuf,
+    chatgpt_base_url: String,
+    account_id: Option<String>,
+    chatgpt_user_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
@@ -419,6 +466,177 @@ pub async fn fetch_remote_installed_plugins(
     Ok(installed_plugins)
 }
 
+pub fn maybe_start_remote_installed_plugin_bundle_sync(
+    codex_home: PathBuf,
+    config: RemotePluginServiceConfig,
+    auth: Option<CodexAuth>,
+    on_local_cache_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+) {
+    let Some(auth) = auth else {
+        return;
+    };
+    let key = RemoteInstalledPluginBundleSyncKey {
+        codex_home: codex_home.clone(),
+        chatgpt_base_url: config.chatgpt_base_url.clone(),
+        account_id: auth.get_account_id(),
+        chatgpt_user_id: auth.get_chatgpt_user_id(),
+    };
+    if !mark_remote_installed_plugin_bundle_sync_in_flight(key.clone()) {
+        return;
+    }
+
+    tokio::spawn(async move {
+        let result =
+            sync_remote_installed_plugin_bundles_once(codex_home, &config, Some(&auth)).await;
+        match result {
+            Ok(outcome) => {
+                if outcome.changed_local_cache()
+                    && let Some(on_local_cache_changed) = on_local_cache_changed
+                {
+                    on_local_cache_changed();
+                }
+                info!(
+                    installed_plugin_ids = ?outcome.installed_plugin_ids,
+                    removed_cache_plugin_ids = ?outcome.removed_cache_plugin_ids,
+                    failed_remote_plugin_ids = ?outcome.failed_remote_plugin_ids,
+                    "completed remote installed plugin bundle sync"
+                );
+            }
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    "remote installed plugin bundle sync failed"
+                );
+            }
+        }
+        clear_remote_installed_plugin_bundle_sync_in_flight(&key);
+    });
+}
+
+pub async fn sync_remote_installed_plugin_bundles_once(
+    codex_home: PathBuf,
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+) -> Result<RemoteInstalledPluginBundleSyncOutcome, RemoteInstalledPluginBundleSyncError> {
+    let auth = ensure_chatgpt_auth(auth)?;
+    let global = async {
+        let scope = RemotePluginScope::Global;
+        let installed_plugins =
+            fetch_installed_plugins_for_scope_with_download_urls(config, auth, scope).await?;
+        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
+    };
+    let workspace = async {
+        let scope = RemotePluginScope::Workspace;
+        let installed_plugins =
+            fetch_installed_plugins_for_scope_with_download_urls(config, auth, scope).await?;
+        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
+    };
+
+    let (global, workspace) = tokio::try_join!(global, workspace)?;
+    let store = PluginStore::try_new(codex_home.clone())?;
+    let mut installed_plugin_names_by_marketplace =
+        BTreeMap::<String, BTreeSet<String>>::from_iter([
+            (REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(), BTreeSet::new()),
+            (
+                REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
+                BTreeSet::new(),
+            ),
+        ]);
+    let mut installed_plugin_ids = BTreeSet::new();
+    let mut failed_remote_plugin_ids = BTreeSet::new();
+
+    for (scope, installed_plugins) in [global, workspace] {
+        let marketplace_name = scope.marketplace_name().to_string();
+        for installed_plugin in installed_plugins {
+            let plugin = installed_plugin.plugin;
+            installed_plugin_names_by_marketplace
+                .entry(marketplace_name.clone())
+                .or_default()
+                .insert(plugin.name.clone());
+            let plugin_id = match PluginId::new(plugin.name.clone(), marketplace_name.clone()) {
+                Ok(plugin_id) => plugin_id,
+                Err(err) => {
+                    warn!(
+                        remote_plugin_id = %plugin.id,
+                        plugin = %plugin.name,
+                        marketplace = %marketplace_name,
+                        error = %err,
+                        "skipping remote installed plugin with invalid local cache id"
+                    );
+                    failed_remote_plugin_ids.insert(plugin.id);
+                    continue;
+                }
+            };
+            let release_version = plugin
+                .release
+                .version
+                .as_deref()
+                .map(str::trim)
+                .filter(|version| !version.is_empty());
+            if store.active_plugin_version(&plugin_id).as_deref() == release_version {
+                continue;
+            }
+
+            let bundle = match crate::remote_bundle::validate_remote_plugin_bundle(
+                &plugin.id,
+                &marketplace_name,
+                &plugin.name,
+                release_version,
+                plugin.release.bundle_download_url.as_deref(),
+            ) {
+                Ok(bundle) => bundle,
+                Err(err) => {
+                    warn!(
+                        remote_plugin_id = %plugin.id,
+                        plugin = %plugin.name,
+                        marketplace = %marketplace_name,
+                        error = %err,
+                        "skipping remote installed plugin bundle download"
+                    );
+                    failed_remote_plugin_ids.insert(plugin.id);
+                    continue;
+                }
+            };
+
+            match crate::remote_bundle::download_and_install_remote_plugin_bundle(
+                codex_home.clone(),
+                bundle,
+            )
+            .await
+            {
+                Ok(result) => {
+                    installed_plugin_ids.insert(result.plugin_id.as_key());
+                }
+                Err(err) => {
+                    warn!(
+                        remote_plugin_id = %plugin.id,
+                        plugin = %plugin.name,
+                        marketplace = %marketplace_name,
+                        error = %err,
+                        "failed to download remote installed plugin bundle"
+                    );
+                    failed_remote_plugin_ids.insert(plugin.id);
+                }
+            }
+        }
+    }
+
+    let removed_cache_plugin_ids = tokio::task::spawn_blocking(move || {
+        remove_stale_remote_plugin_caches(
+            codex_home.as_path(),
+            &installed_plugin_names_by_marketplace,
+        )
+    })
+    .await?
+    .map_err(RemoteInstalledPluginBundleSyncError::CacheRemove)?;
+
+    Ok(RemoteInstalledPluginBundleSyncOutcome {
+        installed_plugin_ids: installed_plugin_ids.into_iter().collect(),
+        removed_cache_plugin_ids,
+        failed_remote_plugin_ids: failed_remote_plugin_ids.into_iter().collect(),
+    })
+}
+
 pub async fn fetch_remote_plugin_detail(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
@@ -643,6 +861,96 @@ fn remove_remote_plugin_cache(
     Ok(())
 }
 
+fn remove_stale_remote_plugin_caches(
+    codex_home: &Path,
+    installed_plugin_names_by_marketplace: &BTreeMap<String, BTreeSet<String>>,
+) -> Result<Vec<String>, String> {
+    let mut removed_cache_plugin_ids = Vec::new();
+    for marketplace_name in [
+        REMOTE_GLOBAL_MARKETPLACE_NAME,
+        REMOTE_WORKSPACE_MARKETPLACE_NAME,
+    ] {
+        let marketplace_root = codex_home.join(PLUGINS_CACHE_DIR).join(marketplace_name);
+        if !marketplace_root.exists() {
+            continue;
+        }
+        let installed_plugin_names = installed_plugin_names_by_marketplace
+            .get(marketplace_name)
+            .cloned()
+            .unwrap_or_default();
+        for entry in fs::read_dir(&marketplace_root).map_err(|err| {
+            format!(
+                "failed to read remote plugin cache directory {}: {err}",
+                marketplace_root.display()
+            )
+        })? {
+            let entry = entry.map_err(|err| {
+                format!(
+                    "failed to enumerate remote plugin cache directory {}: {err}",
+                    marketplace_root.display()
+                )
+            })?;
+            let plugin_name = entry.file_name().into_string().map_err(|file_name| {
+                format!(
+                    "remote plugin cache entry under {} is not valid UTF-8: {:?}",
+                    marketplace_root.display(),
+                    file_name
+                )
+            })?;
+            if installed_plugin_names.contains(&plugin_name) {
+                continue;
+            }
+
+            let cache_path = entry.path();
+            if cache_path.is_dir() {
+                fs::remove_dir_all(&cache_path).map_err(|err| {
+                    format!(
+                        "failed to remove stale remote plugin cache entry {}: {err}",
+                        cache_path.display()
+                    )
+                })?;
+            } else {
+                fs::remove_file(&cache_path).map_err(|err| {
+                    format!(
+                        "failed to remove stale remote plugin cache entry {}: {err}",
+                        cache_path.display()
+                    )
+                })?;
+            }
+            let plugin_key = PluginId::new(plugin_name.clone(), marketplace_name.to_string())
+                .map(|plugin_id| plugin_id.as_key())
+                .unwrap_or_else(|_| format!("{plugin_name}@{marketplace_name}"));
+            removed_cache_plugin_ids.push(plugin_key);
+        }
+    }
+
+    removed_cache_plugin_ids.sort();
+    Ok(removed_cache_plugin_ids)
+}
+
+fn mark_remote_installed_plugin_bundle_sync_in_flight(
+    key: RemoteInstalledPluginBundleSyncKey,
+) -> bool {
+    let syncs =
+        REMOTE_INSTALLED_PLUGIN_BUNDLE_SYNC_IN_FLIGHT.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut syncs = match syncs.lock() {
+        Ok(syncs) => syncs,
+        Err(err) => err.into_inner(),
+    };
+    syncs.insert(key)
+}
+
+fn clear_remote_installed_plugin_bundle_sync_in_flight(key: &RemoteInstalledPluginBundleSyncKey) {
+    let Some(syncs) = REMOTE_INSTALLED_PLUGIN_BUNDLE_SYNC_IN_FLIGHT.get() else {
+        return;
+    };
+    let mut syncs = match syncs.lock() {
+        Ok(syncs) => syncs,
+        Err(err) => err.into_inner(),
+    };
+    syncs.remove(key);
+}
+
 fn build_remote_plugin_summary(
     plugin: &RemotePluginDirectoryItem,
     installed_plugin: Option<&RemotePluginInstalledItem>,
@@ -784,11 +1092,40 @@ async fn fetch_installed_plugins_for_scope(
     auth: &CodexAuth,
     scope: RemotePluginScope,
 ) -> Result<Vec<RemotePluginInstalledItem>, RemotePluginCatalogError> {
+    fetch_installed_plugins_for_scope_with_download_url_option(
+        config, auth, scope, /*include_download_urls*/ false,
+    )
+    .await
+}
+
+async fn fetch_installed_plugins_for_scope_with_download_urls(
+    config: &RemotePluginServiceConfig,
+    auth: &CodexAuth,
+    scope: RemotePluginScope,
+) -> Result<Vec<RemotePluginInstalledItem>, RemotePluginCatalogError> {
+    fetch_installed_plugins_for_scope_with_download_url_option(
+        config, auth, scope, /*include_download_urls*/ true,
+    )
+    .await
+}
+
+async fn fetch_installed_plugins_for_scope_with_download_url_option(
+    config: &RemotePluginServiceConfig,
+    auth: &CodexAuth,
+    scope: RemotePluginScope,
+    include_download_urls: bool,
+) -> Result<Vec<RemotePluginInstalledItem>, RemotePluginCatalogError> {
     let mut plugins = Vec::new();
     let mut page_token = None;
     loop {
-        let response =
-            get_remote_plugin_installed_page(config, auth, scope, page_token.as_deref()).await?;
+        let response = get_remote_plugin_installed_page(
+            config,
+            auth,
+            scope,
+            page_token.as_deref(),
+            include_download_urls,
+        )
+        .await?;
         plugins.extend(response.plugins);
         let Some(next_page_token) = response.pagination.next_page_token else {
             break;
@@ -821,12 +1158,16 @@ async fn get_remote_plugin_installed_page(
     auth: &CodexAuth,
     scope: RemotePluginScope,
     page_token: Option<&str>,
+    include_download_urls: bool,
 ) -> Result<RemotePluginInstalledResponse, RemotePluginCatalogError> {
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/installed");
     let client = build_reqwest_client();
     let mut request = authenticated_request(client.get(&url), auth)?;
     request = request.query(&[("scope", scope.api_value())]);
+    if include_download_urls {
+        request = request.query(&[("includeDownloadUrls", true)]);
+    }
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
     }
