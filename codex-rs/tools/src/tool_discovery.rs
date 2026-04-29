@@ -272,11 +272,6 @@ pub fn collect_tool_search_source_infos<'a>(
 }
 
 pub fn create_tool_suggest_tool(discoverable_tools: &[ToolSuggestEntry]) -> ToolSpec {
-    let discoverable_tool_ids = discoverable_tools
-        .iter()
-        .map(|tool| tool.id.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
     let properties = BTreeMap::from([
         (
             "tool_type".to_string(),
@@ -287,15 +282,11 @@ pub fn create_tool_suggest_tool(discoverable_tools: &[ToolSuggestEntry]) -> Tool
         ),
         (
             "action_type".to_string(),
-            JsonSchema::string(Some(
-                "Suggested action for the tool. Use \"install\" or \"enable\".".to_string(),
-            )),
+            JsonSchema::string(Some("Suggested action for the tool. Use \"install\".".to_string())),
         ),
         (
             "tool_id".to_string(),
-            JsonSchema::string(Some(format!(
-                "Connector or plugin id to suggest. Must be one of: {discoverable_tool_ids}."
-            ))),
+            JsonSchema::string(Some("Connector or plugin id to suggest.".to_string())),
         ),
         (
             "suggest_reason".to_string(),
@@ -308,7 +299,7 @@ pub fn create_tool_suggest_tool(discoverable_tools: &[ToolSuggestEntry]) -> Tool
 
     let discoverable_tools = format_discoverable_tools(discoverable_tools);
     let description = format!(
-        "# Tool suggestion discovery\n\nSuggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin, when the user clearly wants a capability that is not currently available in the active `tools` list.\n\nUse this ONLY when:\n- You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `{TOOL_SEARCH_TOOL_NAME}` (if available) and other means.\n- For connectors/apps that are not installed but needed for an installed plugin, suggest to install them if the task requirements match precisely.\n- For plugins that are not installed but discoverable, only suggest discoverable and installable plugins when the user's intent very explicitly and unambiguously matches that plugin itself. Do not suggest a plugin just because one of its connectors or capabilities seems relevant.\n\nTool suggestions should only use the discoverable tools listed here. DO NOT explore or recommend tools that are not on this list.\n\nDiscoverable tools:\n{discoverable_tools}\n\nWorkflow:\n\n1. Ensure all possible means have been exhausted to find an existing available tool but none of them matches the request intent.\n2. Match the user's request against the discoverable tools list above. Apply the stricter explicit-and-unambiguous rule for *discoverable tools* like plugin install suggestions; *missing tools* like connector install suggestions continue to use the normal clear-fit standard.\n3. If one tool clearly fits, call `{TOOL_SUGGEST_TOOL_NAME}` with:\n   - `tool_type`: `connector` or `plugin`\n   - `action_type`: `install` or `enable`\n   - `tool_id`: exact id from the discoverable tools list above\n   - `suggest_reason`: concise one-line user-facing reason this tool can help with the current request\n4. After the suggestion flow completes:\n   - if the user finished the install or enable flow, continue by searching again or using the newly available tool\n   - if the user did not finish, continue without that tool, and don't suggest that tool again unless the user explicitly asks for it."
+        "# Tool suggestion discovery\n\nUse this tool only to ask the user to install one known plugin or connector from the list below. The list contains known candidates that are not currently installed.\n\nUse this ONLY when all of the following are true:\n- The user explicitly wants a specific plugin or connector that is not already available in the current context or active `tools` list.\n- `{TOOL_SEARCH_TOOL_NAME}` is not available, or it has already been called and did not find or make the requested tool callable.\n- The tool is one of the known installable plugins or connectors listed below. Only ask to install tools from this list.\n\nDo not use tool suggestion for adjacent capabilities, broad recommendations, or tools that merely seem useful. The user's intent must clearly match one listed tool.\n\nKnown plugins/connectors available to install:\n{discoverable_tools}\n\nWorkflow:\n\n1. Check the current context and active `tools` list first. If `{TOOL_SEARCH_TOOL_NAME}` is available, call `{TOOL_SEARCH_TOOL_NAME}` before calling `{TOOL_SUGGEST_TOOL_NAME}`. Do not use tool suggestion if the needed tool is already available, found through `{TOOL_SEARCH_TOOL_NAME}`, or callable after discovery.\n2. Match the user's explicit request against the known plugin/connector list above. Only proceed when one listed plugin or connector exactly fits.\n3. If we found both connectors and plugins to suggest, use plugins first, only use connectors if the corresponding plugin is installed but the connector is not.\n4. If one tool clearly fits, call `{TOOL_SUGGEST_TOOL_NAME}` with:\n   - `tool_type`: `connector` or `plugin`\n   - `action_type`: `install`\n   - `tool_id`: exact id from the known plugin/connector list above\n   - `suggest_reason`: concise one-line user-facing reason this tool can help with the current request\n5. After the suggestion flow completes:\n   - if the user finished the install flow, continue by searching again or using the newly available tool\n   - if the user did not finish, continue without that tool, and don't suggest that tool again unless the user explicitly asks for it.\n\nIMPORTANT: DO NOT call this tool in parallel with other tools."
     );
 
     ToolSpec::Function(ResponsesApiTool {

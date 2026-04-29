@@ -1901,10 +1901,7 @@ fn goal_status_indicator_line_formats_goal_text() {
             },
             "Goal unmet (4K / 5K tokens)",
         ),
-        (
-            GoalStatusIndicator::Paused,
-            "Goal paused (/goal to unpause)",
-        ),
+        (GoalStatusIndicator::Paused, "Goal paused (/goal resume)"),
         (
             GoalStatusIndicator::BudgetLimited { usage: None },
             "Goal abandoned",

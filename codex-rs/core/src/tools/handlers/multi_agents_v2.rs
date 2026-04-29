@@ -2,7 +2,6 @@
 
 use crate::agent::AgentStatus;
 use crate::agent::agent_resolver::resolve_agent_target;
-use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;

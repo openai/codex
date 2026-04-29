@@ -131,12 +131,13 @@ async fn tool_suggest_is_available_without_search_tool_after_discovery_attempts(
 
     let description =
         function_tool_description(&body, TOOL_SUGGEST_TOOL_NAME).expect("description");
-    assert!(
-        description.contains(
-            "You've already tried to find a matching available tool for the user's request"
-        )
-    );
-    assert!(description.contains("This includes `tool_search` (if available) and other means."));
+    assert!(description.contains(
+        "Use this tool only to ask the user to install one known plugin or connector from the list below"
+    ));
+    assert!(description.contains(
+        "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
+    ));
+    assert!(description.contains("IMPORTANT: DO NOT call this tool in parallel with other tools."));
     assert!(!description.contains("tool_search fails to find a good match"));
 
     Ok(())

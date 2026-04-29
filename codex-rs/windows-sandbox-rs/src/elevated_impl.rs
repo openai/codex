@@ -198,10 +198,13 @@ mod windows_impl {
                 stdin_open: false,
                 use_private_desktop,
             };
-            let mut transport =
-                spawn_runner_transport(codex_home, cwd, &sandbox_creds, logs_base_dir)?;
-            transport.send_spawn_request(spawn_request)?;
-            transport.read_spawn_ready()?;
+            let transport = spawn_runner_transport(
+                codex_home,
+                cwd,
+                &sandbox_creds,
+                logs_base_dir,
+                spawn_request,
+            )?;
             let (pipe_write, mut pipe_read) = transport.into_files();
             drop(pipe_write);
 

@@ -196,7 +196,6 @@ async fn plugin_uninstall_writes_remote_plugin_to_cloud_when_remote_plugin_enabl
     )?;
 
     mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.0.0", "GLOBAL").await;
-    mount_empty_remote_installed_plugins(&server).await;
 
     Mock::given(method("POST"))
         .and(path(format!(
@@ -269,7 +268,6 @@ async fn plugin_uninstall_uses_detail_scope_for_cache_namespace() -> Result<()> 
         AuthCredentialsStoreMode::File,
     )?;
     mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.0.0", "WORKSPACE").await;
-    mount_empty_remote_installed_plugins(&server).await;
 
     Mock::given(method("POST"))
         .and(path(format!(
@@ -326,7 +324,7 @@ async fn plugin_uninstall_uses_detail_scope_for_cache_namespace() -> Result<()> 
 }
 
 #[tokio::test]
-async fn plugin_uninstall_posts_even_when_remote_detail_fetch_fails() -> Result<()> {
+async fn plugin_uninstall_rejects_before_post_when_remote_detail_fetch_fails() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     write_remote_plugin_catalog_config(
@@ -342,19 +340,6 @@ async fn plugin_uninstall_posts_even_when_remote_detail_fetch_fails() -> Result<
         AuthCredentialsStoreMode::File,
     )?;
 
-    Mock::given(method("POST"))
-        .and(path(format!(
-            "/backend-api/plugins/{REMOTE_PLUGIN_ID}/uninstall"
-        )))
-        .and(header("authorization", "Bearer chatgpt-token"))
-        .and(header("chatgpt-account-id", "account-123"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(format!(r#"{{"id":"{REMOTE_PLUGIN_ID}","enabled":false}}"#)),
-        )
-        .mount(&server)
-        .await;
-
     let legacy_remote_plugin_cache_root = codex_home
         .path()
         .join(format!("plugins/cache/chatgpt-global/{REMOTE_PLUGIN_ID}"));
@@ -368,22 +353,29 @@ async fn plugin_uninstall_posts_even_when_remote_detail_fetch_fails() -> Result<
             plugin_id: REMOTE_PLUGIN_ID.to_string(),
         })
         .await?;
-    let response: JSONRPCResponse = timeout(
+    let err = timeout(
         DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let response: PluginUninstallResponse = to_response(response)?;
 
-    assert_eq!(response, PluginUninstallResponse {});
+    assert_eq!(err.error.code, -32600);
+    assert!(err.error.message.contains("remote plugin catalog request"));
+    wait_for_remote_plugin_request_count(
+        &server,
+        "GET",
+        &format!("/ps/plugins/{REMOTE_PLUGIN_ID}"),
+        /*expected_count*/ 1,
+    )
+    .await?;
     wait_for_remote_plugin_request_count(
         &server,
         "POST",
         &format!("/plugins/{REMOTE_PLUGIN_ID}/uninstall"),
-        /*expected_count*/ 1,
+        /*expected_count*/ 0,
     )
     .await?;
-    assert!(!legacy_remote_plugin_cache_root.exists());
+    assert!(legacy_remote_plugin_cache_root.exists());
     Ok(())
 }
 
@@ -553,24 +545,6 @@ async fn mount_remote_plugin_detail(
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(ResponseTemplate::new(200).set_body_string(detail_body))
-        .mount(server)
-        .await;
-}
-
-async fn mount_empty_remote_installed_plugins(server: &MockServer) {
-    Mock::given(method("GET"))
-        .and(path("/backend-api/ps/plugins/installed"))
-        .and(header("authorization", "Bearer chatgpt-token"))
-        .and(header("chatgpt-account-id", "account-123"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(
-            r#"{
-  "plugins": [],
-  "pagination": {
-    "limit": 50,
-    "next_page_token": null
-  }
-}"#,
-        ))
         .mount(server)
         .await;
 }

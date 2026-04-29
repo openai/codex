@@ -37,6 +37,7 @@ use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
@@ -247,6 +248,7 @@ impl ConnectionSessionState {
 
 pub(crate) struct MessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
+    pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
     pub(crate) config_manager: ConfigManager,
@@ -267,6 +269,7 @@ impl MessageProcessor {
     pub(crate) fn new(args: MessageProcessorArgs) -> Self {
         let MessageProcessorArgs {
             outgoing,
+            analytics_events_client,
             arg0_paths,
             config,
             config_manager,
@@ -283,11 +286,6 @@ impl MessageProcessor {
         auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));
-        let analytics_events_client = AnalyticsEventsClient::new(
-            Arc::clone(&auth_manager),
-            config.chatgpt_base_url.trim_end_matches('/').to_string(),
-            config.analytics_enabled,
-        );
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
@@ -317,10 +315,15 @@ impl MessageProcessor {
         });
         if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
             // Keep plugin startup warmups aligned at app-server startup.
-            // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
+            let on_effective_plugins_changed =
+                codex_message_processor.effective_plugins_changed_callback((*config).clone());
             thread_manager
                 .plugins_manager()
-                .maybe_start_plugin_startup_tasks_for_config(&config, auth_manager.clone());
+                .maybe_start_plugin_startup_tasks_for_config(
+                    &config,
+                    auth_manager.clone(),
+                    Some(on_effective_plugins_changed),
+                );
         }
         let config_api = ConfigApi::new(
             config_manager,
@@ -730,15 +733,11 @@ impl MessageProcessor {
             return Err(invalid_request(experimental_required_message(reason)));
         }
         let connection_id = connection_request_id.connection_id;
-        if let ClientRequest::TurnStart { request_id, .. }
-        | ClientRequest::TurnSteer { request_id, .. } = &codex_request
-        {
-            self.analytics_events_client.track_request(
-                connection_id.0,
-                request_id.clone(),
-                codex_request.clone(),
-            );
-        }
+        self.analytics_events_client.track_request(
+            connection_id.0,
+            connection_request_id.request_id.clone(),
+            &codex_request,
+        );
 
         let serialization_scope = codex_request.serialization_scope();
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
@@ -990,7 +989,12 @@ impl MessageProcessor {
         params: ConfigValueWriteParams,
     ) {
         let result = self.config_api.write_value(params).await;
-        self.handle_config_mutation_result(request_id, result).await
+        self.handle_config_mutation_result(
+            request_id,
+            result,
+            ClientResponsePayload::ConfigValueWrite,
+        )
+        .await
     }
 
     async fn handle_config_batch_write(
@@ -999,7 +1003,12 @@ impl MessageProcessor {
         params: ConfigBatchWriteParams,
     ) {
         let result = self.config_api.batch_write(params).await;
-        self.handle_config_mutation_result(request_id, result).await;
+        self.handle_config_mutation_result(
+            request_id,
+            result,
+            ClientResponsePayload::ConfigBatchWrite,
+        )
+        .await;
     }
 
     async fn handle_experimental_feature_enablement_set(
@@ -1013,7 +1022,12 @@ impl MessageProcessor {
             .set_experimental_feature_enablement(params)
             .await;
         let is_ok = result.is_ok();
-        self.handle_config_mutation_result(request_id, result).await;
+        self.handle_config_mutation_result(
+            request_id,
+            result,
+            ClientResponsePayload::ExperimentalFeatureEnablementSet,
+        )
+        .await;
         if should_refresh_apps_list && is_ok {
             self.refresh_apps_list_after_experimental_feature_enablement_set()
                 .await;
@@ -1089,15 +1103,18 @@ impl MessageProcessor {
         });
     }
 
-    async fn handle_config_mutation_result<T: serde::Serialize>(
+    async fn handle_config_mutation_result<T>(
         &self,
         request_id: ConnectionRequestId,
         result: std::result::Result<T, JSONRPCErrorError>,
+        wrap_success: impl FnOnce(T) -> ClientResponsePayload,
     ) {
         match result {
             Ok(response) => {
                 self.handle_config_mutation().await;
-                self.outgoing.send_response(request_id, response).await;
+                self.outgoing
+                    .send_response_as(request_id, wrap_success(response))
+                    .await;
             }
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
@@ -1175,7 +1192,7 @@ impl MessageProcessor {
         device_key_requests_allowed: bool,
         run_request: F,
     ) where
-        R: serde::Serialize + Send + 'static,
+        R: Into<ClientResponsePayload> + Send + 'static,
         F: FnOnce(DeviceKeyApi) -> Fut + Send + 'static,
         Fut: Future<Output = Result<R, JSONRPCErrorError>> + Send + 'static,
     {

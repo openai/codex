@@ -115,6 +115,7 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
         use_legacy_landlock: false,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
+        network_denial_cancellation_token: None,
     };
 
     let exec_request = attempt
@@ -675,10 +676,12 @@ fn maybe_wrap_shell_lc_with_snapshot_keeps_user_proxy_env_when_proxy_inactive() 
         &HashMap::new(),
         &HashMap::new(),
     );
-    let output = Command::new(&rewritten[0])
-        .args(&rewritten[1..])
-        .output()
-        .expect("run rewritten command");
+    let mut command = Command::new(&rewritten[0]);
+    command.args(&rewritten[1..]);
+    for key in PROXY_ENV_KEYS {
+        command.env_remove(key);
+    }
+    let output = command.output().expect("run rewritten command");
 
     assert!(output.status.success(), "command failed: {output:?}");
     assert_eq!(

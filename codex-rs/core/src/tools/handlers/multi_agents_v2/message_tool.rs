@@ -43,8 +43,6 @@ pub(crate) struct SendMessageArgs {
 pub(crate) struct FollowupTaskArgs {
     pub(crate) target: String,
     pub(crate) message: String,
-    #[serde(default)]
-    pub(crate) interrupt: bool,
 }
 
 fn message_content(message: String) -> Result<String, FunctionCallError> {
@@ -62,16 +60,8 @@ pub(crate) async fn handle_message_string_tool(
     mode: MessageDeliveryMode,
     target: String,
     message: String,
-    interrupt: bool,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
-    handle_message_submission(
-        invocation,
-        mode,
-        target,
-        message_content(message)?,
-        interrupt,
-    )
-    .await
+    handle_message_submission(invocation, mode, target, message_content(message)?).await
 }
 
 async fn handle_message_submission(
@@ -79,7 +69,6 @@ async fn handle_message_submission(
     mode: MessageDeliveryMode,
     target: String,
     prompt: String,
-    interrupt: bool,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let ToolInvocation {
         session,
@@ -102,14 +91,6 @@ async fn handle_message_submission(
         return Err(FunctionCallError::RespondToModel(
             "Tasks can't be assigned to the root agent".to_string(),
         ));
-    }
-    if interrupt {
-        session
-            .services
-            .agent_control
-            .interrupt_agent(receiver_thread_id)
-            .await
-            .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
     }
     session
         .send_event(

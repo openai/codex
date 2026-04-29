@@ -1923,6 +1923,38 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_macos_parses_permissions_profile() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "sandbox",
+            "macos",
+            "--permissions-profile",
+            ":workspace",
+            "--",
+            "echo",
+        ])
+        .expect("parse");
+
+        let Some(Subcommand::Sandbox(SandboxArgs {
+            cmd: SandboxCommand::Macos(command),
+        })) = cli.subcommand
+        else {
+            panic!("expected sandbox macos command");
+        };
+
+        assert_eq!(command.permissions_profile.as_deref(), Some(":workspace"));
+        assert_eq!(command.command, vec!["echo"]);
+    }
+
+    #[test]
+    fn sandbox_macos_rejects_explicit_profile_controls_without_profile() {
+        let err = MultitoolCli::try_parse_from(["codex", "sandbox", "macos", "-C", "/tmp"])
+            .expect_err("parse should fail");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
     fn plugin_marketplace_remove_parses_under_plugin() {
         let cli =
             MultitoolCli::try_parse_from(["codex", "plugin", "marketplace", "remove", "debug"])

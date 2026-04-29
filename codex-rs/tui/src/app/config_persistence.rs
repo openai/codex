@@ -351,8 +351,8 @@ impl App {
             #[cfg(target_os = "windows")]
             {
                 let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
-                self.app_event_tx.send(AppEvent::CodexOp(
-                    AppCommand::override_turn_context(
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(AppCommand::override_turn_context(
                         /*cwd*/ None,
                         /*approval_policy*/ None,
                         /*approvals_reviewer*/ None,
@@ -365,9 +365,7 @@ impl App {
                         /*service_tier*/ None,
                         /*collaboration_mode*/ None,
                         /*personality*/ None,
-                    )
-                    .into_core(),
-                ));
+                    )));
             }
         }
 

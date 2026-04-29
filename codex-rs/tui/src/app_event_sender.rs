@@ -38,48 +38,45 @@ impl AppEventSender {
     }
 
     pub(crate) fn interrupt(&self) {
-        self.send(AppEvent::CodexOp(AppCommand::interrupt().into_core()));
+        self.send(AppEvent::CodexOp(AppCommand::interrupt()));
     }
 
     pub(crate) fn compact(&self) {
-        self.send(AppEvent::CodexOp(AppCommand::compact().into_core()));
+        self.send(AppEvent::CodexOp(AppCommand::compact()));
     }
 
     pub(crate) fn set_thread_name(&self, name: String) {
-        self.send(AppEvent::CodexOp(
-            AppCommand::set_thread_name(name).into_core(),
-        ));
+        self.send(AppEvent::CodexOp(AppCommand::set_thread_name(name)));
     }
 
     pub(crate) fn review(&self, review_request: ReviewRequest) {
-        self.send(AppEvent::CodexOp(
-            AppCommand::review(review_request).into_core(),
-        ));
+        self.send(AppEvent::CodexOp(AppCommand::review(review_request)));
     }
 
     pub(crate) fn list_skills(&self, cwds: Vec<PathBuf>, force_reload: bool) {
-        self.send(AppEvent::CodexOp(
-            AppCommand::list_skills(cwds, force_reload).into_core(),
-        ));
+        self.send(AppEvent::CodexOp(AppCommand::list_skills(
+            cwds,
+            force_reload,
+        )));
     }
 
     #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub(crate) fn realtime_conversation_audio(&self, params: ConversationAudioParams) {
-        self.send(AppEvent::CodexOp(
-            AppCommand::realtime_conversation_audio(params).into_core(),
-        ));
+        self.send(AppEvent::CodexOp(AppCommand::realtime_conversation_audio(
+            params,
+        )));
     }
 
     pub(crate) fn user_input_answer(&self, id: String, response: RequestUserInputResponse) {
-        self.send(AppEvent::CodexOp(
-            AppCommand::user_input_answer(id, response).into_core(),
-        ));
+        self.send(AppEvent::CodexOp(AppCommand::user_input_answer(
+            id, response,
+        )));
     }
 
     pub(crate) fn exec_approval(&self, thread_id: ThreadId, id: String, decision: ReviewDecision) {
         self.send(AppEvent::SubmitThreadOp {
             thread_id,
-            op: AppCommand::exec_approval(id, /*turn_id*/ None, decision).into_core(),
+            op: AppCommand::exec_approval(id, /*turn_id*/ None, decision),
         });
     }
 
@@ -91,14 +88,14 @@ impl AppEventSender {
     ) {
         self.send(AppEvent::SubmitThreadOp {
             thread_id,
-            op: AppCommand::request_permissions_response(id, response).into_core(),
+            op: AppCommand::request_permissions_response(id, response),
         });
     }
 
     pub(crate) fn patch_approval(&self, thread_id: ThreadId, id: String, decision: ReviewDecision) {
         self.send(AppEvent::SubmitThreadOp {
             thread_id,
-            op: AppCommand::patch_approval(id, decision).into_core(),
+            op: AppCommand::patch_approval(id, decision),
         });
     }
 
@@ -113,8 +110,7 @@ impl AppEventSender {
     ) {
         self.send(AppEvent::SubmitThreadOp {
             thread_id,
-            op: AppCommand::resolve_elicitation(server_name, request_id, decision, content, meta)
-                .into_core(),
+            op: AppCommand::resolve_elicitation(server_name, request_id, decision, content, meta),
         });
     }
 }
