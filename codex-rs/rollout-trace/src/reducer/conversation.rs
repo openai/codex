@@ -209,7 +209,6 @@ impl TraceReducer {
             let index = context.start_index + offset;
             let tool_link_item = item.clone();
             self.ensure_call_id_consistency(context.thread_id, &item)?;
-            self.ensure_reasoning_consistency(context.thread_id, &item)?;
             let item_id = if let Some(previous_item_id) = previous_snapshot.get(index) {
                 if self.item_matches(previous_item_id, &item) {
                     previous_item_id.clone()
@@ -366,7 +365,6 @@ impl TraceReducer {
         for item in items {
             let tool_link_item = item.clone();
             self.ensure_call_id_consistency(context.thread_id, &item)?;
-            self.ensure_reasoning_consistency(context.thread_id, &item)?;
             let item_id = self
                 .find_matching_snapshot_item(&context.candidates, &item_ids, &item)
                 .unwrap_or_else(|| {
@@ -497,31 +495,6 @@ impl TraceReducer {
         Ok(())
     }
 
-    fn ensure_reasoning_consistency(
-        &self,
-        thread_id: &str,
-        normalized: &NormalizedConversationItem,
-    ) -> Result<()> {
-        if normalized.kind != ConversationItemKind::Reasoning {
-            return Ok(());
-        };
-        let Some((label, value)) = reasoning_encoded_part(&normalized.body) else {
-            return Ok(());
-        };
-
-        for item in self.rollout.conversation_items.values() {
-            if item.thread_id == thread_id
-                && item.kind == ConversationItemKind::Reasoning
-                && item.channel == normalized.channel
-                && reasoning_encoded_part(&item.body) == Some((label, value))
-                && !reasoning_body_matches(&item.body, &normalized.body)
-            {
-                bail!("reasoning encrypted_content was reused with different readable content");
-            }
-        }
-        Ok(())
-    }
-
     fn item_matches(&self, item_id: &str, normalized: &NormalizedConversationItem) -> bool {
         let Some(item) = self.rollout.conversation_items.get(item_id) else {
             return false;
@@ -636,9 +609,10 @@ fn reasoning_body_matches(left: &ConversationBody, right: &ConversationBody) -> 
     }
 
     // The Responses API may return readable reasoning on completion, but later
-    // request snapshots often replay only the encrypted blob. The blob is the
-    // stable model-visible identity; readable text/summary is extra evidence
-    // that must agree whenever both sides provide it.
+    // request snapshots often replay only the encrypted blob. Treat the blob as
+    // stable model-visible identity and merge readable text as best-effort
+    // evidence, because request/response serialization can observe different
+    // readable forms for the same encrypted reasoning item.
     let Some(left_encoded) = reasoning_encoded_part(left) else {
         return false;
     };
@@ -646,7 +620,7 @@ fn reasoning_body_matches(left: &ConversationBody, right: &ConversationBody) -> 
         return false;
     };
 
-    left_encoded == right_encoded && readable_reasoning_parts_match(left, right)
+    left_encoded == right_encoded
 }
 
 fn merge_reasoning_body(
@@ -657,11 +631,9 @@ fn merge_reasoning_body(
         return Ok(());
     }
     if !reasoning_body_matches(existing, incoming) {
-        bail!("reasoning encrypted_content was reused with different readable content");
+        bail!("reasoning item merge attempted with different encrypted_content identity");
     }
-    if readable_reasoning_parts(existing).is_empty()
-        && !readable_reasoning_parts(incoming).is_empty()
-    {
+    if incoming_readable_reasoning_supersedes_existing(existing, incoming) {
         existing.parts = incoming.parts.clone();
     }
     Ok(())
@@ -677,12 +649,6 @@ fn reasoning_encoded_part(body: &ConversationBody) -> Option<(&str, &str)> {
     })
 }
 
-fn readable_reasoning_parts_match(left: &ConversationBody, right: &ConversationBody) -> bool {
-    let left = readable_reasoning_parts(left);
-    let right = readable_reasoning_parts(right);
-    left.is_empty() || right.is_empty() || left == right
-}
-
 fn readable_reasoning_parts(body: &ConversationBody) -> Vec<&ConversationPart> {
     body.parts
         .iter()
@@ -693,6 +659,22 @@ fn readable_reasoning_parts(body: &ConversationBody) -> Vec<&ConversationPart> {
             )
         })
         .collect()
+}
+
+fn incoming_readable_reasoning_supersedes_existing(
+    existing: &ConversationBody,
+    incoming: &ConversationBody,
+) -> bool {
+    let existing_parts = readable_reasoning_parts(existing);
+    let incoming_parts = readable_reasoning_parts(incoming);
+    // Keep the richest non-conflicting readable observation. Treat "richer" as
+    // an ordered superset so a later sighting can add summary/text while a
+    // conflicting sighting cannot overwrite the first readable body.
+    let mut incoming_iter = incoming_parts.iter();
+    existing_parts.len() < incoming_parts.len()
+        && existing_parts
+            .iter()
+            .all(|existing| incoming_iter.any(|incoming| incoming == existing))
 }
 
 #[cfg(test)]
