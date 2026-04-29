@@ -75,6 +75,10 @@ mod tests {
 
         let serialized = to_ascii_json_string(&value).expect("serialize ascii json");
 
+        assert_eq!(
+            serialized,
+            r#"{"workspaces":{"/tmp/\u6771\u4eac":{"emoji":"\ud83d\ude80","label":"Agentlar\u0131m"}}}"#
+        );
         assert!(serialized.is_ascii());
         assert!(!serialized.contains("東京"));
         assert!(!serialized.contains("Agentlarım"));
