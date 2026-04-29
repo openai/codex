@@ -2174,9 +2174,12 @@ pub enum LoginAccountParams {
         #[ts(rename = "apiKey")]
         api_key: String,
     },
-    #[serde(rename = "chatgpt")]
-    #[ts(rename = "chatgpt")]
-    Chatgpt,
+    #[serde(rename = "chatgpt", rename_all = "camelCase")]
+    #[ts(rename = "chatgpt", rename_all = "camelCase")]
+    Chatgpt {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        codex_streamlined_login: bool,
+    },
     #[serde(rename = "chatgptDeviceCode")]
     #[ts(rename = "chatgptDeviceCode")]
     ChatgptDeviceCode,

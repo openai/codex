@@ -6,5 +6,6 @@ codex_rust_crate(
     compile_data = [
         "src/assets/error.html",
         "src/assets/success.html",
+        "src/assets/success_legacy.html",
     ],
 )

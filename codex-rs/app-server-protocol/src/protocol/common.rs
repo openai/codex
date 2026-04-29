@@ -2104,7 +2104,9 @@ mod tests {
     fn serialize_account_login_chatgpt() -> Result<()> {
         let request = ClientRequest::LoginAccount {
             request_id: RequestId::Integer(3),
-            params: v2::LoginAccountParams::Chatgpt,
+            params: v2::LoginAccountParams::Chatgpt {
+                codex_streamlined_login: false,
+            },
         };
         assert_eq!(
             json!({
@@ -2112,6 +2114,28 @@ mod tests {
                 "id": 3,
                 "params": {
                     "type": "chatgpt"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_account_login_chatgpt_streamlined() -> Result<()> {
+        let request = ClientRequest::LoginAccount {
+            request_id: RequestId::Integer(3),
+            params: v2::LoginAccountParams::Chatgpt {
+                codex_streamlined_login: true,
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "account/login/start",
+                "id": 3,
+                "params": {
+                    "type": "chatgpt",
+                    "codexStreamlinedLogin": true
                 }
             }),
             serde_json::to_value(&request)?,

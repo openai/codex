@@ -65,6 +65,7 @@ pub struct ServerOptions {
     pub open_browser: bool,
     pub force_state: Option<String>,
     pub forced_chatgpt_workspace_id: Option<String>,
+    pub codex_streamlined_login: bool,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 }
 
@@ -84,6 +85,7 @@ impl ServerOptions {
             open_browser: true,
             force_state: None,
             forced_chatgpt_workspace_id,
+            codex_streamlined_login: false,
             cli_auth_credentials_store_mode,
         }
     }
@@ -372,6 +374,7 @@ async fn process_request(
                         &opts.issuer,
                         &tokens.id_token,
                         &tokens.access_token,
+                        opts.codex_streamlined_login,
                     );
                     match tiny_http::Header::from_bytes(&b"Location"[..], success_url.as_bytes()) {
                         Ok(header) => HandledRequest::RedirectWithHeader(header),
@@ -396,7 +399,14 @@ async fn process_request(
             }
         }
         "/success" => {
-            let body = include_str!("assets/success.html");
+            let use_streamlined_success = parsed_url
+                .query_pairs()
+                .any(|(key, value)| key == "codex_streamlined_login" && value == "true");
+            let body = if use_streamlined_success {
+                include_str!("assets/success.html")
+            } else {
+                include_str!("assets/success_legacy.html")
+            };
             HandledRequest::ResponseAndExit {
                 headers: match Header::from_bytes(
                     &b"Content-Type"[..],
@@ -696,13 +706,15 @@ pub(crate) async fn exchange_code_for_tokens(
     }
 
     let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
+    let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
     info!(
         issuer = %sanitize_url_for_logging(issuer),
+        token_endpoint = %sanitize_url_for_logging(&token_endpoint),
         redirect_uri = %redirect_uri,
         "starting oauth token exchange"
     );
     let resp = client
-        .post(format!("{issuer}/oauth/token"))
+        .post(token_endpoint)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(format!(
             "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
@@ -789,7 +801,13 @@ pub(crate) async fn persist_tokens_async(
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?
 }
 
-fn compose_success_url(port: u16, issuer: &str, id_token: &str, access_token: &str) -> String {
+fn compose_success_url(
+    port: u16,
+    issuer: &str,
+    id_token: &str,
+    access_token: &str,
+    codex_streamlined_login: bool,
+) -> String {
     let token_claims = jwt_auth_claims(id_token);
     let access_claims = jwt_auth_claims(access_token);
 
@@ -829,6 +847,9 @@ fn compose_success_url(port: u16, issuer: &str, id_token: &str, access_token: &s
         ("plan_type", plan_type.to_string()),
         ("platform_url", platform_url.to_string()),
     ];
+    if codex_streamlined_login {
+        params.push(("codex_streamlined_login", "true".to_string()));
+    }
     let qs = params
         .drain(..)
         .map(|(k, v)| format!("{}={}", k, urlencoding::encode(&v)))
@@ -1068,8 +1089,9 @@ pub(crate) async fn obtain_api_key(
         access_token: String,
     }
     let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
+    let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
     let resp = client
-        .post(format!("{issuer}/oauth/token"))
+        .post(token_endpoint)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(format!(
             "grant_type={}&client_id={}&requested_token={}&subject_token={}&subject_token_type={}",
@@ -1095,7 +1117,9 @@ pub(crate) async fn obtain_api_key(
 mod tests {
     use pretty_assertions::assert_eq;
 
+    use super::DEFAULT_ISSUER;
     use super::TokenEndpointErrorDetail;
+    use super::compose_success_url;
     use super::html_escape;
     use super::is_missing_codex_entitlement_error;
     use super::parse_token_endpoint_error;
@@ -1199,6 +1223,43 @@ mod tests {
         assert_eq!(
             redacted,
             "https://example.com/base?token=%3Credacted%3E&env=prod".to_string()
+        );
+    }
+
+    #[test]
+    fn compose_success_url_omits_streamlined_success_by_default() {
+        let url = url::Url::parse(&compose_success_url(
+            /*port*/ 1455,
+            DEFAULT_ISSUER,
+            "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
+            "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
+            /*codex_streamlined_login*/ false,
+        ))
+        .expect("success url should parse");
+
+        assert_eq!(
+            url.query_pairs()
+                .find(|(key, _)| key == "codex_streamlined_login"),
+            None
+        );
+    }
+
+    #[test]
+    fn compose_success_url_includes_streamlined_success_when_requested() {
+        let url = url::Url::parse(&compose_success_url(
+            /*port*/ 1455,
+            DEFAULT_ISSUER,
+            "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
+            "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
+            /*codex_streamlined_login*/ true,
+        ))
+        .expect("success url should parse");
+
+        assert_eq!(
+            url.query_pairs()
+                .find(|(key, _)| key == "codex_streamlined_login")
+                .map(|(_, value)| value.into_owned()),
+            Some("true".to_string())
         );
     }
 
