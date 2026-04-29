@@ -47,20 +47,6 @@ fn assistant_msg(text: &str) -> ResponseItem {
     }
 }
 
-fn disabled_environment_manager_for_tests() -> Arc<codex_exec_server::EnvironmentManager> {
-    let runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
-        std::env::current_exe().expect("current exe path"),
-        /*codex_linux_sandbox_exe*/ None,
-    )
-    .expect("runtime paths");
-    Arc::new(codex_exec_server::EnvironmentManager::new(
-        codex_exec_server::EnvironmentManagerArgs {
-            exec_server_url: Some("none".to_string()),
-            local_runtime_paths: runtime_paths,
-        },
-    ))
-}
-
 fn contextual_user_interrupted_marker() -> ResponseItem {
     interrupted_turn_history_marker(InterruptedTurnHistoryMarker::ContextualUser)
         .expect("contextual-user interrupted marker should be enabled")
@@ -307,11 +293,23 @@ async fn start_thread_accepts_explicit_environment_when_default_environment_is_d
     config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
 
+    let runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
+        std::env::current_exe().expect("current exe path"),
+        /*codex_linux_sandbox_exe*/ None,
+    )
+    .expect("runtime paths");
+    let environment_manager = Arc::new(
+        codex_exec_server::EnvironmentManager::create_for_tests(
+            Some("none".to_string()),
+            runtime_paths,
+        )
+        .await,
+    );
     let manager = ThreadManager::with_models_provider_and_home_for_tests(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
-        disabled_environment_manager_for_tests(),
+        environment_manager,
     );
 
     let thread = manager

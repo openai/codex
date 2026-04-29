@@ -216,6 +216,11 @@ fn exec_root_span() -> tracing::Span {
 }
 
 pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
+    #[allow(clippy::print_stderr)]
+    if let Some(message) = cli.removed_full_auto_warning() {
+        eprintln!("{message}");
+    }
+
     if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
     }
@@ -227,6 +232,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         ephemeral,
         ignore_user_config,
         ignore_rules,
+        removed_full_auto,
         color,
         last_message_file,
         json: json_mode,
@@ -242,7 +248,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         oss_provider,
         config_profile,
         sandbox_mode: sandbox_mode_cli_arg,
-        full_auto,
         dangerously_bypass_approvals_and_sandbox,
         cwd,
         add_dir,
@@ -269,7 +274,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .with_writer(std::io::stderr)
         .with_filter(env_filter);
 
-    let sandbox_mode = if full_auto {
+    let sandbox_mode = if removed_full_auto {
         Some(SandboxMode::WorkspaceWrite)
     } else if dangerously_bypass_approvals_and_sandbox {
         Some(SandboxMode::DangerFullAccess)
@@ -502,9 +507,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         cloud_requirements: run_cloud_requirements,
         feedback: CodexFeedback::new(),
         log_db: None,
-        environment_manager: std::sync::Arc::new(EnvironmentManager::new(
-            EnvironmentManagerArgs::from_env(local_runtime_paths),
-        )),
+        environment_manager: std::sync::Arc::new(
+            EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await,
+        ),
         config_warnings,
         session_source: SessionSource::Exec,
         enable_codex_api_key_env: true,

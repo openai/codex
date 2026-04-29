@@ -201,7 +201,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         config.codex_linux_sandbox_exe.clone(),
     )?;
     let environment_manager =
-        EnvironmentManager::new(EnvironmentManagerArgs::from_env(local_runtime_paths));
+        EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await;
     list_accessible_connectors_from_mcp_tools_with_environment_manager(
         config,
         force_refetch,
