@@ -585,11 +585,11 @@ impl From<Op> for AppCommand {
             Op::RunUserShellCommand { command } => Self::RunUserShellCommand { command },
             Op::UserTurn {
                 items,
-                environments: _,
+                environments,
                 cwd,
                 approval_policy,
                 approvals_reviewer,
-                sandbox_policy: _,
+                sandbox_policy,
                 permission_profile: Some(permission_profile),
                 model,
                 effort,
@@ -598,25 +598,50 @@ impl From<Op> for AppCommand {
                 final_output_json_schema,
                 collaboration_mode,
                 personality,
-            } => Self::UserTurn {
-                items,
-                cwd,
-                approval_policy,
-                approvals_reviewer,
-                permission_profile,
-                model,
-                effort,
-                summary,
-                service_tier,
-                final_output_json_schema,
-                collaboration_mode,
-                personality,
-            },
+            } => {
+                if environments.is_none()
+                    && legacy_compatible_permission_profile(&permission_profile, cwd.as_path())
+                        .to_legacy_sandbox_policy(cwd.as_path())
+                        .is_ok_and(|compatible_policy| compatible_policy == sandbox_policy)
+                {
+                    Self::UserTurn {
+                        items,
+                        cwd,
+                        approval_policy,
+                        approvals_reviewer,
+                        permission_profile,
+                        model,
+                        effort,
+                        summary,
+                        service_tier,
+                        final_output_json_schema,
+                        collaboration_mode,
+                        personality,
+                    }
+                } else {
+                    Self::Other(Op::UserTurn {
+                        items,
+                        cwd,
+                        approval_policy,
+                        approvals_reviewer,
+                        sandbox_policy,
+                        permission_profile: Some(permission_profile),
+                        model,
+                        effort,
+                        summary,
+                        service_tier,
+                        final_output_json_schema,
+                        collaboration_mode,
+                        personality,
+                        environments,
+                    })
+                }
+            }
             Op::OverrideTurnContext {
                 cwd,
                 approval_policy,
                 approvals_reviewer,
-                sandbox_policy: _,
+                sandbox_policy,
                 permission_profile,
                 windows_sandbox_level,
                 model,
@@ -625,19 +650,38 @@ impl From<Op> for AppCommand {
                 service_tier,
                 collaboration_mode,
                 personality,
-            } => Self::OverrideTurnContext {
-                cwd,
-                approval_policy,
-                approvals_reviewer,
-                permission_profile,
-                windows_sandbox_level,
-                model,
-                effort,
-                summary,
-                service_tier,
-                collaboration_mode,
-                personality,
-            },
+            } => {
+                if sandbox_policy.is_none() {
+                    Self::OverrideTurnContext {
+                        cwd,
+                        approval_policy,
+                        approvals_reviewer,
+                        permission_profile,
+                        windows_sandbox_level,
+                        model,
+                        effort,
+                        summary,
+                        service_tier,
+                        collaboration_mode,
+                        personality,
+                    }
+                } else {
+                    Self::Other(Op::OverrideTurnContext {
+                        cwd,
+                        approval_policy,
+                        approvals_reviewer,
+                        sandbox_policy,
+                        permission_profile,
+                        windows_sandbox_level,
+                        model,
+                        effort,
+                        summary,
+                        service_tier,
+                        collaboration_mode,
+                        personality,
+                    })
+                }
+            }
             Op::ExecApproval {
                 id,
                 turn_id,
