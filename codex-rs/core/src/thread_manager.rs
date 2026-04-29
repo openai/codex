@@ -223,6 +223,16 @@ pub struct StartThreadOptions {
     pub environments: Vec<TurnEnvironmentSelection>,
 }
 
+pub(crate) struct ResumeThreadFromRolloutOptions {
+    pub(crate) config: Config,
+    pub(crate) thread_store: Arc<dyn ThreadStore>,
+    pub(crate) rollout_path: PathBuf,
+    pub(crate) agent_control: AgentControl,
+    pub(crate) session_source: SessionSource,
+    pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+    pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+}
+
 /// Shared, `Arc`-owned state for [`ThreadManager`]. This `Arc` is required to have a single
 /// `Arc` reference that can be downgraded to by `AgentControl` while preventing every single
 /// function to require an `Arc<&Self>`.
@@ -954,14 +964,17 @@ impl ThreadManagerState {
 
     pub(crate) async fn resume_thread_from_rollout_with_source(
         &self,
-        config: Config,
-        thread_store: Arc<dyn ThreadStore>,
-        rollout_path: PathBuf,
-        agent_control: AgentControl,
-        session_source: SessionSource,
-        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
-        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        options: ResumeThreadFromRolloutOptions,
     ) -> CodexResult<NewThread> {
+        let ResumeThreadFromRolloutOptions {
+            config,
+            thread_store,
+            rollout_path,
+            agent_control,
+            session_source,
+            inherited_shell_snapshot,
+            inherited_exec_policy,
+        } = options;
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
         let environments =
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd);

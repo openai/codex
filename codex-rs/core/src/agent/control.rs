@@ -12,6 +12,7 @@ use crate::session::emit_subagent_session_started;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::thread_manager::ResumeThreadFromRolloutOptions;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_manager::thread_store_from_config;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
@@ -589,15 +590,15 @@ impl AgentControl {
             };
 
         let resumed_thread = state
-            .resume_thread_from_rollout_with_source(
-                config.clone(),
-                thread_store_from_config(&config),
+            .resume_thread_from_rollout_with_source(ResumeThreadFromRolloutOptions {
+                config: config.clone(),
+                thread_store: thread_store_from_config(&config),
                 rollout_path,
-                self.clone(),
+                agent_control: self.clone(),
                 session_source,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
-            )
+            })
             .await?;
         let mut agent_metadata = agent_metadata;
         agent_metadata.agent_id = Some(resumed_thread.thread_id);
