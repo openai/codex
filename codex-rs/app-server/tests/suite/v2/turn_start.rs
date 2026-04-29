@@ -1030,7 +1030,7 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
     assert_eq!(payload["model"].as_str(), Some("mock-model-collab"));
     let payload_text = payload.to_string();
     assert!(payload_text.contains(
-        "Use the `request_user_input` tool only when it is listed in the available tools"
+        "The `request_user_input` tool description lists the modes where the tool is available"
     ));
 
     Ok(())
@@ -1117,6 +1117,10 @@ async fn turn_start_uses_thread_feature_overrides_for_request_user_input_tool_de
     let request = response_mock.single_request();
     let payload_text = request.body_json().to_string();
     assert!(payload_text.contains("This tool is only available in Default or Plan mode."));
+    assert!(
+        payload_text
+            .contains("use `request_user_input` when its tool description includes Default mode")
+    );
 
     Ok(())
 }
