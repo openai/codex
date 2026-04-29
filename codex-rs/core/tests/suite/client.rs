@@ -1112,11 +1112,10 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
                 .enabled(Feature::DefaultModeRequestUserInput),
         },
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        thread_store_from_config(&config),
         /*analytics_events_client*/ None,
     );
     let NewThread { thread: codex, .. } = thread_manager
-        .start_thread(config)
+        .start_thread(config.clone(), thread_store_from_config(&config))
         .await
         .expect("create new conversation");
 

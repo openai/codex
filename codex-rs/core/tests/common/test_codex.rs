@@ -431,7 +431,6 @@ impl TestCodexBuilder {
                 SessionSource::Exec,
                 CollaborationModesConfig::default(),
                 Arc::clone(&environment_manager),
-                thread_store_from_config(&config),
                 /*analytics_events_client*/ None,
             )
         } else {
@@ -452,6 +451,7 @@ impl TestCodexBuilder {
                     codex_core::test_support::resume_thread_from_rollout_with_user_shell_override(
                         thread_manager.as_ref(),
                         config.clone(),
+                        thread_store_from_config(&config),
                         path,
                         auth_manager,
                         user_shell_override,
@@ -463,6 +463,7 @@ impl TestCodexBuilder {
                 let auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
                 Box::pin(thread_manager.resume_thread_from_rollout(
                     config.clone(),
+                    thread_store_from_config(&config),
                     path,
                     auth_manager,
                     /*parent_trace*/ None,
@@ -474,12 +475,18 @@ impl TestCodexBuilder {
                     codex_core::test_support::start_thread_with_user_shell_override(
                         thread_manager.as_ref(),
                         config.clone(),
+                        thread_store_from_config(&config),
                         user_shell_override,
                     ),
                 )
                 .await?
             }
-            (None, None) => Box::pin(thread_manager.start_thread(config.clone())).await?,
+            (None, None) => {
+                Box::pin(
+                    thread_manager.start_thread(config.clone(), thread_store_from_config(&config)),
+                )
+                .await?
+            }
         };
 
         Ok(TestCodex {

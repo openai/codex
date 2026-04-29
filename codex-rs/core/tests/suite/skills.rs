@@ -247,10 +247,11 @@ async fn list_skills_skips_cwd_roots_when_environment_disabled() -> Result<()> {
                 /*codex_linux_sandbox_exe*/ None,
             )?,
         )),
-        thread_store_from_config(&config),
         /*analytics_events_client*/ None,
     );
-    let new_thread = thread_manager.start_thread(config.clone()).await?;
+    let new_thread = thread_manager
+        .start_thread(config.clone(), thread_store_from_config(&config))
+        .await?;
     let cwd = config.cwd.to_path_buf();
 
     new_thread

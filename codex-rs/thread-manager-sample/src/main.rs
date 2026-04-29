@@ -123,14 +123,13 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 .enabled(Feature::DefaultModeRequestUserInput),
         },
         environment_manager,
-        thread_store,
         /*analytics_events_client*/ None,
     );
 
     let NewThread {
         thread_id, thread, ..
     } = thread_manager
-        .start_thread(config)
+        .start_thread(config, thread_store)
         .await
         .context("start Codex thread")?;
 

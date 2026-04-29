@@ -3591,7 +3591,12 @@ mod tests {
             thread_id: conversation_id,
             thread: conversation,
             ..
-        } = thread_manager.start_thread(config).await?;
+        } = thread_manager
+            .start_thread(
+                config.clone(),
+                codex_core::thread_store_from_config(&config),
+            )
+            .await?;
         let thread_state = new_thread_state();
         let thread_watch_manager = ThreadWatchManager::new();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);

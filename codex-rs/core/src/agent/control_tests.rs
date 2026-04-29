@@ -7,6 +7,7 @@ use crate::config::Config;
 use crate::config::ConfigBuilder;
 use crate::context::ContextualUserFragment;
 use crate::context::SubagentNotification;
+use crate::thread_manager::thread_store_from_config;
 use assert_matches::assert_matches;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -108,7 +109,7 @@ impl AgentControlHarness {
     async fn start_thread(&self) -> (ThreadId, Arc<CodexThread>) {
         let new_thread = self
             .manager
-            .start_thread(self.config.clone())
+            .start_thread(self.config.clone(), thread_store_from_config(&self.config))
             .await
             .expect("start thread");
         (new_thread.thread_id, new_thread.thread)
@@ -609,7 +610,10 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         Some("Child subagent guidance.".to_string());
     let new_thread = harness
         .manager
-        .start_thread(parent_config)
+        .start_thread(
+            parent_config.clone(),
+            thread_store_from_config(&parent_config),
+        )
         .await
         .expect("start parent thread");
     let parent_thread_id = new_thread.thread_id;
@@ -952,7 +956,7 @@ async fn spawn_agent_respects_max_threads_limit() {
     let control = manager.agent_control();
 
     let _ = manager
-        .start_thread(config.clone())
+        .start_thread(config.clone(), thread_store_from_config(&config))
         .await
         .expect("start thread");
 
@@ -1309,7 +1313,10 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
     let _ = tester_config.features.enable(Feature::MultiAgentV2);
     let tester_thread_id = harness
         .manager
-        .start_thread(tester_config)
+        .start_thread(
+            tester_config.clone(),
+            thread_store_from_config(&tester_config),
+        )
         .await
         .expect("tester thread should start")
         .thread_id;

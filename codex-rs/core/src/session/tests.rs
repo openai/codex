@@ -1643,7 +1643,10 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
         .thread_manager
         .fork_thread(
             usize::MAX,
-            fork_config,
+            fork_config.clone(),
+            std::sync::Arc::new(codex_thread_store::LocalThreadStore::new(
+                codex_rollout::RolloutConfig::from_view(&fork_config),
+            )),
             rollout_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
