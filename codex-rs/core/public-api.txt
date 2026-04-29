@@ -1,0 +1,934 @@
+pub mod codex_core
+pub use codex_core::ARCHIVED_SESSIONS_SUBDIR
+pub use codex_core::Cursor
+pub use codex_core::EventPersistenceMode
+pub use codex_core::INTERACTIVE_SESSION_SOURCES
+pub use codex_core::ModelProviderAuthInfo
+pub use codex_core::PLUGIN_TEXT_MENTION_SIGIL
+pub use codex_core::ResponseEvent
+pub use codex_core::RolloutRecorder
+pub use codex_core::RolloutRecorderParams
+pub use codex_core::SESSIONS_SUBDIR
+pub use codex_core::SandboxState
+pub use codex_core::SessionMeta
+pub use codex_core::SortDirection
+pub use codex_core::StateDbHandle
+pub use codex_core::TOOL_MENTION_SIGIL
+pub use codex_core::ThreadItem
+pub use codex_core::ThreadSortKey
+pub use codex_core::ThreadsPage
+pub use codex_core::append_thread_name
+pub use codex_core::find_archived_thread_path_by_id_str
+pub use codex_core::find_conversation_path_by_id_str
+pub use codex_core::find_thread_meta_by_name_str
+pub use codex_core::find_thread_name_by_id
+pub use codex_core::find_thread_names_by_ids
+pub use codex_core::find_thread_path_by_id_str
+pub use codex_core::parse_cursor
+pub use codex_core::read_head_for_summary
+pub use codex_core::read_session_meta_line
+pub use codex_core::rollout_date_parts
+pub mod codex_core::compact
+pub const codex_core::compact::SUMMARIZATION_PROMPT: &str
+pub const codex_core::compact::SUMMARY_PREFIX: &str
+pub fn codex_core::compact::content_items_to_text(content: &[codex_protocol::models::ContentItem]) -> core::option::Option<alloc::string::String>
+pub mod codex_core::config
+pub use codex_core::config::Constrained
+pub use codex_core::config::ConstraintError
+pub use codex_core::config::ConstraintResult
+pub use codex_core::config::NetworkProxyAuditMetadata
+pub use codex_core::config::system_bwrap_warning
+pub mod codex_core::config::edit
+pub enum codex_core::config::edit::ConfigEdit
+pub codex_core::config::edit::ConfigEdit::AddToolSuggestDisabledTool(codex_config::types::ToolSuggestDisabledTool)
+pub codex_core::config::edit::ConfigEdit::ClearPath
+pub codex_core::config::edit::ConfigEdit::ClearPath::segments: alloc::vec::Vec<alloc::string::String>
+pub codex_core::config::edit::ConfigEdit::RecordModelMigrationSeen
+pub codex_core::config::edit::ConfigEdit::RecordModelMigrationSeen::from: alloc::string::String
+pub codex_core::config::edit::ConfigEdit::RecordModelMigrationSeen::to: alloc::string::String
+pub codex_core::config::edit::ConfigEdit::ReplaceMcpServers(alloc::collections::btree::map::BTreeMap<alloc::string::String, codex_config::mcp_types::McpServerConfig>)
+pub codex_core::config::edit::ConfigEdit::SetModel
+pub codex_core::config::edit::ConfigEdit::SetModel::effort: core::option::Option<codex_protocol::openai_models::ReasoningEffort>
+pub codex_core::config::edit::ConfigEdit::SetModel::model: core::option::Option<alloc::string::String>
+pub codex_core::config::edit::ConfigEdit::SetModelPersonality
+pub codex_core::config::edit::ConfigEdit::SetModelPersonality::personality: core::option::Option<codex_protocol::config_types::Personality>
+pub codex_core::config::edit::ConfigEdit::SetNoticeExternalConfigMigrationPromptHomeLastPromptedAt(i64)
+pub codex_core::config::edit::ConfigEdit::SetNoticeExternalConfigMigrationPromptProjectLastPromptedAt(alloc::string::String, i64)
+pub codex_core::config::edit::ConfigEdit::SetNoticeFastDefaultOptOut(bool)
+pub codex_core::config::edit::ConfigEdit::SetNoticeHideExternalConfigMigrationPromptHome(bool)
+pub codex_core::config::edit::ConfigEdit::SetNoticeHideExternalConfigMigrationPromptProject(alloc::string::String, bool)
+pub codex_core::config::edit::ConfigEdit::SetNoticeHideFullAccessWarning(bool)
+pub codex_core::config::edit::ConfigEdit::SetNoticeHideModelMigrationPrompt(alloc::string::String, bool)
+pub codex_core::config::edit::ConfigEdit::SetNoticeHideRateLimitModelNudge(bool)
+pub codex_core::config::edit::ConfigEdit::SetNoticeHideWorldWritableWarning(bool)
+pub codex_core::config::edit::ConfigEdit::SetPath
+pub codex_core::config::edit::ConfigEdit::SetPath::segments: alloc::vec::Vec<alloc::string::String>
+pub codex_core::config::edit::ConfigEdit::SetPath::value: toml_edit::item::Item
+pub codex_core::config::edit::ConfigEdit::SetProjectTrustLevel
+pub codex_core::config::edit::ConfigEdit::SetProjectTrustLevel::level: codex_protocol::config_types::TrustLevel
+pub codex_core::config::edit::ConfigEdit::SetProjectTrustLevel::path: std::path::PathBuf
+pub codex_core::config::edit::ConfigEdit::SetServiceTier
+pub codex_core::config::edit::ConfigEdit::SetServiceTier::service_tier: core::option::Option<codex_protocol::config_types::ServiceTier>
+pub codex_core::config::edit::ConfigEdit::SetSkillConfig
+pub codex_core::config::edit::ConfigEdit::SetSkillConfig::enabled: bool
+pub codex_core::config::edit::ConfigEdit::SetSkillConfig::path: std::path::PathBuf
+pub codex_core::config::edit::ConfigEdit::SetSkillConfigByName
+pub codex_core::config::edit::ConfigEdit::SetSkillConfigByName::enabled: bool
+pub codex_core::config::edit::ConfigEdit::SetSkillConfigByName::name: alloc::string::String
+pub codex_core::config::edit::ConfigEdit::SetWindowsWslSetupAcknowledged(bool)
+pub struct codex_core::config::edit::ConfigEditsBuilder
+impl codex_core::config::edit::ConfigEditsBuilder
+pub async fn codex_core::config::edit::ConfigEditsBuilder::apply(self) -> anyhow::Result<()>
+pub fn codex_core::config::edit::ConfigEditsBuilder::apply_blocking(self) -> anyhow::Result<()>
+pub fn codex_core::config::edit::ConfigEditsBuilder::clear_legacy_windows_sandbox_keys(self) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::new(codex_home: &std::path::Path) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::record_model_migration_seen(self, from: &str, to: &str) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::replace_mcp_servers(self, servers: &alloc::collections::btree::map::BTreeMap<alloc::string::String, codex_config::mcp_types::McpServerConfig>) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_fast_default_opt_out(self, opted_out: bool) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_feature_enabled(self, key: &str, enabled: bool) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_hide_external_config_migration_prompt_home(self, acknowledged: bool) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_hide_external_config_migration_prompt_project(self, project: &str, acknowledged: bool) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_hide_full_access_warning(self, acknowledged: bool) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_hide_model_migration_prompt(self, model: &str, acknowledged: bool) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_hide_rate_limit_model_nudge(self, acknowledged: bool) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_hide_world_writable_warning(self, acknowledged: bool) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_model(self, model: core::option::Option<&str>, effort: core::option::Option<codex_protocol::openai_models::ReasoningEffort>) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_model_availability_nux_count(self, shown_count: &std::collections::hash::map::HashMap<alloc::string::String, u32>) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_personality(self, personality: core::option::Option<codex_protocol::config_types::Personality>) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_project_trust_level<P: core::convert::Into<std::path::PathBuf>>(self, project_path: P, trust_level: codex_protocol::config_types::TrustLevel) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_realtime_microphone(self, microphone: core::option::Option<&str>) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_realtime_speaker(self, speaker: core::option::Option<&str>) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_realtime_voice(self, voice: core::option::Option<&str>) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_service_tier(self, service_tier: core::option::Option<codex_protocol::config_types::ServiceTier>) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_windows_sandbox_mode(self, mode: &str) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::set_windows_wsl_setup_acknowledged(self, acknowledged: bool) -> Self
+pub fn codex_core::config::edit::ConfigEditsBuilder::with_edits<I>(self, edits: I) -> Self where I: core::iter::traits::collect::IntoIterator<Item = codex_core::config::edit::ConfigEdit>
+pub fn codex_core::config::edit::ConfigEditsBuilder::with_profile(self, profile: core::option::Option<&str>) -> Self
+pub async fn codex_core::config::edit::apply(codex_home: &std::path::Path, profile: core::option::Option<&str>, edits: alloc::vec::Vec<codex_core::config::edit::ConfigEdit>) -> anyhow::Result<()>
+pub fn codex_core::config::edit::apply_blocking(codex_home: &std::path::Path, profile: core::option::Option<&str>, edits: &[codex_core::config::edit::ConfigEdit]) -> anyhow::Result<()>
+pub fn codex_core::config::edit::keymap_binding_clear_edit(context: &str, action: &str) -> codex_core::config::edit::ConfigEdit
+pub fn codex_core::config::edit::keymap_binding_edit(context: &str, action: &str, key: &str) -> codex_core::config::edit::ConfigEdit
+pub fn codex_core::config::edit::keymap_bindings_edit(context: &str, action: &str, keys: &[alloc::string::String]) -> codex_core::config::edit::ConfigEdit
+pub fn codex_core::config::edit::model_availability_nux_count_edits(shown_count: &std::collections::hash::map::HashMap<alloc::string::String, u32>) -> alloc::vec::Vec<codex_core::config::edit::ConfigEdit>
+pub fn codex_core::config::edit::status_line_items_edit(items: &[alloc::string::String]) -> codex_core::config::edit::ConfigEdit
+pub fn codex_core::config::edit::syntax_theme_edit(name: &str) -> codex_core::config::edit::ConfigEdit
+pub fn codex_core::config::edit::terminal_title_items_edit(items: &[alloc::string::String]) -> codex_core::config::edit::ConfigEdit
+pub enum codex_core::config::TerminalResizeReflowMaxRows
+pub codex_core::config::TerminalResizeReflowMaxRows::Auto
+pub codex_core::config::TerminalResizeReflowMaxRows::Disabled
+pub codex_core::config::TerminalResizeReflowMaxRows::Limit(usize)
+pub enum codex_core::config::ThreadStoreConfig
+pub codex_core::config::ThreadStoreConfig::InMemory
+pub codex_core::config::ThreadStoreConfig::InMemory::id: alloc::string::String
+pub codex_core::config::ThreadStoreConfig::Local
+pub codex_core::config::ThreadStoreConfig::Remote
+pub codex_core::config::ThreadStoreConfig::Remote::endpoint: alloc::string::String
+pub struct codex_core::config::AgentRoleConfig
+pub codex_core::config::AgentRoleConfig::config_file: core::option::Option<std::path::PathBuf>
+pub codex_core::config::AgentRoleConfig::description: core::option::Option<alloc::string::String>
+pub codex_core::config::AgentRoleConfig::nickname_candidates: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub struct codex_core::config::Config
+pub codex_core::config::Config::active_profile: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::active_project: codex_config::config_toml::ProjectConfig
+pub codex_core::config::Config::agent_interrupt_message_enabled: bool
+pub codex_core::config::Config::agent_job_max_runtime_seconds: core::option::Option<u64>
+pub codex_core::config::Config::agent_max_depth: i32
+pub codex_core::config::Config::agent_max_threads: core::option::Option<usize>
+pub codex_core::config::Config::agent_roles: alloc::collections::btree::map::BTreeMap<alloc::string::String, codex_core::config::AgentRoleConfig>
+pub codex_core::config::Config::analytics_enabled: core::option::Option<bool>
+pub codex_core::config::Config::animations: bool
+pub codex_core::config::Config::approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer
+pub codex_core::config::Config::background_terminal_max_timeout: u64
+pub codex_core::config::Config::base_instructions: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::chatgpt_base_url: alloc::string::String
+pub codex_core::config::Config::check_for_update_on_startup: bool
+pub codex_core::config::Config::cli_auth_credentials_store_mode: codex_config::types::AuthCredentialsStoreMode
+pub codex_core::config::Config::codex_home: codex_utils_absolute_path::AbsolutePathBuf
+pub codex_core::config::Config::codex_linux_sandbox_exe: core::option::Option<std::path::PathBuf>
+pub codex_core::config::Config::codex_self_exe: core::option::Option<std::path::PathBuf>
+pub codex_core::config::Config::commit_attribution: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::compact_prompt: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::config_layer_stack: codex_config::state::ConfigLayerStack
+pub codex_core::config::Config::cwd: codex_utils_absolute_path::AbsolutePathBuf
+pub codex_core::config::Config::developer_instructions: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::disable_paste_burst: bool
+pub codex_core::config::Config::enforce_residency: codex_config::constraint::Constrained<core::option::Option<codex_config::config_requirements::ResidencyRequirement>>
+pub codex_core::config::Config::ephemeral: bool
+pub codex_core::config::Config::experimental_realtime_start_instructions: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::experimental_realtime_ws_backend_prompt: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::experimental_realtime_ws_base_url: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::experimental_realtime_ws_model: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::experimental_realtime_ws_startup_context: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::experimental_thread_config_endpoint: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::experimental_thread_store: codex_core::config::ThreadStoreConfig
+pub codex_core::config::Config::features: codex_core::config::ManagedFeatures
+pub codex_core::config::Config::feedback_enabled: bool
+pub codex_core::config::Config::file_opener: codex_config::types::UriBasedFileOpener
+pub codex_core::config::Config::forced_chatgpt_workspace_id: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::forced_login_method: core::option::Option<codex_protocol::config_types::ForcedLoginMethod>
+pub codex_core::config::Config::ghost_snapshot: codex_core::config::GhostSnapshotConfig
+pub codex_core::config::Config::guardian_policy_config: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::hide_agent_reasoning: bool
+pub codex_core::config::Config::history: codex_config::types::History
+pub codex_core::config::Config::include_apply_patch_tool: bool
+pub codex_core::config::Config::include_apps_instructions: bool
+pub codex_core::config::Config::include_environment_context: bool
+pub codex_core::config::Config::include_permissions_instructions: bool
+pub codex_core::config::Config::include_skill_instructions: bool
+pub codex_core::config::Config::log_dir: std::path::PathBuf
+pub codex_core::config::Config::main_execve_wrapper_exe: core::option::Option<std::path::PathBuf>
+pub codex_core::config::Config::mcp_oauth_callback_port: core::option::Option<u16>
+pub codex_core::config::Config::mcp_oauth_callback_url: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::mcp_oauth_credentials_store_mode: codex_config::types::OAuthCredentialsStoreMode
+pub codex_core::config::Config::mcp_servers: codex_config::constraint::Constrained<std::collections::hash::map::HashMap<alloc::string::String, codex_config::mcp_types::McpServerConfig>>
+pub codex_core::config::Config::memories: codex_config::types::MemoriesConfig
+pub codex_core::config::Config::model: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::model_auto_compact_token_limit: core::option::Option<i64>
+pub codex_core::config::Config::model_availability_nux: codex_config::types::ModelAvailabilityNuxConfig
+pub codex_core::config::Config::model_catalog: core::option::Option<codex_protocol::openai_models::ModelsResponse>
+pub codex_core::config::Config::model_context_window: core::option::Option<i64>
+pub codex_core::config::Config::model_provider: codex_model_provider_info::ModelProviderInfo
+pub codex_core::config::Config::model_provider_id: alloc::string::String
+pub codex_core::config::Config::model_providers: std::collections::hash::map::HashMap<alloc::string::String, codex_model_provider_info::ModelProviderInfo>
+pub codex_core::config::Config::model_reasoning_effort: core::option::Option<codex_protocol::openai_models::ReasoningEffort>
+pub codex_core::config::Config::model_reasoning_summary: core::option::Option<codex_protocol::config_types::ReasoningSummary>
+pub codex_core::config::Config::model_supports_reasoning_summaries: core::option::Option<bool>
+pub codex_core::config::Config::model_verbosity: core::option::Option<codex_protocol::config_types::Verbosity>
+pub codex_core::config::Config::multi_agent_v2: codex_core::config::MultiAgentV2Config
+pub codex_core::config::Config::notices: codex_config::types::Notice
+pub codex_core::config::Config::notify: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub codex_core::config::Config::otel: codex_config::types::OtelConfig
+pub codex_core::config::Config::permissions: codex_core::config::Permissions
+pub codex_core::config::Config::personality: core::option::Option<codex_protocol::config_types::Personality>
+pub codex_core::config::Config::plan_mode_reasoning_effort: core::option::Option<codex_protocol::openai_models::ReasoningEffort>
+pub codex_core::config::Config::project_doc_fallback_filenames: alloc::vec::Vec<alloc::string::String>
+pub codex_core::config::Config::project_doc_max_bytes: usize
+pub codex_core::config::Config::realtime: codex_config::config_toml::RealtimeConfig
+pub codex_core::config::Config::realtime_audio: codex_config::config_toml::RealtimeAudioConfig
+pub codex_core::config::Config::review_model: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::service_tier: core::option::Option<codex_protocol::config_types::ServiceTier>
+pub codex_core::config::Config::show_raw_agent_reasoning: bool
+pub codex_core::config::Config::show_tooltips: bool
+pub codex_core::config::Config::sqlite_home: std::path::PathBuf
+pub codex_core::config::Config::startup_warnings: alloc::vec::Vec<alloc::string::String>
+pub codex_core::config::Config::suppress_unstable_features_warning: bool
+pub codex_core::config::Config::terminal_resize_reflow: codex_core::config::TerminalResizeReflowConfig
+pub codex_core::config::Config::tool_output_token_limit: core::option::Option<usize>
+pub codex_core::config::Config::tool_suggest: codex_config::types::ToolSuggestConfig
+pub codex_core::config::Config::tui_alternate_screen: codex_protocol::config_types::AltScreenMode
+pub codex_core::config::Config::tui_keymap: codex_config::tui_keymap::TuiKeymap
+pub codex_core::config::Config::tui_notifications: codex_config::types::TuiNotificationSettings
+pub codex_core::config::Config::tui_status_line: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub codex_core::config::Config::tui_terminal_title: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub codex_core::config::Config::tui_theme: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::use_experimental_unified_exec_tool: bool
+pub codex_core::config::Config::user_instructions: core::option::Option<alloc::string::String>
+pub codex_core::config::Config::web_search_config: core::option::Option<codex_protocol::config_types::WebSearchConfig>
+pub codex_core::config::Config::web_search_mode: codex_config::constraint::Constrained<codex_protocol::config_types::WebSearchMode>
+pub codex_core::config::Config::windows_wsl_setup_acknowledged: bool
+pub codex_core::config::Config::zsh_path: core::option::Option<std::path::PathBuf>
+impl codex_core::config::Config
+pub fn codex_core::config::Config::bundled_skills_enabled(&self) -> bool
+pub fn codex_core::config::Config::managed_network_requirements_enabled(&self) -> bool
+pub fn codex_core::config::Config::set_windows_elevated_sandbox_enabled(&mut self, value: bool)
+pub fn codex_core::config::Config::set_windows_sandbox_enabled(&mut self, value: bool)
+impl codex_core::config::Config
+pub fn codex_core::config::Config::legacy_sandbox_policy(&self) -> codex_protocol::protocol::SandboxPolicy
+pub async fn codex_core::config::Config::load_default_with_cli_overrides(cli_overrides: alloc::vec::Vec<(alloc::string::String, toml::value::Value)>) -> std::io::error::Result<Self>
+pub async fn codex_core::config::Config::load_default_with_cli_overrides_for_codex_home(codex_home: std::path::PathBuf, cli_overrides: alloc::vec::Vec<(alloc::string::String, toml::value::Value)>) -> std::io::error::Result<Self>
+pub async fn codex_core::config::Config::load_with_cli_overrides(cli_overrides: alloc::vec::Vec<(alloc::string::String, toml::value::Value)>) -> std::io::error::Result<Self>
+pub async fn codex_core::config::Config::load_with_cli_overrides_and_harness_overrides(cli_overrides: alloc::vec::Vec<(alloc::string::String, toml::value::Value)>, harness_overrides: codex_core::config::ConfigOverrides) -> std::io::error::Result<Self>
+pub fn codex_core::config::Config::set_legacy_sandbox_policy(&mut self, sandbox_policy: codex_protocol::protocol::SandboxPolicy) -> codex_config::constraint::ConstraintResult<()>
+pub async fn codex_core::config::Config::to_mcp_config(&self, plugins_manager: &codex_core::plugins::PluginsManager) -> codex_mcp::mcp::McpConfig
+pub fn codex_core::config::Config::to_models_manager_config(&self) -> codex_models_manager::config::ModelsManagerConfig
+impl codex_login::auth::manager::AuthManagerConfig for codex_core::config::Config
+pub fn codex_core::config::Config::chatgpt_base_url(&self) -> alloc::string::String
+pub fn codex_core::config::Config::cli_auth_credentials_store_mode(&self) -> codex_config::types::AuthCredentialsStoreMode
+pub fn codex_core::config::Config::codex_home(&self) -> std::path::PathBuf
+pub fn codex_core::config::Config::forced_chatgpt_workspace_id(&self) -> core::option::Option<alloc::string::String>
+impl codex_rollout::config::RolloutConfigView for codex_core::config::Config
+pub fn codex_core::config::Config::codex_home(&self) -> &std::path::Path
+pub fn codex_core::config::Config::cwd(&self) -> &std::path::Path
+pub fn codex_core::config::Config::generate_memories(&self) -> bool
+pub fn codex_core::config::Config::model_provider_id(&self) -> &str
+pub fn codex_core::config::Config::sqlite_home(&self) -> &std::path::Path
+pub struct codex_core::config::ConfigBuilder
+impl codex_core::config::ConfigBuilder
+pub async fn codex_core::config::ConfigBuilder::build(self) -> std::io::error::Result<codex_core::config::Config>
+pub fn codex_core::config::ConfigBuilder::cli_overrides(self, cli_overrides: alloc::vec::Vec<(alloc::string::String, toml::value::Value)>) -> Self
+pub fn codex_core::config::ConfigBuilder::cloud_requirements(self, cloud_requirements: codex_config::cloud_requirements::CloudRequirementsLoader) -> Self
+pub fn codex_core::config::ConfigBuilder::codex_home(self, codex_home: std::path::PathBuf) -> Self
+pub fn codex_core::config::ConfigBuilder::fallback_cwd(self, fallback_cwd: core::option::Option<std::path::PathBuf>) -> Self
+pub fn codex_core::config::ConfigBuilder::harness_overrides(self, harness_overrides: codex_core::config::ConfigOverrides) -> Self
+pub fn codex_core::config::ConfigBuilder::loader_overrides(self, loader_overrides: codex_config::state::LoaderOverrides) -> Self
+pub fn codex_core::config::ConfigBuilder::thread_config_loader(self, thread_config_loader: alloc::sync::Arc<dyn codex_config::thread_config::ThreadConfigLoader>) -> Self
+pub struct codex_core::config::ConfigOverrides
+pub codex_core::config::ConfigOverrides::additional_writable_roots: alloc::vec::Vec<std::path::PathBuf>
+pub codex_core::config::ConfigOverrides::approval_policy: core::option::Option<codex_protocol::protocol::AskForApproval>
+pub codex_core::config::ConfigOverrides::approvals_reviewer: core::option::Option<codex_protocol::config_types::ApprovalsReviewer>
+pub codex_core::config::ConfigOverrides::base_instructions: core::option::Option<alloc::string::String>
+pub codex_core::config::ConfigOverrides::codex_linux_sandbox_exe: core::option::Option<std::path::PathBuf>
+pub codex_core::config::ConfigOverrides::codex_self_exe: core::option::Option<std::path::PathBuf>
+pub codex_core::config::ConfigOverrides::compact_prompt: core::option::Option<alloc::string::String>
+pub codex_core::config::ConfigOverrides::config_profile: core::option::Option<alloc::string::String>
+pub codex_core::config::ConfigOverrides::cwd: core::option::Option<std::path::PathBuf>
+pub codex_core::config::ConfigOverrides::developer_instructions: core::option::Option<alloc::string::String>
+pub codex_core::config::ConfigOverrides::ephemeral: core::option::Option<bool>
+pub codex_core::config::ConfigOverrides::include_apply_patch_tool: core::option::Option<bool>
+pub codex_core::config::ConfigOverrides::main_execve_wrapper_exe: core::option::Option<std::path::PathBuf>
+pub codex_core::config::ConfigOverrides::model: core::option::Option<alloc::string::String>
+pub codex_core::config::ConfigOverrides::model_provider: core::option::Option<alloc::string::String>
+pub codex_core::config::ConfigOverrides::permission_profile: core::option::Option<codex_protocol::models::PermissionProfile>
+pub codex_core::config::ConfigOverrides::personality: core::option::Option<codex_protocol::config_types::Personality>
+pub codex_core::config::ConfigOverrides::review_model: core::option::Option<alloc::string::String>
+pub codex_core::config::ConfigOverrides::sandbox_mode: core::option::Option<codex_protocol::config_types::SandboxMode>
+pub codex_core::config::ConfigOverrides::service_tier: core::option::Option<core::option::Option<codex_protocol::config_types::ServiceTier>>
+pub codex_core::config::ConfigOverrides::show_raw_agent_reasoning: core::option::Option<bool>
+pub codex_core::config::ConfigOverrides::tools_web_search_request: core::option::Option<bool>
+pub codex_core::config::ConfigOverrides::zsh_path: core::option::Option<std::path::PathBuf>
+pub struct codex_core::config::GhostSnapshotConfig
+pub codex_core::config::GhostSnapshotConfig::disable_warnings: bool
+pub codex_core::config::GhostSnapshotConfig::ignore_large_untracked_dirs: core::option::Option<i64>
+pub codex_core::config::GhostSnapshotConfig::ignore_large_untracked_files: core::option::Option<i64>
+impl core::default::Default for codex_core::config::GhostSnapshotConfig
+pub fn codex_core::config::GhostSnapshotConfig::default() -> Self
+pub struct codex_core::config::ManagedFeatures
+impl codex_core::config::ManagedFeatures
+pub fn codex_core::config::ManagedFeatures::can_set(&self, candidate: &codex_features::Features) -> codex_config::constraint::ConstraintResult<()>
+pub fn codex_core::config::ManagedFeatures::disable(&mut self, feature: codex_features::Feature) -> codex_config::constraint::ConstraintResult<()>
+pub fn codex_core::config::ManagedFeatures::enable(&mut self, feature: codex_features::Feature) -> codex_config::constraint::ConstraintResult<()>
+pub fn codex_core::config::ManagedFeatures::get(&self) -> &codex_features::Features
+pub fn codex_core::config::ManagedFeatures::set(&mut self, candidate: codex_features::Features) -> codex_config::constraint::ConstraintResult<()>
+pub fn codex_core::config::ManagedFeatures::set_enabled(&mut self, feature: codex_features::Feature, enabled: bool) -> codex_config::constraint::ConstraintResult<()>
+impl core::ops::deref::Deref for codex_core::config::ManagedFeatures
+pub type codex_core::config::ManagedFeatures::Target = codex_features::Features
+pub fn codex_core::config::ManagedFeatures::deref(&self) -> &Self::Target
+pub struct codex_core::config::MultiAgentV2Config
+pub codex_core::config::MultiAgentV2Config::hide_spawn_agent_metadata: bool
+pub codex_core::config::MultiAgentV2Config::max_concurrent_threads_per_session: usize
+pub codex_core::config::MultiAgentV2Config::min_wait_timeout_ms: i64
+pub codex_core::config::MultiAgentV2Config::root_agent_usage_hint_text: core::option::Option<alloc::string::String>
+pub codex_core::config::MultiAgentV2Config::subagent_usage_hint_text: core::option::Option<alloc::string::String>
+pub codex_core::config::MultiAgentV2Config::usage_hint_enabled: bool
+pub codex_core::config::MultiAgentV2Config::usage_hint_text: core::option::Option<alloc::string::String>
+impl core::default::Default for codex_core::config::MultiAgentV2Config
+pub fn codex_core::config::MultiAgentV2Config::default() -> Self
+pub struct codex_core::config::NetworkProxySpec
+impl codex_core::config::NetworkProxySpec
+pub fn codex_core::config::NetworkProxySpec::proxy_host_and_port(&self) -> alloc::string::String
+pub fn codex_core::config::NetworkProxySpec::socks_enabled(&self) -> bool
+pub async fn codex_core::config::NetworkProxySpec::start_proxy(&self, permission_profile: &codex_protocol::models::PermissionProfile, policy_decider: core::option::Option<alloc::sync::Arc<dyn codex_network_proxy::network_policy::NetworkPolicyDecider>>, blocked_request_observer: core::option::Option<alloc::sync::Arc<dyn codex_network_proxy::runtime::BlockedRequestObserver>>, enable_network_approval_flow: bool, audit_metadata: codex_network_proxy::runtime::NetworkProxyAuditMetadata) -> std::io::error::Result<codex_core::config::StartedNetworkProxy>
+pub struct codex_core::config::Permissions
+pub codex_core::config::Permissions::allow_login_shell: bool
+pub codex_core::config::Permissions::approval_policy: codex_config::constraint::Constrained<codex_protocol::protocol::AskForApproval>
+pub codex_core::config::Permissions::network: core::option::Option<codex_core::config::NetworkProxySpec>
+pub codex_core::config::Permissions::permission_profile: codex_config::constraint::Constrained<codex_protocol::models::PermissionProfile>
+pub codex_core::config::Permissions::shell_environment_policy: codex_protocol::config_types::ShellEnvironmentPolicy
+pub codex_core::config::Permissions::windows_sandbox_mode: core::option::Option<codex_config::types::WindowsSandboxModeToml>
+pub codex_core::config::Permissions::windows_sandbox_private_desktop: bool
+impl codex_core::config::Permissions
+pub fn codex_core::config::Permissions::can_set_legacy_sandbox_policy(&self, sandbox_policy: &codex_protocol::protocol::SandboxPolicy, cwd: &std::path::Path) -> codex_config::constraint::ConstraintResult<()>
+pub fn codex_core::config::Permissions::file_system_sandbox_policy(&self) -> codex_protocol::permissions::FileSystemSandboxPolicy
+pub fn codex_core::config::Permissions::legacy_sandbox_policy(&self, cwd: &std::path::Path) -> codex_protocol::protocol::SandboxPolicy
+pub fn codex_core::config::Permissions::network_sandbox_policy(&self) -> codex_protocol::permissions::NetworkSandboxPolicy
+pub fn codex_core::config::Permissions::permission_profile(&self) -> codex_protocol::models::PermissionProfile
+pub fn codex_core::config::Permissions::set_legacy_sandbox_policy(&mut self, sandbox_policy: codex_protocol::protocol::SandboxPolicy, cwd: &std::path::Path) -> codex_config::constraint::ConstraintResult<()>
+pub fn codex_core::config::Permissions::set_permission_profile(&mut self, permission_profile: codex_protocol::models::PermissionProfile) -> codex_config::constraint::ConstraintResult<()>
+pub struct codex_core::config::StartedNetworkProxy
+impl codex_core::config::StartedNetworkProxy
+pub fn codex_core::config::StartedNetworkProxy::proxy(&self) -> codex_network_proxy::proxy::NetworkProxy
+pub struct codex_core::config::TerminalResizeReflowConfig
+pub codex_core::config::TerminalResizeReflowConfig::max_rows: codex_core::config::TerminalResizeReflowMaxRows
+pub const codex_core::config::CONFIG_TOML_FILE: &str
+pub fn codex_core::config::deserialize_config_toml_with_base(root_value: toml::value::Value, config_base_dir: &std::path::Path) -> std::io::error::Result<codex_config::config_toml::ConfigToml>
+pub fn codex_core::config::find_codex_home() -> std::io::error::Result<codex_utils_absolute_path::AbsolutePathBuf>
+pub async fn codex_core::config::load_config_as_toml_with_cli_and_loader_overrides(codex_home: &std::path::Path, cwd: core::option::Option<&codex_utils_absolute_path::AbsolutePathBuf>, cli_overrides: alloc::vec::Vec<(alloc::string::String, toml::value::Value)>, loader_overrides: codex_config::state::LoaderOverrides) -> std::io::error::Result<codex_config::config_toml::ConfigToml>
+pub async fn codex_core::config::load_config_as_toml_with_cli_overrides(codex_home: &std::path::Path, cwd: core::option::Option<&codex_utils_absolute_path::AbsolutePathBuf>, cli_overrides: alloc::vec::Vec<(alloc::string::String, toml::value::Value)>) -> std::io::error::Result<codex_config::config_toml::ConfigToml>
+pub async fn codex_core::config::load_global_mcp_servers(codex_home: &std::path::Path) -> std::io::error::Result<alloc::collections::btree::map::BTreeMap<alloc::string::String, codex_config::mcp_types::McpServerConfig>>
+pub fn codex_core::config::log_dir(cfg: &codex_core::config::Config) -> std::io::error::Result<std::path::PathBuf>
+pub fn codex_core::config::resolve_oss_provider(explicit_provider: core::option::Option<&str>, config_toml: &codex_config::config_toml::ConfigToml, config_profile: core::option::Option<alloc::string::String>) -> core::option::Option<alloc::string::String>
+pub fn codex_core::config::set_default_oss_provider(codex_home: &std::path::Path, provider: &str) -> std::io::error::Result<()>
+pub fn codex_core::config::set_project_trust_level(codex_home: &std::path::Path, project_path: &std::path::Path, trust_level: codex_protocol::config_types::TrustLevel) -> anyhow::Result<()>
+pub fn codex_core::config::validate_feature_requirements_for_config_toml(cfg: &codex_config::config_toml::ConfigToml, feature_requirements: core::option::Option<&codex_config::config_requirements::Sourced<codex_config::config_requirements::FeatureRequirementsToml>>) -> std::io::error::Result<()>
+pub mod codex_core::connectors
+pub use codex_core::connectors::AppBranding
+pub use codex_core::connectors::AppInfo
+pub use codex_core::connectors::AppMetadata
+pub struct codex_core::connectors::AccessibleConnectorsStatus
+pub codex_core::connectors::AccessibleConnectorsStatus::codex_apps_ready: bool
+pub codex_core::connectors::AccessibleConnectorsStatus::connectors: alloc::vec::Vec<codex_app_server_protocol::protocol::v2::AppInfo>
+pub async fn codex_core::connectors::list_accessible_connectors_from_mcp_tools(config: &codex_core::config::Config) -> anyhow::Result<alloc::vec::Vec<codex_app_server_protocol::protocol::v2::AppInfo>>
+pub async fn codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(config: &codex_core::config::Config, force_refetch: bool, environment_manager: &codex_exec_server::environment::EnvironmentManager) -> anyhow::Result<codex_core::connectors::AccessibleConnectorsStatus>
+pub async fn codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options(config: &codex_core::config::Config, force_refetch: bool) -> anyhow::Result<alloc::vec::Vec<codex_app_server_protocol::protocol::v2::AppInfo>>
+pub async fn codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status(config: &codex_core::config::Config, force_refetch: bool) -> anyhow::Result<codex_core::connectors::AccessibleConnectorsStatus>
+pub async fn codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools(config: &codex_core::config::Config) -> core::option::Option<alloc::vec::Vec<codex_app_server_protocol::protocol::v2::AppInfo>>
+pub fn codex_core::connectors::with_app_enabled_state(connectors: alloc::vec::Vec<codex_app_server_protocol::protocol::v2::AppInfo>, config: &codex_core::config::Config) -> alloc::vec::Vec<codex_app_server_protocol::protocol::v2::AppInfo>
+pub fn codex_core::connectors::with_app_plugin_sources(connectors: alloc::vec::Vec<codex_app_server_protocol::protocol::v2::AppInfo>, tool_plugin_provenance: &codex_mcp::mcp::ToolPluginProvenance) -> alloc::vec::Vec<codex_app_server_protocol::protocol::v2::AppInfo>
+pub mod codex_core::context
+pub struct codex_core::context::PermissionsInstructions
+impl codex_core::context::PermissionsInstructions
+pub fn codex_core::context::PermissionsInstructions::from_permission_profile(permission_profile: &codex_protocol::models::PermissionProfile, approval_policy: codex_protocol::protocol::AskForApproval, approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer, exec_policy: &codex_execpolicy::policy::Policy, cwd: &std::path::Path, exec_permission_approvals_enabled: bool, request_permissions_tool_enabled: bool) -> Self
+pub fn codex_core::context::PermissionsInstructions::from_policy(sandbox_policy: &codex_protocol::protocol::SandboxPolicy, approval_policy: codex_protocol::protocol::AskForApproval, approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer, exec_policy: &codex_execpolicy::policy::Policy, cwd: &std::path::Path, exec_permission_approvals_enabled: bool, request_permissions_tool_enabled: bool) -> Self
+impl codex_core::context::ContextualUserFragment for codex_core::context::PermissionsInstructions
+pub const codex_core::context::PermissionsInstructions::END_MARKER: &'static str
+pub const codex_core::context::PermissionsInstructions::ROLE: &'static str
+pub const codex_core::context::PermissionsInstructions::START_MARKER: &'static str
+pub fn codex_core::context::PermissionsInstructions::body(&self) -> alloc::string::String
+pub fn codex_core::context::PermissionsInstructions::into(self) -> codex_protocol::models::ResponseItem where Self: core::marker::Sized
+pub fn codex_core::context::PermissionsInstructions::matches_text(text: &str) -> bool where Self: core::marker::Sized
+pub fn codex_core::context::PermissionsInstructions::render(&self) -> alloc::string::String
+pub trait codex_core::context::ContextualUserFragment
+pub const codex_core::context::ContextualUserFragment::END_MARKER: &'static str
+pub const codex_core::context::ContextualUserFragment::ROLE: &'static str
+pub const codex_core::context::ContextualUserFragment::START_MARKER: &'static str
+pub fn codex_core::context::ContextualUserFragment::body(&self) -> alloc::string::String
+pub fn codex_core::context::ContextualUserFragment::into(self) -> codex_protocol::models::ResponseItem where Self: core::marker::Sized
+pub fn codex_core::context::ContextualUserFragment::matches_text(text: &str) -> bool where Self: core::marker::Sized
+pub fn codex_core::context::ContextualUserFragment::render(&self) -> alloc::string::String
+impl codex_core::context::ContextualUserFragment for codex_core::context::PermissionsInstructions
+pub const codex_core::context::PermissionsInstructions::END_MARKER: &'static str
+pub const codex_core::context::PermissionsInstructions::ROLE: &'static str
+pub const codex_core::context::PermissionsInstructions::START_MARKER: &'static str
+pub fn codex_core::context::PermissionsInstructions::body(&self) -> alloc::string::String
+pub fn codex_core::context::PermissionsInstructions::into(self) -> codex_protocol::models::ResponseItem where Self: core::marker::Sized
+pub fn codex_core::context::PermissionsInstructions::matches_text(text: &str) -> bool where Self: core::marker::Sized
+pub fn codex_core::context::PermissionsInstructions::render(&self) -> alloc::string::String
+pub mod codex_core::exec
+pub enum codex_core::exec::ExecCapturePolicy
+pub codex_core::exec::ExecCapturePolicy::FullBuffer
+pub codex_core::exec::ExecCapturePolicy::ShellTool
+pub enum codex_core::exec::ExecExpiration
+pub codex_core::exec::ExecExpiration::Cancellation(tokio_util::sync::cancellation_token::CancellationToken)
+pub codex_core::exec::ExecExpiration::DefaultTimeout
+pub codex_core::exec::ExecExpiration::Timeout(core::time::Duration)
+impl core::convert::From<core::option::Option<u64>> for codex_core::exec::ExecExpiration
+pub fn codex_core::exec::ExecExpiration::from(timeout_ms: core::option::Option<u64>) -> Self
+impl core::convert::From<u64> for codex_core::exec::ExecExpiration
+pub fn codex_core::exec::ExecExpiration::from(timeout_ms: u64) -> Self
+pub struct codex_core::exec::ExecParams
+pub codex_core::exec::ExecParams::arg0: core::option::Option<alloc::string::String>
+pub codex_core::exec::ExecParams::capture_policy: codex_core::exec::ExecCapturePolicy
+pub codex_core::exec::ExecParams::command: alloc::vec::Vec<alloc::string::String>
+pub codex_core::exec::ExecParams::cwd: codex_utils_absolute_path::AbsolutePathBuf
+pub codex_core::exec::ExecParams::env: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub codex_core::exec::ExecParams::expiration: codex_core::exec::ExecExpiration
+pub codex_core::exec::ExecParams::justification: core::option::Option<alloc::string::String>
+pub codex_core::exec::ExecParams::network: core::option::Option<codex_network_proxy::proxy::NetworkProxy>
+pub codex_core::exec::ExecParams::sandbox_permissions: codex_protocol::models::SandboxPermissions
+pub codex_core::exec::ExecParams::windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel
+pub codex_core::exec::ExecParams::windows_sandbox_private_desktop: bool
+pub struct codex_core::exec::StdoutStream
+pub codex_core::exec::StdoutStream::call_id: alloc::string::String
+pub codex_core::exec::StdoutStream::sub_id: alloc::string::String
+pub codex_core::exec::StdoutStream::tx_event: async_channel::Sender<codex_protocol::protocol::Event>
+pub const codex_core::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS: u64
+pub const codex_core::exec::IO_DRAIN_TIMEOUT_MS: u64
+pub fn codex_core::exec::build_exec_request(params: codex_core::exec::ExecParams, permission_profile: &codex_protocol::models::PermissionProfile, sandbox_cwd: &codex_utils_absolute_path::AbsolutePathBuf, codex_linux_sandbox_exe: &core::option::Option<std::path::PathBuf>, use_legacy_landlock: bool) -> codex_protocol::error::Result<codex_core::sandboxing::ExecRequest>
+pub async fn codex_core::exec::process_exec_tool_call(params: codex_core::exec::ExecParams, permission_profile: &codex_protocol::models::PermissionProfile, sandbox_cwd: &codex_utils_absolute_path::AbsolutePathBuf, codex_linux_sandbox_exe: &core::option::Option<std::path::PathBuf>, use_legacy_landlock: bool, stdout_stream: core::option::Option<codex_core::exec::StdoutStream>) -> codex_protocol::error::Result<codex_protocol::exec_output::ExecToolCallOutput>
+pub mod codex_core::exec_env
+pub use codex_core::exec_env::CODEX_THREAD_ID_ENV_VAR
+pub fn codex_core::exec_env::create_env(policy: &codex_protocol::config_types::ShellEnvironmentPolicy, thread_id: core::option::Option<codex_protocol::thread_id::ThreadId>) -> std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub mod codex_core::file_watcher
+pub struct codex_core::file_watcher::FileWatcher
+impl codex_core::file_watcher::FileWatcher
+pub fn codex_core::file_watcher::FileWatcher::add_subscriber(self: &alloc::sync::Arc<Self>) -> (codex_core::file_watcher::FileWatcherSubscriber, codex_core::file_watcher::Receiver)
+pub fn codex_core::file_watcher::FileWatcher::new() -> notify::error::Result<Self>
+pub fn codex_core::file_watcher::FileWatcher::noop() -> Self
+pub struct codex_core::file_watcher::FileWatcherEvent
+pub codex_core::file_watcher::FileWatcherEvent::paths: alloc::vec::Vec<std::path::PathBuf>
+pub struct codex_core::file_watcher::FileWatcherSubscriber
+impl codex_core::file_watcher::FileWatcherSubscriber
+pub fn codex_core::file_watcher::FileWatcherSubscriber::register_paths(&self, watched_paths: alloc::vec::Vec<codex_core::file_watcher::WatchPath>) -> codex_core::file_watcher::WatchRegistration
+impl core::ops::drop::Drop for codex_core::file_watcher::FileWatcherSubscriber
+pub fn codex_core::file_watcher::FileWatcherSubscriber::drop(&mut self)
+pub struct codex_core::file_watcher::Receiver
+impl codex_core::file_watcher::Receiver
+pub async fn codex_core::file_watcher::Receiver::recv(&mut self) -> core::option::Option<codex_core::file_watcher::FileWatcherEvent>
+pub struct codex_core::file_watcher::ThrottledWatchReceiver
+impl codex_core::file_watcher::ThrottledWatchReceiver
+pub fn codex_core::file_watcher::ThrottledWatchReceiver::new(rx: codex_core::file_watcher::Receiver, interval: core::time::Duration) -> Self
+pub async fn codex_core::file_watcher::ThrottledWatchReceiver::recv(&mut self) -> core::option::Option<codex_core::file_watcher::FileWatcherEvent>
+pub struct codex_core::file_watcher::WatchPath
+pub codex_core::file_watcher::WatchPath::path: std::path::PathBuf
+pub codex_core::file_watcher::WatchPath::recursive: bool
+pub struct codex_core::file_watcher::WatchRegistration
+impl core::default::Default for codex_core::file_watcher::WatchRegistration
+pub fn codex_core::file_watcher::WatchRegistration::default() -> Self
+impl core::ops::drop::Drop for codex_core::file_watcher::WatchRegistration
+pub fn codex_core::file_watcher::WatchRegistration::drop(&mut self)
+pub mod codex_core::otel_init
+pub fn codex_core::otel_init::build_provider(config: &codex_core::config::Config, service_version: &str, service_name_override: core::option::Option<&str>, default_analytics_enabled: bool) -> core::result::Result<core::option::Option<codex_otel::provider::OtelProvider>, alloc::boxed::Box<dyn core::error::Error>>
+pub fn codex_core::otel_init::codex_export_filter(meta: &tracing_core::metadata::Metadata<'_>) -> bool
+pub mod codex_core::path_utils
+pub use codex_core::path_utils::<<codex_utils_path::*>>
+pub mod codex_core::personality_migration
+pub enum codex_core::personality_migration::PersonalityMigrationStatus
+pub codex_core::personality_migration::PersonalityMigrationStatus::Applied
+pub codex_core::personality_migration::PersonalityMigrationStatus::SkippedExplicitPersonality
+pub codex_core::personality_migration::PersonalityMigrationStatus::SkippedMarker
+pub codex_core::personality_migration::PersonalityMigrationStatus::SkippedNoSessions
+pub const codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME: &str
+pub async fn codex_core::personality_migration::maybe_migrate_personality(codex_home: &std::path::Path, config_toml: &codex_config::config_toml::ConfigToml) -> std::io::error::Result<codex_core::personality_migration::PersonalityMigrationStatus>
+pub mod codex_core::plugins
+pub use codex_core::plugins::AppConnectorId
+pub use codex_core::plugins::EffectiveSkillRoots
+pub use codex_core::plugins::PluginCapabilitySummary
+pub use codex_core::plugins::PluginId
+pub use codex_core::plugins::PluginIdError
+pub use codex_core::plugins::PluginMarketplaceUpgradeError
+pub use codex_core::plugins::PluginMarketplaceUpgradeOutcome
+pub use codex_core::plugins::PluginTelemetryMetadata
+pub use codex_core::plugins::validate_plugin_segment
+pub enum codex_core::plugins::PluginDetailsUnavailableReason
+pub codex_core::plugins::PluginDetailsUnavailableReason::InstallRequiredForRemoteSource
+pub enum codex_core::plugins::PluginInstallError
+pub codex_core::plugins::PluginInstallError::Config(anyhow::Error)
+pub codex_core::plugins::PluginInstallError::Join(tokio::runtime::task::error::JoinError)
+pub codex_core::plugins::PluginInstallError::Marketplace(codex_core_plugins::marketplace::MarketplaceError)
+pub codex_core::plugins::PluginInstallError::Remote(codex_core_plugins::remote_legacy::RemotePluginMutationError)
+pub codex_core::plugins::PluginInstallError::Store(codex_core_plugins::store::PluginStoreError)
+impl codex_core::plugins::PluginInstallError
+pub fn codex_core::plugins::PluginInstallError::is_invalid_request(&self) -> bool
+pub enum codex_core::plugins::PluginRemoteSyncError
+pub codex_core::plugins::PluginRemoteSyncError::AuthRequired
+pub codex_core::plugins::PluginRemoteSyncError::AuthToken(std::io::error::Error)
+pub codex_core::plugins::PluginRemoteSyncError::Config(anyhow::Error)
+pub codex_core::plugins::PluginRemoteSyncError::Decode
+pub codex_core::plugins::PluginRemoteSyncError::Decode::source: serde_json::error::Error
+pub codex_core::plugins::PluginRemoteSyncError::Decode::url: alloc::string::String
+pub codex_core::plugins::PluginRemoteSyncError::DuplicateRemotePlugin
+pub codex_core::plugins::PluginRemoteSyncError::DuplicateRemotePlugin::plugin_name: alloc::string::String
+pub codex_core::plugins::PluginRemoteSyncError::InvalidPluginId(codex_plugin::plugin_id::PluginIdError)
+pub codex_core::plugins::PluginRemoteSyncError::Join(tokio::runtime::task::error::JoinError)
+pub codex_core::plugins::PluginRemoteSyncError::LocalMarketplaceNotFound
+pub codex_core::plugins::PluginRemoteSyncError::Marketplace(codex_core_plugins::marketplace::MarketplaceError)
+pub codex_core::plugins::PluginRemoteSyncError::Request
+pub codex_core::plugins::PluginRemoteSyncError::Request::source: reqwest::error::Error
+pub codex_core::plugins::PluginRemoteSyncError::Request::url: alloc::string::String
+pub codex_core::plugins::PluginRemoteSyncError::Store(codex_core_plugins::store::PluginStoreError)
+pub codex_core::plugins::PluginRemoteSyncError::UnexpectedStatus
+pub codex_core::plugins::PluginRemoteSyncError::UnexpectedStatus::body: alloc::string::String
+pub codex_core::plugins::PluginRemoteSyncError::UnexpectedStatus::status: http::status::StatusCode
+pub codex_core::plugins::PluginRemoteSyncError::UnexpectedStatus::url: alloc::string::String
+pub codex_core::plugins::PluginRemoteSyncError::UnknownRemoteMarketplace
+pub codex_core::plugins::PluginRemoteSyncError::UnknownRemoteMarketplace::marketplace_name: alloc::string::String
+pub codex_core::plugins::PluginRemoteSyncError::UnknownRemotePlugin
+pub codex_core::plugins::PluginRemoteSyncError::UnknownRemotePlugin::marketplace_name: alloc::string::String
+pub codex_core::plugins::PluginRemoteSyncError::UnknownRemotePlugin::plugin_name: alloc::string::String
+pub codex_core::plugins::PluginRemoteSyncError::UnsupportedAuthMode
+impl core::convert::From<codex_core_plugins::remote_legacy::RemotePluginFetchError> for codex_core::plugins::PluginRemoteSyncError
+pub fn codex_core::plugins::PluginRemoteSyncError::from(value: codex_core_plugins::remote_legacy::RemotePluginFetchError) -> Self
+pub enum codex_core::plugins::PluginUninstallError
+pub codex_core::plugins::PluginUninstallError::Config(anyhow::Error)
+pub codex_core::plugins::PluginUninstallError::InvalidPluginId(codex_plugin::plugin_id::PluginIdError)
+pub codex_core::plugins::PluginUninstallError::Join(tokio::runtime::task::error::JoinError)
+pub codex_core::plugins::PluginUninstallError::Remote(codex_core_plugins::remote_legacy::RemotePluginMutationError)
+pub codex_core::plugins::PluginUninstallError::Store(codex_core_plugins::store::PluginStoreError)
+impl codex_core::plugins::PluginUninstallError
+pub fn codex_core::plugins::PluginUninstallError::is_invalid_request(&self) -> bool
+pub struct codex_core::plugins::ConfiguredMarketplace
+pub codex_core::plugins::ConfiguredMarketplace::interface: core::option::Option<codex_core_plugins::marketplace::MarketplaceInterface>
+pub codex_core::plugins::ConfiguredMarketplace::name: alloc::string::String
+pub codex_core::plugins::ConfiguredMarketplace::path: codex_utils_absolute_path::AbsolutePathBuf
+pub codex_core::plugins::ConfiguredMarketplace::plugins: alloc::vec::Vec<codex_core::plugins::ConfiguredMarketplacePlugin>
+pub struct codex_core::plugins::ConfiguredMarketplaceListOutcome
+pub codex_core::plugins::ConfiguredMarketplaceListOutcome::errors: alloc::vec::Vec<codex_core_plugins::marketplace::MarketplaceListError>
+pub codex_core::plugins::ConfiguredMarketplaceListOutcome::marketplaces: alloc::vec::Vec<codex_core::plugins::ConfiguredMarketplace>
+pub struct codex_core::plugins::ConfiguredMarketplacePlugin
+pub codex_core::plugins::ConfiguredMarketplacePlugin::enabled: bool
+pub codex_core::plugins::ConfiguredMarketplacePlugin::id: alloc::string::String
+pub codex_core::plugins::ConfiguredMarketplacePlugin::installed: bool
+pub codex_core::plugins::ConfiguredMarketplacePlugin::interface: core::option::Option<codex_core_plugins::manifest::PluginManifestInterface>
+pub codex_core::plugins::ConfiguredMarketplacePlugin::name: alloc::string::String
+pub codex_core::plugins::ConfiguredMarketplacePlugin::policy: codex_core_plugins::marketplace::MarketplacePluginPolicy
+pub codex_core::plugins::ConfiguredMarketplacePlugin::source: codex_core_plugins::marketplace::MarketplacePluginSource
+pub struct codex_core::plugins::PluginDetail
+pub codex_core::plugins::PluginDetail::apps: alloc::vec::Vec<codex_plugin::AppConnectorId>
+pub codex_core::plugins::PluginDetail::description: core::option::Option<alloc::string::String>
+pub codex_core::plugins::PluginDetail::details_unavailable_reason: core::option::Option<codex_core::plugins::PluginDetailsUnavailableReason>
+pub codex_core::plugins::PluginDetail::disabled_skill_paths: std::collections::hash::set::HashSet<codex_utils_absolute_path::AbsolutePathBuf>
+pub codex_core::plugins::PluginDetail::enabled: bool
+pub codex_core::plugins::PluginDetail::id: alloc::string::String
+pub codex_core::plugins::PluginDetail::installed: bool
+pub codex_core::plugins::PluginDetail::interface: core::option::Option<codex_core_plugins::manifest::PluginManifestInterface>
+pub codex_core::plugins::PluginDetail::mcp_server_names: alloc::vec::Vec<alloc::string::String>
+pub codex_core::plugins::PluginDetail::name: alloc::string::String
+pub codex_core::plugins::PluginDetail::policy: codex_core_plugins::marketplace::MarketplacePluginPolicy
+pub codex_core::plugins::PluginDetail::skills: alloc::vec::Vec<codex_core_skills::model::SkillMetadata>
+pub codex_core::plugins::PluginDetail::source: codex_core_plugins::marketplace::MarketplacePluginSource
+impl core::convert::From<codex_core::plugins::PluginDetail> for codex_plugin::PluginCapabilitySummary
+pub fn codex_plugin::PluginCapabilitySummary::from(value: codex_core::plugins::PluginDetail) -> Self
+pub struct codex_core::plugins::PluginInstallOutcome
+pub codex_core::plugins::PluginInstallOutcome::auth_policy: codex_core_plugins::marketplace::MarketplacePluginAuthPolicy
+pub codex_core::plugins::PluginInstallOutcome::installed_path: codex_utils_absolute_path::AbsolutePathBuf
+pub codex_core::plugins::PluginInstallOutcome::plugin_id: codex_plugin::plugin_id::PluginId
+pub codex_core::plugins::PluginInstallOutcome::plugin_version: alloc::string::String
+pub struct codex_core::plugins::PluginInstallRequest
+pub codex_core::plugins::PluginInstallRequest::marketplace_path: codex_utils_absolute_path::AbsolutePathBuf
+pub codex_core::plugins::PluginInstallRequest::plugin_name: alloc::string::String
+pub struct codex_core::plugins::PluginReadOutcome
+pub codex_core::plugins::PluginReadOutcome::marketplace_name: alloc::string::String
+pub codex_core::plugins::PluginReadOutcome::marketplace_path: core::option::Option<codex_utils_absolute_path::AbsolutePathBuf>
+pub codex_core::plugins::PluginReadOutcome::plugin: codex_core::plugins::PluginDetail
+pub struct codex_core::plugins::PluginReadRequest
+pub codex_core::plugins::PluginReadRequest::marketplace_path: codex_utils_absolute_path::AbsolutePathBuf
+pub codex_core::plugins::PluginReadRequest::plugin_name: alloc::string::String
+pub struct codex_core::plugins::PluginsManager
+impl codex_core::plugins::PluginsManager
+pub fn codex_core::plugins::PluginsManager::clear_cache(&self)
+pub async fn codex_core::plugins::PluginsManager::effective_skill_roots_for_layer_stack(&self, config_layer_stack: &codex_config::state::ConfigLayerStack, plugins_feature_enabled: bool) -> alloc::vec::Vec<codex_utils_absolute_path::AbsolutePathBuf>
+pub async fn codex_core::plugins::PluginsManager::featured_plugin_ids_for_config(&self, config: &codex_core::config::Config, auth: core::option::Option<&codex_login::auth::manager::CodexAuth>) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, codex_core_plugins::remote_legacy::RemotePluginFetchError>
+pub async fn codex_core::plugins::PluginsManager::install_plugin(&self, request: codex_core::plugins::PluginInstallRequest) -> core::result::Result<codex_core::plugins::PluginInstallOutcome, codex_core::plugins::PluginInstallError>
+pub async fn codex_core::plugins::PluginsManager::install_plugin_with_remote_sync(&self, config: &codex_core::config::Config, auth: core::option::Option<&codex_login::auth::manager::CodexAuth>, request: codex_core::plugins::PluginInstallRequest) -> core::result::Result<codex_core::plugins::PluginInstallOutcome, codex_core::plugins::PluginInstallError>
+pub fn codex_core::plugins::PluginsManager::list_marketplaces_for_config(&self, config: &codex_core::config::Config, additional_roots: &[codex_utils_absolute_path::AbsolutePathBuf]) -> core::result::Result<codex_core::plugins::ConfiguredMarketplaceListOutcome, codex_core_plugins::marketplace::MarketplaceError>
+pub fn codex_core::plugins::PluginsManager::maybe_start_non_curated_plugin_cache_refresh(self: &alloc::sync::Arc<Self>, roots: &[codex_utils_absolute_path::AbsolutePathBuf])
+pub fn codex_core::plugins::PluginsManager::maybe_start_plugin_startup_tasks_for_config(self: &alloc::sync::Arc<Self>, config: &codex_core::config::Config, auth_manager: alloc::sync::Arc<codex_login::auth::manager::AuthManager>)
+pub fn codex_core::plugins::PluginsManager::new(codex_home: std::path::PathBuf) -> Self
+pub fn codex_core::plugins::PluginsManager::new_with_restriction_product(codex_home: std::path::PathBuf, restriction_product: core::option::Option<codex_protocol::protocol::Product>) -> Self
+pub async fn codex_core::plugins::PluginsManager::plugins_for_config(&self, config: &codex_core::config::Config) -> codex_core::plugins::PluginLoadOutcome
+pub async fn codex_core::plugins::PluginsManager::read_plugin_for_config(&self, config: &codex_core::config::Config, request: &codex_core::plugins::PluginReadRequest) -> core::result::Result<codex_core::plugins::PluginReadOutcome, codex_core_plugins::marketplace::MarketplaceError>
+pub fn codex_core::plugins::PluginsManager::set_analytics_events_client(&self, analytics_events_client: codex_analytics::client::AnalyticsEventsClient)
+pub async fn codex_core::plugins::PluginsManager::sync_plugins_from_remote(&self, config: &codex_core::config::Config, auth: core::option::Option<&codex_login::auth::manager::CodexAuth>, additive_only: bool) -> core::result::Result<codex_core::plugins::RemotePluginSyncResult, codex_core::plugins::PluginRemoteSyncError>
+pub async fn codex_core::plugins::PluginsManager::uninstall_plugin(&self, plugin_id: alloc::string::String) -> core::result::Result<(), codex_core::plugins::PluginUninstallError>
+pub async fn codex_core::plugins::PluginsManager::uninstall_plugin_with_remote_sync(&self, config: &codex_core::config::Config, auth: core::option::Option<&codex_login::auth::manager::CodexAuth>, plugin_id: alloc::string::String) -> core::result::Result<(), codex_core::plugins::PluginUninstallError>
+pub fn codex_core::plugins::PluginsManager::upgrade_configured_marketplaces_for_config(&self, config: &codex_core::config::Config, marketplace_name: core::option::Option<&str>) -> core::result::Result<codex_core_plugins::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome, alloc::string::String>
+pub struct codex_core::plugins::RemotePluginSyncResult
+pub codex_core::plugins::RemotePluginSyncResult::disabled_plugin_ids: alloc::vec::Vec<alloc::string::String>
+pub codex_core::plugins::RemotePluginSyncResult::enabled_plugin_ids: alloc::vec::Vec<alloc::string::String>
+pub codex_core::plugins::RemotePluginSyncResult::installed_plugin_ids: alloc::vec::Vec<alloc::string::String>
+pub codex_core::plugins::RemotePluginSyncResult::uninstalled_plugin_ids: alloc::vec::Vec<alloc::string::String>
+pub type codex_core::plugins::LoadedPlugin = codex_plugin::load_outcome::LoadedPlugin<codex_config::mcp_types::McpServerConfig>
+pub type codex_core::plugins::PluginLoadOutcome = codex_plugin::load_outcome::PluginLoadOutcome<codex_config::mcp_types::McpServerConfig>
+pub mod codex_core::review_format
+pub fn codex_core::review_format::format_review_findings_block(findings: &[codex_protocol::protocol::ReviewFinding], selection: core::option::Option<&[bool]>) -> alloc::string::String
+pub fn codex_core::review_format::render_review_output_text(output: &codex_protocol::protocol::ReviewOutputEvent) -> alloc::string::String
+pub mod codex_core::review_prompts
+pub struct codex_core::review_prompts::ResolvedReviewRequest
+pub codex_core::review_prompts::ResolvedReviewRequest::prompt: alloc::string::String
+pub codex_core::review_prompts::ResolvedReviewRequest::target: codex_protocol::protocol::ReviewTarget
+pub codex_core::review_prompts::ResolvedReviewRequest::user_facing_hint: alloc::string::String
+impl core::convert::From<codex_core::review_prompts::ResolvedReviewRequest> for codex_protocol::protocol::ReviewRequest
+pub fn codex_protocol::protocol::ReviewRequest::from(resolved: codex_core::review_prompts::ResolvedReviewRequest) -> Self
+pub fn codex_core::review_prompts::resolve_review_request(request: codex_protocol::protocol::ReviewRequest, cwd: &codex_utils_absolute_path::AbsolutePathBuf) -> anyhow::Result<codex_core::review_prompts::ResolvedReviewRequest>
+pub fn codex_core::review_prompts::review_prompt(target: &codex_protocol::protocol::ReviewTarget, cwd: &codex_utils_absolute_path::AbsolutePathBuf) -> anyhow::Result<alloc::string::String>
+pub fn codex_core::review_prompts::user_facing_hint(target: &codex_protocol::protocol::ReviewTarget) -> alloc::string::String
+pub mod codex_core::sandboxing
+pub use codex_core::sandboxing::SandboxPermissions
+pub struct codex_core::sandboxing::ExecRequest
+pub codex_core::sandboxing::ExecRequest::arg0: core::option::Option<alloc::string::String>
+pub codex_core::sandboxing::ExecRequest::capture_policy: codex_core::exec::ExecCapturePolicy
+pub codex_core::sandboxing::ExecRequest::command: alloc::vec::Vec<alloc::string::String>
+pub codex_core::sandboxing::ExecRequest::cwd: codex_utils_absolute_path::AbsolutePathBuf
+pub codex_core::sandboxing::ExecRequest::env: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub codex_core::sandboxing::ExecRequest::expiration: codex_core::exec::ExecExpiration
+pub codex_core::sandboxing::ExecRequest::file_system_sandbox_policy: codex_protocol::permissions::FileSystemSandboxPolicy
+pub codex_core::sandboxing::ExecRequest::network: core::option::Option<codex_network_proxy::proxy::NetworkProxy>
+pub codex_core::sandboxing::ExecRequest::network_sandbox_policy: codex_protocol::permissions::NetworkSandboxPolicy
+pub codex_core::sandboxing::ExecRequest::permission_profile: codex_protocol::models::PermissionProfile
+pub codex_core::sandboxing::ExecRequest::sandbox: codex_sandboxing::manager::SandboxType
+pub codex_core::sandboxing::ExecRequest::windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel
+pub codex_core::sandboxing::ExecRequest::windows_sandbox_policy_cwd: codex_utils_absolute_path::AbsolutePathBuf
+pub codex_core::sandboxing::ExecRequest::windows_sandbox_private_desktop: bool
+impl codex_core::sandboxing::ExecRequest
+pub fn codex_core::sandboxing::ExecRequest::new(command: alloc::vec::Vec<alloc::string::String>, cwd: codex_utils_absolute_path::AbsolutePathBuf, env: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, network: core::option::Option<codex_network_proxy::proxy::NetworkProxy>, expiration: codex_core::exec::ExecExpiration, capture_policy: codex_core::exec::ExecCapturePolicy, sandbox: codex_sandboxing::manager::SandboxType, windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel, windows_sandbox_private_desktop: bool, permission_profile: codex_protocol::models::PermissionProfile, arg0: core::option::Option<alloc::string::String>) -> Self
+pub async fn codex_core::sandboxing::execute_env(exec_request: codex_core::sandboxing::ExecRequest, stdout_stream: core::option::Option<codex_core::exec::StdoutStream>) -> codex_protocol::error::Result<codex_protocol::exec_output::ExecToolCallOutput>
+pub async fn codex_core::sandboxing::execute_exec_request_with_after_spawn(exec_request: codex_core::sandboxing::ExecRequest, stdout_stream: core::option::Option<codex_core::exec::StdoutStream>, after_spawn: core::option::Option<alloc::boxed::Box<(dyn core::ops::function::FnOnce() + core::marker::Send)>>) -> codex_protocol::error::Result<codex_protocol::exec_output::ExecToolCallOutput>
+pub mod codex_core::shell
+pub enum codex_core::shell::ShellType
+pub codex_core::shell::ShellType::Bash
+pub codex_core::shell::ShellType::Cmd
+pub codex_core::shell::ShellType::PowerShell
+pub codex_core::shell::ShellType::Sh
+pub codex_core::shell::ShellType::Zsh
+pub struct codex_core::shell::Shell
+impl codex_core::shell::Shell
+pub fn codex_core::shell::Shell::derive_exec_args(&self, command: &str, use_login_shell: bool) -> alloc::vec::Vec<alloc::string::String>
+pub fn codex_core::shell::Shell::name(&self) -> &'static str
+pub fn codex_core::shell::Shell::shell_snapshot(&self) -> core::option::Option<alloc::sync::Arc<codex_core::shell_snapshot::ShellSnapshot>>
+impl core::cmp::Eq for codex_core::shell::Shell
+impl core::cmp::PartialEq for codex_core::shell::Shell
+pub fn codex_core::shell::Shell::eq(&self, other: &Self) -> bool
+pub fn codex_core::shell::default_user_shell() -> codex_core::shell::Shell
+pub fn codex_core::shell::get_shell(shell_type: codex_core::shell::ShellType, path: core::option::Option<&std::path::PathBuf>) -> core::option::Option<codex_core::shell::Shell>
+pub fn codex_core::shell::get_shell_by_model_provided_path(shell_path: &std::path::PathBuf) -> codex_core::shell::Shell
+pub mod codex_core::skills
+pub use codex_core::skills::SkillDependencyInfo
+pub use codex_core::skills::SkillError
+pub use codex_core::skills::SkillInjections
+pub use codex_core::skills::SkillLoadOutcome
+pub use codex_core::skills::SkillMetadata
+pub use codex_core::skills::SkillPolicy
+pub use codex_core::skills::SkillRenderReport
+pub use codex_core::skills::SkillRenderSideEffects
+pub use codex_core::skills::SkillsLoadInput
+pub use codex_core::skills::SkillsManager
+pub use codex_core::skills::build_available_skills
+pub use codex_core::skills::build_skill_injections
+pub use codex_core::skills::build_skill_name_counts
+pub use codex_core::skills::collect_env_var_dependencies
+pub use codex_core::skills::collect_explicit_skill_mentions
+pub use codex_core::skills::config_rules
+pub use codex_core::skills::default_skill_metadata_budget
+pub use codex_core::skills::detect_implicit_skill_invocation_for_command
+pub use codex_core::skills::filter_skill_load_outcome_for_product
+pub use codex_core::skills::injection
+pub use codex_core::skills::loader
+pub use codex_core::skills::manager
+pub use codex_core::skills::model
+pub use codex_core::skills::remote
+pub use codex_core::skills::render
+pub use codex_core::skills::system
+pub mod codex_core::spawn
+pub enum codex_core::spawn::StdioPolicy
+pub codex_core::spawn::StdioPolicy::Inherit
+pub codex_core::spawn::StdioPolicy::RedirectForShellTool
+pub const codex_core::spawn::CODEX_SANDBOX_ENV_VAR: &str
+pub const codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR: &str
+pub mod codex_core::test_support
+pub fn codex_core::test_support::all_model_presets() -> &'static alloc::vec::Vec<codex_protocol::openai_models::ModelPreset>
+pub fn codex_core::test_support::auth_manager_from_auth(auth: codex_login::auth::manager::CodexAuth) -> alloc::sync::Arc<codex_login::auth::manager::AuthManager>
+pub fn codex_core::test_support::auth_manager_from_auth_with_home(auth: codex_login::auth::manager::CodexAuth, codex_home: std::path::PathBuf) -> alloc::sync::Arc<codex_login::auth::manager::AuthManager>
+pub fn codex_core::test_support::builtin_collaboration_mode_presets() -> alloc::vec::Vec<codex_protocol::config_types::CollaborationModeMask>
+pub fn codex_core::test_support::construct_model_info_offline(model: &str, config: &codex_core::config::Config) -> codex_protocol::openai_models::ModelInfo
+pub fn codex_core::test_support::get_model_offline(model: core::option::Option<&str>) -> alloc::string::String
+pub fn codex_core::test_support::models_manager_with_provider(codex_home: std::path::PathBuf, auth_manager: alloc::sync::Arc<codex_login::auth::manager::AuthManager>, provider: codex_model_provider_info::ModelProviderInfo) -> codex_models_manager::manager::SharedModelsManager
+pub async fn codex_core::test_support::resume_thread_from_rollout_with_user_shell_override(thread_manager: &codex_core::ThreadManager, config: codex_core::config::Config, rollout_path: std::path::PathBuf, auth_manager: alloc::sync::Arc<codex_login::auth::manager::AuthManager>, user_shell_override: codex_core::shell::Shell) -> codex_protocol::error::Result<codex_core::NewThread>
+pub fn codex_core::test_support::set_deterministic_process_ids(enabled: bool)
+pub fn codex_core::test_support::set_thread_manager_test_mode(enabled: bool)
+pub async fn codex_core::test_support::start_thread_with_user_shell_override(thread_manager: &codex_core::ThreadManager, config: codex_core::config::Config, user_shell_override: codex_core::shell::Shell) -> codex_protocol::error::Result<codex_core::NewThread>
+pub fn codex_core::test_support::thread_manager_with_models_provider(auth: codex_login::auth::manager::CodexAuth, provider: codex_model_provider_info::ModelProviderInfo) -> codex_core::ThreadManager
+pub fn codex_core::test_support::thread_manager_with_models_provider_and_home(auth: codex_login::auth::manager::CodexAuth, provider: codex_model_provider_info::ModelProviderInfo, codex_home: std::path::PathBuf, environment_manager: alloc::sync::Arc<codex_exec_server::environment::EnvironmentManager>) -> codex_core::ThreadManager
+pub mod codex_core::util
+pub fn codex_core::util::backoff(attempt: u64) -> core::time::Duration
+pub fn codex_core::util::normalize_thread_name(name: &str) -> core::option::Option<alloc::string::String>
+pub fn codex_core::util::resolve_path(base: &std::path::Path, path: &std::path::PathBuf) -> std::path::PathBuf
+pub fn codex_core::util::resume_command(thread_name: core::option::Option<&str>, thread_id: core::option::Option<codex_protocol::thread_id::ThreadId>) -> core::option::Option<alloc::string::String>
+pub mod codex_core::windows_sandbox
+pub enum codex_core::windows_sandbox::WindowsSandboxSetupMode
+pub codex_core::windows_sandbox::WindowsSandboxSetupMode::Elevated
+pub codex_core::windows_sandbox::WindowsSandboxSetupMode::Unelevated
+pub struct codex_core::windows_sandbox::WindowsSandboxSetupRequest
+pub codex_core::windows_sandbox::WindowsSandboxSetupRequest::active_profile: core::option::Option<alloc::string::String>
+pub codex_core::windows_sandbox::WindowsSandboxSetupRequest::codex_home: std::path::PathBuf
+pub codex_core::windows_sandbox::WindowsSandboxSetupRequest::command_cwd: std::path::PathBuf
+pub codex_core::windows_sandbox::WindowsSandboxSetupRequest::env_map: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub codex_core::windows_sandbox::WindowsSandboxSetupRequest::mode: codex_core::windows_sandbox::WindowsSandboxSetupMode
+pub codex_core::windows_sandbox::WindowsSandboxSetupRequest::policy: codex_protocol::protocol::SandboxPolicy
+pub codex_core::windows_sandbox::WindowsSandboxSetupRequest::policy_cwd: std::path::PathBuf
+pub const codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED: bool
+pub trait codex_core::windows_sandbox::WindowsSandboxLevelExt
+pub fn codex_core::windows_sandbox::WindowsSandboxLevelExt::from_config(config: &codex_core::config::Config) -> codex_protocol::config_types::WindowsSandboxLevel
+pub fn codex_core::windows_sandbox::WindowsSandboxLevelExt::from_features(features: &codex_features::Features) -> codex_protocol::config_types::WindowsSandboxLevel
+impl codex_core::windows_sandbox::WindowsSandboxLevelExt for codex_protocol::config_types::WindowsSandboxLevel
+pub fn codex_protocol::config_types::WindowsSandboxLevel::from_config(config: &codex_core::config::Config) -> codex_protocol::config_types::WindowsSandboxLevel
+pub fn codex_protocol::config_types::WindowsSandboxLevel::from_features(features: &codex_features::Features) -> codex_protocol::config_types::WindowsSandboxLevel
+pub fn codex_core::windows_sandbox::elevated_setup_failure_details(_err: &anyhow::Error) -> core::option::Option<(alloc::string::String, alloc::string::String)>
+pub fn codex_core::windows_sandbox::elevated_setup_failure_metric_name(_err: &anyhow::Error) -> &'static str
+pub fn codex_core::windows_sandbox::legacy_windows_sandbox_mode(features: core::option::Option<&codex_features::FeaturesToml>) -> core::option::Option<codex_config::types::WindowsSandboxModeToml>
+pub fn codex_core::windows_sandbox::legacy_windows_sandbox_mode_from_entries(entries: &alloc::collections::btree::map::BTreeMap<alloc::string::String, bool>) -> core::option::Option<codex_config::types::WindowsSandboxModeToml>
+pub fn codex_core::windows_sandbox::resolve_windows_sandbox_mode(cfg: &codex_config::config_toml::ConfigToml, profile: &codex_config::profile_toml::ConfigProfile) -> core::option::Option<codex_config::types::WindowsSandboxModeToml>
+pub fn codex_core::windows_sandbox::resolve_windows_sandbox_private_desktop(cfg: &codex_config::config_toml::ConfigToml, profile: &codex_config::profile_toml::ConfigProfile) -> bool
+pub fn codex_core::windows_sandbox::run_elevated_setup(_policy: &codex_protocol::protocol::SandboxPolicy, _policy_cwd: &std::path::Path, _command_cwd: &std::path::Path, _env_map: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, _codex_home: &std::path::Path) -> anyhow::Result<()>
+pub fn codex_core::windows_sandbox::run_legacy_setup_preflight(_policy: &codex_protocol::protocol::SandboxPolicy, _policy_cwd: &std::path::Path, _command_cwd: &std::path::Path, _env_map: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, _codex_home: &std::path::Path) -> anyhow::Result<()>
+pub fn codex_core::windows_sandbox::run_setup_refresh_with_extra_read_roots(_policy: &codex_protocol::protocol::SandboxPolicy, _policy_cwd: &std::path::Path, _command_cwd: &std::path::Path, _env_map: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, _codex_home: &std::path::Path, _extra_read_roots: alloc::vec::Vec<std::path::PathBuf>) -> anyhow::Result<()>
+pub async fn codex_core::windows_sandbox::run_windows_sandbox_setup(request: codex_core::windows_sandbox::WindowsSandboxSetupRequest) -> anyhow::Result<()>
+pub fn codex_core::windows_sandbox::sandbox_setup_is_complete(_codex_home: &std::path::Path) -> bool
+pub fn codex_core::windows_sandbox::windows_sandbox_level_from_config(config: &codex_core::config::Config) -> codex_protocol::config_types::WindowsSandboxLevel
+pub fn codex_core::windows_sandbox::windows_sandbox_level_from_features(features: &codex_features::Features) -> codex_protocol::config_types::WindowsSandboxLevel
+pub macro codex_core::feedback_tags!
+pub enum codex_core::ExecPolicyError
+pub codex_core::ExecPolicyError::ParsePolicy
+pub codex_core::ExecPolicyError::ParsePolicy::path: alloc::string::String
+pub codex_core::ExecPolicyError::ParsePolicy::source: codex_execpolicy::error::Error
+pub codex_core::ExecPolicyError::ReadDir
+pub codex_core::ExecPolicyError::ReadDir::dir: std::path::PathBuf
+pub codex_core::ExecPolicyError::ReadDir::source: std::io::error::Error
+pub codex_core::ExecPolicyError::ReadFile
+pub codex_core::ExecPolicyError::ReadFile::path: std::path::PathBuf
+pub codex_core::ExecPolicyError::ReadFile::source: std::io::error::Error
+pub enum codex_core::ForkSnapshot
+pub codex_core::ForkSnapshot::Interrupted
+pub codex_core::ForkSnapshot::TruncateBeforeNthUserMessage(usize)
+impl core::convert::From<usize> for codex_core::ForkSnapshot
+pub fn codex_core::ForkSnapshot::from(value: usize) -> Self
+pub enum codex_core::SteerInputError
+pub codex_core::SteerInputError::ActiveTurnNotSteerable
+pub codex_core::SteerInputError::ActiveTurnNotSteerable::turn_kind: codex_protocol::protocol::NonSteerableTurnKind
+pub codex_core::SteerInputError::EmptyInput
+pub codex_core::SteerInputError::ExpectedTurnMismatch
+pub codex_core::SteerInputError::ExpectedTurnMismatch::actual: alloc::string::String
+pub codex_core::SteerInputError::ExpectedTurnMismatch::expected: alloc::string::String
+pub codex_core::SteerInputError::NoActiveTurn(alloc::vec::Vec<codex_protocol::user_input::UserInput>)
+pub struct codex_core::AgentsMdManager<'a>
+impl<'a> codex_core::AgentsMdManager<'a>
+pub async fn codex_core::AgentsMdManager<'a>::instruction_sources(&self, fs: &dyn codex_file_system::ExecutorFileSystem) -> alloc::vec::Vec<codex_utils_absolute_path::AbsolutePathBuf>
+pub fn codex_core::AgentsMdManager<'a>::new(config: &'a codex_core::config::Config) -> Self
+pub struct codex_core::CodexThread
+impl codex_core::CodexThread
+pub async fn codex_core::CodexThread::agent_status(&self) -> codex_protocol::protocol::AgentStatus
+pub async fn codex_core::CodexThread::apply_external_goal_clear(&self)
+pub async fn codex_core::CodexThread::apply_external_goal_set(&self, status: codex_state::model::thread_goal::ThreadGoalStatus)
+pub async fn codex_core::CodexThread::apply_goal_resume_runtime_effects(&self) -> anyhow::Result<()>
+pub async fn codex_core::CodexThread::call_mcp_tool(&self, server: &str, tool: &str, arguments: core::option::Option<serde_json::value::Value>, meta: core::option::Option<serde_json::value::Value>) -> anyhow::Result<codex_protocol::mcp::CallToolResult>
+pub async fn codex_core::CodexThread::config(&self) -> alloc::sync::Arc<codex_core::config::Config>
+pub async fn codex_core::CodexThread::config_snapshot(&self) -> codex_core::ThreadConfigSnapshot
+pub async fn codex_core::CodexThread::continue_active_goal_if_idle(&self) -> anyhow::Result<()>
+pub async fn codex_core::CodexThread::decrement_out_of_band_elicitation_count(&self) -> codex_protocol::error::Result<u64>
+pub fn codex_core::CodexThread::enabled(&self, feature: codex_features::Feature) -> bool
+pub async fn codex_core::CodexThread::increment_out_of_band_elicitation_count(&self) -> codex_protocol::error::Result<u64>
+pub async fn codex_core::CodexThread::inject_response_items(&self, items: alloc::vec::Vec<codex_protocol::models::ResponseItem>) -> codex_protocol::error::Result<()>
+pub async fn codex_core::CodexThread::next_event(&self) -> codex_protocol::error::Result<codex_protocol::protocol::Event>
+pub async fn codex_core::CodexThread::prepare_external_goal_mutation(&self)
+pub async fn codex_core::CodexThread::read_mcp_resource(&self, server: &str, uri: &str) -> anyhow::Result<serde_json::value::Value>
+pub fn codex_core::CodexThread::rollout_path(&self) -> core::option::Option<std::path::PathBuf>
+pub async fn codex_core::CodexThread::set_app_server_client_info(&self, app_server_client_name: core::option::Option<alloc::string::String>, app_server_client_version: core::option::Option<alloc::string::String>) -> codex_config::constraint::ConstraintResult<()>
+pub async fn codex_core::CodexThread::set_thread_memory_mode(&self, mode: codex_protocol::protocol::ThreadMemoryMode) -> anyhow::Result<()>
+pub async fn codex_core::CodexThread::shutdown_and_wait(&self) -> codex_protocol::error::Result<()>
+pub fn codex_core::CodexThread::state_db(&self) -> core::option::Option<codex_rollout::state_db::StateDbHandle>
+pub async fn codex_core::CodexThread::steer_input(&self, input: alloc::vec::Vec<codex_protocol::user_input::UserInput>, expected_turn_id: core::option::Option<&str>, responsesapi_client_metadata: core::option::Option<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>) -> core::result::Result<alloc::string::String, codex_core::SteerInputError>
+pub async fn codex_core::CodexThread::submit(&self, op: codex_protocol::protocol::Op) -> codex_protocol::error::Result<alloc::string::String>
+pub async fn codex_core::CodexThread::submit_with_id(&self, sub: codex_protocol::protocol::Submission) -> codex_protocol::error::Result<()>
+pub async fn codex_core::CodexThread::submit_with_trace(&self, op: codex_protocol::protocol::Op, trace: core::option::Option<codex_protocol::protocol::W3cTraceContext>) -> codex_protocol::error::Result<alloc::string::String>
+pub async fn codex_core::CodexThread::token_usage_info(&self) -> core::option::Option<codex_protocol::protocol::TokenUsageInfo>
+pub async fn codex_core::CodexThread::validate_turn_context_overrides(&self, overrides: codex_core::CodexThreadTurnContextOverrides) -> codex_config::constraint::ConstraintResult<()>
+pub async fn codex_core::CodexThread::wait_until_terminated(&self)
+pub struct codex_core::CodexThreadTurnContextOverrides
+pub codex_core::CodexThreadTurnContextOverrides::approval_policy: core::option::Option<codex_protocol::protocol::AskForApproval>
+pub codex_core::CodexThreadTurnContextOverrides::approvals_reviewer: core::option::Option<codex_protocol::config_types::ApprovalsReviewer>
+pub codex_core::CodexThreadTurnContextOverrides::collaboration_mode: core::option::Option<codex_protocol::config_types::CollaborationMode>
+pub codex_core::CodexThreadTurnContextOverrides::cwd: core::option::Option<std::path::PathBuf>
+pub codex_core::CodexThreadTurnContextOverrides::effort: core::option::Option<core::option::Option<codex_protocol::openai_models::ReasoningEffort>>
+pub codex_core::CodexThreadTurnContextOverrides::model: core::option::Option<alloc::string::String>
+pub codex_core::CodexThreadTurnContextOverrides::permission_profile: core::option::Option<codex_protocol::models::PermissionProfile>
+pub codex_core::CodexThreadTurnContextOverrides::personality: core::option::Option<codex_protocol::config_types::Personality>
+pub codex_core::CodexThreadTurnContextOverrides::sandbox_policy: core::option::Option<codex_protocol::protocol::SandboxPolicy>
+pub codex_core::CodexThreadTurnContextOverrides::service_tier: core::option::Option<core::option::Option<codex_protocol::config_types::ServiceTier>>
+pub codex_core::CodexThreadTurnContextOverrides::summary: core::option::Option<codex_protocol::config_types::ReasoningSummary>
+pub codex_core::CodexThreadTurnContextOverrides::windows_sandbox_level: core::option::Option<codex_protocol::config_types::WindowsSandboxLevel>
+pub struct codex_core::FileWatcherEvent
+pub codex_core::FileWatcherEvent::paths: alloc::vec::Vec<std::path::PathBuf>
+pub struct codex_core::McpManager
+impl codex_core::McpManager
+pub async fn codex_core::McpManager::configured_servers(&self, config: &codex_core::config::Config) -> std::collections::hash::map::HashMap<alloc::string::String, codex_config::mcp_types::McpServerConfig>
+pub async fn codex_core::McpManager::effective_servers(&self, config: &codex_core::config::Config, auth: core::option::Option<&codex_login::auth::manager::CodexAuth>) -> std::collections::hash::map::HashMap<alloc::string::String, codex_config::mcp_types::McpServerConfig>
+pub fn codex_core::McpManager::new(plugins_manager: alloc::sync::Arc<codex_core::plugins::PluginsManager>) -> Self
+pub async fn codex_core::McpManager::tool_plugin_provenance(&self, config: &codex_core::config::Config) -> codex_mcp::mcp::ToolPluginProvenance
+pub struct codex_core::MessageHistoryEntry
+pub codex_core::MessageHistoryEntry::session_id: alloc::string::String
+pub codex_core::MessageHistoryEntry::text: alloc::string::String
+pub codex_core::MessageHistoryEntry::ts: u64
+pub struct codex_core::ModelClient
+impl codex_core::ModelClient
+pub async fn codex_core::ModelClient::compact_conversation_history(&self, prompt: &codex_core::Prompt, model_info: &codex_protocol::openai_models::ModelInfo, effort: core::option::Option<codex_protocol::openai_models::ReasoningEffort>, summary: codex_protocol::config_types::ReasoningSummary, session_telemetry: &codex_otel::events::session_telemetry::SessionTelemetry, compaction_trace: &codex_rollout_trace::compaction::CompactionTraceContext) -> codex_protocol::error::Result<alloc::vec::Vec<codex_protocol::models::ResponseItem>>
+pub fn codex_core::ModelClient::new(auth_manager: core::option::Option<alloc::sync::Arc<codex_login::auth::manager::AuthManager>>, conversation_id: codex_protocol::thread_id::ThreadId, installation_id: alloc::string::String, provider_info: codex_model_provider_info::ModelProviderInfo, session_source: codex_protocol::protocol::SessionSource, model_verbosity: core::option::Option<codex_protocol::config_types::Verbosity>, enable_request_compression: bool, include_timing_metrics: bool, beta_features_header: core::option::Option<alloc::string::String>) -> Self
+pub fn codex_core::ModelClient::new_session(&self) -> codex_core::ModelClientSession
+pub fn codex_core::ModelClient::responses_websocket_enabled(&self) -> bool
+pub async fn codex_core::ModelClient::summarize_memories(&self, raw_memories: alloc::vec::Vec<codex_api::common::RawMemory>, model_info: &codex_protocol::openai_models::ModelInfo, effort: core::option::Option<codex_protocol::openai_models::ReasoningEffort>, session_telemetry: &codex_otel::events::session_telemetry::SessionTelemetry) -> codex_protocol::error::Result<alloc::vec::Vec<codex_api::common::MemorySummarizeOutput>>
+pub struct codex_core::ModelClientSession
+impl codex_core::ModelClientSession
+pub async fn codex_core::ModelClientSession::preconnect_websocket(&mut self, session_telemetry: &codex_otel::events::session_telemetry::SessionTelemetry, _model_info: &codex_protocol::openai_models::ModelInfo) -> core::result::Result<(), codex_api::error::ApiError>
+pub async fn codex_core::ModelClientSession::prewarm_websocket(&mut self, prompt: &codex_core::Prompt, model_info: &codex_protocol::openai_models::ModelInfo, session_telemetry: &codex_otel::events::session_telemetry::SessionTelemetry, effort: core::option::Option<codex_protocol::openai_models::ReasoningEffort>, summary: codex_protocol::config_types::ReasoningSummary, service_tier: core::option::Option<codex_protocol::config_types::ServiceTier>, turn_metadata_header: core::option::Option<&str>) -> codex_protocol::error::Result<()>
+pub async fn codex_core::ModelClientSession::stream(&mut self, prompt: &codex_core::Prompt, model_info: &codex_protocol::openai_models::ModelInfo, session_telemetry: &codex_otel::events::session_telemetry::SessionTelemetry, effort: core::option::Option<codex_protocol::openai_models::ReasoningEffort>, summary: codex_protocol::config_types::ReasoningSummary, service_tier: core::option::Option<codex_protocol::config_types::ServiceTier>, turn_metadata_header: core::option::Option<&str>, inference_trace: &codex_rollout_trace::inference::InferenceTraceContext) -> codex_protocol::error::Result<codex_core::ResponseStream>
+impl core::ops::drop::Drop for codex_core::ModelClientSession
+pub fn codex_core::ModelClientSession::drop(&mut self)
+pub struct codex_core::MtimeConfigReloader
+impl codex_network_proxy::runtime::ConfigReloader for codex_core::MtimeConfigReloader
+pub fn codex_core::MtimeConfigReloader::maybe_reload<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<core::option::Option<codex_network_proxy::runtime::ConfigState>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn codex_core::MtimeConfigReloader::reload_now<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = anyhow::Result<codex_network_proxy::runtime::ConfigState>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn codex_core::MtimeConfigReloader::source_label(&self) -> alloc::string::String
+pub struct codex_core::NewThread
+pub codex_core::NewThread::session_configured: codex_protocol::protocol::SessionConfiguredEvent
+pub codex_core::NewThread::thread: alloc::sync::Arc<codex_core::CodexThread>
+pub codex_core::NewThread::thread_id: codex_protocol::thread_id::ThreadId
+pub struct codex_core::Prompt
+pub codex_core::Prompt::base_instructions: codex_protocol::models::BaseInstructions
+pub codex_core::Prompt::input: alloc::vec::Vec<codex_protocol::models::ResponseItem>
+pub codex_core::Prompt::output_schema: core::option::Option<serde_json::value::Value>
+pub codex_core::Prompt::output_schema_strict: bool
+pub codex_core::Prompt::personality: core::option::Option<codex_protocol::config_types::Personality>
+impl core::default::Default for codex_core::Prompt
+pub fn codex_core::Prompt::default() -> Self
+pub struct codex_core::ResponseStream
+impl core::ops::drop::Drop for codex_core::ResponseStream
+pub fn codex_core::ResponseStream::drop(&mut self)
+impl futures_core::stream::Stream for codex_core::ResponseStream
+pub type codex_core::ResponseStream::Item = core::result::Result<codex_api::common::ResponseEvent, codex_protocol::error::CodexErr>
+pub fn codex_core::ResponseStream::poll_next(self: core::pin::Pin<&mut Self>, cx: &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<core::option::Option<Self::Item>>
+pub struct codex_core::StartThreadOptions
+pub codex_core::StartThreadOptions::config: codex_core::config::Config
+pub codex_core::StartThreadOptions::dynamic_tools: alloc::vec::Vec<codex_protocol::dynamic_tools::DynamicToolSpec>
+pub codex_core::StartThreadOptions::environments: alloc::vec::Vec<codex_protocol::protocol::TurnEnvironmentSelection>
+pub codex_core::StartThreadOptions::initial_history: codex_protocol::protocol::InitialHistory
+pub codex_core::StartThreadOptions::metrics_service_name: core::option::Option<alloc::string::String>
+pub codex_core::StartThreadOptions::parent_trace: core::option::Option<codex_protocol::protocol::W3cTraceContext>
+pub codex_core::StartThreadOptions::persist_extended_history: bool
+pub codex_core::StartThreadOptions::session_source: core::option::Option<codex_protocol::protocol::SessionSource>
+pub struct codex_core::ThreadConfigSnapshot
+pub codex_core::ThreadConfigSnapshot::approval_policy: codex_protocol::protocol::AskForApproval
+pub codex_core::ThreadConfigSnapshot::approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer
+pub codex_core::ThreadConfigSnapshot::cwd: codex_utils_absolute_path::AbsolutePathBuf
+pub codex_core::ThreadConfigSnapshot::ephemeral: bool
+pub codex_core::ThreadConfigSnapshot::model: alloc::string::String
+pub codex_core::ThreadConfigSnapshot::model_provider_id: alloc::string::String
+pub codex_core::ThreadConfigSnapshot::permission_profile: codex_protocol::models::PermissionProfile
+pub codex_core::ThreadConfigSnapshot::personality: core::option::Option<codex_protocol::config_types::Personality>
+pub codex_core::ThreadConfigSnapshot::reasoning_effort: core::option::Option<codex_protocol::openai_models::ReasoningEffort>
+pub codex_core::ThreadConfigSnapshot::service_tier: core::option::Option<codex_protocol::config_types::ServiceTier>
+pub codex_core::ThreadConfigSnapshot::session_source: codex_protocol::protocol::SessionSource
+impl codex_core::ThreadConfigSnapshot
+pub fn codex_core::ThreadConfigSnapshot::sandbox_policy(&self) -> codex_protocol::protocol::SandboxPolicy
+pub struct codex_core::ThreadManager
+impl codex_core::ThreadManager
+pub fn codex_core::ThreadManager::auth_manager(&self) -> alloc::sync::Arc<codex_login::auth::manager::AuthManager>
+pub fn codex_core::ThreadManager::default_environment_selections(&self, cwd: &codex_utils_absolute_path::AbsolutePathBuf) -> alloc::vec::Vec<codex_protocol::protocol::TurnEnvironmentSelection>
+pub fn codex_core::ThreadManager::environment_manager(&self) -> alloc::sync::Arc<codex_exec_server::environment::EnvironmentManager>
+pub async fn codex_core::ThreadManager::fork_thread<S>(&self, snapshot: S, config: codex_core::config::Config, path: std::path::PathBuf, persist_extended_history: bool, parent_trace: core::option::Option<codex_protocol::protocol::W3cTraceContext>) -> codex_protocol::error::Result<codex_core::NewThread> where S: core::convert::Into<codex_core::ForkSnapshot>
+pub async fn codex_core::ThreadManager::fork_thread_from_history<S>(&self, snapshot: S, config: codex_core::config::Config, history: codex_protocol::protocol::InitialHistory, persist_extended_history: bool, parent_trace: core::option::Option<codex_protocol::protocol::W3cTraceContext>) -> codex_protocol::error::Result<codex_core::NewThread> where S: core::convert::Into<codex_core::ForkSnapshot>
+pub fn codex_core::ThreadManager::get_models_manager(&self) -> codex_models_manager::manager::SharedModelsManager
+pub async fn codex_core::ThreadManager::get_thread(&self, thread_id: codex_protocol::thread_id::ThreadId) -> codex_protocol::error::Result<alloc::sync::Arc<codex_core::CodexThread>>
+pub async fn codex_core::ThreadManager::list_agent_subtree_thread_ids(&self, thread_id: codex_protocol::thread_id::ThreadId) -> codex_protocol::error::Result<alloc::vec::Vec<codex_protocol::thread_id::ThreadId>>
+pub fn codex_core::ThreadManager::list_collaboration_modes(&self) -> alloc::vec::Vec<codex_protocol::config_types::CollaborationModeMask>
+pub async fn codex_core::ThreadManager::list_models(&self, refresh_strategy: codex_models_manager::manager::RefreshStrategy) -> alloc::vec::Vec<codex_protocol::openai_models::ModelPreset>
+pub async fn codex_core::ThreadManager::list_thread_ids(&self) -> alloc::vec::Vec<codex_protocol::thread_id::ThreadId>
+pub fn codex_core::ThreadManager::mcp_manager(&self) -> alloc::sync::Arc<codex_core::McpManager>
+pub fn codex_core::ThreadManager::new(config: &codex_core::config::Config, auth_manager: alloc::sync::Arc<codex_login::auth::manager::AuthManager>, session_source: codex_protocol::protocol::SessionSource, collaboration_modes_config: codex_models_manager::collaboration_mode_presets::CollaborationModesConfig, environment_manager: alloc::sync::Arc<codex_exec_server::environment::EnvironmentManager>, analytics_events_client: core::option::Option<codex_analytics::client::AnalyticsEventsClient>) -> Self
+pub fn codex_core::ThreadManager::plugins_manager(&self) -> alloc::sync::Arc<codex_core::plugins::PluginsManager>
+pub async fn codex_core::ThreadManager::refresh_mcp_servers(&self, refresh_config: codex_protocol::protocol::McpServerRefreshConfig)
+pub async fn codex_core::ThreadManager::remove_thread(&self, thread_id: &codex_protocol::thread_id::ThreadId) -> core::option::Option<alloc::sync::Arc<codex_core::CodexThread>>
+pub async fn codex_core::ThreadManager::resume_thread_from_rollout(&self, config: codex_core::config::Config, rollout_path: std::path::PathBuf, auth_manager: alloc::sync::Arc<codex_login::auth::manager::AuthManager>, parent_trace: core::option::Option<codex_protocol::protocol::W3cTraceContext>) -> codex_protocol::error::Result<codex_core::NewThread>
+pub async fn codex_core::ThreadManager::resume_thread_with_history(&self, config: codex_core::config::Config, initial_history: codex_protocol::protocol::InitialHistory, auth_manager: alloc::sync::Arc<codex_login::auth::manager::AuthManager>, persist_extended_history: bool, parent_trace: core::option::Option<codex_protocol::protocol::W3cTraceContext>) -> codex_protocol::error::Result<codex_core::NewThread>
+pub fn codex_core::ThreadManager::session_source(&self) -> codex_protocol::protocol::SessionSource
+pub async fn codex_core::ThreadManager::shutdown_all_threads_bounded(&self, timeout: core::time::Duration) -> codex_core::thread_manager::ThreadShutdownReport
+pub fn codex_core::ThreadManager::skills_manager(&self) -> alloc::sync::Arc<codex_core_skills::manager::SkillsManager>
+pub async fn codex_core::ThreadManager::start_thread(&self, config: codex_core::config::Config) -> codex_protocol::error::Result<codex_core::NewThread>
+pub async fn codex_core::ThreadManager::start_thread_with_options(&self, options: codex_core::StartThreadOptions) -> codex_protocol::error::Result<codex_core::NewThread>
+pub async fn codex_core::ThreadManager::start_thread_with_tools(&self, config: codex_core::config::Config, dynamic_tools: alloc::vec::Vec<codex_protocol::dynamic_tools::DynamicToolSpec>, persist_extended_history: bool) -> codex_protocol::error::Result<codex_core::NewThread>
+pub fn codex_core::ThreadManager::subscribe_thread_created(&self) -> tokio::sync::broadcast::Receiver<codex_protocol::thread_id::ThreadId>
+pub fn codex_core::ThreadManager::validate_environment_selections(&self, environments: &[codex_protocol::protocol::TurnEnvironmentSelection]) -> codex_protocol::error::Result<()>
+pub const codex_core::DEFAULT_AGENTS_MD_FILENAME: &str
+pub const codex_core::LOCAL_AGENTS_MD_FILENAME: &str
+pub const codex_core::REVIEW_PROMPT: &str
+pub const codex_core::X_CODEX_INSTALLATION_ID_HEADER: &str
+pub const codex_core::X_CODEX_TURN_METADATA_HEADER: &str
+pub const codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str
+pub async fn codex_core::append_message_history_entry(text: &str, conversation_id: &codex_protocol::thread_id::ThreadId, config: &codex_core::config::Config) -> std::io::error::Result<()>
+pub fn codex_core::build_models_manager(config: &codex_core::config::Config, auth_manager: alloc::sync::Arc<codex_login::auth::manager::AuthManager>, collaboration_modes_config: codex_models_manager::collaboration_mode_presets::CollaborationModesConfig) -> codex_models_manager::manager::SharedModelsManager
+pub async fn codex_core::build_network_proxy_state() -> anyhow::Result<codex_network_proxy::runtime::NetworkProxyState>
+pub async fn codex_core::build_network_proxy_state_and_reloader() -> anyhow::Result<(codex_network_proxy::runtime::ConfigState, codex_core::MtimeConfigReloader)>
+pub async fn codex_core::build_turn_metadata_header(cwd: &codex_utils_absolute_path::AbsolutePathBuf, sandbox: core::option::Option<&str>) -> core::option::Option<alloc::string::String>
+pub async fn codex_core::check_execpolicy_for_warnings(config_stack: &codex_config::state::ConfigLayerStack) -> core::result::Result<core::option::Option<codex_core::ExecPolicyError>, codex_core::ExecPolicyError>
+pub fn codex_core::content_items_to_text(content: &[codex_protocol::models::ContentItem]) -> core::option::Option<alloc::string::String>
+pub fn codex_core::format_exec_policy_error_with_source(error: &codex_core::ExecPolicyError) -> alloc::string::String
+pub async fn codex_core::get_state_db(config: &codex_core::config::Config) -> core::option::Option<codex_rollout::state_db::StateDbHandle>
+pub fn codex_core::grant_read_root_non_elevated(policy: &codex_protocol::protocol::SandboxPolicy, policy_cwd: &std::path::Path, command_cwd: &std::path::Path, env_map: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, codex_home: &std::path::Path, read_root: &std::path::Path) -> anyhow::Result<std::path::PathBuf>
+pub async fn codex_core::load_exec_policy(config_stack: &codex_config::state::ConfigLayerStack) -> core::result::Result<codex_execpolicy::policy::Policy, codex_core::ExecPolicyError>
+pub fn codex_core::lookup_message_history_entry(log_id: u64, offset: usize, config: &codex_core::config::Config) -> core::option::Option<codex_core::MessageHistoryEntry>
+pub async fn codex_core::message_history_metadata(config: &codex_core::config::Config) -> (u64, usize)
+pub fn codex_core::parse_turn_item(item: &codex_protocol::models::ResponseItem) -> core::option::Option<codex_protocol::items::TurnItem>
+pub async fn codex_core::resolve_installation_id(codex_home: &codex_utils_absolute_path::AbsolutePathBuf) -> std::io::error::Result<alloc::string::String>
+pub async fn codex_core::spawn_command_under_linux_sandbox<P>(codex_linux_sandbox_exe: P, command: alloc::vec::Vec<alloc::string::String>, command_cwd: codex_utils_absolute_path::AbsolutePathBuf, permission_profile: &codex_protocol::models::PermissionProfile, sandbox_policy_cwd: &codex_utils_absolute_path::AbsolutePathBuf, use_legacy_landlock: bool, stdio_policy: codex_core::spawn::StdioPolicy, network: core::option::Option<&codex_network_proxy::proxy::NetworkProxy>, env: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> std::io::error::Result<tokio::process::Child> where P: core::convert::AsRef<std::path::Path>
+pub fn codex_core::web_search_action_detail(action: &codex_protocol::models::WebSearchAction) -> alloc::string::String
+pub fn codex_core::web_search_detail(action: core::option::Option<&codex_protocol::models::WebSearchAction>, query: &str) -> alloc::string::String
+pub type codex_core::CodexConversation = codex_core::CodexThread
+pub type codex_core::ConversationManager = codex_core::ThreadManager
+pub type codex_core::NewConversation = codex_core::NewThread

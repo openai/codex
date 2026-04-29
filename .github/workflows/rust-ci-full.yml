@@ -40,6 +40,21 @@ jobs:
       - name: cargo shear
         run: cargo shear
 
+  public_api:
+    name: Public API listing
+    runs-on:
+      group: codex-runners
+      labels: codex-linux-x64
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # nightly-2025-09-18
+        with:
+          toolchain: nightly-2025-09-18
+      - name: Check public API listings are up to date
+        env:
+          CODEX_PUBLIC_API_TOOLCHAIN: nightly-2025-09-18
+        run: ./scripts/regen-public-api.sh --check
+
   argument_comment_lint_package:
     name: Argument comment lint package
     runs-on: ubuntu-24.04
@@ -740,6 +755,7 @@ jobs:
       [
         general,
         cargo_shear,
+        public_api,
         argument_comment_lint_package,
         argument_comment_lint_prebuilt,
         lint_build,
@@ -754,12 +770,14 @@ jobs:
           echo "argpkg : ${{ needs.argument_comment_lint_package.result }}"
           echo "arglint: ${{ needs.argument_comment_lint_prebuilt.result }}"
           echo "general: ${{ needs.general.result }}"
+          echo "pubapi : ${{ needs.public_api.result }}"
           echo "shear  : ${{ needs.cargo_shear.result }}"
           echo "lint   : ${{ needs.lint_build.result }}"
           echo "tests  : ${{ needs.tests.result }}"
           [[ '${{ needs.argument_comment_lint_package.result }}' == 'success' ]] || { echo 'argument_comment_lint_package failed'; exit 1; }
           [[ '${{ needs.argument_comment_lint_prebuilt.result }}' == 'success' ]] || { echo 'argument_comment_lint_prebuilt failed'; exit 1; }
           [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
+          [[ '${{ needs.public_api.result }}' == 'success' ]] || { echo 'public_api failed'; exit 1; }
           [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
           [[ '${{ needs.lint_build.result }}' == 'success' ]] || { echo 'lint_build failed'; exit 1; }
           [[ '${{ needs.tests.result }}' == 'success' ]] || { echo 'tests failed'; exit 1; }
