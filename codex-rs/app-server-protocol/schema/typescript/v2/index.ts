@@ -287,6 +287,8 @@ export type { PluginShareListParams } from "./PluginShareListParams";
 export type { PluginShareListResponse } from "./PluginShareListResponse";
 export type { PluginShareSaveParams } from "./PluginShareSaveParams";
 export type { PluginShareSaveResponse } from "./PluginShareSaveResponse";
+export type { PluginSkillReadParams } from "./PluginSkillReadParams";
+export type { PluginSkillReadResponse } from "./PluginSkillReadResponse";
 export type { PluginSource } from "./PluginSource";
 export type { PluginSummary } from "./PluginSummary";
 export type { PluginUninstallParams } from "./PluginUninstallParams";

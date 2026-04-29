@@ -769,6 +769,30 @@
             },
             "method": {
               "enum": [
+                "plugin/skill/read"
+              ],
+              "title": "Plugin/skill/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginSkillReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/skill/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/share/save"
               ],
               "title": "Plugin/share/saveRequestMethod",
@@ -12389,6 +12413,40 @@
           "shareUrl"
         ],
         "title": "PluginShareSaveResponse",
+        "type": "object"
+      },
+      "PluginSkillReadParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "pluginName": {
+            "type": "string"
+          },
+          "remoteMarketplaceName": {
+            "type": "string"
+          },
+          "skillName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pluginName",
+          "remoteMarketplaceName",
+          "skillName"
+        ],
+        "title": "PluginSkillReadParams",
+        "type": "object"
+      },
+      "PluginSkillReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "contents": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "PluginSkillReadResponse",
         "type": "object"
       },
       "PluginSource": {

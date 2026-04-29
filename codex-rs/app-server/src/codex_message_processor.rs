@@ -120,6 +120,8 @@ use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginSkillReadParams;
+use codex_app_server_protocol::PluginSkillReadResponse;
 use codex_app_server_protocol::PluginShareDeleteParams;
 use codex_app_server_protocol::PluginShareDeleteResponse;
 use codex_app_server_protocol::PluginShareListParams;
@@ -1112,6 +1114,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::PluginRead { request_id, params } => {
                 self.plugin_read(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::PluginSkillRead { request_id, params } => {
+                self.plugin_skill_read(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::PluginShareSave { request_id, params } => {
