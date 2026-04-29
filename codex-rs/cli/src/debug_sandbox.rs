@@ -581,6 +581,11 @@ async fn load_debug_sandbox_config_with_codex_home(
     codex_linux_sandbox_exe: Option<PathBuf>,
     codex_home: Option<PathBuf>,
 ) -> anyhow::Result<Config> {
+    // For legacy configs, `codex sandbox` historically defaulted to read-only
+    // instead of inheriting ambient `sandbox_mode` settings from user/system
+    // config. Keep that behavior unless this invocation explicitly passes a
+    // legacy `sandbox_mode` CLI override, which is now the documented writable
+    // replacement for the removed `--full-auto` flag.
     let uses_legacy_sandbox_mode_override = cli_overrides_use_legacy_sandbox_mode(&cli_overrides);
     let config = build_debug_sandbox_config(
         cli_overrides.clone(),
