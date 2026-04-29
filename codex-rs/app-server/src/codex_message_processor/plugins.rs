@@ -303,6 +303,127 @@ impl CodexMessageProcessor {
         Ok(PluginReadResponse { plugin })
     }
 
+    pub(super) async fn plugin_share_save(
+        &self,
+        request_id: ConnectionRequestId,
+        params: PluginShareSaveParams,
+    ) {
+        let result = self.plugin_share_save_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn plugin_share_save_response(
+        &self,
+        params: PluginShareSaveParams,
+    ) -> Result<PluginShareSaveResponse, JSONRPCErrorError> {
+        let (config, auth) = self.load_plugin_share_config_and_auth().await?;
+        let PluginShareSaveParams {
+            plugin_path,
+            remote_plugin_id,
+        } = params;
+        if let Some(remote_plugin_id) = remote_plugin_id.as_ref()
+            && (remote_plugin_id.is_empty() || !is_valid_remote_plugin_id(remote_plugin_id))
+        {
+            return Err(invalid_request(
+                "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed",
+            ));
+        }
+
+        let remote_plugin_service_config = RemotePluginServiceConfig {
+            chatgpt_base_url: config.chatgpt_base_url.clone(),
+        };
+        let result = codex_core_plugins::remote::save_remote_plugin_share(
+            &remote_plugin_service_config,
+            auth.as_ref(),
+            plugin_path.as_path(),
+            remote_plugin_id.as_deref(),
+        )
+        .await
+        .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "save remote plugin share"))?;
+        self.clear_plugin_related_caches();
+        Ok(PluginShareSaveResponse {
+            remote_plugin_id: result.remote_plugin_id,
+            // TODO(remote plugins): populate this once the backend returns a share URL.
+            share_url: String::new(),
+        })
+    }
+
+    pub(super) async fn plugin_share_list(
+        &self,
+        request_id: ConnectionRequestId,
+        _params: PluginShareListParams,
+    ) {
+        let result = self.plugin_share_list_response().await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn plugin_share_list_response(
+        &self,
+    ) -> Result<PluginShareListResponse, JSONRPCErrorError> {
+        let (config, auth) = self.load_plugin_share_config_and_auth().await?;
+        let remote_plugin_service_config = RemotePluginServiceConfig {
+            chatgpt_base_url: config.chatgpt_base_url.clone(),
+        };
+        let data = codex_core_plugins::remote::list_remote_plugin_shares(
+            &remote_plugin_service_config,
+            auth.as_ref(),
+        )
+        .await
+        .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "list remote plugin shares"))?
+        .into_iter()
+        .map(remote_plugin_summary_to_info)
+        .collect();
+        Ok(PluginShareListResponse { data })
+    }
+
+    pub(super) async fn plugin_share_delete(
+        &self,
+        request_id: ConnectionRequestId,
+        params: PluginShareDeleteParams,
+    ) {
+        let result = self.plugin_share_delete_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn plugin_share_delete_response(
+        &self,
+        params: PluginShareDeleteParams,
+    ) -> Result<PluginShareDeleteResponse, JSONRPCErrorError> {
+        let (config, auth) = self.load_plugin_share_config_and_auth().await?;
+        let PluginShareDeleteParams { remote_plugin_id } = params;
+        if remote_plugin_id.is_empty() || !is_valid_remote_plugin_id(&remote_plugin_id) {
+            return Err(invalid_request(
+                "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed",
+            ));
+        }
+
+        let remote_plugin_service_config = RemotePluginServiceConfig {
+            chatgpt_base_url: config.chatgpt_base_url.clone(),
+        };
+        codex_core_plugins::remote::delete_remote_plugin_share(
+            &remote_plugin_service_config,
+            auth.as_ref(),
+            &remote_plugin_id,
+        )
+        .await
+        .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "delete remote plugin share"))?;
+        self.clear_plugin_related_caches();
+        Ok(PluginShareDeleteResponse {})
+    }
+
+    async fn load_plugin_share_config_and_auth(
+        &self,
+    ) -> Result<(Config, Option<CodexAuth>), JSONRPCErrorError> {
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        if !config.features.enabled(Feature::Plugins)
+            || !config.features.enabled(Feature::RemotePlugin)
+        {
+            return Err(invalid_request("plugin sharing is not enabled"));
+        }
+        let auth = self.auth_manager.auth().await;
+        Ok((config, auth))
+    }
+
     pub(super) async fn plugin_install(
         &self,
         request_id: ConnectionRequestId,
@@ -802,12 +923,22 @@ fn remote_plugin_catalog_error_to_jsonrpc(
                 data: None,
             }
         }
+        RemotePluginCatalogError::InvalidPluginPath { .. }
+        | RemotePluginCatalogError::ArchiveTooLarge { .. } => JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message: format!("{context}: {err}"),
+            data: None,
+        },
         RemotePluginCatalogError::AuthToken(_)
         | RemotePluginCatalogError::Request { .. }
         | RemotePluginCatalogError::UnexpectedStatus { .. }
         | RemotePluginCatalogError::Decode { .. }
         | RemotePluginCatalogError::UnexpectedPluginId { .. }
         | RemotePluginCatalogError::UnexpectedEnabledState { .. }
+        | RemotePluginCatalogError::Archive { .. }
+        | RemotePluginCatalogError::ArchiveJoin(_)
+        | RemotePluginCatalogError::MissingUploadEtag
+        | RemotePluginCatalogError::UnexpectedResponse(_)
         | RemotePluginCatalogError::CacheRemove(_) => JSONRPCErrorError {
             code: INTERNAL_ERROR_CODE,
             message: format!("{context}: {err}"),

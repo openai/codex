@@ -611,6 +611,21 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::PluginReadResponse,
     },
+    PluginShareSave => "plugin/share/save" {
+        params: v2::PluginShareSaveParams,
+        serialization: global("config"),
+        response: v2::PluginShareSaveResponse,
+    },
+    PluginShareList => "plugin/share/list" {
+        params: v2::PluginShareListParams,
+        serialization: global("config"),
+        response: v2::PluginShareListResponse,
+    },
+    PluginShareDelete => "plugin/share/delete" {
+        params: v2::PluginShareDeleteParams,
+        serialization: global("config"),
+        response: v2::PluginShareDeleteResponse,
+    },
     AppsList => "app/list" {
         params: v2::AppsListParams,
         serialization: None,

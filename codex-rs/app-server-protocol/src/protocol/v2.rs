@@ -4480,6 +4480,47 @@ pub struct PluginReadResponse {
     pub plugin: PluginDetail,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareSaveParams {
+    pub plugin_path: AbsolutePathBuf,
+    #[ts(optional = nullable)]
+    pub remote_plugin_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareSaveResponse {
+    pub remote_plugin_id: String,
+    pub share_url: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareListParams {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareListResponse {
+    pub data: Vec<PluginSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareDeleteParams {
+    pub remote_plugin_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareDeleteResponse {}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -10468,6 +10509,101 @@ mod tests {
                 remote_marketplace_name: Some("openai-curated".to_string()),
                 plugin_name: "gmail".to_string(),
             },
+        );
+    }
+
+    #[test]
+    fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
+        let plugin_path = if cfg!(windows) {
+            r"C:\plugins\gmail"
+        } else {
+            "/plugins/gmail"
+        };
+        let plugin_path = AbsolutePathBuf::try_from(PathBuf::from(plugin_path)).unwrap();
+        let plugin_path_json = plugin_path.as_path().display().to_string();
+
+        assert_eq!(
+            serde_json::to_value(PluginShareSaveParams {
+                plugin_path: plugin_path.clone(),
+                remote_plugin_id: None,
+            })
+            .unwrap(),
+            json!({
+                "pluginPath": plugin_path_json,
+                "remotePluginId": null,
+            }),
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginShareSaveParams {
+                plugin_path,
+                remote_plugin_id: Some(
+                    "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                ),
+            })
+            .unwrap(),
+            json!({
+                "pluginPath": plugin_path_json,
+                "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+            }),
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginShareSaveResponse {
+                remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                share_url: String::new(),
+            })
+            .unwrap(),
+            json!({
+                "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+                "shareUrl": "",
+            }),
+        );
+
+        assert_eq!(
+            serde_json::from_value::<PluginShareListParams>(json!({})).unwrap(),
+            PluginShareListParams {},
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginShareDeleteParams {
+                remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+            })
+            .unwrap(),
+            json!({
+                "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+            }),
+        );
+    }
+
+    #[test]
+    fn plugin_share_list_response_serializes_plugin_summaries() {
+        assert_eq!(
+            serde_json::to_value(PluginShareListResponse {
+                data: vec![PluginSummary {
+                    id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                    name: "gmail".to_string(),
+                    source: PluginSource::Remote,
+                    installed: false,
+                    enabled: false,
+                    install_policy: PluginInstallPolicy::Available,
+                    auth_policy: PluginAuthPolicy::OnUse,
+                    interface: None,
+                }],
+            })
+            .unwrap(),
+            json!({
+                "data": [{
+                    "id": "plugins~Plugin_00000000000000000000000000000000",
+                    "name": "gmail",
+                    "source": { "type": "remote" },
+                    "installed": false,
+                    "enabled": false,
+                    "installPolicy": "AVAILABLE",
+                    "authPolicy": "ON_USE",
+                    "interface": null,
+                }],
+            }),
         );
     }
 

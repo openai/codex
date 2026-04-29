@@ -119,6 +119,12 @@ use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginShareDeleteParams;
+use codex_app_server_protocol::PluginShareDeleteResponse;
+use codex_app_server_protocol::PluginShareListParams;
+use codex_app_server_protocol::PluginShareListResponse;
+use codex_app_server_protocol::PluginShareSaveParams;
+use codex_app_server_protocol::PluginShareSaveResponse;
 use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallParams;
@@ -1127,6 +1133,18 @@ impl CodexMessageProcessor {
             }
             ClientRequest::PluginRead { request_id, params } => {
                 self.plugin_read(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::PluginShareSave { request_id, params } => {
+                self.plugin_share_save(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::PluginShareList { request_id, params } => {
+                self.plugin_share_list(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::PluginShareDelete { request_id, params } => {
+                self.plugin_share_delete(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::AppsList { request_id, params } => {

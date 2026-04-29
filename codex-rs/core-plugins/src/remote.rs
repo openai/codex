@@ -16,6 +16,13 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
+mod share;
+
+pub use share::RemotePluginShareSaveResult;
+pub use share::delete_remote_plugin_share;
+pub use share::list_remote_plugin_shares;
+pub use share::save_remote_plugin_share;
+
 pub const REMOTE_GLOBAL_MARKETPLACE_NAME: &str = "chatgpt-global";
 pub const REMOTE_WORKSPACE_MARKETPLACE_NAME: &str = "chatgpt-workspace";
 pub const REMOTE_GLOBAL_MARKETPLACE_DISPLAY_NAME: &str = "ChatGPT Plugins";
@@ -136,6 +143,30 @@ pub enum RemotePluginCatalogError {
         expected_enabled: bool,
         actual_enabled: bool,
     },
+
+    #[error("invalid plugin path `{path}`: {reason}")]
+    InvalidPluginPath { path: PathBuf, reason: String },
+
+    #[error("failed to archive plugin at `{path}`: {source}")]
+    Archive {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to join plugin archive task: {0}")]
+    ArchiveJoin(#[source] tokio::task::JoinError),
+
+    #[error(
+        "plugin archive would be {bytes} bytes, exceeding the maximum upload size of {max_bytes} bytes"
+    )]
+    ArchiveTooLarge { bytes: usize, max_bytes: usize },
+
+    #[error("workspace plugin upload response did not include an etag")]
+    MissingUploadEtag,
+
+    #[error("{0}")]
+    UnexpectedResponse(String),
 
     #[error("{0}")]
     CacheRemove(String),
