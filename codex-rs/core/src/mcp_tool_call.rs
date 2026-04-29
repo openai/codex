@@ -657,54 +657,42 @@ fn truncate_mcp_tool_result_for_event(
     result: &Result<CallToolResult, String>,
 ) -> Result<CallToolResult, String> {
     match result {
-        Ok(call_tool_result) => Ok(truncate_call_tool_result_for_event(call_tool_result)),
-        Err(message) => Err(truncate_mcp_tool_error_for_event(message)),
-    }
-}
+        Ok(call_tool_result) => {
+            // The app-server rebuilds `ThreadItem::McpToolCall` from this event,
+            // so avoid persisting multi-megabyte results in rollout storage.
+            let Ok(serialized) = serde_json::to_string(call_tool_result) else {
+                return Ok(call_tool_result.clone());
+            };
+            if serialized.len() <= MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES {
+                return Ok(call_tool_result.clone());
+            }
 
-fn truncate_mcp_tool_error_for_event(message: &str) -> String {
-    let mut content_budget = MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES;
-    loop {
-        let truncated = truncate_text(message, TruncationPolicy::Bytes(content_budget));
-        if truncated.len() <= MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES || content_budget == 0 {
-            return truncated;
+            // A huge MCP result can put bytes in `content`, `structuredContent`,
+            // or `_meta`. Collapse the event copy to a text preview of the whole
+            // serialized result so the UI still has useful context without
+            // preserving a multi-megabyte structured payload.
+            //
+            // This budget applies to the preview text, not the final event JSON.
+            // The preview is itself serialized into a JSON string, so quotes and
+            // backslashes can be escaped again and the stored event may end up
+            // somewhat larger than this byte budget.
+            let content_budget = MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES
+                .saturating_sub(MCP_TOOL_CALL_EVENT_RESULT_TRUNCATED_PREFIX.len());
+            let truncated = truncate_text(&serialized, TruncationPolicy::Bytes(content_budget));
+            Ok(CallToolResult {
+                content: vec![serde_json::json!({
+                    "type": "text",
+                    "text": format!("{MCP_TOOL_CALL_EVENT_RESULT_TRUNCATED_PREFIX}{truncated}"),
+                })],
+                structured_content: None,
+                is_error: call_tool_result.is_error,
+                meta: None,
+            })
         }
-        content_budget =
-            content_budget.saturating_sub(truncated.len() - MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES);
-    }
-}
-
-fn truncate_call_tool_result_for_event(result: &CallToolResult) -> CallToolResult {
-    let Ok(serialized) = serde_json::to_string(result) else {
-        return result.clone();
-    };
-    if serialized.len() <= MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES {
-        return result.clone();
-    }
-
-    let mut content_budget = MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES
-        .saturating_sub(MCP_TOOL_CALL_EVENT_RESULT_TRUNCATED_PREFIX.len());
-    loop {
-        let truncated = truncate_text(&serialized, TruncationPolicy::Bytes(content_budget));
-        let candidate = CallToolResult {
-            content: vec![serde_json::json!({
-                "type": "text",
-                "text": format!("{MCP_TOOL_CALL_EVENT_RESULT_TRUNCATED_PREFIX}{truncated}"),
-            })],
-            structured_content: None,
-            is_error: result.is_error,
-            meta: None,
-        };
-
-        let Ok(candidate_serialized) = serde_json::to_string(&candidate) else {
-            return candidate;
-        };
-        if candidate_serialized.len() <= MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES || content_budget == 0
-        {
-            return candidate;
-        }
-        content_budget = content_budget
-            .saturating_sub(candidate_serialized.len() - MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES);
+        Err(message) => Err(truncate_text(
+            message,
+            TruncationPolicy::Bytes(MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES),
+        )),
     }
 }
 
