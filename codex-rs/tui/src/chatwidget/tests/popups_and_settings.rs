@@ -284,6 +284,15 @@ async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
     let marketplace_root = plugins_test_absolute_path("marketplaces/debug");
     let marketplace_path =
         plugins_test_absolute_path("marketplaces/debug/.agents/plugins/marketplace.json");
+    let temp = tempdir().expect("tempdir");
+    let config_toml_path = temp.path().join("config.toml").abs();
+    chat.config.config_layer_stack = ConfigLayerStack::default().with_user_config(
+        &config_toml_path,
+        toml::from_str::<TomlValue>(
+            "[marketplaces.debug]\nsource_type = \"git\"\nsource = \"https://github.com/owner/debug.git\"\n",
+        )
+        .expect("marketplace config"),
+    );
     render_loaded_plugins_popup(
         &mut chat,
         plugins_test_response(vec![plugins_test_curated_marketplace(Vec::new())]),
@@ -398,6 +407,10 @@ async fn plugins_popup_removes_user_configured_marketplace_flow() {
             && confirmation.contains("Remove marketplace")
             && confirmation.contains("Back to plugins"),
         "expected marketplace removal confirmation, got:\n{confirmation}"
+    );
+    assert_chatwidget_snapshot!(
+        "plugins_popup_marketplace_remove_confirmation",
+        confirmation
     );
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
