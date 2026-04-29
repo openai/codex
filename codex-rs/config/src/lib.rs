@@ -48,6 +48,7 @@ pub use config_requirements::NetworkDomainPermissionsToml;
 pub use config_requirements::NetworkRequirementsToml;
 pub use config_requirements::NetworkUnixSocketPermissionToml;
 pub use config_requirements::NetworkUnixSocketPermissionsToml;
+pub use config_requirements::PluginRequirementsToml;
 pub use config_requirements::RemoteSandboxConfigToml;
 pub use config_requirements::RequirementSource;
 pub use config_requirements::ResidencyRequirement;

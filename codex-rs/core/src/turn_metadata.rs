@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
+use codex_utils_string::to_ascii_json_string;
 use serde::Serialize;
 use serde_json::Value;
 use tokio::task::JoinHandle;
@@ -71,7 +72,7 @@ pub(crate) struct TurnMetadataBag {
 
 impl TurnMetadataBag {
     fn to_header_value(&self) -> Option<String> {
-        serde_json::to_string(self).ok()
+        to_ascii_json_string(self).ok()
     }
 }
 
@@ -101,7 +102,7 @@ fn merge_turn_metadata(
                 .or_insert_with(|| Value::String(value.clone()));
         }
     }
-    serde_json::to_string(&metadata).ok()
+    to_ascii_json_string(&metadata).ok()
 }
 
 fn build_turn_metadata_bag(
