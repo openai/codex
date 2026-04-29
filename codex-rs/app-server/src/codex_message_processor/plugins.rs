@@ -607,6 +607,8 @@ impl CodexMessageProcessor {
             )));
         }
         let actual_remote_marketplace_name = remote_detail.marketplace_name.clone();
+        // Direct install writes the same cache tree that installed-plugin sync
+        // prunes before the backend installed snapshot can include this plugin.
         let _remote_plugin_cache_mutation =
             codex_core_plugins::remote::mark_remote_plugin_cache_mutation_in_flight(
                 config.codex_home.as_path(),
