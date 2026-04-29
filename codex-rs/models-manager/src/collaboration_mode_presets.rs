@@ -3,6 +3,7 @@ use codex_collaboration_mode_templates::PLAN as COLLABORATION_MODE_PLAN;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_template::Template;
 use std::sync::LazyLock;
 
@@ -21,7 +22,7 @@ fn plan_preset() -> CollaborationModeMask {
         name: ModeKind::Plan.display_name().to_string(),
         mode: Some(ModeKind::Plan),
         model: None,
-        reasoning_effort: None,
+        reasoning_effort: Some(Some(ReasoningEffort::Medium)),
         developer_instructions: Some(Some(COLLABORATION_MODE_PLAN.to_string())),
     }
 }
