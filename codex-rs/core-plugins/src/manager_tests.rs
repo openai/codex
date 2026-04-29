@@ -345,13 +345,22 @@ remote_plugin = true
     );
 
     let config = load_config(codex_home.path(), codex_home.path()).await;
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let remote_cache_key = remote_installed_plugins_cache_key(&config, Some(&auth)).unwrap();
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(vec![RemoteInstalledPlugin {
-        marketplace_name: "chatgpt-global".to_string(),
-        id: "plugins~Plugin_linear".to_string(),
-        name: "linear".to_string(),
-        enabled: true,
-    }]);
+    manager.set_current_remote_installed_plugins_cache_key(Some(remote_cache_key.clone()));
+    assert_eq!(
+        manager.write_remote_installed_plugins_cache_if_current(
+            remote_cache_key,
+            vec![RemoteInstalledPlugin {
+                marketplace_name: "chatgpt-global".to_string(),
+                id: "plugins~Plugin_linear".to_string(),
+                name: "linear".to_string(),
+                enabled: true,
+            }],
+        ),
+        Some(true)
+    );
 
     let outcome = manager.plugins_for_config(&config).await;
     assert_eq!(
@@ -374,16 +383,136 @@ remote_plugin = true
     );
 
     let config = load_config(codex_home.path(), codex_home.path()).await;
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let remote_cache_key = remote_installed_plugins_cache_key(&config, Some(&auth)).unwrap();
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(vec![RemoteInstalledPlugin {
+    manager.set_current_remote_installed_plugins_cache_key(Some(remote_cache_key.clone()));
+    assert_eq!(
+        manager.write_remote_installed_plugins_cache_if_current(
+            remote_cache_key,
+            vec![RemoteInstalledPlugin {
+                marketplace_name: "chatgpt-global".to_string(),
+                id: "plugins~Plugin_linear".to_string(),
+                name: "linear".to_string(),
+                enabled: true,
+            }],
+        ),
+        Some(true)
+    );
+
+    let outcome = manager.plugins_for_config(&config).await;
+    assert_eq!(outcome, PluginLoadOutcome::default());
+}
+
+#[tokio::test]
+async fn remote_installed_cache_ignores_entries_for_different_account() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_base = codex_home
+        .path()
+        .join("plugins/cache/chatgpt-global/linear");
+    write_plugin(&plugin_base, "local", "linear");
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = true
+"#,
+    );
+
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let current_cache_key = remote_installed_plugins_cache_key(&config, Some(&auth)).unwrap();
+    let other_account_cache_key = RemoteInstalledPluginsCacheKey {
+        account_id: Some("other_account".to_string()),
+        ..current_cache_key.clone()
+    };
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let remote_plugins = vec![RemoteInstalledPlugin {
         marketplace_name: "chatgpt-global".to_string(),
         id: "plugins~Plugin_linear".to_string(),
         name: "linear".to_string(),
         enabled: true,
-    }]);
+    }];
+    manager.set_current_remote_installed_plugins_cache_key(Some(current_cache_key.clone()));
+    assert_eq!(
+        manager.write_remote_installed_plugins_cache_if_current(
+            other_account_cache_key.clone(),
+            remote_plugins.clone(),
+        ),
+        None
+    );
+
+    let stale_outcome = manager.plugins_for_config(&config).await;
+    assert_eq!(stale_outcome, PluginLoadOutcome::default());
+
+    assert_eq!(
+        manager.write_remote_installed_plugins_cache_if_current(current_cache_key, remote_plugins),
+        Some(true)
+    );
+    let current_outcome = manager.plugins_for_config(&config).await;
+    assert_eq!(
+        current_outcome.effective_skill_roots(),
+        vec![AbsolutePathBuf::try_from(plugin_base.join("local/skills")).unwrap()]
+    );
+    assert_eq!(current_outcome.plugins().len(), 1);
+    assert_eq!(
+        current_outcome.plugins()[0].config_name,
+        "linear@chatgpt-global"
+    );
+
+    manager.set_current_remote_installed_plugins_cache_key(Some(other_account_cache_key));
+    let switched_account_outcome = manager.plugins_for_config(&config).await;
+    assert_eq!(switched_account_outcome, PluginLoadOutcome::default());
+}
+
+#[tokio::test]
+async fn remote_installed_cache_entry_clear_preserves_current_account_key() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_base = codex_home
+        .path()
+        .join("plugins/cache/chatgpt-global/linear");
+    write_plugin(&plugin_base, "local", "linear");
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = true
+"#,
+    );
+
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let cache_key = remote_installed_plugins_cache_key(&config, Some(&auth)).unwrap();
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let remote_plugins = vec![RemoteInstalledPlugin {
+        marketplace_name: "chatgpt-global".to_string(),
+        id: "plugins~Plugin_linear".to_string(),
+        name: "linear".to_string(),
+        enabled: true,
+    }];
+
+    manager.set_current_remote_installed_plugins_cache_key(Some(cache_key.clone()));
+    assert_eq!(
+        manager.write_remote_installed_plugins_cache_if_current(
+            cache_key.clone(),
+            remote_plugins.clone(),
+        ),
+        Some(true)
+    );
+    assert_eq!(
+        manager.clear_remote_installed_plugins_cache_entry_if_current(Some(&cache_key)),
+        Some(true)
+    );
+    assert_eq!(
+        manager.write_remote_installed_plugins_cache_if_current(cache_key, remote_plugins),
+        Some(true)
+    );
 
     let outcome = manager.plugins_for_config(&config).await;
-    assert_eq!(outcome, PluginLoadOutcome::default());
+    assert_eq!(
+        outcome.effective_skill_roots(),
+        vec![AbsolutePathBuf::try_from(plugin_base.join("local/skills")).unwrap()]
+    );
 }
 
 #[tokio::test]
@@ -1118,14 +1247,8 @@ async fn plugins_for_config_reloads_when_plugin_hooks_enablement_changes() {
             .is_empty()
     );
 
-    write_file(
-        &codex_home.path().join(CONFIG_TOML_FILE),
-        &plugin_config_toml_with_plugin_hooks(
-            /*enabled*/ true, /*plugins_feature_enabled*/ true,
-            /*plugin_hooks_feature_enabled*/ true,
-        ),
-    );
-    let config_with_plugin_hooks = load_config(codex_home.path(), codex_home.path()).await;
+    let mut config_with_plugin_hooks = config_without_plugin_hooks;
+    config_with_plugin_hooks.plugin_hooks_enabled = true;
     let with_plugin_hooks = manager.plugins_for_config(&config_with_plugin_hooks).await;
     assert_eq!(with_plugin_hooks.effective_plugin_hook_sources().len(), 1);
 }
