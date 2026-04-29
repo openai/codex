@@ -1086,7 +1086,6 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
             function_payload(json!({
                 "target": "/root",
                 "message": "run this",
-                "interrupt": true
             })),
         ))
         .await
@@ -1548,7 +1547,6 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
             function_payload(json!({
                 "target": agent_id.to_string(),
                 "message": "continue",
-                "interrupt": true
             })),
         ))
         .await
@@ -1700,7 +1698,6 @@ async fn multi_agent_v2_followup_task_can_disable_interrupted_marker() {
             function_payload(json!({
                 "target": agent_id.to_string(),
                 "message": "continue",
-                "interrupt": true
             })),
         ))
         .await

@@ -139,7 +139,7 @@ pub fn create_send_message_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_message".to_string(),
-        description: "Send a string message to an existing agent without triggering a new turn."
+        description: "Send a message to an existing agent. The message will be delivered promptly. Does not trigger a new turn."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -166,18 +166,11 @@ pub fn create_followup_task_tool() -> ToolSpec {
                 "Message text to send to the target agent.".to_string(),
             )),
         ),
-        (
-            "interrupt".to_string(),
-            JsonSchema::boolean(Some(
-                "When true, stop the agent's current task and handle this immediately. When false (default), queue this message; if the target is already running, it starts the target's next turn after the current turn completes."
-                    .to_string(),
-            )),
-        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "followup_task".to_string(),
-        description: "Send a string message to an existing non-root agent and trigger a turn in the target. Use interrupt=true to redirect work immediately. If interrupt=false and the target's turn has not completed, the message is queued and starts the target's next turn after the current turn completes."
+        description: "Send a message to an existing non-root target agent and trigger a turn in that target. If the target is currently mid-turn, the message is queued and will be used to start the target's next turn, after the current turn completes."
             .to_string(),
         strict: false,
         defer_loading: None,

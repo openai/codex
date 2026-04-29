@@ -194,9 +194,6 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
     assert!(description.contains(
         "Send a string message to an existing non-root agent and trigger a turn in the target."
     ));
-    assert!(description.contains(
-        "If interrupt=false and the target's turn has not completed, the message is queued"
-    ));
     assert_eq!(
         properties
             .get("interrupt")
