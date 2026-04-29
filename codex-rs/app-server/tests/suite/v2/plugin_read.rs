@@ -141,6 +141,7 @@ async fn plugin_read_rejects_remote_marketplace_when_remote_plugin_is_disabled()
             .message
             .contains("remote plugin read is not enabled")
     );
+    assert!(err.error.message.contains("chatgpt-global"));
     Ok(())
 }
 
@@ -254,7 +255,7 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("caller-marketplace-is-ignored".to_string()),
+            remote_marketplace_name: Some("chatgpt-global".to_string()),
             plugin_name: "plugins~Plugin_00000000000000000000000000000000".to_string(),
         })
         .await?;
@@ -478,6 +479,11 @@ async fn plugin_read_rejects_invalid_remote_plugin_name() -> Result<()> {
 
     assert_eq!(err.error.code, -32600);
     assert!(err.error.message.contains("invalid remote plugin id"));
+    assert!(
+        err.error
+            .message
+            .contains("only ASCII letters, digits, `_`, `-`, and `~` are allowed")
+    );
     Ok(())
 }
 

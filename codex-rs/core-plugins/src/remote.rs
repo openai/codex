@@ -1,5 +1,6 @@
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
@@ -40,6 +41,7 @@ pub const REMOTE_WORKSPACE_MARKETPLACE_DISPLAY_NAME: &str = "ChatGPT Workspace P
 const REMOTE_PLUGIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
 const REMOTE_PLUGIN_LIST_PAGE_LIMIT: u32 = 200;
 const MAX_REMOTE_DEFAULT_PROMPT_LEN: usize = 128;
+const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemotePluginServiceConfig {
@@ -97,6 +99,27 @@ pub struct RemotePluginSkill {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemotePluginSkillDetail {
     pub contents: Option<String>,
+}
+
+pub fn is_valid_remote_plugin_id(plugin_id: &str) -> bool {
+    !plugin_id.is_empty()
+        && plugin_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '~')
+}
+
+pub fn validate_remote_plugin_id(plugin_id: &str) -> Result<(), JSONRPCErrorError> {
+    if !is_valid_remote_plugin_id(plugin_id) {
+        return Err(JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message:
+                "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed"
+                    .to_string(),
+            data: None,
+        });
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
