@@ -312,6 +312,12 @@ impl ChatWidget {
         marketplace_name: String,
         marketplace_display_name: String,
     ) {
+        self.plugins_active_tab_id = self
+            .bottom_pane
+            .active_tab_id_for_active_view(PLUGINS_SELECTION_VIEW_ID)
+            .map(str::to_string)
+            .or_else(|| self.plugins_active_tab_id.clone());
+
         let PluginsCacheState::Ready(plugins_response) = self.plugins_cache_for_current_cwd()
         else {
             return;
