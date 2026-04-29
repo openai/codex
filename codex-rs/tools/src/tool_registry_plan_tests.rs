@@ -1729,7 +1729,7 @@ fn tool_suggest_can_be_registered_without_search_tool() {
         panic!("expected function tool");
     };
     assert!(description.contains(
-        "Use this tool only to ask the user to install or enable one known plugin or connector from the list below. The list contains known candidates that are not currently installed or not currently enabled."
+        "Use this tool only to ask the user to install one known plugin or connector from the list below. The list contains known candidates that are not currently installed."
     ));
     assert!(description.contains(
         "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
@@ -1799,7 +1799,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
         panic!("expected function tool");
     };
     assert!(description.contains(
-        "Use this tool only to ask the user to install or enable one known plugin or connector from the list below. The list contains known candidates that are not currently installed or not currently enabled."
+        "Use this tool only to ask the user to install one known plugin or connector from the list below. The list contains known candidates that are not currently installed."
     ));
     assert!(description.contains("Google Calendar"));
     assert!(description.contains("Gmail"));
@@ -1807,7 +1807,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
     assert!(description.contains("Plan events and schedules."));
     assert!(description.contains("Find and summarize email threads."));
     assert!(description.contains("id: `sample@test`, type: plugin, action: install"));
-    assert!(description.contains("`action_type`: `install` or `enable`"));
+    assert!(description.contains("`action_type`: `install`"));
     assert!(
         description.contains("skills; MCP servers: sample-docs; app connectors: connector_sample")
     );
@@ -1820,7 +1820,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
         "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
     ));
     assert!(description.contains(
-        "The tool is one of the known installable or enableable plugins or connectors listed below. Only ask to install or enable tools from this list."
+        "The tool is one of the known installable plugins or connectors listed below. Only ask to install tools from this list."
     ));
     assert!(description.contains(
         "Do not use tool suggestion for adjacent capabilities, broad recommendations, or tools that merely seem useful."
@@ -1835,6 +1835,9 @@ fn tool_suggest_description_lists_discoverable_tools() {
     assert!(!description.contains("targeted lookup"));
     assert!(!description.contains("broad or speculative searches"));
     assert!(description.contains("Only proceed when one listed plugin or connector exactly fits."));
+    assert!(description.contains(
+        "If we found both connectors and plugins to suggest, use plugins first, only use connectors if the corresponding plugin is installed but the connector is not."
+    ));
     assert!(!description.contains("{{discoverable_tools}}"));
     assert!(!description.contains("tool_search fails to find a good match"));
     let (_, required) = expect_object_schema(parameters);
