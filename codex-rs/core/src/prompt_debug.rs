@@ -19,6 +19,7 @@ use crate::session::session::Session;
 use crate::session::turn::build_prompt;
 use crate::session::turn::built_tools;
 use crate::thread_manager::ThreadManager;
+use crate::thread_manager::thread_store_from_config;
 
 /// Build the model-visible `input` list for a single debug turn.
 #[doc(hidden)]
@@ -46,6 +47,7 @@ pub async fn build_prompt_input(
                 .enabled(Feature::DefaultModeRequestUserInput),
         },
         Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await),
+        thread_store_from_config(&config),
         /*analytics_events_client*/ None,
     );
     let thread = thread_manager.start_thread(config).await?;
