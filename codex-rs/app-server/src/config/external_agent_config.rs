@@ -64,14 +64,19 @@ pub(crate) struct PluginsMigration {
     pub plugin_names: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NamedMigration {
+    pub name: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct MigrationDetails {
     pub plugins: Vec<PluginsMigration>,
     pub sessions: Vec<ExternalAgentSessionMigration>,
-    pub mcp_server_names: Vec<String>,
-    pub hook_event_names: Vec<String>,
-    pub subagent_names: Vec<String>,
-    pub command_names: Vec<String>,
+    pub mcp_servers: Vec<NamedMigration>,
+    pub hooks: Vec<NamedMigration>,
+    pub subagents: Vec<NamedMigration>,
+    pub commands: Vec<NamedMigration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -320,7 +325,7 @@ impl ExternalAgentConfigService {
                     ),
                     cwd: cwd.clone(),
                     details: Some(MigrationDetails {
-                        mcp_server_names: mcp_server_names.clone(),
+                        mcp_servers: named_migrations(mcp_server_names.clone()),
                         ..Default::default()
                     }),
                 });
@@ -352,7 +357,7 @@ impl ExternalAgentConfigService {
                 ),
                 cwd: cwd.clone(),
                 details: Some(MigrationDetails {
-                    hook_event_names,
+                    hooks: named_migrations(hook_event_names),
                     ..Default::default()
                 }),
             });
@@ -407,7 +412,7 @@ impl ExternalAgentConfigService {
                 ),
                 cwd: cwd.clone(),
                 details: Some(MigrationDetails {
-                    command_names,
+                    commands: named_migrations(command_names),
                     ..Default::default()
                 }),
             });
@@ -435,7 +440,7 @@ impl ExternalAgentConfigService {
                 ),
                 cwd: cwd.clone(),
                 details: Some(MigrationDetails {
-                    subagent_names,
+                    subagents: named_migrations(subagent_names),
                     ..Default::default()
                 }),
             });
@@ -1493,6 +1498,13 @@ fn migrated_mcp_server_names(value: &TomlValue) -> Vec<String> {
         .and_then(TomlValue::as_table)
         .map(|servers| servers.keys().cloned().collect())
         .unwrap_or_default()
+}
+
+fn named_migrations(names: Vec<String>) -> Vec<NamedMigration> {
+    names
+        .into_iter()
+        .map(|name| NamedMigration { name })
+        .collect()
 }
 
 fn is_empty_toml_table(value: &TomlValue) -> bool {

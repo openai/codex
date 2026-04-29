@@ -2,17 +2,22 @@ use crate::config::external_agent_config::ExternalAgentConfigDetectOptions;
 use crate::config::external_agent_config::ExternalAgentConfigMigrationItem as CoreMigrationItem;
 use crate::config::external_agent_config::ExternalAgentConfigMigrationItemType as CoreMigrationItemType;
 use crate::config::external_agent_config::ExternalAgentConfigService;
+use crate::config::external_agent_config::NamedMigration as CoreNamedMigration;
 use crate::config::external_agent_config::PendingPluginImport;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_params;
+use codex_app_server_protocol::CommandMigration;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
+use codex_app_server_protocol::HookMigration;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::McpServerMigration;
 use codex_app_server_protocol::MigrationDetails;
 use codex_app_server_protocol::PluginsMigration;
+use codex_app_server_protocol::SubagentMigration;
 use codex_external_agent_sessions::ExternalAgentSessionMigration as CoreSessionMigration;
 use codex_external_agent_sessions::PendingSessionImport;
 use codex_external_agent_sessions::PrepareSessionImportsError;
@@ -99,10 +104,30 @@ impl ExternalAgentConfigApi {
                                 title: session.title,
                             })
                             .collect(),
-                        mcp_server_names: details.mcp_server_names,
-                        hook_event_names: details.hook_event_names,
-                        subagent_names: details.subagent_names,
-                        command_names: details.command_names,
+                        mcp_servers: details
+                            .mcp_servers
+                            .into_iter()
+                            .map(|mcp_server| McpServerMigration {
+                                name: mcp_server.name,
+                            })
+                            .collect(),
+                        hooks: details
+                            .hooks
+                            .into_iter()
+                            .map(|hook| HookMigration { name: hook.name })
+                            .collect(),
+                        subagents: details
+                            .subagents
+                            .into_iter()
+                            .map(|subagent| SubagentMigration {
+                                name: subagent.name,
+                            })
+                            .collect(),
+                        commands: details
+                            .commands
+                            .into_iter()
+                            .map(|command| CommandMigration { name: command.name })
+                            .collect(),
                     }),
                 })
                 .collect(),
@@ -229,10 +254,30 @@ impl ExternalAgentConfigApi {
                                         title: session.title,
                                     })
                                     .collect(),
-                                mcp_server_names: details.mcp_server_names,
-                                hook_event_names: details.hook_event_names,
-                                subagent_names: details.subagent_names,
-                                command_names: details.command_names,
+                                mcp_servers: details
+                                    .mcp_servers
+                                    .into_iter()
+                                    .map(|mcp_server| CoreNamedMigration {
+                                        name: mcp_server.name,
+                                    })
+                                    .collect(),
+                                hooks: details
+                                    .hooks
+                                    .into_iter()
+                                    .map(|hook| CoreNamedMigration { name: hook.name })
+                                    .collect(),
+                                subagents: details
+                                    .subagents
+                                    .into_iter()
+                                    .map(|subagent| CoreNamedMigration {
+                                        name: subagent.name,
+                                    })
+                                    .collect(),
+                                commands: details
+                                    .commands
+                                    .into_iter()
+                                    .map(|command| CoreNamedMigration { name: command.name })
+                                    .collect(),
                             }
                         }),
                     })

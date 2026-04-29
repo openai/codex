@@ -356,7 +356,9 @@ async fn detect_repo_lists_mcp_hooks_commands_and_subagents() {
                 ),
                 cwd: Some(repo_root.clone()),
                 details: Some(MigrationDetails {
-                    mcp_server_names: vec!["docs".to_string()],
+                    mcp_servers: vec![NamedMigration {
+                        name: "docs".to_string(),
+                    }],
                     ..Default::default()
                 }),
             },
@@ -369,7 +371,9 @@ async fn detect_repo_lists_mcp_hooks_commands_and_subagents() {
                 ),
                 cwd: Some(repo_root.clone()),
                 details: Some(MigrationDetails {
-                    hook_event_names: vec!["PreToolUse".to_string()],
+                    hooks: vec![NamedMigration {
+                        name: "PreToolUse".to_string(),
+                    }],
                     ..Default::default()
                 }),
             },
@@ -385,7 +389,9 @@ async fn detect_repo_lists_mcp_hooks_commands_and_subagents() {
                 ),
                 cwd: Some(repo_root.clone()),
                 details: Some(MigrationDetails {
-                    command_names: vec!["source-command-pr-review".to_string()],
+                    commands: vec![NamedMigration {
+                        name: "source-command-pr-review".to_string(),
+                    }],
                     ..Default::default()
                 }),
             },
@@ -398,7 +404,9 @@ async fn detect_repo_lists_mcp_hooks_commands_and_subagents() {
                 ),
                 cwd: Some(repo_root),
                 details: Some(MigrationDetails {
-                    subagent_names: vec!["researcher".to_string()],
+                    subagents: vec![NamedMigration {
+                        name: "researcher".to_string(),
+                    }],
                     ..Default::default()
                 }),
             },

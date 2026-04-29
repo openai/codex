@@ -6766,6 +6766,17 @@
         ],
         "type": "string"
       },
+      "CommandMigration": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "Config": {
         "additionalProperties": true,
         "properties": {
@@ -9539,6 +9550,17 @@
         ],
         "type": "string"
       },
+      "HookMigration": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "HookOutputEntry": {
         "properties": {
           "kind": {
@@ -10451,6 +10473,17 @@
         "title": "McpResourceReadResponse",
         "type": "object"
       },
+      "McpServerMigration": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "McpServerOauthLoginCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -10775,24 +10808,24 @@
       },
       "MigrationDetails": {
         "properties": {
-          "commandNames": {
+          "commands": {
             "default": [],
             "items": {
-              "type": "string"
+              "$ref": "#/definitions/v2/CommandMigration"
             },
             "type": "array"
           },
-          "hookEventNames": {
+          "hooks": {
             "default": [],
             "items": {
-              "type": "string"
+              "$ref": "#/definitions/v2/HookMigration"
             },
             "type": "array"
           },
-          "mcpServerNames": {
+          "mcpServers": {
             "default": [],
             "items": {
-              "type": "string"
+              "$ref": "#/definitions/v2/McpServerMigration"
             },
             "type": "array"
           },
@@ -10810,10 +10843,10 @@
             },
             "type": "array"
           },
-          "subagentNames": {
+          "subagents": {
             "default": [],
             "items": {
-              "type": "string"
+              "$ref": "#/definitions/v2/SubagentMigration"
             },
             "type": "array"
           }
@@ -14116,6 +14149,17 @@
             "type": "object"
           }
         ]
+      },
+      "SubagentMigration": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
       },
       "TerminalInteractionNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",

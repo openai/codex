@@ -1,6 +1,17 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "CommandMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "ExternalAgentConfigMigrationItem": {
       "properties": {
         "cwd": {
@@ -47,26 +58,48 @@
       ],
       "type": "string"
     },
+    "HookMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "McpServerMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "MigrationDetails": {
       "properties": {
-        "commandNames": {
+        "commands": {
           "default": [],
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/CommandMigration"
           },
           "type": "array"
         },
-        "hookEventNames": {
+        "hooks": {
           "default": [],
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/HookMigration"
           },
           "type": "array"
         },
-        "mcpServerNames": {
+        "mcpServers": {
           "default": [],
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/McpServerMigration"
           },
           "type": "array"
         },
@@ -84,10 +117,10 @@
           },
           "type": "array"
         },
-        "subagentNames": {
+        "subagents": {
           "default": [],
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/SubagentMigration"
           },
           "type": "array"
         }
@@ -130,6 +163,17 @@
       "required": [
         "cwd",
         "path"
+      ],
+      "type": "object"
+    },
+    "SubagentMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
       ],
       "type": "object"
     }

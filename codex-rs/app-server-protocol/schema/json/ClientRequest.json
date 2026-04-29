@@ -354,6 +354,17 @@
       ],
       "type": "object"
     },
+    "CommandMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "ConfigBatchWriteParams": {
       "properties": {
         "edits": {
@@ -1393,6 +1404,17 @@
       },
       "type": "object"
     },
+    "HookMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "ImageDetail": {
       "enum": [
         "auto",
@@ -1699,6 +1721,17 @@
       ],
       "type": "object"
     },
+    "McpServerMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "McpServerOauthLoginParams": {
       "properties": {
         "name": {
@@ -1782,24 +1815,24 @@
     },
     "MigrationDetails": {
       "properties": {
-        "commandNames": {
+        "commands": {
           "default": [],
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/CommandMigration"
           },
           "type": "array"
         },
-        "hookEventNames": {
+        "hooks": {
           "default": [],
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/HookMigration"
           },
           "type": "array"
         },
-        "mcpServerNames": {
+        "mcpServers": {
           "default": [],
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/McpServerMigration"
           },
           "type": "array"
         },
@@ -1817,10 +1850,10 @@
           },
           "type": "array"
         },
-        "subagentNames": {
+        "subagents": {
           "default": [],
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/SubagentMigration"
           },
           "type": "array"
         }
@@ -3188,6 +3221,17 @@
         "desc"
       ],
       "type": "string"
+    },
+    "SubagentMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
     },
     "TextElement": {
       "properties": {

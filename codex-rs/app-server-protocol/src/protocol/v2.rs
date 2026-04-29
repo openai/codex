@@ -1126,6 +1126,34 @@ pub struct SessionMigration {
     pub title: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HookMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SubagentMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandMigration {
+    pub name: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -1135,13 +1163,13 @@ pub struct MigrationDetails {
     #[serde(default)]
     pub sessions: Vec<SessionMigration>,
     #[serde(default)]
-    pub mcp_server_names: Vec<String>,
+    pub mcp_servers: Vec<McpServerMigration>,
     #[serde(default)]
-    pub hook_event_names: Vec<String>,
+    pub hooks: Vec<HookMigration>,
     #[serde(default)]
-    pub subagent_names: Vec<String>,
+    pub subagents: Vec<SubagentMigration>,
     #[serde(default)]
-    pub command_names: Vec<String>,
+    pub commands: Vec<CommandMigration>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
