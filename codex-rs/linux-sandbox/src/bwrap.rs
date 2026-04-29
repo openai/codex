@@ -26,7 +26,6 @@ use std::process::Command;
 
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
-use codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES;
 use codex_protocol::permissions::is_protected_metadata_name;
 use codex_protocol::protocol::FileSystemAccessMode;
 use codex_protocol::protocol::FileSystemPath;
@@ -576,11 +575,7 @@ fn create_filesystem_args(
             .filter(|path| !unreadable_paths.contains(path))
             .filter(|path| !missing_auto_metadata_read_only_project_root_subpaths.contains(path))
             .collect();
-        let protected_metadata_names = protected_metadata_names_for_writable_root(
-            file_system_sandbox_policy,
-            writable_root,
-            cwd,
-        );
+        let protected_metadata_names = writable_root.protected_metadata_names.clone();
         append_metadata_path_masks_for_writable_root(
             &mut read_only_subpaths,
             root,
@@ -654,24 +649,6 @@ fn append_protected_create_targets_for_writable_root(
             .protected_create_targets
             .push(ProtectedCreateTarget::missing(&path));
     }
-}
-
-fn protected_metadata_names_for_writable_root(
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    writable_root: &WritableRoot,
-    cwd: &Path,
-) -> Vec<String> {
-    let mut names = writable_root.protected_metadata_names.clone();
-    for name in PROTECTED_METADATA_PATH_NAMES {
-        if names.iter().any(|existing| existing == name) {
-            continue;
-        }
-        let path = writable_root.root.join(*name);
-        if !file_system_sandbox_policy.can_write_path_with_cwd(path.as_path(), cwd) {
-            names.push((*name).to_string());
-        }
-    }
-    names
 }
 
 fn append_metadata_path_masks_for_writable_root(

@@ -522,7 +522,7 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
 
     close_child_exec_start_read(exec_start_pipe[0]);
     let protected_create_monitor = ProtectedCreateMonitor::start(&protected_create_targets);
-    install_bwrap_signal_forwarders(pid);
+    let signal_forwarders = install_bwrap_signal_forwarders(pid);
     release_child_exec_start(exec_start_pipe[1]);
     setup_signal_mask.restore();
     let status = wait_for_bwrap_child(pid);
@@ -534,6 +534,7 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
     cleanup_synthetic_mount_targets(&synthetic_mount_registrations);
     let protected_create_violation = protected_create_monitor_violation
         || cleanup_protected_create_targets(&protected_create_registrations);
+    signal_forwarders.restore();
     cleanup_signal_mask.restore();
     exit_with_wait_status_or_policy_violation(status, protected_create_violation);
 }
@@ -733,6 +734,10 @@ struct ForwardedSignalMask {
     previous: libc::sigset_t,
 }
 
+struct ForwardedSignalHandlers {
+    previous: Vec<(libc::c_int, libc::sigaction)>,
+}
+
 impl ForwardedSignalMask {
     fn block() -> Self {
         let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
@@ -777,20 +782,39 @@ fn terminate_with_parent(parent_pid: libc::pid_t) {
     }
 }
 
-fn install_bwrap_signal_forwarders(pid: libc::pid_t) {
+impl ForwardedSignalHandlers {
+    fn restore(self) {
+        BWRAP_CHILD_PID.store(0, Ordering::SeqCst);
+        PENDING_FORWARDED_SIGNAL.store(0, Ordering::SeqCst);
+        for (signal, previous_action) in self.previous {
+            unsafe {
+                if libc::sigaction(signal, &previous_action, std::ptr::null_mut()) < 0 {
+                    let err = std::io::Error::last_os_error();
+                    panic!("failed to restore bubblewrap signal handler for {signal}: {err}");
+                }
+            }
+        }
+    }
+}
+
+fn install_bwrap_signal_forwarders(pid: libc::pid_t) -> ForwardedSignalHandlers {
     BWRAP_CHILD_PID.store(pid, Ordering::SeqCst);
+    let mut previous = Vec::with_capacity(FORWARDED_SIGNALS.len());
     for signal in FORWARDED_SIGNALS {
         let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+        let mut previous_action: libc::sigaction = unsafe { std::mem::zeroed() };
         action.sa_sigaction = forward_signal_to_bwrap_child as *const () as libc::sighandler_t;
         unsafe {
             libc::sigemptyset(&mut action.sa_mask);
-            if libc::sigaction(*signal, &action, std::ptr::null_mut()) < 0 {
+            if libc::sigaction(*signal, &action, &mut previous_action) < 0 {
                 let err = std::io::Error::last_os_error();
                 panic!("failed to install bubblewrap signal forwarder for {signal}: {err}");
             }
         }
+        previous.push((*signal, previous_action));
     }
     replay_pending_forwarded_signal(pid);
+    ForwardedSignalHandlers { previous }
 }
 
 extern "C" fn forward_signal_to_bwrap_child(signal: libc::c_int) {
@@ -1306,7 +1330,7 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
         exec_bwrap(args, preserved_files);
     }
 
-    install_bwrap_signal_forwarders(pid);
+    let signal_forwarders = install_bwrap_signal_forwarders(pid);
     setup_signal_mask.restore();
     // Parent: close the write end and read stderr while the child runs.
     close_fd_or_panic(write_fd, "close write end in bubblewrap parent");
@@ -1319,12 +1343,16 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
         panic!("failed to read bubblewrap stderr: {err}");
     }
 
-    wait_for_bwrap_child(pid);
+    let status = wait_for_bwrap_child(pid);
     let cleanup_signal_mask = ForwardedSignalMask::block();
     BWRAP_CHILD_PID.store(0, Ordering::SeqCst);
     cleanup_synthetic_mount_targets(&synthetic_mount_registrations);
     cleanup_protected_create_targets(&protected_create_registrations);
+    signal_forwarders.restore();
     cleanup_signal_mask.restore();
+    if libc::WIFSIGNALED(status) {
+        exit_with_wait_status(status);
+    }
 
     String::from_utf8_lossy(&stderr_bytes).into_owned()
 }
