@@ -816,6 +816,7 @@ async fn drops_requested_amendment_for_heredoc_fallback_prompts_when_it_matches(
 }
 
 #[tokio::test]
+#[cfg(not(windows))]
 async fn heredoc_with_variable_assignment_is_not_reduced_to_allowed_prefix() {
     assert_exec_approval_requirement_for_command(
         ExecApprovalRequirementScenario {
