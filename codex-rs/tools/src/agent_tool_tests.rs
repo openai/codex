@@ -131,7 +131,6 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
 #[test]
 fn send_message_tool_requires_message_and_has_no_output_schema() {
     let ToolSpec::Function(ResponsesApiTool {
-        description,
         parameters,
         output_schema,
         ..
@@ -167,7 +166,6 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
 #[test]
 fn followup_task_tool_requires_message_and_has_no_output_schema() {
     let ToolSpec::Function(ResponsesApiTool {
-        description,
         parameters,
         output_schema,
         ..
