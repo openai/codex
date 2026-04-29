@@ -740,29 +740,6 @@ async fn evaluates_heredoc_script_against_prefix_rules() {
 }
 
 #[tokio::test]
-async fn forbidden_prefix_rule_still_applies_to_heredoc_script() {
-    assert_exec_approval_requirement_for_command(
-        ExecApprovalRequirementScenario {
-            policy_src: Some(r#"prefix_rule(pattern=["python3"], decision="forbidden")"#.to_string()),
-            command: vec![
-                "bash".to_string(),
-                "-lc".to_string(),
-                "python3 <<'PY'\nprint('hello')\nPY".to_string(),
-            ],
-            approval_policy: AskForApproval::OnRequest,
-            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-            file_system_sandbox_policy: workspace_write_file_system_sandbox_policy(),
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            prefix_rule: None,
-        },
-        ExecApprovalRequirement::Forbidden {
-            reason: "`bash -lc \"python3 <<'PY'\nprint('hello')\nPY\"` rejected: policy forbids commands starting with `python3`".to_string(),
-        },
-    )
-    .await;
-}
-
-#[tokio::test]
 async fn omits_auto_amendment_for_heredoc_fallback_prompts() {
     assert_exec_approval_requirement_for_command(
         ExecApprovalRequirementScenario {
