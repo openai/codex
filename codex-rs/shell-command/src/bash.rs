@@ -139,17 +139,6 @@ pub fn parse_shell_lc_single_command_prefix(command: &[String]) -> Option<Vec<St
     parse_heredoc_command_words(command_node, script)
 }
 
-pub fn shell_lc_contains_file_redirect(command: &[String]) -> bool {
-    let Some((_, script)) = extract_bash_command(command) else {
-        return false;
-    };
-    let Some(tree) = try_parse_shell(script) else {
-        return false;
-    };
-    let root = tree.root_node();
-    !root.has_error() && has_named_descendant_kind(root, "file_redirect")
-}
-
 fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Vec<String>> {
     if cmd.kind() != "command" {
         return None;
@@ -558,17 +547,6 @@ mod tests {
             "python3 <<'PY' > /tmp/out.txt\nprint('hello')\nPY".to_string(),
         ];
         assert_eq!(parse_shell_lc_single_command_prefix(&command), None);
-    }
-
-    #[test]
-    fn shell_lc_contains_file_redirect_detects_heredoc_with_extra_file_redirect() {
-        let command = vec![
-            "bash".to_string(),
-            "-lc".to_string(),
-            "cat <<'EOF' > ~/Pictures/sandbox_test.txt\nhello world\nEOF".to_string(),
-        ];
-
-        assert!(shell_lc_contains_file_redirect(&command));
     }
 
     #[test]

@@ -809,7 +809,11 @@ async fn heredoc_redirect_without_escalation_runs_inside_sandbox() {
         },
         ExecApprovalRequirement::Skip {
             bypass_sandbox: false,
-            proposed_execpolicy_amendment: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "zsh".to_string(),
+                "-lc".to_string(),
+                "cat <<'EOF' > /some/important/folder/test.txt\nhello world\nEOF".to_string(),
+            ])),
         },
     )
     .await;
@@ -833,7 +837,11 @@ async fn heredoc_redirect_with_escalation_requires_approval() {
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "zsh".to_string(),
+                "-lc".to_string(),
+                "cat <<'EOF' > /some/important/folder/test.txt\nhello world\nEOF".to_string(),
+            ])),
         },
     )
     .await;
