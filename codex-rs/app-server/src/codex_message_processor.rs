@@ -289,6 +289,7 @@ use codex_core_plugins::remote::RemotePluginServiceConfig;
 use codex_core_plugins::remote::RemotePluginSummary as RemoteCatalogPluginSummary;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::LOCAL_FS;
+use codex_external_agent_sessions::ImportedExternalAgentSession;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::Stage;
@@ -2446,6 +2447,64 @@ impl CodexMessageProcessor {
         };
         self.background_tasks
             .spawn(thread_start_task.instrument(request_context.span()));
+    }
+
+    pub(crate) async fn import_external_agent_session(
+        &self,
+        session: ImportedExternalAgentSession,
+    ) -> Result<ThreadId, JSONRPCErrorError> {
+        let ImportedExternalAgentSession {
+            cwd,
+            title,
+            rollout_items,
+        } = session;
+        let typesafe_overrides = self.build_thread_config_overrides(
+            /*model*/ None,
+            /*model_provider*/ None,
+            /*service_tier*/ None,
+            Some(cwd.to_string_lossy().into_owned()),
+            /*approval_policy*/ None,
+            /*approvals_reviewer*/ None,
+            /*sandbox*/ None,
+            /*permission_profile*/ None,
+            /*base_instructions*/ None,
+            /*developer_instructions*/ None,
+            /*personality*/ None,
+        );
+        let config = self
+            .config_manager
+            .load_with_overrides(/*request_overrides*/ None, typesafe_overrides)
+            .await
+            .map_err(|err| {
+                internal_error(format!("failed to load imported session config: {err}"))
+            })?;
+        let environments = self
+            .thread_manager
+            .default_environment_selections(&config.cwd);
+        let imported_thread = self
+            .thread_manager
+            .start_thread_with_options(StartThreadOptions {
+                config,
+                initial_history: InitialHistory::Forked(rollout_items),
+                session_source: None,
+                dynamic_tools: Vec::new(),
+                persist_extended_history: true,
+                metrics_service_name: None,
+                parent_trace: None,
+                environments,
+            })
+            .await
+            .map_err(|err| internal_error(format!("failed to import session: {err}")))?;
+        if let Some(title) = title
+            && let Some(name) = codex_core::util::normalize_thread_name(&title)
+        {
+            imported_thread
+                .thread
+                .submit(Op::SetThreadName { name })
+                .await
+                .map_err(|err| internal_error(format!("failed to name imported session: {err}")))?;
+        }
+        Ok(imported_thread.thread_id)
     }
 
     pub(crate) async fn drain_background_tasks(&self) {

@@ -257,6 +257,7 @@ pub(super) async fn make_chatwidget_manual(
         pending_status_indicator_restore: false,
         suppress_queue_autosend: false,
         thread_id: None,
+        dismissed_plan_mode_nudge_scopes: HashSet::new(),
         last_turn_id: None,
         budget_limited_turn_ids: HashSet::new(),
         thread_name: None,

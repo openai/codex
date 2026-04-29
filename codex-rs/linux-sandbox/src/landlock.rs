@@ -176,6 +176,8 @@ fn install_network_seccomp_filter_on_current_thread(
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
 
     deny_syscall(&mut rules, libc::SYS_ptrace);
+    deny_syscall(&mut rules, libc::SYS_process_vm_readv);
+    deny_syscall(&mut rules, libc::SYS_process_vm_writev);
     deny_syscall(&mut rules, libc::SYS_io_uring_setup);
     deny_syscall(&mut rules, libc::SYS_io_uring_enter);
     deny_syscall(&mut rules, libc::SYS_io_uring_register);

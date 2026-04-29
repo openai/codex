@@ -50,6 +50,8 @@ use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
+use codex_config::types::WindowsSandboxModeToml;
+use codex_config::types::WindowsToml;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
@@ -666,8 +668,55 @@ allow_upstream_proxy = false
 }
 
 #[tokio::test]
-async fn permissions_profiles_network_populates_runtime_network_proxy_spec() -> std::io::Result<()>
-{
+async fn permissions_profiles_network_enabled_allows_runtime_network_without_proxy()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some("workspace".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "workspace".to_string(),
+                    PermissionProfileToml {
+                        filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
+                            entries: BTreeMap::from([(
+                                ":minimal".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            )]),
+                        }),
+                        network: Some(NetworkToml {
+                            enabled: Some(true),
+                            ..Default::default()
+                        }),
+                    },
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Enabled
+    );
+    assert!(
+        config.permissions.network.is_none(),
+        "bare profile network.enabled should not start the managed network proxy"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permissions_profiles_proxy_policy_starts_managed_network_proxy() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
@@ -704,14 +753,20 @@ async fn permissions_profiles_network_populates_runtime_network_proxy_spec() -> 
         codex_home.abs(),
     )
     .await?;
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Enabled
+    );
     let network = config
         .permissions
         .network
         .as_ref()
-        .expect("enabled profile network should produce a NetworkProxySpec");
-
+        .expect("profile proxy policy should start the managed network proxy");
     assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
-    assert!(!network.socks_enabled());
+    assert!(
+        !network.socks_enabled(),
+        "profile proxy policy should preserve SOCKS config"
+    );
     Ok(())
 }
 
@@ -1019,7 +1074,8 @@ async fn permission_profile_override_applies_runtime_roots_to_legacy_projection(
 }
 
 #[tokio::test]
-async fn permission_profile_override_preserves_configured_network_proxy() -> std::io::Result<()> {
+async fn permission_profile_override_preserves_configured_network_policy_without_starting_proxy()
+-> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     let permission_profile = PermissionProfile::Disabled;
@@ -1064,14 +1120,10 @@ async fn permission_profile_override_preserves_configured_network_proxy() -> std
         codex_home.abs(),
     )
     .await?;
-    let network = config
-        .permissions
-        .network
-        .as_ref()
-        .expect("network-enabled override should preserve configured proxy");
-
-    assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
-    assert!(!network.socks_enabled());
+    assert!(
+        config.permissions.network.is_none(),
+        "profile network.enabled should not start the managed network proxy"
+    );
     assert_eq!(config.permissions.permission_profile(), permission_profile);
     Ok(())
 }
@@ -1190,6 +1242,306 @@ async fn permissions_profiles_require_default_permissions() -> std::io::Result<(
     assert_eq!(
         err.to_string(),
         "config defines `[permissions]` profiles but does not set `default_permissions`"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_permissions_can_select_builtin_profile_without_permissions_table()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":workspace".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    assert!(
+        policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+        "expected :workspace to allow writing the project root, policy: {policy:?}"
+    );
+    assert!(
+        !policy.can_write_path_with_cwd(&cwd.path().join(".git"), cwd.path()),
+        "expected :workspace to protect project metadata, policy: {policy:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn empty_config_defaults_to_builtin_profile_for_trusted_project() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let project_key = cwd.path().to_string_lossy().to_string();
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            projects: Some(HashMap::from([(
+                project_key,
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Trusted),
+                },
+            )])),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    if cfg!(target_os = "windows") {
+        assert!(
+            !policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+            "expected trusted project fallback to stay read-only without Windows sandbox support, policy: {policy:?}"
+        );
+    } else {
+        assert!(
+            policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+            "expected trusted project fallback to use :workspace, policy: {policy:?}"
+        );
+        assert!(
+            !policy.can_write_path_with_cwd(&cwd.path().join(".codex"), cwd.path()),
+            "expected :workspace metadata carveouts, policy: {policy:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn implicit_builtin_workspace_profile_preserves_sandbox_workspace_write_settings()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let extra_root = TempDir::new()?;
+    let extra_root = extra_root.path().abs();
+    let project_key = cwd.path().to_string_lossy().to_string();
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            projects: Some(HashMap::from([(
+                project_key,
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Trusted),
+                },
+            )])),
+            sandbox_workspace_write: Some(SandboxWorkspaceWrite {
+                writable_roots: vec![extra_root.clone()],
+                network_access: true,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: false,
+            }),
+            windows: Some(WindowsToml {
+                sandbox: Some(WindowsSandboxModeToml::Elevated),
+                sandbox_private_desktop: None,
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    assert!(
+        policy.can_write_path_with_cwd(extra_root.as_path(), cwd.path()),
+        "expected implicit :workspace to preserve sandbox_workspace_write.writable_roots, policy: {policy:?}"
+    );
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Enabled
+    );
+    match config.legacy_sandbox_policy() {
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots,
+            network_access,
+            exclude_tmpdir_env_var,
+            exclude_slash_tmp,
+        } => {
+            assert!(writable_roots.contains(&extra_root));
+            assert!(network_access);
+            assert!(exclude_tmpdir_env_var);
+            assert!(!exclude_slash_tmp);
+        }
+        sandbox_policy => panic!("expected workspace-write projection, got {sandbox_policy:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn implicit_builtin_workspace_profile_preserves_add_dir_metadata_carveouts()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let extra_root = TempDir::new()?;
+    for subpath in [".git", ".agents", ".codex"] {
+        std::fs::create_dir_all(extra_root.path().join(subpath))?;
+    }
+    let project_key = cwd.path().to_string_lossy().to_string();
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            projects: Some(HashMap::from([(
+                project_key,
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Trusted),
+                },
+            )])),
+            windows: Some(WindowsToml {
+                sandbox: Some(WindowsSandboxModeToml::Elevated),
+                sandbox_private_desktop: None,
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            additional_writable_roots: vec![extra_root.path().to_path_buf()],
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    let extra_root = extra_root.path().abs();
+    assert!(
+        policy.can_write_path_with_cwd(extra_root.as_path(), cwd.path()),
+        "expected implicit :workspace to preserve additional writable roots, policy: {policy:?}"
+    );
+    for subpath in [".git", ".agents", ".codex"] {
+        assert!(
+            !policy.can_write_path_with_cwd(&extra_root.join(subpath), cwd.path()),
+            "expected implicit :workspace to preserve legacy metadata carveout for {subpath}, \
+             policy: {policy:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn empty_config_defaults_to_builtin_read_only_without_trust_decision() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    assert!(
+        policy.can_read_path_with_cwd(cwd.path(), cwd.path()),
+        "expected :read-only to allow reads, policy: {policy:?}"
+    );
+    assert!(
+        !policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+        "expected :read-only to deny writes, policy: {policy:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_permissions_can_select_builtin_no_sandbox_profile() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":danger-no-sandbox".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.permissions.permission_profile(),
+        PermissionProfile::Disabled
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn user_defined_permission_profile_names_cannot_use_builtin_prefix() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+
+    let err = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":custom".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    ":custom".to_string(),
+                    PermissionProfileToml::default(),
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("reserved profile name should be rejected");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "permissions profile `:custom` uses a reserved built-in profile prefix"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unknown_builtin_permission_profile_name_is_rejected() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+
+    let err = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":unknown".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("unknown built-in profile name should be rejected");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "default_permissions refers to unknown built-in profile `:unknown`"
     );
     Ok(())
 }

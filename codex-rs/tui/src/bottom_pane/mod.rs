@@ -774,6 +774,11 @@ impl BottomPane {
         self.composer.current_text_with_pending()
     }
 
+    /// Returns whether the composer currently accepts interactive draft edits.
+    pub(crate) fn composer_input_enabled(&self) -> bool {
+        self.composer.input_enabled()
+    }
+
     pub(crate) fn composer_pending_pastes(&self) -> Vec<(String, String)> {
         self.composer.pending_pastes()
     }
@@ -786,6 +791,18 @@ impl BottomPane {
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.composer.set_footer_hint_override(items);
         self.request_redraw();
+    }
+
+    /// Applies the externally decided Plan-mode nudge visibility to the footer presentation.
+    pub(crate) fn set_plan_mode_nudge_visible(&mut self, visible: bool) {
+        if self.composer.set_plan_mode_nudge_visible(visible) {
+            self.request_redraw();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn plan_mode_nudge_visible(&self) -> bool {
+        self.composer.plan_mode_nudge_visible()
     }
 
     pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {

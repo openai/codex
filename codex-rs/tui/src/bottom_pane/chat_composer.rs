@@ -354,6 +354,11 @@ pub(crate) struct ChatComposer {
     disable_paste_burst: bool,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
+    /// Whether the ambient footer row is currently replaced by the Plan-mode nudge.
+    ///
+    /// Eligibility is decided by `ChatWidget`; the composer only owns presentation so enabling
+    /// the nudge never changes layout height or reimplements mode-selection policy here.
+    plan_mode_nudge_visible: bool,
     remote_image_urls: Vec<String>,
     /// Tracks keyboard selection for the remote-image rows so Up/Down + Delete/Backspace
     /// can highlight and remove remote attachments from the composer UI.
@@ -459,6 +464,19 @@ fn status_line_right_indicator(
         .or_else(|| goal_status_indicator_line(goal_status_indicator))
 }
 
+/// Builds the one-line nudge that replaces the ambient footer without adding layout height.
+fn plan_mode_nudge_line() -> Line<'static> {
+    Line::from(vec![
+        "Create a plan?".magenta(),
+        "  ".into(),
+        key_hint::shift(KeyCode::Tab).into(),
+        " use Plan mode".into(),
+        "   ".into(),
+        key_hint::plain(KeyCode::Esc).into(),
+        " dismiss".into(),
+    ])
+}
+
 impl ChatComposer {
     fn builtin_command_flags(&self) -> BuiltinCommandFlags {
         BuiltinCommandFlags {
@@ -534,6 +552,7 @@ impl ChatComposer {
             disable_paste_burst: false,
             footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
+            plan_mode_nudge_visible: false,
             remote_image_urls: Vec::new(),
             selected_remote_image_index: None,
             pending_slash_command_history: None,
@@ -1027,6 +1046,11 @@ impl ChatComposer {
         text
     }
 
+    /// Returns whether the composer currently accepts interactive draft edits.
+    pub(crate) fn input_enabled(&self) -> bool {
+        self.input_enabled
+    }
+
     pub(crate) fn pending_pastes(&self) -> Vec<(String, String)> {
         self.pending_pastes.clone()
     }
@@ -1043,6 +1067,23 @@ impl ChatComposer {
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.footer_hint_override = items;
+    }
+
+    /// Updates whether the Plan-mode nudge replaces the ambient footer row.
+    ///
+    /// Returns `true` only when the rendered footer can change so callers can avoid scheduling
+    /// redundant redraws while reevaluating nudge policy on routine composer updates.
+    pub(crate) fn set_plan_mode_nudge_visible(&mut self, visible: bool) -> bool {
+        if self.plan_mode_nudge_visible == visible {
+            return false;
+        }
+        self.plan_mode_nudge_visible = visible;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn plan_mode_nudge_visible(&self) -> bool {
+        self.plan_mode_nudge_visible
     }
 
     pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
@@ -2931,6 +2972,15 @@ impl ChatComposer {
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
+        if self.is_bash_mode && key_event.code == KeyCode::Esc {
+            if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+                self.handle_paste(pasted);
+            }
+            if self.textarea.is_empty() {
+                self.is_bash_mode = false;
+                return (InputResult::None, true);
+            }
+        }
         if key_event.code == KeyCode::Esc {
             if self.is_empty() {
                 let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
@@ -4047,6 +4097,17 @@ impl ChatComposer {
                 };
                 if let Some(line) = self.history_search_footer_line() {
                     render_footer_line(hint_rect, buf, line);
+                } else if self.plan_mode_nudge_visible {
+                    let available_width =
+                        hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
+                    render_footer_line(
+                        hint_rect,
+                        buf,
+                        truncate_line_with_ellipsis_if_overflow(
+                            plan_mode_nudge_line(),
+                            available_width,
+                        ),
+                    );
                 } else {
                     let available_width =
                         hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
@@ -4738,6 +4799,19 @@ mod tests {
                 composer.set_text_content("!git status".to_string(), Vec::new(), Vec::new());
             },
         );
+
+        snapshot_composer_state(
+            "footer_mode_shell_command_escape_exits_empty_mode",
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                composer.set_status_line_enabled(/*enabled*/ true);
+                composer.set_status_line(Some(Line::from(
+                    "gpt-5.4 high fast · ~/code/codex-1 · Context 0% used",
+                )));
+                composer.set_text_content("!".to_string(), Vec::new(), Vec::new());
+                let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+            },
+        );
     }
 
     #[test]
@@ -4798,6 +4872,65 @@ mod tests {
             buf[(shell_label_x as u16, footer_y)].style().fg,
             Some(Color::LightRed)
         );
+    }
+
+    #[test]
+    fn esc_exits_empty_shell_mode() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['!']);
+        assert!(composer.is_bash_mode);
+        assert_eq!(composer.current_text(), "!");
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(needs_redraw);
+        assert!(!composer.is_bash_mode);
+        assert_eq!(composer.current_text(), "");
+    }
+
+    #[test]
+    fn esc_keeps_shell_mode_when_paste_burst_flushes_pending_text() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['!']);
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert!(composer.is_in_paste_burst());
+        assert_eq!(composer.current_text(), "!");
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(needs_redraw);
+        assert!(composer.is_bash_mode);
+        assert_eq!(composer.current_text(), "!g");
     }
 
     #[test]

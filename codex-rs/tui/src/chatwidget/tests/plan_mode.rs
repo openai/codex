@@ -122,6 +122,7 @@ async fn plan_mode_nudge_narrow_snapshot() {
         render_bottom_popup(&chat, /*width*/ 36)
     );
 }
+
 #[tokio::test]
 async fn plan_implementation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;

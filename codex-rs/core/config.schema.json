@@ -3194,7 +3194,7 @@
       "type": "string"
     },
     "default_permissions": {
-      "description": "Default named permissions profile to apply from the `[permissions]` table.",
+      "description": "Default permissions profile to apply. Names starting with `:` refer to built-in profiles; other names are resolved from the `[permissions]` table.",
       "type": "string"
     },
     "developer_instructions": {

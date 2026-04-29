@@ -1853,6 +1853,7 @@ dependencies = [
  "codex-core-plugins",
  "codex-device-key",
  "codex-exec-server",
+ "codex-external-agent-sessions",
  "codex-features",
  "codex-feedback",
  "codex-file-search",
@@ -2683,6 +2684,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-external-agent-sessions"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "codex-app-server-protocol",
+ "codex-protocol",
+ "codex-utils-output-truncation",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "codex-features"
 version = "0.0.0"
 dependencies = [
@@ -2801,6 +2816,7 @@ dependencies = [
  "cc",
  "clap",
  "codex-core",
+ "codex-process-hardening",
  "codex-protocol",
  "codex-sandboxing",
  "codex-utils-absolute-path",
@@ -4079,6 +4095,7 @@ dependencies = [
  "assert_cmd",
  "base64 0.22.1",
  "codex-arg0",
+ "codex-config",
  "codex-core",
  "codex-exec-server",
  "codex-features",

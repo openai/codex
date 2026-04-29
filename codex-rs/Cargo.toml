@@ -40,6 +40,7 @@ members = [
     "exec-server",
     "execpolicy",
     "execpolicy-legacy",
+    "external-agent-sessions",
     "keyring-store",
     "file-search",
     "linux-sandbox",
@@ -146,6 +147,7 @@ codex-exec = { path = "exec" }
 codex-file-system = { path = "file-system" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
+codex-external-agent-sessions = { path = "external-agent-sessions" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-features = { path = "features" }
 codex-feedback = { path = "feedback" }

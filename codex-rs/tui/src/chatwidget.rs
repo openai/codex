@@ -934,6 +934,11 @@ pub(crate) struct ChatWidget {
     pending_status_indicator_restore: bool,
     suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
+    /// Nudge dismissals that should survive draft edits within the current thread scope.
+    ///
+    /// The nudge is only a discovery aid, so once a user dismisses it or enters Plan mode we keep it
+    /// hidden for that thread instead of resurfacing it on every matching draft.
+    dismissed_plan_mode_nudge_scopes: HashSet<PlanModeNudgeScope>,
     last_turn_id: Option<String>,
     budget_limited_turn_ids: HashSet<String>,
     thread_name: Option<String>,
@@ -1594,6 +1599,25 @@ enum SessionConfiguredDisplay {
     SideConversation,
 }
 
+/// Scope used to keep Plan-mode nudge dismissal local to one conversation context.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum PlanModeNudgeScope {
+    /// Drafts entered before the server has assigned a thread id.
+    NewThread,
+    /// Drafts associated with one configured thread.
+    Thread(ThreadId),
+}
+
+/// Returns whether `text` contains the standalone word `plan`.
+///
+/// This intentionally mirrors the App suggestion heuristic instead of trying to infer broader
+/// planning intent from substrings such as `planning`. Slash and shell drafts still match here so
+/// callers can keep lexical matching separate from presentation policy.
+fn contains_plan_keyword(text: &str) -> bool {
+    text.split(|ch: char| !ch.is_alphanumeric() && ch != '_')
+        .any(|word| word.eq_ignore_ascii_case("plan"))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ThreadItemRenderSource {
     Live,
@@ -1993,6 +2017,7 @@ impl ChatWidget {
     fn update_task_running_state(&mut self) {
         self.bottom_pane
             .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+        self.refresh_plan_mode_nudge();
         self.refresh_status_surfaces();
     }
 
@@ -2331,6 +2356,7 @@ impl ChatWidget {
         if previous_thread_id != self.thread_id {
             self.recent_auto_review_denials = RecentAutoReviewDenials::default();
         }
+        self.refresh_plan_mode_nudge();
         self.last_turn_id = None;
         self.thread_name = event.thread_name.clone();
         self.current_goal_status_indicator = None;
@@ -4915,6 +4941,7 @@ impl ChatWidget {
         self.update_due_hook_visibility();
         self.schedule_hook_timer_if_needed();
         self.bottom_pane.pre_draw_tick();
+        self.refresh_plan_mode_nudge();
         self.refresh_goal_status_indicator_for_time_tick();
         if self.terminal_title_shows_action_required() != self.last_terminal_title_requires_action {
             self.refresh_terminal_title();
@@ -5584,6 +5611,7 @@ impl ChatWidget {
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
             thread_id: None,
+            dismissed_plan_mode_nudge_scopes: HashSet::new(),
             last_turn_id: None,
             budget_limited_turn_ids: HashSet::new(),
             thread_name: None,
@@ -5806,6 +5834,14 @@ impl ChatWidget {
             return;
         }
 
+        if matches!(key_event.code, KeyCode::Esc)
+            && key_event.kind == KeyEventKind::Press
+            && self.should_show_plan_mode_nudge()
+        {
+            self.dismiss_plan_mode_nudge();
+            return;
+        }
+
         match key_event {
             KeyEvent {
                 code: KeyCode::BackTab,
@@ -5816,6 +5852,7 @@ impl ChatWidget {
                 && self.bottom_pane.no_modal_or_popup_active() =>
             {
                 self.cycle_collaboration_mode();
+                self.refresh_plan_mode_nudge();
             }
             _ => {
                 let had_modal_or_popup = !self.bottom_pane.no_modal_or_popup_active();
@@ -5893,6 +5930,7 @@ impl ChatWidget {
                 if had_modal_or_popup && self.bottom_pane.no_modal_or_popup_active() {
                     self.maybe_send_next_queued_input();
                 }
+                self.refresh_plan_mode_nudge();
             }
         }
     }
@@ -5920,6 +5958,7 @@ impl ChatWidget {
 
     pub(crate) fn apply_external_edit(&mut self, text: String) {
         self.bottom_pane.apply_external_edit(text);
+        self.refresh_plan_mode_nudge();
         self.request_redraw();
     }
 
@@ -5937,6 +5976,7 @@ impl ChatWidget {
 
     pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
         self.bottom_pane.show_selection_view(params);
+        self.refresh_plan_mode_nudge();
         self.request_redraw();
     }
 
@@ -6060,11 +6100,13 @@ impl ChatWidget {
 
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.bottom_pane.handle_paste(text);
+        self.refresh_plan_mode_nudge();
     }
 
     // Returns true if caller should skip rendering this frame (a future frame is scheduled).
     pub(crate) fn handle_paste_burst_tick(&mut self, frame_requester: FrameRequester) -> bool {
         if self.bottom_pane.flush_paste_burst_if_due() {
+            self.refresh_plan_mode_nudge();
             // A paste just flushed; request an immediate redraw and skip this frame.
             self.request_redraw();
             true
@@ -10799,6 +10841,48 @@ impl ChatWidget {
         true
     }
 
+    /// Returns the dismissal scope that applies to the currently visible draft.
+    fn plan_mode_nudge_scope(&self) -> PlanModeNudgeScope {
+        self.thread_id
+            .map_or(PlanModeNudgeScope::NewThread, PlanModeNudgeScope::Thread)
+    }
+
+    /// Returns whether the current draft should replace the normal footer with the Plan-mode nudge.
+    ///
+    /// `ChatWidget` owns this policy because it can combine lexical draft matching with mode
+    /// availability, interaction state, and thread-scoped dismissal. `ChatComposer` only renders
+    /// the resulting visibility bit. Keeping slash and shell drafts out here avoids advertising a
+    /// mode switch while the user is intentionally composing another local command.
+    fn should_show_plan_mode_nudge(&self) -> bool {
+        let text = self.bottom_pane.composer_text();
+        let trimmed = text.trim_start();
+        self.collaboration_modes_enabled()
+            && collaboration_modes::plan_mask(self.model_catalog.as_ref()).is_some()
+            && self.active_mode_kind() != ModeKind::Plan
+            && self.bottom_pane.composer_input_enabled()
+            && !self.bottom_pane.is_task_running()
+            && self.bottom_pane.no_modal_or_popup_active()
+            && !trimmed.starts_with('/')
+            && !trimmed.starts_with('!')
+            && contains_plan_keyword(&text)
+            && !self
+                .dismissed_plan_mode_nudge_scopes
+                .contains(&self.plan_mode_nudge_scope())
+    }
+
+    /// Synchronizes the footer presentation with the current Plan-mode nudge policy.
+    fn refresh_plan_mode_nudge(&mut self) {
+        self.bottom_pane
+            .set_plan_mode_nudge_visible(self.should_show_plan_mode_nudge());
+    }
+
+    /// Hides the nudge for the current thread scope until the user changes conversation context.
+    fn dismiss_plan_mode_nudge(&mut self) {
+        self.dismissed_plan_mode_nudge_scopes
+            .insert(self.plan_mode_nudge_scope());
+        self.refresh_plan_mode_nudge();
+    }
+
     fn initial_collaboration_mask(
         _config: &Config,
         model_catalog: &ModelCatalog,
@@ -10989,8 +11073,13 @@ impl ChatWidget {
         {
             mask.reasoning_effort = Some(Some(effort));
         }
+        if mask.mode == Some(ModeKind::Plan) {
+            self.dismissed_plan_mode_nudge_scopes
+                .insert(self.plan_mode_nudge_scope());
+        }
         self.active_collaboration_mask = Some(mask);
         self.update_collaboration_mode_indicator();
+        self.refresh_plan_mode_nudge();
         self.refresh_model_dependent_surfaces();
         let next_mode = self.active_mode_kind();
         let next_model = self.current_model();
@@ -11616,6 +11705,7 @@ impl ChatWidget {
     ) {
         self.bottom_pane
             .set_composer_text(text, text_elements, local_image_paths);
+        self.refresh_plan_mode_nudge();
     }
 
     pub(crate) fn set_remote_image_urls(&mut self, remote_image_urls: Vec<String>) {
