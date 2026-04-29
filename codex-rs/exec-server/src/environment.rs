@@ -425,8 +425,7 @@ mod tests {
                     .expect("remote environment"),
             )]),
             test_runtime_paths(),
-        )
-        .expect("environment manager");
+        );
 
         assert_eq!(
             manager.default_environment_id(),
