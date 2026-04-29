@@ -12,6 +12,7 @@ use reqwest::RequestBuilder;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
@@ -41,6 +42,9 @@ const MAX_REMOTE_DEFAULT_PROMPT_LEN: usize = 128;
 
 static REMOTE_INSTALLED_PLUGIN_BUNDLE_SYNC_IN_FLIGHT: OnceLock<
     Mutex<HashSet<RemoteInstalledPluginBundleSyncKey>>,
+> = OnceLock::new();
+static REMOTE_PLUGIN_CACHE_MUTATIONS_IN_FLIGHT: OnceLock<
+    Mutex<HashMap<RemotePluginCacheMutationKey, usize>>,
 > = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,10 +205,18 @@ pub enum RemoteInstalledPluginBundleSyncError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RemoteInstalledPluginBundleSyncKey {
-    codex_home: PathBuf,
-    chatgpt_base_url: String,
-    account_id: Option<String>,
-    chatgpt_user_id: Option<String>,
+    plugin_cache_root: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct RemotePluginCacheMutationKey {
+    plugin_cache_root: PathBuf,
+    marketplace_name: String,
+    plugin_name: String,
+}
+
+pub struct RemotePluginCacheMutationGuard {
+    key: RemotePluginCacheMutationKey,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
@@ -476,10 +488,7 @@ pub fn maybe_start_remote_installed_plugin_bundle_sync(
         return;
     };
     let key = RemoteInstalledPluginBundleSyncKey {
-        codex_home: codex_home.clone(),
-        chatgpt_base_url: config.chatgpt_base_url.clone(),
-        account_id: auth.get_account_id(),
-        chatgpt_user_id: auth.get_chatgpt_user_id(),
+        plugin_cache_root: remote_plugin_cache_root(&codex_home),
     };
     if !mark_remote_installed_plugin_bundle_sync_in_flight(key.clone()) {
         return;
@@ -635,6 +644,44 @@ pub async fn sync_remote_installed_plugin_bundles_once(
         removed_cache_plugin_ids,
         failed_remote_plugin_ids: failed_remote_plugin_ids.into_iter().collect(),
     })
+}
+
+pub fn mark_remote_plugin_cache_mutation_in_flight(
+    codex_home: &Path,
+    marketplace_name: &str,
+    plugin_name: &str,
+) -> RemotePluginCacheMutationGuard {
+    let key = RemotePluginCacheMutationKey {
+        plugin_cache_root: remote_plugin_cache_root(codex_home),
+        marketplace_name: marketplace_name.to_string(),
+        plugin_name: plugin_name.to_string(),
+    };
+    let mutations =
+        REMOTE_PLUGIN_CACHE_MUTATIONS_IN_FLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut mutations = match mutations.lock() {
+        Ok(mutations) => mutations,
+        Err(err) => err.into_inner(),
+    };
+    *mutations.entry(key.clone()).or_default() += 1;
+    RemotePluginCacheMutationGuard { key }
+}
+
+impl Drop for RemotePluginCacheMutationGuard {
+    fn drop(&mut self) {
+        let Some(mutations) = REMOTE_PLUGIN_CACHE_MUTATIONS_IN_FLIGHT.get() else {
+            return;
+        };
+        let mut mutations = match mutations.lock() {
+            Ok(mutations) => mutations,
+            Err(err) => err.into_inner(),
+        };
+        if let Some(count) = mutations.get_mut(&self.key) {
+            *count -= 1;
+            if *count == 0 {
+                mutations.remove(&self.key);
+            }
+        }
+    }
 }
 
 pub async fn fetch_remote_plugin_detail(
@@ -900,6 +947,10 @@ fn remove_stale_remote_plugin_caches(
             if installed_plugin_names.contains(&plugin_name) {
                 continue;
             }
+            if is_remote_plugin_cache_mutation_in_flight(codex_home, marketplace_name, &plugin_name)
+            {
+                continue;
+            }
 
             let cache_path = entry.path();
             if cache_path.is_dir() {
@@ -926,6 +977,29 @@ fn remove_stale_remote_plugin_caches(
 
     removed_cache_plugin_ids.sort();
     Ok(removed_cache_plugin_ids)
+}
+
+fn remote_plugin_cache_root(codex_home: &Path) -> PathBuf {
+    codex_home.join(PLUGINS_CACHE_DIR)
+}
+
+fn is_remote_plugin_cache_mutation_in_flight(
+    codex_home: &Path,
+    marketplace_name: &str,
+    plugin_name: &str,
+) -> bool {
+    let Some(mutations) = REMOTE_PLUGIN_CACHE_MUTATIONS_IN_FLIGHT.get() else {
+        return false;
+    };
+    let mutations = match mutations.lock() {
+        Ok(mutations) => mutations,
+        Err(err) => err.into_inner(),
+    };
+    mutations.contains_key(&RemotePluginCacheMutationKey {
+        plugin_cache_root: remote_plugin_cache_root(codex_home),
+        marketplace_name: marketplace_name.to_string(),
+        plugin_name: plugin_name.to_string(),
+    })
 }
 
 fn mark_remote_installed_plugin_bundle_sync_in_flight(
@@ -1234,4 +1308,92 @@ async fn send_and_decode<T: for<'de> Deserialize<'de>>(
         url: url.to_string(),
         source,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn installed_bundle_sync_in_flight_dedupes_by_cache_root() {
+        let codex_home = tempfile::tempdir().expect("create codex home");
+        let key = RemoteInstalledPluginBundleSyncKey {
+            plugin_cache_root: remote_plugin_cache_root(codex_home.path()),
+        };
+
+        assert!(mark_remote_installed_plugin_bundle_sync_in_flight(
+            key.clone()
+        ));
+        assert!(!mark_remote_installed_plugin_bundle_sync_in_flight(
+            key.clone()
+        ));
+
+        clear_remote_installed_plugin_bundle_sync_in_flight(&key);
+        assert!(mark_remote_installed_plugin_bundle_sync_in_flight(
+            key.clone()
+        ));
+        clear_remote_installed_plugin_bundle_sync_in_flight(&key);
+    }
+
+    #[test]
+    fn stale_remote_plugin_cleanup_skips_cache_mutations_in_progress() {
+        let codex_home = tempfile::tempdir().expect("create codex home");
+        let cached_manifest = codex_home
+            .path()
+            .join(PLUGINS_CACHE_DIR)
+            .join(REMOTE_GLOBAL_MARKETPLACE_NAME)
+            .join("linear")
+            .join("1.2.3")
+            .join(".codex-plugin")
+            .join("plugin.json");
+        std::fs::create_dir_all(cached_manifest.parent().expect("manifest parent"))
+            .expect("create cached plugin manifest parent");
+        std::fs::write(&cached_manifest, r#"{"name":"linear"}"#)
+            .expect("write cached plugin manifest");
+        let installed_plugin_names_by_marketplace =
+            BTreeMap::<String, BTreeSet<String>>::from_iter([
+                (REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(), BTreeSet::new()),
+                (
+                    REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
+                    BTreeSet::new(),
+                ),
+            ]);
+
+        let guard = mark_remote_plugin_cache_mutation_in_flight(
+            codex_home.path(),
+            REMOTE_GLOBAL_MARKETPLACE_NAME,
+            "linear",
+        );
+        let second_guard = mark_remote_plugin_cache_mutation_in_flight(
+            codex_home.path(),
+            REMOTE_GLOBAL_MARKETPLACE_NAME,
+            "linear",
+        );
+        let removed = remove_stale_remote_plugin_caches(
+            codex_home.path(),
+            &installed_plugin_names_by_marketplace,
+        )
+        .expect("cleanup while install is guarded");
+        assert_eq!(removed, Vec::<String>::new());
+        assert!(cached_manifest.is_file());
+
+        drop(guard);
+        let removed = remove_stale_remote_plugin_caches(
+            codex_home.path(),
+            &installed_plugin_names_by_marketplace,
+        )
+        .expect("cleanup while second install guard is still active");
+        assert_eq!(removed, Vec::<String>::new());
+        assert!(cached_manifest.is_file());
+
+        drop(second_guard);
+        let removed = remove_stale_remote_plugin_caches(
+            codex_home.path(),
+            &installed_plugin_names_by_marketplace,
+        )
+        .expect("cleanup after install guard is dropped");
+        assert_eq!(removed, vec!["linear@chatgpt-global".to_string()]);
+        assert!(!cached_manifest.exists());
+    }
 }

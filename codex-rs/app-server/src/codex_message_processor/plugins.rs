@@ -607,6 +607,12 @@ impl CodexMessageProcessor {
             )));
         }
         let actual_remote_marketplace_name = remote_detail.marketplace_name.clone();
+        let _remote_plugin_cache_mutation =
+            codex_core_plugins::remote::mark_remote_plugin_cache_mutation_in_flight(
+                config.codex_home.as_path(),
+                &actual_remote_marketplace_name,
+                &remote_detail.summary.name,
+            );
         let validated_bundle = codex_core_plugins::remote_bundle::validate_remote_plugin_bundle(
             &plugin_name,
             &actual_remote_marketplace_name,
