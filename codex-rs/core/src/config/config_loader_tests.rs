@@ -1085,6 +1085,52 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
+async fn load_config_layers_can_ignore_managed_requirements() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+
+    let managed_config_path = tmp.path().join("managed_config.toml");
+    tokio::fs::write(&managed_config_path, "approval_policy = \"never\"\n").await?;
+    let system_requirements_path = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &system_requirements_path,
+        "allowed_sandbox_modes = [\"read-only\"]\n",
+    )
+    .await?;
+
+    let mut overrides = LoaderOverrides::with_managed_config_path_for_tests(managed_config_path);
+    overrides.system_requirements_path = Some(system_requirements_path);
+    overrides.ignore_managed_requirements = true;
+
+    let cloud_requirements = CloudRequirementsLoader::new(async {
+        Ok(Some(ConfigRequirementsToml {
+            allowed_approval_policies: Some(vec![AskForApproval::Never]),
+            ..Default::default()
+        }))
+    });
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        overrides,
+        cloud_requirements,
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    assert_eq!(
+        layers.requirements_toml(),
+        &ConfigRequirementsToml::default()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_layers_includes_cloud_hook_requirements() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let codex_home = tmp.path().join("home");
