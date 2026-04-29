@@ -3,7 +3,7 @@ use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use codex_app_server_protocol::PluginInstallPolicy;
 
-fn maybe_start_remote_installed_plugin_bundle_sync_for_config(
+fn maybe_start_remote_installed_plugin_bundle_sync(
     thread_manager: Arc<ThreadManager>,
     config: Config,
     auth: Option<CodexAuth>,
@@ -53,7 +53,7 @@ impl CodexMessageProcessor {
             Some(self.effective_plugins_changed_callback(config.clone()));
         tokio::spawn(async move {
             let auth = auth_manager.auth().await;
-            maybe_start_remote_installed_plugin_bundle_sync_for_config(
+            maybe_start_remote_installed_plugin_bundle_sync(
                 thread_manager,
                 config,
                 auth,
@@ -104,7 +104,7 @@ impl CodexMessageProcessor {
             &roots,
             on_effective_plugins_changed.clone(),
         );
-        maybe_start_remote_installed_plugin_bundle_sync_for_config(
+        maybe_start_remote_installed_plugin_bundle_sync(
             Arc::clone(&self.thread_manager),
             config.clone(),
             auth.clone(),
