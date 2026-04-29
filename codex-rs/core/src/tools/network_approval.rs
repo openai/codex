@@ -289,6 +289,8 @@ impl NetworkApprovalService {
 
     async fn resolve_single_active_call(&self) -> Option<Arc<ActiveNetworkApprovalCall>> {
         let calls = self.calls.lock().await;
+        // Blocked proxy requests are not attributed to a specific tool call. Only pick an owner
+        // when there is exactly one candidate; with concurrent calls, canceling one would be a guess.
         if calls.active_calls.len() == 1 {
             return calls.active_calls.values().next().cloned();
         }
