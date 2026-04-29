@@ -71,8 +71,7 @@ impl EnvironmentManager {
 
     /// Builds a test-only manager with environment access disabled.
     pub fn disabled_for_tests(local_runtime_paths: ExecServerRuntimePaths) -> Self {
-        let mut manager =
-            Self::from_environments(HashMap::new(), local_runtime_paths).expect("empty manager");
+        let mut manager = Self::from_environments(HashMap::new(), local_runtime_paths);
         manager.default_environment = None;
         manager
     }
@@ -102,8 +101,7 @@ impl EnvironmentManager {
         let environment_disabled = normalize_exec_server_url(exec_server_url.clone()).1;
         let provider = DefaultEnvironmentProvider::new(exec_server_url);
         let provider_environments = provider.environments(&local_runtime_paths);
-        let mut manager = Self::from_environments(provider_environments, local_runtime_paths)
-            .expect("default provider returns valid environment ids");
+        let mut manager = Self::from_environments(provider_environments, local_runtime_paths);
         if environment_disabled {
             // TODO: Remove this legacy `CODEX_EXEC_SERVER_URL=none` crutch once
             // environment attachment defaulting moves out of EnvironmentManager.
@@ -120,13 +118,13 @@ impl EnvironmentManager {
     where
         P: EnvironmentProvider + ?Sized,
     {
-        Self::from_environments(
+        Self::from_provider_environments(
             provider.get_environments(&local_runtime_paths).await?,
             local_runtime_paths,
         )
     }
 
-    fn from_environments(
+    fn from_provider_environments(
         environments: HashMap<String, Environment>,
         local_runtime_paths: ExecServerRuntimePaths,
     ) -> Result<Self, ExecServerError> {
@@ -138,6 +136,13 @@ impl EnvironmentManager {
             }
         }
 
+        Ok(Self::from_environments(environments, local_runtime_paths))
+    }
+
+    fn from_environments(
+        environments: HashMap<String, Environment>,
+        local_runtime_paths: ExecServerRuntimePaths,
+    ) -> Self {
         // TODO: Stop deriving a default environment here once omitted
         // environment attachment is owned by thread/session setup.
         let default_environment = if environments.contains_key(REMOTE_ENVIRONMENT_ID) {
@@ -153,11 +158,11 @@ impl EnvironmentManager {
             .map(|(id, environment)| (id, Arc::new(environment)))
             .collect();
 
-        Ok(Self {
+        Self {
             default_environment,
             environments,
             local_environment,
-        })
+        }
     }
 
     /// Returns the default environment instance.
@@ -439,7 +444,7 @@ mod tests {
 
     #[tokio::test]
     async fn environment_manager_rejects_empty_environment_id() {
-        let err = EnvironmentManager::from_environments(
+        let err = EnvironmentManager::from_provider_environments(
             HashMap::from([("".to_string(), Environment::default_for_tests())]),
             test_runtime_paths(),
         )
