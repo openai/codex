@@ -213,6 +213,7 @@ pub struct ThreadManager {
 
 pub struct StartThreadOptions {
     pub config: Config,
+    pub thread_store: Option<Arc<dyn ThreadStore>>,
     pub initial_history: InitialHistory,
     pub session_source: Option<SessionSource>,
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
@@ -555,6 +556,7 @@ impl ThreadManager {
         );
         Box::pin(self.start_thread_with_options(StartThreadOptions {
             config,
+            thread_store: None,
             initial_history: InitialHistory::New,
             session_source: None,
             dynamic_tools,
@@ -570,7 +572,9 @@ impl ThreadManager {
         &self,
         options: StartThreadOptions,
     ) -> CodexResult<NewThread> {
-        let thread_store = Arc::clone(&self.state.thread_store);
+        let thread_store = options
+            .thread_store
+            .unwrap_or_else(|| Arc::clone(&self.state.thread_store));
         let session_source = options
             .session_source
             .unwrap_or_else(|| self.state.session_source.clone());
