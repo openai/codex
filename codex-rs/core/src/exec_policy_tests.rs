@@ -792,6 +792,58 @@ async fn drops_requested_amendment_for_heredoc_fallback_prompts_when_it_wont_mat
 }
 
 #[tokio::test]
+async fn drops_requested_amendment_for_heredoc_fallback_prompts_when_it_matches() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: None,
+            command: vec![
+                "bash".to_string(),
+                "-lc".to_string(),
+                "python3 <<'PY'\nprint('hello')\nPY".to_string(),
+            ],
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: Some(vec!["python3".to_string()]),
+        },
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn heredoc_with_variable_assignment_is_not_reduced_to_allowed_prefix() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: Some(r#"prefix_rule(pattern=["cat"], decision="allow")"#.to_string()),
+            command: vec![
+                "bash".to_string(),
+                "-lc".to_string(),
+                "PATH=/tmp/evil:$PATH cat <<'EOF'\nhello\nEOF".to_string(),
+            ],
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "bash".to_string(),
+                "-lc".to_string(),
+                "PATH=/tmp/evil:$PATH cat <<'EOF'\nhello\nEOF".to_string(),
+            ])),
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn heredoc_redirect_without_escalation_runs_inside_sandbox() {
     assert_exec_approval_requirement_for_command(
         ExecApprovalRequirementScenario {

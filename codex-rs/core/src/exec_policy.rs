@@ -271,14 +271,18 @@ impl ExecPolicyManager {
             &match_options,
         );
 
-        let requested_amendment = derive_requested_execpolicy_amendment_from_prefix_rule(
-            prefix_rule.as_ref(),
-            &evaluation.matched_rules,
-            exec_policy.as_ref(),
-            &commands,
-            &exec_policy_fallback,
-            &match_options,
-        );
+        let requested_amendment = if auto_amendment_allowed {
+            derive_requested_execpolicy_amendment_from_prefix_rule(
+                prefix_rule.as_ref(),
+                &evaluation.matched_rules,
+                exec_policy.as_ref(),
+                &commands,
+                &exec_policy_fallback,
+                &match_options,
+            )
+        } else {
+            None
+        };
 
         match evaluation.decision {
             Decision::Forbidden => ExecApprovalRequirement::Forbidden {

@@ -225,7 +225,7 @@ fn parse_heredoc_command_words(cmd: Node<'_>, src: &str) -> Option<Vec<String>> 
             // without changing argv matching semantics for the executable
             // prefix. Other file redirects may write outside the sandbox and
             // must not be collapsed to the executable prefix for execpolicy.
-            "variable_assignment" | "comment" => {}
+            "comment" => {}
             kind if is_allowed_heredoc_attachment_kind(kind) => {}
             _ => return None,
         }
@@ -545,6 +545,16 @@ mod tests {
             "bash".to_string(),
             "-lc".to_string(),
             "python3 <<'PY' > /tmp/out.txt\nprint('hello')\nPY".to_string(),
+        ];
+        assert_eq!(parse_shell_lc_single_command_prefix(&command), None);
+    }
+
+    #[test]
+    fn parse_shell_lc_single_command_prefix_rejects_heredoc_with_variable_assignment() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "PATH=/tmp/evil:$PATH cat <<'EOF'\nhello\nEOF".to_string(),
         ];
         assert_eq!(parse_shell_lc_single_command_prefix(&command), None);
     }
