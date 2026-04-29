@@ -579,6 +579,7 @@ fn create_filesystem_args(
         append_metadata_path_masks_for_writable_root(
             &mut read_only_subpaths,
             root,
+            mount_root,
             &protected_metadata_names,
         );
         if let Some(target) = &symlink_target {
@@ -654,11 +655,12 @@ fn append_protected_create_targets_for_writable_root(
 fn append_metadata_path_masks_for_writable_root(
     read_only_subpaths: &mut Vec<PathBuf>,
     root: &Path,
+    mount_root: &Path,
     protected_metadata_names: &[String],
 ) {
     for name in protected_metadata_names {
         let path = root.join(name);
-        if should_leave_missing_git_for_parent_repo_discovery(root, name, &path) {
+        if should_leave_missing_git_for_parent_repo_discovery(mount_root, name) {
             continue;
         }
         if !read_only_subpaths.iter().any(|subpath| subpath == &path) {
@@ -667,17 +669,17 @@ fn append_metadata_path_masks_for_writable_root(
     }
 }
 
-fn should_leave_missing_git_for_parent_repo_discovery(
-    root: &Path,
-    name: &str,
-    path: &Path,
-) -> bool {
+fn should_leave_missing_git_for_parent_repo_discovery(mount_root: &Path, name: &str) -> bool {
+    let path = mount_root.join(name);
     name == ".git"
         && matches!(
             path.symlink_metadata(),
             Err(err) if err.kind() == io::ErrorKind::NotFound
         )
-        && root.ancestors().skip(1).any(ancestor_has_git_metadata)
+        && mount_root
+            .ancestors()
+            .skip(1)
+            .any(ancestor_has_git_metadata)
 }
 
 fn ancestor_has_git_metadata(ancestor: &Path) -> bool {
@@ -1819,6 +1821,53 @@ mod tests {
             protected_create_target_paths(&args),
             vec![dot_git],
             "missing child .git should fail through protected create cleanup",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_missing_child_git_under_parent_repo_uses_effective_mount_root() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let repo = temp_dir.path().join("repo");
+        let workspace = repo.join("workspace");
+        let link_repo = temp_dir.path().join("link-repo");
+        let link_workspace = link_repo.join("workspace");
+        let dot_git = workspace.join(".git");
+        std::fs::create_dir_all(repo.join(".git")).expect("create parent .git");
+        std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        std::os::unix::fs::symlink(&repo, &link_repo).expect("create symlinked repo");
+
+        let link_workspace_root = AbsolutePathBuf::from_absolute_path(&link_workspace)
+            .expect("absolute symlinked workspace");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: link_workspace_root,
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let args =
+            create_filesystem_args(&policy, &link_workspace, NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
+        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".agents"));
+        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
+        let dot_git_str = path_to_string(&dot_git);
+        assert!(
+            !args
+                .args
+                .windows(4)
+                .any(|window| window == ["--perms", "555", "--tmpfs", dot_git_str.as_str()]),
+            "symlinked missing child .git should not shadow parent repo discovery",
+        );
+        assert!(
+            !synthetic_mount_target_paths(&args).contains(&dot_git),
+            "symlinked missing child .git should not be a transient mount target",
+        );
+        assert_eq!(
+            protected_create_target_paths(&args),
+            vec![dot_git],
+            "symlinked missing child .git should fail through protected create cleanup",
         );
     }
 
