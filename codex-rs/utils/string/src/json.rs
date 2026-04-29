@@ -56,7 +56,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use pretty_assertions::assert_eq;
+    use serde::Serialize;
+    use serde::ser::SerializeStruct;
     use serde_json::Value;
     use serde_json::json;
 
@@ -64,7 +68,36 @@ mod tests {
 
     #[test]
     fn to_ascii_json_string_escapes_non_ascii_strings() {
-        let value = json!({
+        struct TestPayload;
+
+        impl Serialize for TestPayload {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                let workspaces = BTreeMap::from([("/tmp/東京", TestWorkspace)]);
+                let mut state = serializer.serialize_struct("TestPayload", 1)?;
+                state.serialize_field("workspaces", &workspaces)?;
+                state.end()
+            }
+        }
+
+        struct TestWorkspace;
+
+        impl Serialize for TestWorkspace {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                let mut state = serializer.serialize_struct("TestWorkspace", 2)?;
+                state.serialize_field("label", "Agentlarım")?;
+                state.serialize_field("emoji", "🚀")?;
+                state.end()
+            }
+        }
+
+        let value = TestPayload;
+        let expected_value = json!({
             "workspaces": {
                 "/tmp/東京": {
                     "label": "Agentlarım",
@@ -77,13 +110,13 @@ mod tests {
 
         assert_eq!(
             serialized,
-            r#"{"workspaces":{"/tmp/\u6771\u4eac":{"emoji":"\ud83d\ude80","label":"Agentlar\u0131m"}}}"#
+            r#"{"workspaces":{"/tmp/\u6771\u4eac":{"label":"Agentlar\u0131m","emoji":"\ud83d\ude80"}}}"#
         );
         assert!(serialized.is_ascii());
         assert!(!serialized.contains("東京"));
         assert!(!serialized.contains("Agentlarım"));
         assert!(!serialized.contains("🚀"));
         let parsed: Value = serde_json::from_str(&serialized).expect("serialized json");
-        assert_eq!(parsed, value);
+        assert_eq!(parsed, expected_value);
     }
 }
