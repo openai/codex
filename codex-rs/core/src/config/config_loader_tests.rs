@@ -1111,21 +1111,27 @@ async fn load_config_layers_can_ignore_managed_requirements() -> anyhow::Result<
         }))
     });
 
-    let layers = load_config_layers_state(
-        LOCAL_FS.as_ref(),
-        &codex_home,
-        Some(cwd),
-        &[] as &[(String, TomlValue)],
-        overrides,
-        cloud_requirements,
-        &codex_config::NoopThreadConfigLoader,
-    )
-    .await?;
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(cwd.to_path_buf()))
+        .loader_overrides(overrides)
+        .cloud_requirements(cloud_requirements)
+        .build()
+        .await?;
 
-    assert_eq!(
-        layers.requirements_toml(),
-        &ConfigRequirementsToml::default()
+    assert!(
+        config
+            .permissions
+            .approval_policy
+            .can_set(&AskForApproval::OnRequest)
+            .is_ok(),
+        "ignoring managed requirements should leave on-request approval allowed"
     );
+    config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("ignoring managed requirements should allow setting on-request approval");
 
     Ok(())
 }

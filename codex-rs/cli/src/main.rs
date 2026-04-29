@@ -1947,33 +1947,6 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_macos_parses_explicit_profile_controls() {
-        let cli = MultitoolCli::try_parse_from([
-            "codex",
-            "sandbox",
-            "macos",
-            "--permissions-profile",
-            ":workspace",
-            "-C",
-            "/tmp",
-            "--include-managed-config",
-            "--",
-            "echo",
-        ])
-        .expect("parse");
-
-        let Some(Subcommand::Sandbox(SandboxArgs {
-            cmd: SandboxCommand::Macos(command),
-        })) = cli.subcommand
-        else {
-            panic!("expected sandbox macos command");
-        };
-
-        assert_eq!(command.cwd.as_deref(), Some(std::path::Path::new("/tmp")));
-        assert!(command.include_managed_config);
-    }
-
-    #[test]
     fn sandbox_macos_rejects_explicit_profile_controls_without_profile() {
         let err = MultitoolCli::try_parse_from(["codex", "sandbox", "macos", "-C", "/tmp"])
             .expect_err("parse should fail");
