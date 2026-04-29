@@ -111,16 +111,7 @@ where
 
 #[cfg(not(target_os = "windows"))]
 const UNIX_CORE_ENV_VARS: &[&str] = &[
-    "PATH",
-    "SHELL",
-    "TMPDIR",
-    "TEMP",
-    "TMP",
-    "HOME",
-    "LANG",
-    "LC_ALL",
-    "LC_CTYPE",
-    "LOGNAME",
+    "PATH", "SHELL", "TMPDIR", "TEMP", "TMP", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME",
     "USER",
 ];
 
