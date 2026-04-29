@@ -192,6 +192,7 @@ pub(super) async fn make_chatwidget_manual(
         session_header: SessionHeader::new(resolved_model.clone()),
         initial_user_message: None,
         status_account_display: None,
+        runtime_model_provider_base_url: None,
         token_info: None,
         rate_limit_snapshots_by_limit_id: BTreeMap::new(),
         refreshing_status_outputs: Vec::new(),

@@ -83,6 +83,10 @@ impl ModelProvider for AmazonBedrockModelProvider {
         api_provider_info.to_api_provider(/*auth_mode*/ None)
     }
 
+    async fn runtime_base_url(&self) -> Result<Option<String>> {
+        Ok(Some(runtime_base_url(&self.aws).await?))
+    }
+
     async fn api_auth(&self) -> Result<SharedAuthProvider> {
         resolve_provider_auth(&self.aws).await
     }

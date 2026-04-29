@@ -125,6 +125,8 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
+use codex_model_provider::create_model_provider;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_otel::SessionTelemetry;
@@ -510,6 +512,17 @@ fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<App
     .then_some(turn_error)
 }
 
+async fn resolve_runtime_model_provider_base_url(provider: &ModelProviderInfo) -> Option<String> {
+    let provider = create_model_provider(provider.clone(), /*auth_manager*/ None);
+    match provider.runtime_base_url().await {
+        Ok(base_url) => base_url,
+        Err(err) => {
+            tracing::warn!(%err, "failed to resolve runtime model provider base URL for status");
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ActiveTurnSteerRace {
     Missing,
@@ -559,6 +572,10 @@ impl App {
             feedback: self.feedback.clone(),
             is_first_run: false,
             status_account_display: self.chat_widget.status_account_display().cloned(),
+            runtime_model_provider_base_url: self
+                .chat_widget
+                .runtime_model_provider_base_url()
+                .map(str::to_string),
             initial_plan_type: self.chat_widget.current_plan_type(),
             model: Some(self.chat_widget.current_model().to_string()),
             startup_tooltip_override: None,
@@ -685,6 +702,8 @@ impl App {
 
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
         let terminal_title_invalid_items_warned = Arc::new(AtomicBool::new(false));
+        let runtime_model_provider_base_url =
+            resolve_runtime_model_provider_base_url(&config.model_provider).await;
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
@@ -711,6 +730,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
+                    runtime_model_provider_base_url: runtime_model_provider_base_url.clone(),
                     initial_plan_type,
                     model: Some(model.clone()),
                     startup_tooltip_override,
@@ -745,6 +765,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
+                    runtime_model_provider_base_url: runtime_model_provider_base_url.clone(),
                     initial_plan_type,
                     model: config.model.clone(),
                     startup_tooltip_override: None,
@@ -784,6 +805,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
+                    runtime_model_provider_base_url: runtime_model_provider_base_url.clone(),
                     initial_plan_type,
                     model: config.model.clone(),
                     startup_tooltip_override: None,

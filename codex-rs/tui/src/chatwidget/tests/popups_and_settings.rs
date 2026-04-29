@@ -76,6 +76,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         status_account_display: None,
+        runtime_model_provider_base_url: None,
         initial_plan_type: None,
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,

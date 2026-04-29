@@ -558,6 +558,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
     pub(crate) status_account_display: Option<StatusAccountDisplay>,
+    pub(crate) runtime_model_provider_base_url: Option<String>,
     pub(crate) initial_plan_type: Option<PlanType>,
     pub(crate) model: Option<String>,
     pub(crate) startup_tooltip_override: Option<String>,
@@ -758,6 +759,7 @@ pub(crate) struct ChatWidget {
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     status_account_display: Option<StatusAccountDisplay>,
+    runtime_model_provider_base_url: Option<String>,
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
@@ -4751,6 +4753,7 @@ impl ChatWidget {
             feedback,
             is_first_run,
             status_account_display,
+            runtime_model_provider_base_url,
             initial_plan_type,
             model,
             startup_tooltip_override,
@@ -4835,6 +4838,7 @@ impl ChatWidget {
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             status_account_display,
+            runtime_model_provider_base_url,
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             refreshing_status_outputs: Vec::new(),
@@ -6834,6 +6838,7 @@ impl ChatWidget {
             crate::status::compose_agents_summary(&self.config, &self.instruction_source_paths);
         let (cell, handle) = crate::status::new_status_output_with_rate_limits_handle(
             &self.config,
+            self.runtime_model_provider_base_url.as_deref(),
             self.status_account_display.as_ref(),
             token_info,
             total_usage,
@@ -9224,6 +9229,10 @@ impl ChatWidget {
 
     pub(crate) fn status_account_display(&self) -> Option<&StatusAccountDisplay> {
         self.status_account_display.as_ref()
+    }
+
+    pub(crate) fn runtime_model_provider_base_url(&self) -> Option<&str> {
+        self.runtime_model_provider_base_url.as_deref()
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
