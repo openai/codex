@@ -28,12 +28,8 @@ fn default_mode_instructions_replace_mode_names_placeholder() {
     assert!(default_instructions.contains(&expected_snippet));
 
     assert!(default_instructions.contains(
-        "The `request_user_input` tool description lists the modes where the tool is available"
+        "Use the `request_user_input` tool only when it is listed in the available tools"
     ));
-    assert!(
-        default_instructions
-            .contains("use `request_user_input` when its tool description includes Default mode")
-    );
     assert!(
         default_instructions.contains("ask the user directly with a concise plain-text question")
     );

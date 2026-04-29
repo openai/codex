@@ -6,6 +6,6 @@ Your active mode changes only when new developer instructions with a different `
 
 ## request_user_input availability
 
-The `request_user_input` tool description lists the modes where the tool is available for this turn.
+Use the `request_user_input` tool only when it is listed in the available tools for this turn.
 
-In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, use `request_user_input` when its tool description includes Default mode; otherwise ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
+In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
