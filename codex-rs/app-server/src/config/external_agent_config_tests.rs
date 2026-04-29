@@ -739,6 +739,37 @@ async fn import_home_config_uses_local_settings_over_project_settings() {
 }
 
 #[tokio::test]
+async fn import_home_config_ignores_invalid_local_settings() {
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
+    fs::write(
+        external_agent_home.join("settings.json"),
+        r#"{"env":{"FOO":"project"},"sandbox":{"enabled":false}}"#,
+    )
+    .expect("write project settings");
+    fs::write(
+        external_agent_home.join("settings.local.json"),
+        "{invalid json",
+    )
+    .expect("write local settings");
+
+    service_for_paths(external_agent_home, codex_home.clone())
+        .import(vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Config,
+            description: String::new(),
+            cwd: None,
+            details: None,
+        }])
+        .await
+        .expect("import");
+
+    assert_eq!(
+        fs::read_to_string(codex_home.join("config.toml")).expect("read config"),
+        "[shell_environment_policy]\ninherit = \"core\"\n\n[shell_environment_policy.set]\nFOO = \"project\"\n"
+    );
+}
+
+#[tokio::test]
 async fn import_home_skips_empty_config_migration() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
     fs::create_dir_all(&external_agent_home).expect("create external agent home");

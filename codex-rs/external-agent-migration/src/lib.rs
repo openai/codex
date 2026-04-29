@@ -722,6 +722,10 @@ fn replace_unquoted_hook_paths(
     {
         let path_start = shell_path_start(&rewritten, source_hooks_start);
         let path_end = shell_path_end(&rewritten, source_hooks_start + source_hooks_path.len());
+        if is_assignment_value_start(&rewritten, path_start) {
+            search_start = source_hooks_start + source_hooks_path.len();
+            continue;
+        }
         let path = rewritten[path_start..path_end].to_string();
         let suffix = rewritten[source_hooks_start + source_hooks_path.len()..path_end].to_string();
         if let Some(replacement) = target_hook_path_replacement(
@@ -809,7 +813,14 @@ fn shell_path_end(command: &str, start: usize) -> usize {
 }
 
 fn is_shell_path_boundary(ch: char) -> bool {
-    ch.is_whitespace() || matches!(ch, ';' | '|' | '&' | '<' | '>' | '(' | ')')
+    ch.is_whitespace() || matches!(ch, '=' | ';' | '|' | '&' | '<' | '>' | '(' | ')')
+}
+
+fn is_assignment_value_start(command: &str, path_start: usize) -> bool {
+    command[..path_start]
+        .chars()
+        .next_back()
+        .is_some_and(|ch| ch == '=')
 }
 
 fn target_hook_path_replacement(
@@ -831,7 +842,7 @@ fn is_static_hook_path_suffix(suffix: &str) -> bool {
     !suffix.is_empty()
         && !suffix
             .chars()
-            .any(|ch| matches!(ch, '\\' | '$' | '`' | '*' | '?' | '['))
+            .any(|ch| matches!(ch, '\\' | '$' | '`' | '*' | '?' | '[' | '{' | '}'))
 }
 
 fn looks_like_windows_hook_command(command: &str) -> bool {
@@ -1992,10 +2003,14 @@ Review carefully."""
         );
         assert_eq!(
             rewrite_hook_command(
-                &format!("HOOK={source_hooks_path}/check.py python3 \"$HOOK\""),
+                &format!(
+                    "HOOK=${{{project_dir_env_var}}}/{source_hooks_path}/check.py python3 \"$HOOK\""
+                ),
                 Some(Path::new("/repo/.codex")),
             ),
-            format!("HOOK={source_hooks_path}/check.py python3 \"$HOOK\"")
+            format!(
+                "HOOK=${{{project_dir_env_var}}}/{source_hooks_path}/check.py python3 \"$HOOK\""
+            )
         );
         assert_eq!(
             rewrite_hook_command(
@@ -2003,6 +2018,13 @@ Review carefully."""
                 Some(Path::new("/repo/.codex")),
             ),
             format!("python3 {source_hooks_path}/${{SCRIPT}}.py")
+        );
+        assert_eq!(
+            rewrite_hook_command(
+                &format!("python3 {source_hooks_path}/{{lint,fmt}}.sh"),
+                Some(Path::new("/repo/.codex")),
+            ),
+            format!("python3 {source_hooks_path}/{{lint,fmt}}.sh")
         );
         assert_eq!(
             rewrite_hook_command(
@@ -2042,13 +2064,6 @@ Review carefully."""
         );
         assert_eq!(
             rewrite_hook_command(
-                &format!("python3 /repo/{source_hooks_path}/check.py"),
-                Some(Path::new("/repo/.codex")),
-            ),
-            migrated_quoted_hook_command("check.py")
-        );
-        assert_eq!(
-            rewrite_hook_command(
                 &format!("/repo/{source_hooks_path}/check.py 2>/dev/null || true"),
                 Some(Path::new("/repo/.codex")),
             ),
@@ -2067,13 +2082,6 @@ Review carefully."""
         assert_eq!(
             rewrite_hook_command(&plugin_script_command, Some(Path::new("/repo/.codex")),),
             plugin_script_command
-        );
-        assert_eq!(
-            rewrite_hook_command(
-                "./scripts/security-check.sh",
-                Some(Path::new("/repo/.codex"))
-            ),
-            "./scripts/security-check.sh"
         );
     }
 

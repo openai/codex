@@ -1003,8 +1003,11 @@ fn effective_external_settings(project_settings: &Path) -> io::Result<Option<Jso
         return Ok(effective);
     };
     let local_settings = settings_dir.join("settings.local.json");
-    let Some(local_settings) = read_external_settings(&local_settings)? else {
-        return Ok(effective);
+    let local_settings = match read_external_settings(&local_settings) {
+        Ok(Some(local_settings)) => local_settings,
+        Ok(None) => return Ok(effective),
+        Err(err) if err.kind() == io::ErrorKind::InvalidData => return Ok(effective),
+        Err(err) => return Err(err),
     };
     if let Some(effective) = effective.as_mut() {
         merge_json_settings(effective, &local_settings);
@@ -1031,7 +1034,6 @@ fn merge_json_settings(existing: &mut JsonValue, incoming: &JsonValue) {
         }
     }
 }
-
 fn extract_plugin_migration_details(
     settings: &JsonValue,
     source_root: &Path,
