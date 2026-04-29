@@ -1295,11 +1295,20 @@ mod tests {
     }
 
     fn migrated_hook_command(script_name: &str) -> String {
-        format!("python3 '/repo/.codex/{EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR}'/{script_name}")
+        let hook_dir = shell_quote_path_prefix(
+            &Path::new("/repo/.codex").join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR),
+        );
+        format!("python3 {hook_dir}{script_name}")
     }
 
     fn migrated_quoted_hook_command(script_name: &str) -> String {
-        format!("python3 '/repo/.codex/{EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR}/{script_name}'")
+        let hook_path = Path::new("/repo/.codex")
+            .join(EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR)
+            .join(script_name);
+        format!(
+            "python3 {}",
+            shell_single_quote(hook_path.to_string_lossy().as_ref())
+        )
     }
 
     #[test]
@@ -1807,6 +1816,11 @@ Review carefully."""
 
     #[test]
     fn hook_command_paths_rewrite_to_target_hook_dir() {
+        let project_dir_env_var = external_agent_project_dir_env_var();
+        let source_hooks_path = format!(
+            "{}/{EXTERNAL_AGENT_HOOKS_SUBDIR}",
+            external_agent_config_dir()
+        );
         assert_eq!(
             rewrite_hook_command(
                 &source_hook_command_with_project_dir("check.py"),
@@ -1823,28 +1837,28 @@ Review carefully."""
         );
         assert_eq!(
             rewrite_hook_command(
-                "python3 ./.claude/hooks/check.py",
+                &format!("python3 ./{source_hooks_path}/check.py"),
                 Some(Path::new("/repo/.codex")),
             ),
             migrated_hook_command("check.py")
         );
         assert_eq!(
             rewrite_hook_command(
-                "python3 '${CLAUDE_PROJECT_DIR}/.claude/hooks/check.py'",
+                &format!("python3 '${{{project_dir_env_var}}}/{source_hooks_path}/check.py'"),
                 Some(Path::new("/repo/.codex")),
             ),
             migrated_quoted_hook_command("check.py")
         );
         assert_eq!(
             rewrite_hook_command(
-                "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/check.py\"",
+                &format!("python3 \"${{{project_dir_env_var}}}/{source_hooks_path}/check.py\""),
                 Some(Path::new("/repo/.codex")),
             ),
             migrated_quoted_hook_command("check.py")
         );
         assert_eq!(
             rewrite_hook_command(
-                "python3 '${CLAUDE_PROJECT_DIR}/.claude/hooks/my script.py'",
+                &format!("python3 '${{{project_dir_env_var}}}/{source_hooks_path}/my script.py'"),
                 Some(Path::new("/repo/.codex")),
             ),
             migrated_quoted_hook_command("my script.py")
