@@ -8313,22 +8313,19 @@ impl ChatWidget {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
 
         let switch_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-            tx.send(AppEvent::CodexOp(
-                AppCommand::override_turn_context(
-                    /*cwd*/ None,
-                    /*approval_policy*/ None,
-                    /*approvals_reviewer*/ None,
-                    /*permission_profile*/ None,
-                    /*windows_sandbox_level*/ None,
-                    Some(switch_model_for_events.clone()),
-                    Some(Some(default_effort)),
-                    /*summary*/ None,
-                    /*service_tier*/ None,
-                    /*collaboration_mode*/ None,
-                    /*personality*/ None,
-                )
-                .into_core(),
-            ));
+            tx.send(AppEvent::CodexOp(AppCommand::override_turn_context(
+                /*cwd*/ None,
+                /*approval_policy*/ None,
+                /*approvals_reviewer*/ None,
+                /*permission_profile*/ None,
+                /*windows_sandbox_level*/ None,
+                Some(switch_model_for_events.clone()),
+                Some(Some(default_effort)),
+                /*summary*/ None,
+                /*service_tier*/ None,
+                /*collaboration_mode*/ None,
+                /*personality*/ None,
+            )));
             tx.send(AppEvent::UpdateModel(switch_model_for_events.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
         })];
@@ -8537,22 +8534,19 @@ impl ChatWidget {
                 let name = Self::personality_label(personality).to_string();
                 let description = Some(Self::personality_description(personality).to_string());
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::CodexOp(
-                        AppCommand::override_turn_context(
-                            /*cwd*/ None,
-                            /*approval_policy*/ None,
-                            /*approvals_reviewer*/ None,
-                            /*permission_profile*/ None,
-                            /*windows_sandbox_level*/ None,
-                            /*model*/ None,
-                            /*effort*/ None,
-                            /*summary*/ None,
-                            /*service_tier*/ None,
-                            /*collaboration_mode*/ None,
-                            Some(personality),
-                        )
-                        .into_core(),
-                    ));
+                    tx.send(AppEvent::CodexOp(AppCommand::override_turn_context(
+                        /*cwd*/ None,
+                        /*approval_policy*/ None,
+                        /*approvals_reviewer*/ None,
+                        /*permission_profile*/ None,
+                        /*windows_sandbox_level*/ None,
+                        /*model*/ None,
+                        /*effort*/ None,
+                        /*summary*/ None,
+                        /*service_tier*/ None,
+                        /*collaboration_mode*/ None,
+                        Some(personality),
+                    )));
                     tx.send(AppEvent::UpdatePersonality(personality));
                     tx.send(AppEvent::PersistPersonalitySelection { personality });
                 })];
@@ -9567,7 +9561,7 @@ impl ChatWidget {
 
         self.app_event_tx.send(AppEvent::SubmitThreadOp {
             thread_id,
-            op: Op::ApproveGuardianDeniedAction { event },
+            op: AppCommand::from(Op::ApproveGuardianDeniedAction { event }),
         });
         self.add_info_message(
             "Approval recorded for one retry of the selected auto-review denial.".to_string(),
@@ -9605,22 +9599,19 @@ impl ChatWidget {
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
             let permission_profile_clone = permission_profile.clone();
-            tx.send(AppEvent::CodexOp(
-                AppCommand::override_turn_context(
-                    /*cwd*/ None,
-                    Some(approval),
-                    Some(approvals_reviewer),
-                    Some(permission_profile_clone.clone()),
-                    /*windows_sandbox_level*/ None,
-                    /*model*/ None,
-                    /*effort*/ None,
-                    /*summary*/ None,
-                    /*service_tier*/ None,
-                    /*collaboration_mode*/ None,
-                    /*personality*/ None,
-                )
-                .into_core(),
-            ));
+            tx.send(AppEvent::CodexOp(AppCommand::override_turn_context(
+                /*cwd*/ None,
+                Some(approval),
+                Some(approvals_reviewer),
+                Some(permission_profile_clone.clone()),
+                /*windows_sandbox_level*/ None,
+                /*model*/ None,
+                /*effort*/ None,
+                /*summary*/ None,
+                /*service_tier*/ None,
+                /*collaboration_mode*/ None,
+                /*personality*/ None,
+            )));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdatePermissionProfile(permission_profile_clone));
             tx.send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
@@ -10457,8 +10448,8 @@ impl ChatWidget {
             self.config.notices.fast_default_opt_out = Some(true);
         }
         self.set_service_tier(service_tier);
-        self.app_event_tx.send(AppEvent::CodexOp(
-            AppCommand::override_turn_context(
+        self.app_event_tx
+            .send(AppEvent::CodexOp(AppCommand::override_turn_context(
                 /*cwd*/ None,
                 /*approval_policy*/ None,
                 /*approvals_reviewer*/ None,
@@ -10470,9 +10461,7 @@ impl ChatWidget {
                 Some(service_tier),
                 /*collaboration_mode*/ None,
                 /*personality*/ None,
-            )
-            .into_core(),
-        ));
+            )));
         self.app_event_tx
             .send(AppEvent::PersistServiceTierSelection { service_tier });
     }
@@ -11539,7 +11528,7 @@ impl ChatWidget {
                 }
             }
             CodexOpTarget::AppEvent => {
-                self.app_event_tx.send(AppEvent::CodexOp(op.into()));
+                self.app_event_tx.send(AppEvent::CodexOp(op));
             }
         }
         true

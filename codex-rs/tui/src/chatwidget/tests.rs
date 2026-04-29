@@ -5,6 +5,7 @@
 //! changes show up as stable, reviewable diffs.
 
 pub(super) use super::*;
+pub(super) use crate::app_command::AppCommand;
 pub(super) use crate::app_event::AppEvent;
 pub(super) use crate::app_event::ExitMode;
 #[cfg(not(target_os = "linux"))]

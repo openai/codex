@@ -989,8 +989,7 @@ impl App {
                                         /*service_tier*/ None,
                                         /*collaboration_mode*/ None,
                                         /*personality*/ None,
-                                    )
-                                    .into(),
+                                    ),
                                 ));
                                 self.app_event_tx.send(
                                     AppEvent::OpenWorldWritableWarningConfirmation {
@@ -1015,8 +1014,7 @@ impl App {
                                         /*service_tier*/ None,
                                         /*collaboration_mode*/ None,
                                         /*personality*/ None,
-                                    )
-                                    .into(),
+                                    ),
                                 ));
                                 self.app_event_tx
                                     .send(AppEvent::UpdateAskForApprovalPolicy(preset.approval));
