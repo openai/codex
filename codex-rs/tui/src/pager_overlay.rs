@@ -912,8 +912,8 @@ fn render_offset_content(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::protocol::ExecCommandSource;
-    use codex_protocol::protocol::ReviewDecision;
+    use crate::history_cell::ReviewDecision;
+    use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
@@ -921,12 +921,12 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use crate::diff_model::FileChange;
     use crate::exec_cell::CommandOutput;
     use crate::history_cell;
     use crate::history_cell::HistoryCell;
     use crate::history_cell::new_patch_event;
     use codex_protocol::parse_command::ParsedCommand;
-    use codex_protocol::protocol::FileChange;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::text::Text;

@@ -14,11 +14,11 @@ use super::HistoryCell;
 use crate::exec_cell::spinner;
 use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
-use codex_protocol::protocol::HookEventName;
-use codex_protocol::protocol::HookOutputEntry;
-use codex_protocol::protocol::HookOutputEntryKind;
-use codex_protocol::protocol::HookRunStatus;
-use codex_protocol::protocol::HookRunSummary;
+use codex_app_server_protocol::HookEventName;
+use codex_app_server_protocol::HookOutputEntry;
+use codex_app_server_protocol::HookOutputEntryKind;
+use codex_app_server_protocol::HookRunStatus;
+use codex_app_server_protocol::HookRunSummary;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use ratatui::widgets::Paragraph;
@@ -765,11 +765,11 @@ mod tests {
         HookRunSummary {
             id: id.to_string(),
             event_name: HookEventName::PostToolUse,
-            handler_type: codex_protocol::protocol::HookHandlerType::Command,
-            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
-            scope: codex_protocol::protocol::HookScope::Turn,
+            handler_type: codex_app_server_protocol::HookHandlerType::Command,
+            execution_mode: codex_app_server_protocol::HookExecutionMode::Sync,
+            scope: codex_app_server_protocol::HookScope::Turn,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
-            source: codex_protocol::protocol::HookSource::User,
+            source: codex_app_server_protocol::HookSource::User,
             display_order: 0,
             status: HookRunStatus::Running,
             status_message: Some("checking output policy".to_string()),

@@ -11,14 +11,14 @@ use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::SkillMetadata as ProtocolSkillMetadata;
+use codex_app_server_protocol::SkillsListEntry;
+use codex_app_server_protocol::SkillsListResponse;
 use codex_core_skills::model::SkillDependencies;
 use codex_core_skills::model::SkillInterface;
 use codex_core_skills::model::SkillMetadata;
 use codex_core_skills::model::SkillToolDependency;
 use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::protocol::ListSkillsResponseEvent;
-use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
-use codex_protocol::protocol::SkillsListEntry;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 
@@ -135,8 +135,8 @@ impl ChatWidget {
         );
     }
 
-    pub(crate) fn set_skills_from_response(&mut self, response: &ListSkillsResponseEvent) {
-        let skills = skills_for_cwd(&self.config.cwd, &response.skills);
+    pub(crate) fn set_skills_from_response(&mut self, response: &SkillsListResponse) {
+        let skills = skills_for_cwd(&self.config.cwd, &response.data);
         self.skills_all = skills;
         self.set_skills(Some(enabled_skills_for_mentions(&self.skills_all)));
     }
@@ -222,7 +222,9 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
             }),
         policy: None,
         path_to_skills_md: skill.path.clone(),
-        scope: skill.scope,
+        scope: serde_json::to_value(skill.scope)
+            .and_then(serde_json::from_value)
+            .unwrap_or_else(|err| panic!("skill scope should map to core skill scope: {err}")),
     }
 }
 

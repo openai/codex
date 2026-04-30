@@ -74,7 +74,8 @@ fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
         "test_originator".to_string(),
         /*log_user_prompts*/ false,
         "test".to_string(),
-        SessionSource::Cli,
+        serde_json::from_value(serde_json::json!("cli"))
+            .expect("cli session source should deserialize"),
     )
 }
 
