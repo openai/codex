@@ -17,11 +17,11 @@ use thiserror::Error;
 
 use super::IdeContext;
 
-// The desktop integration can take several seconds to determine whether an IDE can answer an
-// initial probe. Keep this long enough that transient local read timeouts do not prevent enabling
-// the feature, but use a much shorter budget on the prompt-submit path below.
-const IDE_CONTEXT_PROBE_TIMEOUT: Duration = Duration::from_secs(6);
-const IDE_CONTEXT_PROMPT_TIMEOUT: Duration = Duration::from_millis(500);
+// The desktop IPC client gives requests 5 seconds to complete. Match that prompt-time budget here:
+// fetching IDE context includes router discovery and extension event-loop work, so a shorter TUI
+// deadline can incorrectly skip context even though the IDE answers normally.
+const IDE_CONTEXT_PROMPT_TIMEOUT: Duration = Duration::from_secs(5);
+const IDE_CONTEXT_PROBE_TIMEOUT: Duration = IDE_CONTEXT_PROMPT_TIMEOUT;
 #[cfg(any(unix, windows))]
 const IDE_CONTEXT_IDLE_READ_TIMEOUT: Duration = Duration::from_millis(50);
 #[cfg(any(unix, windows))]
@@ -112,12 +112,16 @@ impl IdeContextError {
                 "Open this project in VS Code or Cursor with the Codex extension active."
                     .to_string()
             }
+            IdeContextError::Read(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                "Codex timed out waiting for IDE context. It will keep trying on future messages."
+                    .to_string()
+            }
             IdeContextError::Send(_)
-            | IdeContextError::Read(_)
             | IdeContextError::InvalidResponse(_)
             | IdeContextError::RequestFailed(_) => {
                 "Codex will keep trying on future messages.".to_string()
             }
+            IdeContextError::Read(_) => "Codex will keep trying on future messages.".to_string(),
         }
     }
 
