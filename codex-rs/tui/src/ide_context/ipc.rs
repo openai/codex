@@ -89,6 +89,42 @@ impl IdeContextError {
         }
     }
 
+    #[cfg(any(unix, windows))]
+    pub(crate) fn prompt_skip_hint(&self) -> String {
+        match self {
+            IdeContextError::ResponseTooLarge => {
+                "The selected IDE context is too large. Clear any large selection in your IDE."
+                    .to_string()
+            }
+            IdeContextError::Connect(_) => {
+                "Open this project in VS Code or Cursor with the Codex extension active."
+                    .to_string()
+            }
+            IdeContextError::RequestFailed(error) if error == "no-client-found" => {
+                "Open this project in VS Code or Cursor with the Codex extension active."
+                    .to_string()
+            }
+            IdeContextError::Send(_)
+            | IdeContextError::Read(_)
+            | IdeContextError::InvalidResponse(_)
+            | IdeContextError::RequestFailed(_) => {
+                "Codex will keep trying on future messages.".to_string()
+            }
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    pub(crate) fn should_reset_client(&self) -> bool {
+        match self {
+            IdeContextError::Connect(_)
+            | IdeContextError::Send(_)
+            | IdeContextError::Read(_)
+            | IdeContextError::InvalidResponse(_)
+            | IdeContextError::ResponseTooLarge => true,
+            IdeContextError::RequestFailed(_) => false,
+        }
+    }
+
     #[cfg(not(any(unix, windows)))]
     pub(crate) fn is_retryable_after_recent_toggle(&self) -> bool {
         false
@@ -98,24 +134,122 @@ impl IdeContextError {
     pub(crate) fn user_facing_hint(&self) -> String {
         self.to_string()
     }
+
+    #[cfg(not(any(unix, windows)))]
+    pub(crate) fn prompt_skip_hint(&self) -> String {
+        self.to_string()
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    pub(crate) fn should_reset_client(&self) -> bool {
+        false
+    }
 }
 
-pub(crate) fn fetch_ide_context(workspace_root: &Path) -> Result<IdeContext, IdeContextError> {
-    fetch_ide_context_from_socket(
-        default_ipc_socket_path(),
-        workspace_root,
-        IDE_CONTEXT_PROBE_TIMEOUT,
-    )
+/// Persistent IPC client used while TUI `/ide` mode is enabled.
+///
+/// The initial connection and initialize handshake happen once on `/ide on`, and each user turn
+/// asks for a fresh IDE context snapshot over the same route with a short prompt-time deadline.
+#[cfg(any(unix, windows))]
+pub(crate) struct IdeContextClient {
+    stream: IdeContextStream,
+    client_id: String,
 }
 
-pub(crate) fn fetch_ide_context_for_prompt(
-    workspace_root: &Path,
-) -> Result<IdeContext, IdeContextError> {
-    fetch_ide_context_from_socket(
-        default_ipc_socket_path(),
-        workspace_root,
-        IDE_CONTEXT_PROMPT_TIMEOUT,
-    )
+#[cfg(unix)]
+type IdeContextStream = UnixDeadlineStream;
+
+#[cfg(windows)]
+type IdeContextStream = super::windows_pipe::WindowsPipeStream;
+
+#[cfg(any(unix, windows))]
+impl IdeContextClient {
+    pub(crate) fn connect() -> Result<Self, IdeContextError> {
+        Self::connect_to_socket(default_ipc_socket_path(), IDE_CONTEXT_PROBE_TIMEOUT)
+    }
+
+    pub(crate) fn connect_for_prompt() -> Result<Self, IdeContextError> {
+        Self::connect_to_socket(default_ipc_socket_path(), IDE_CONTEXT_PROMPT_TIMEOUT)
+    }
+
+    pub(crate) fn fetch_ide_context(
+        &mut self,
+        workspace_root: &Path,
+    ) -> Result<IdeContext, IdeContextError> {
+        self.fetch_ide_context_with_timeout(workspace_root, IDE_CONTEXT_PROBE_TIMEOUT)
+    }
+
+    pub(crate) fn fetch_ide_context_for_prompt(
+        &mut self,
+        workspace_root: &Path,
+    ) -> Result<IdeContext, IdeContextError> {
+        self.fetch_ide_context_with_timeout(workspace_root, IDE_CONTEXT_PROMPT_TIMEOUT)
+    }
+
+    fn connect_to_socket(socket_path: PathBuf, timeout: Duration) -> Result<Self, IdeContextError> {
+        let deadline = Instant::now() + timeout;
+        Self::connect_to_socket_before_deadline(socket_path, deadline)
+    }
+
+    fn connect_to_socket_before_deadline(
+        socket_path: PathBuf,
+        deadline: Instant,
+    ) -> Result<Self, IdeContextError> {
+        let mut stream = connect_stream(socket_path, deadline)?;
+        let client_id = initialize_client(&mut stream, deadline)?;
+        Ok(Self { stream, client_id })
+    }
+
+    fn fetch_ide_context_with_timeout(
+        &mut self,
+        workspace_root: &Path,
+        timeout: Duration,
+    ) -> Result<IdeContext, IdeContextError> {
+        let deadline = Instant::now() + timeout;
+        self.fetch_ide_context_before_deadline(workspace_root, deadline)
+    }
+
+    fn fetch_ide_context_before_deadline(
+        &mut self,
+        workspace_root: &Path,
+        deadline: Instant,
+    ) -> Result<IdeContext, IdeContextError> {
+        self.stream.set_deadline(deadline);
+        fetch_ide_context_with_client_id(
+            &mut self.stream,
+            &self.client_id,
+            workspace_root,
+            deadline,
+        )
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) struct IdeContextClient;
+
+#[cfg(not(any(unix, windows)))]
+impl IdeContextClient {
+    pub(crate) fn connect() -> Result<Self, IdeContextError> {
+        Err(IdeContextError::UnsupportedPlatform)
+    }
+
+    pub(crate) fn connect_for_prompt() -> Result<Self, IdeContextError> {
+        Err(IdeContextError::UnsupportedPlatform)
+    }
+
+    pub(crate) fn fetch_ide_context(
+        &mut self,
+        _workspace_root: &Path,
+    ) -> Result<IdeContext, IdeContextError> {
+        Err(IdeContextError::UnsupportedPlatform)
+    }
+
+    pub(crate) fn fetch_ide_context_for_prompt(
+        &mut self,
+        _workspace_root: &Path,
+    ) -> Result<IdeContext, IdeContextError> {
+        Err(IdeContextError::UnsupportedPlatform)
+    }
 }
 
 #[cfg(unix)]
@@ -136,17 +270,23 @@ fn default_ipc_socket_path() -> PathBuf {
     PathBuf::new()
 }
 
-#[cfg(unix)]
-pub(crate) fn fetch_ide_context_from_socket(
+#[cfg(all(test, unix))]
+fn fetch_ide_context_from_socket(
     socket_path: PathBuf,
     workspace_root: &Path,
     timeout: Duration,
 ) -> Result<IdeContext, IdeContextError> {
     let deadline = Instant::now() + timeout;
-    let mut stream =
-        UnixDeadlineStream::connect(socket_path, deadline).map_err(IdeContextError::Connect)?;
+    let mut client = IdeContextClient::connect_to_socket_before_deadline(socket_path, deadline)?;
+    client.fetch_ide_context_before_deadline(workspace_root, deadline)
+}
 
-    fetch_ide_context_from_stream(&mut stream, workspace_root, deadline)
+#[cfg(unix)]
+fn connect_stream(
+    socket_path: PathBuf,
+    deadline: Instant,
+) -> Result<IdeContextStream, IdeContextError> {
+    UnixDeadlineStream::connect(socket_path, deadline).map_err(IdeContextError::Connect)
 }
 
 #[cfg(unix)]
@@ -167,6 +307,10 @@ impl UnixDeadlineStream {
 
     fn new(stream: std::os::unix::net::UnixStream, deadline: Instant) -> Self {
         Self { stream, deadline }
+    }
+
+    fn set_deadline(&mut self, deadline: Instant) {
+        self.deadline = deadline;
     }
 
     fn remaining_timeout(&self) -> std::io::Result<Duration> {
@@ -368,16 +512,12 @@ fn ensure_peer_uid_matches_current_user(peer_uid: libc::uid_t) -> std::io::Resul
 }
 
 #[cfg(windows)]
-pub(crate) fn fetch_ide_context_from_socket(
+fn connect_stream(
     socket_path: PathBuf,
-    workspace_root: &Path,
-    timeout: Duration,
-) -> Result<IdeContext, IdeContextError> {
-    let deadline = Instant::now() + timeout;
-    let mut stream = super::windows_pipe::WindowsPipeStream::connect(socket_path, deadline)
-        .map_err(IdeContextError::Connect)?;
-
-    fetch_ide_context_from_stream(&mut stream, workspace_root, deadline)
+    deadline: Instant,
+) -> Result<IdeContextStream, IdeContextError> {
+    super::windows_pipe::WindowsPipeStream::connect(socket_path, deadline)
+        .map_err(IdeContextError::Connect)
 }
 
 #[cfg(any(unix, windows))]
@@ -423,25 +563,6 @@ fn fetch_ide_context_with_client_id<T: std::io::Read + std::io::Write + ?Sized>(
     write_frame(stream, &ide_context_request).map_err(IdeContextError::Send)?;
     let ide_context_response = read_response_frame(stream, &ide_context_request_id, deadline)?;
     extract_ide_context(ide_context_response)
-}
-
-#[cfg(any(unix, windows))]
-fn fetch_ide_context_from_stream<T: std::io::Read + std::io::Write + ?Sized>(
-    stream: &mut T,
-    workspace_root: &Path,
-    deadline: Instant,
-) -> Result<IdeContext, IdeContextError> {
-    let client_id = initialize_client(stream, deadline)?;
-    fetch_ide_context_with_client_id(stream, &client_id, workspace_root, deadline)
-}
-
-#[cfg(not(any(unix, windows)))]
-pub(crate) fn fetch_ide_context_from_socket(
-    _socket_path: PathBuf,
-    _workspace_root: &Path,
-    _timeout: Duration,
-) -> Result<IdeContext, IdeContextError> {
-    Err(IdeContextError::UnsupportedPlatform)
 }
 
 #[cfg(any(unix, windows))]
@@ -640,6 +761,59 @@ mod tests {
         Instant::now() + Duration::from_secs(1)
     }
 
+    #[cfg(unix)]
+    fn write_initialize_response(stream: &mut impl std::io::Write, request_id: &str) {
+        write_frame(
+            stream,
+            &json!({
+                "type": "response",
+                "requestId": request_id,
+                "resultType": "success",
+                "method": "initialize",
+                "handledByClientId": "server",
+                "result": {
+                    "clientId": "rust-client"
+                }
+            }),
+        )
+        .expect("write initialize response");
+    }
+
+    #[cfg(unix)]
+    fn write_ide_context_response(
+        stream: &mut impl std::io::Write,
+        request_id: &str,
+        active_selection_content: &str,
+    ) {
+        write_frame(
+            stream,
+            &json!({
+                "type": "response",
+                "requestId": request_id,
+                "resultType": "success",
+                "method": "ide-context",
+                "handledByClientId": "vscode-client",
+                "result": {
+                    "ideContext": {
+                        "activeFile": {
+                            "label": "lib.rs",
+                            "path": "src/lib.rs",
+                            "fsPath": "/repo/src/lib.rs",
+                            "selection": {
+                                "start": { "line": 0, "character": 0 },
+                                "end": { "line": 0, "character": 3 }
+                            },
+                            "activeSelectionContent": active_selection_content,
+                            "selections": []
+                        },
+                        "openTabs": []
+                    }
+                }
+            }),
+        )
+        .expect("write ide-context response");
+    }
+
     #[cfg(any(unix, windows))]
     #[test]
     fn retryable_after_recent_toggle_covers_transient_errors() {
@@ -812,20 +986,7 @@ mod tests {
                 .get("requestId")
                 .and_then(Value::as_str)
                 .expect("initialize request id");
-            write_frame(
-                &mut stream,
-                &json!({
-                    "type": "response",
-                    "requestId": initialize_request_id,
-                    "resultType": "success",
-                    "method": "initialize",
-                    "handledByClientId": "server",
-                    "result": {
-                        "clientId": "rust-client"
-                    }
-                }),
-            )
-            .expect("write initialize response");
+            write_initialize_response(&mut stream, initialize_request_id);
 
             let ide_context = read_frame(&mut stream, test_deadline()).expect("read ide-context");
             assert_eq!(
@@ -890,33 +1051,7 @@ mod tests {
                 Some(false)
             );
 
-            write_frame(
-                &mut stream,
-                &json!({
-                    "type": "response",
-                    "requestId": ide_context_request_id,
-                    "resultType": "success",
-                    "method": "ide-context",
-                    "handledByClientId": "vscode-client",
-                    "result": {
-                        "ideContext": {
-                            "activeFile": {
-                                "label": "lib.rs",
-                                "path": "src/lib.rs",
-                                "fsPath": "/repo/src/lib.rs",
-                                "selection": {
-                                    "start": { "line": 0, "character": 0 },
-                                    "end": { "line": 0, "character": 3 }
-                                },
-                                "activeSelectionContent": "use",
-                                "selections": []
-                            },
-                            "openTabs": []
-                        }
-                    }
-                }),
-            )
-            .expect("write ide-context response");
+            write_ide_context_response(&mut stream, ide_context_request_id, "use");
         });
 
         let context =
@@ -930,6 +1065,81 @@ mod tests {
                 .as_ref()
                 .map(|file| file.active_selection_content.as_str()),
             Some("use")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ide_context_client_reuses_initialized_connection_for_prompt_requests() {
+        use std::os::unix::net::UnixListener;
+        use std::thread;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let socket_path = tempdir.path().join("codex-ipc.sock");
+        let listener = UnixListener::bind(&socket_path).expect("bind socket");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+
+            let initialize = read_frame(&mut stream, test_deadline()).expect("read initialize");
+            let initialize_request_id = initialize
+                .get("requestId")
+                .and_then(Value::as_str)
+                .expect("initialize request id");
+            write_initialize_response(&mut stream, initialize_request_id);
+
+            for active_selection_content in ["first", "second"] {
+                let ide_context =
+                    read_frame(&mut stream, test_deadline()).expect("read ide-context");
+                assert_eq!(
+                    ide_context.get("method").and_then(Value::as_str),
+                    Some("ide-context")
+                );
+                assert_eq!(
+                    ide_context.get("sourceClientId").and_then(Value::as_str),
+                    Some("rust-client")
+                );
+                assert_eq!(
+                    ide_context
+                        .get("params")
+                        .and_then(|params| params.get("workspaceRoot"))
+                        .and_then(Value::as_str),
+                    Some("/repo")
+                );
+                let ide_context_request_id = ide_context
+                    .get("requestId")
+                    .and_then(Value::as_str)
+                    .expect("ide-context request id");
+                write_ide_context_response(
+                    &mut stream,
+                    ide_context_request_id,
+                    active_selection_content,
+                );
+            }
+        });
+
+        let mut client = IdeContextClient::connect_to_socket(socket_path, Duration::from_secs(1))
+            .expect("connect IDE context client");
+        let first = client
+            .fetch_ide_context(Path::new("/repo"))
+            .expect("fetch first IDE context");
+        let second = client
+            .fetch_ide_context_for_prompt(Path::new("/repo"))
+            .expect("fetch second IDE context");
+
+        server.join().expect("server joins");
+        assert_eq!(
+            [
+                first
+                    .active_file
+                    .as_ref()
+                    .map(|file| file.active_selection_content.as_str()),
+                second
+                    .active_file
+                    .as_ref()
+                    .map(|file| file.active_selection_content.as_str()),
+            ],
+            [Some("first"), Some("second")]
         );
     }
 }

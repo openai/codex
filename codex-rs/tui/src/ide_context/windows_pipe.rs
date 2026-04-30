@@ -11,6 +11,7 @@ use std::time::Instant;
 use windows_sys::Win32::Foundation::BOOL;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
+use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
 use windows_sys::Win32::Foundation::GENERIC_READ;
 use windows_sys::Win32::Foundation::GENERIC_WRITE;
 use windows_sys::Win32::Foundation::HANDLE;
@@ -78,6 +79,10 @@ impl WindowsPipeStream {
         validate_pipe_server_owner(handle.raw())?;
 
         Ok(Self { handle, deadline })
+    }
+
+    pub(super) fn set_deadline(&mut self, deadline: Instant) {
+        self.deadline = deadline;
     }
 }
 
@@ -190,9 +195,22 @@ impl OverlappedOperation {
     }
 
     fn cancel_and_timeout(&mut self, handle: HANDLE) -> io::Error {
-        unsafe {
-            CancelIoEx(handle, self.as_mut_ptr());
+        let cancel_result = unsafe { CancelIoEx(handle, self.as_mut_ptr()) };
+        if cancel_result == 0 {
+            let cancel_error = io::Error::last_os_error();
+            if cancel_error.raw_os_error() != Some(ERROR_NOT_FOUND as i32) {
+                return cancel_error;
+            }
+
+            // ERROR_NOT_FOUND means the operation completed before cancellation was issued. Drain
+            // it without waiting so the timeout path cannot block past the caller's deadline.
+            let mut bytes_transferred = 0;
+            unsafe {
+                GetOverlappedResult(handle, self.as_mut_ptr(), &mut bytes_transferred, FALSE)
+            };
+            return timeout_io_error();
         }
+
         let mut bytes_transferred = 0;
         unsafe {
             GetOverlappedResult(handle, self.as_mut_ptr(), &mut bytes_transferred, TRUE);

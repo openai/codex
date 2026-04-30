@@ -5,8 +5,8 @@ mod prompt;
 #[cfg(windows)]
 mod windows_pipe;
 
-pub(crate) use ipc::fetch_ide_context;
-pub(crate) use ipc::fetch_ide_context_for_prompt;
+pub(crate) use ipc::IdeContextClient;
+pub(crate) use ipc::IdeContextError;
 pub(crate) use prompt::apply_ide_context_to_user_input;
 pub(crate) use prompt::extract_prompt_request_with_offset;
 pub(crate) use prompt::has_prompt_context;
