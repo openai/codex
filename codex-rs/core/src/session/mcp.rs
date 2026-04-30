@@ -49,7 +49,10 @@ impl Session {
             ));
         }
 
-        self.fallback_mcp_runtime_environment(&session_configuration.cwd, true)
+        self.fallback_mcp_runtime_environment(
+            &session_configuration.cwd,
+            /* require_default_environment */ true,
+        )
     }
 
     pub(crate) fn mcp_runtime_environment_for_turn_context(
