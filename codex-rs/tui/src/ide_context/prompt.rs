@@ -6,7 +6,9 @@ use codex_protocol::user_input::UserInput;
 
 use super::IdeContext;
 
-const MAX_ACTIVE_SELECTION_CHARS: usize = 200_000;
+const MAX_ACTIVE_SELECTION_CHARS: usize = 40_000;
+const MAX_OPEN_TABS: usize = 100;
+const MAX_OPEN_TABS_CHARS: usize = 20_000;
 // Match the desktop app and IDE extension delimiter exactly. IDE context is serialized into the
 // raw prompt before this marker, then transcript rendering strips back to the request after the last
 // marker. Keeping the same marker and stripping semantics lets threads created with IDE context in
@@ -138,8 +140,26 @@ fn render_prompt_context(context: &IdeContext) -> Option<String> {
 
     if !context.open_tabs.is_empty() {
         ide_context_section.push_str("\n## Open tabs:\n");
+        let mut rendered_tabs = 0;
+        let mut rendered_tab_chars = 0;
         for tab in &context.open_tabs {
-            ide_context_section.push_str(&format!("- {}: {}\n", tab.label, tab.path));
+            if rendered_tabs >= MAX_OPEN_TABS {
+                break;
+            }
+
+            let tab_line = format!("- {}: {}\n", tab.label, tab.path);
+            if rendered_tab_chars + tab_line.len() > MAX_OPEN_TABS_CHARS {
+                break;
+            }
+
+            ide_context_section.push_str(&tab_line);
+            rendered_tabs += 1;
+            rendered_tab_chars += tab_line.len();
+        }
+
+        let omitted_tabs = context.open_tabs.len() - rendered_tabs;
+        if omitted_tabs > 0 {
+            ide_context_section.push_str(&format!("[{omitted_tabs} open tabs omitted.]\n"));
         }
     }
 
@@ -343,5 +363,21 @@ mod tests {
             "[Selection truncated to {MAX_ACTIVE_SELECTION_CHARS} characters.]"
         )));
         assert!(!rendered.contains("tail"));
+    }
+
+    #[test]
+    fn render_prompt_context_omits_excess_open_tabs() {
+        let open_tabs = (0..MAX_OPEN_TABS + 2)
+            .map(|index| descriptor(&format!("file-{index}.rs"), &format!("src/file-{index}.rs")))
+            .collect::<Vec<_>>();
+        let context = IdeContext {
+            active_file: None,
+            open_tabs,
+        };
+
+        let rendered = render_prompt_context(&context).expect("rendered IDE context");
+        assert!(rendered.contains("- file-99.rs: src/file-99.rs\n"));
+        assert!(!rendered.contains("- file-100.rs: src/file-100.rs\n"));
+        assert!(rendered.contains("[2 open tabs omitted.]\n"));
     }
 }

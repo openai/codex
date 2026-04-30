@@ -22,10 +22,6 @@ const IPC_READ_CHUNK_BYTES: usize = 64 * 1024;
 #[cfg(any(unix, windows))]
 const MAX_IPC_FRAME_BYTES: usize = 256 * 1024 * 1024;
 #[cfg(any(unix, windows))]
-const BROADCAST_TYPE_JSON: &[u8] = br#""type":"broadcast""#;
-#[cfg(any(unix, windows))]
-const BROADCAST_PREFIX_SCAN_BYTES: usize = 256;
-#[cfg(any(unix, windows))]
 const TUI_SOURCE_CLIENT_ID: &str = "codex-tui";
 
 #[derive(Debug, Error)]
@@ -155,7 +151,6 @@ type IdeContextStream = super::windows_pipe::WindowsPipeStream;
 struct IpcFrameBuffer {
     buffer: Vec<u8>,
     expected_len: Option<usize>,
-    discard_remaining: usize,
 }
 
 #[cfg(any(unix, windows))]
@@ -196,46 +191,8 @@ impl IpcFrameBuffer {
         }
     }
 
-    fn push_bytes(&mut self, mut bytes: &[u8]) {
-        while !bytes.is_empty() {
-            if self.discard_remaining > 0 {
-                let bytes_to_discard = bytes.len().min(self.discard_remaining);
-                self.discard_remaining -= bytes_to_discard;
-                bytes = &bytes[bytes_to_discard..];
-                continue;
-            }
-
-            self.buffer.extend_from_slice(bytes);
-            self.maybe_start_discarding_broadcast();
-            break;
-        }
-    }
-
-    fn maybe_start_discarding_broadcast(&mut self) {
-        if self.expected_len.is_none() && self.buffer.len() >= 4 {
-            self.read_frame_len();
-        }
-
-        let Some(expected_len) = self.expected_len else {
-            return;
-        };
-        if expected_len > MAX_IPC_FRAME_BYTES {
-            return;
-        }
-        if self.buffer.len() >= expected_len {
-            return;
-        }
-
-        let prefix_len = self.buffer.len().min(BROADCAST_PREFIX_SCAN_BYTES);
-        if prefix_len < BROADCAST_TYPE_JSON.len() {
-            return;
-        }
-
-        if frame_payload_is_broadcast(&self.buffer[..prefix_len]) {
-            self.discard_remaining = expected_len - self.buffer.len();
-            self.buffer.clear();
-            self.expected_len = None;
-        }
+    fn push_bytes(&mut self, bytes: &[u8]) {
+        self.buffer.extend_from_slice(bytes);
     }
 
     fn pop_complete_frame(&mut self) -> Result<Option<IpcFrame>, IdeContextError> {
@@ -253,18 +210,15 @@ impl IpcFrameBuffer {
             return Ok(None);
         }
 
-        if frame_payload_is_broadcast(&self.buffer[..expected_len]) {
-            self.buffer.drain(..expected_len);
-            self.expected_len = None;
-            return Ok(Some(IpcFrame::IgnoredBroadcast));
-        }
-
         let payload = self.buffer.drain(..expected_len).collect::<Vec<_>>();
         self.expected_len = None;
-        serde_json::from_slice(&payload)
-            .map(IpcFrame::Message)
-            .map(Some)
-            .map_err(|err| IdeContextError::InvalidResponse(format!("invalid JSON payload: {err}")))
+        let message = serde_json::from_slice::<Value>(&payload).map_err(|err| {
+            IdeContextError::InvalidResponse(format!("invalid JSON payload: {err}"))
+        })?;
+        if message.get("type").and_then(Value::as_str) == Some("broadcast") {
+            return Ok(Some(IpcFrame::IgnoredBroadcast));
+        }
+        Ok(Some(IpcFrame::Message(message)))
     }
 
     fn read_frame_len(&mut self) {
@@ -273,14 +227,6 @@ impl IpcFrameBuffer {
         self.buffer.drain(..4);
         self.expected_len = Some(u32::from_le_bytes(len_bytes) as usize);
     }
-}
-
-#[cfg(any(unix, windows))]
-fn frame_payload_is_broadcast(payload: &[u8]) -> bool {
-    let prefix = &payload[..payload.len().min(BROADCAST_PREFIX_SCAN_BYTES)];
-    prefix
-        .windows(BROADCAST_TYPE_JSON.len())
-        .any(|window| window == BROADCAST_TYPE_JSON)
 }
 
 #[cfg(any(unix, windows))]
@@ -814,6 +760,7 @@ mod tests {
                 "method": "ide-context",
                 "handledByClientId": "vscode-client",
                 "result": {
+                    "type": "broadcast",
                     "ideContext": {
                         "activeFile": {
                             "label": "lib.rs",
@@ -832,20 +779,6 @@ mod tests {
             }),
         )
         .expect("write ide-context response");
-    }
-
-    #[cfg(unix)]
-    fn write_raw_frame(stream: &mut impl std::io::Write, payload: &[u8]) {
-        let payload_len = u32::try_from(payload.len())
-            .expect("test IPC message length fits u32")
-            .to_le_bytes();
-        stream
-            .write_all(&payload_len)
-            .expect("write raw test IPC frame header");
-        stream
-            .write_all(payload)
-            .expect("write raw test IPC frame payload");
-        stream.flush().expect("flush raw test IPC frame");
     }
 
     #[cfg(unix)]
@@ -968,10 +901,15 @@ mod tests {
                 Some(false)
             );
 
-            let mut broadcast =
-                br#"{"type":"broadcast","method":"thread-stream-state-changed","params":"#.to_vec();
-            broadcast.resize(2 * 1024 * 1024, b' ');
-            write_raw_frame(&mut stream, &broadcast);
+            write_frame(
+                &mut stream,
+                &json!({
+                    "type": "broadcast",
+                    "method": "thread-stream-state-changed",
+                    "params": "x".repeat(2 * 1024 * 1024),
+                }),
+            )
+            .expect("write large broadcast");
             write_ide_context_response(&mut stream, ide_context_request_id, "use");
         });
 
