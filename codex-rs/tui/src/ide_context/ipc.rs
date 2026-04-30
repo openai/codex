@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::time::Instant;
 
 #[cfg(any(unix, windows))]
 use serde_json::Value;
@@ -145,14 +146,51 @@ pub(crate) fn fetch_ide_context_from_socket(
         .set_write_timeout(Some(timeout))
         .map_err(IdeContextError::Send)?;
 
-    fetch_ide_context_from_stream(&mut stream, workspace_root)
+    fetch_ide_context_from_stream(&mut stream, workspace_root, Instant::now() + timeout)
 }
 
 #[cfg(windows)]
 pub(crate) fn fetch_ide_context_from_socket(
     socket_path: PathBuf,
     workspace_root: &Path,
-    _timeout: Duration,
+    timeout: Duration,
+) -> Result<IdeContext, IdeContextError> {
+    // Unlike UnixStream, std::fs::File does not let us put a read/write timeout on a Windows
+    // named-pipe client. Run the blocking exchange on a worker thread and bound the caller with
+    // recv_timeout so a stuck IDE provider cannot freeze the TUI.
+    let workspace_root = workspace_root.to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("codex-tui-ide-context-ipc".to_string())
+        .spawn(move || {
+            let result =
+                fetch_ide_context_from_socket_blocking(socket_path, &workspace_root, timeout);
+            let _ = tx.send(result);
+        })
+        .map_err(|err| {
+            IdeContextError::Read(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("failed to spawn IDE context worker: {err}"),
+            ))
+        })?;
+
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(timeout_error()),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err(IdeContextError::Read(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "IDE context worker disconnected",
+            )))
+        }
+    }
+}
+
+#[cfg(windows)]
+fn fetch_ide_context_from_socket_blocking(
+    socket_path: PathBuf,
+    workspace_root: &Path,
+    timeout: Duration,
 ) -> Result<IdeContext, IdeContextError> {
     let mut stream = std::fs::OpenOptions::new()
         .read(true)
@@ -160,12 +198,13 @@ pub(crate) fn fetch_ide_context_from_socket(
         .open(socket_path)
         .map_err(IdeContextError::Connect)?;
 
-    fetch_ide_context_from_stream(&mut stream, workspace_root)
+    fetch_ide_context_from_stream(&mut stream, workspace_root, Instant::now() + timeout)
 }
 
 #[cfg(any(unix, windows))]
 fn initialize_client<T: std::io::Read + std::io::Write + ?Sized>(
     stream: &mut T,
+    deadline: Instant,
 ) -> Result<String, IdeContextError> {
     let initialize_request_id = uuid::Uuid::new_v4().to_string();
     let initialize_request = json!({
@@ -180,7 +219,7 @@ fn initialize_client<T: std::io::Read + std::io::Write + ?Sized>(
         },
     });
     write_frame(stream, &initialize_request).map_err(IdeContextError::Send)?;
-    let initialize_response = read_response_frame(stream, &initialize_request_id)?;
+    let initialize_response = read_response_frame(stream, &initialize_request_id, deadline)?;
     extract_client_id(&initialize_response)
 }
 
@@ -189,6 +228,7 @@ fn fetch_ide_context_with_client_id<T: std::io::Read + std::io::Write + ?Sized>(
     stream: &mut T,
     client_id: &str,
     workspace_root: &Path,
+    deadline: Instant,
 ) -> Result<IdeContext, IdeContextError> {
     let ide_context_request_id = uuid::Uuid::new_v4().to_string();
     let ide_context_request = json!({
@@ -202,7 +242,7 @@ fn fetch_ide_context_with_client_id<T: std::io::Read + std::io::Write + ?Sized>(
         },
     });
     write_frame(stream, &ide_context_request).map_err(IdeContextError::Send)?;
-    let ide_context_response = read_response_frame(stream, &ide_context_request_id)?;
+    let ide_context_response = read_response_frame(stream, &ide_context_request_id, deadline)?;
     extract_ide_context(ide_context_response)
 }
 
@@ -210,9 +250,10 @@ fn fetch_ide_context_with_client_id<T: std::io::Read + std::io::Write + ?Sized>(
 fn fetch_ide_context_from_stream<T: std::io::Read + std::io::Write + ?Sized>(
     stream: &mut T,
     workspace_root: &Path,
+    deadline: Instant,
 ) -> Result<IdeContext, IdeContextError> {
-    let client_id = initialize_client(stream)?;
-    fetch_ide_context_with_client_id(stream, &client_id, workspace_root)
+    let client_id = initialize_client(stream, deadline)?;
+    fetch_ide_context_with_client_id(stream, &client_id, workspace_root, deadline)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -266,8 +307,10 @@ fn read_frame<T: std::io::Read + ?Sized>(stream: &mut T) -> Result<Value, IdeCon
 fn read_response_frame<T: std::io::Read + std::io::Write + ?Sized>(
     stream: &mut T,
     request_id: &str,
+    deadline: Instant,
 ) -> Result<Value, IdeContextError> {
     loop {
+        ensure_deadline_not_expired(deadline)?;
         let message = read_frame(stream)?;
         match message.get("type").and_then(Value::as_str) {
             Some("response") => {
@@ -302,6 +345,23 @@ fn read_response_frame<T: std::io::Read + std::io::Write + ?Sized>(
             }
         }
     }
+}
+
+#[cfg(any(unix, windows))]
+fn ensure_deadline_not_expired(deadline: Instant) -> Result<(), IdeContextError> {
+    if Instant::now() >= deadline {
+        return Err(timeout_error());
+    }
+
+    Ok(())
+}
+
+#[cfg(any(unix, windows))]
+fn timeout_error() -> IdeContextError {
+    IdeContextError::Read(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "timed out waiting for IDE context",
+    ))
 }
 
 #[cfg(any(unix, windows))]
@@ -389,6 +449,36 @@ mod tests {
                 .is_retryable_after_recent_toggle()
         );
         assert!(!IdeContextError::ResponseTooLarge.is_retryable_after_recent_toggle());
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn read_response_frame_respects_expired_deadline() {
+        let mut stream = std::io::Cursor::new(Vec::new());
+        write_frame(
+            &mut stream,
+            &json!({
+                "type": "broadcast",
+                "method": "client-status-changed",
+                "sourceClientId": "vscode-client",
+                "version": 0,
+                "params": {
+                    "clientId": "vscode-client",
+                    "clientType": "vscode",
+                    "status": "connected"
+                }
+            }),
+        )
+        .expect("write broadcast frame");
+        stream.set_position(0);
+
+        let err = read_response_frame(&mut stream, "missing-request", Instant::now())
+            .expect_err("expired deadline should fail before reading");
+
+        assert!(matches!(
+            err,
+            IdeContextError::Read(error) if error.kind() == std::io::ErrorKind::TimedOut
+        ));
     }
 
     #[cfg(unix)]
