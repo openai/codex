@@ -332,7 +332,7 @@ async fn plugin_skill_read_reads_remote_skill_contents_when_remote_plugin_enable
     let request_id = mcp
         .send_plugin_skill_read_request(PluginSkillReadParams {
             remote_marketplace_name: "chatgpt-global".to_string(),
-            plugin_name: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+            remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
             skill_name: "plan-work".to_string(),
         })
         .await?;

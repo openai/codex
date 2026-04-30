@@ -12418,10 +12418,10 @@
       "PluginSkillReadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
-          "pluginName": {
+          "remoteMarketplaceName": {
             "type": "string"
           },
-          "remoteMarketplaceName": {
+          "remotePluginId": {
             "type": "string"
           },
           "skillName": {
@@ -12429,8 +12429,8 @@
           }
         },
         "required": [
-          "pluginName",
           "remoteMarketplaceName",
+          "remotePluginId",
           "skillName"
         ],
         "title": "PluginSkillReadParams",

@@ -317,7 +317,7 @@ impl CodexMessageProcessor {
     ) -> Result<PluginSkillReadResponse, JSONRPCErrorError> {
         let PluginSkillReadParams {
             remote_marketplace_name,
-            plugin_name,
+            remote_plugin_id,
             skill_name,
         } = params;
 
@@ -329,7 +329,7 @@ impl CodexMessageProcessor {
                 "remote plugin skill read is not enabled for marketplace {remote_marketplace_name}"
             )));
         }
-        validate_remote_plugin_id(&plugin_name)?;
+        validate_remote_plugin_id(&remote_plugin_id)?;
         if skill_name.is_empty() {
             return Err(invalid_request(
                 "invalid remote plugin skill name: cannot be empty",
@@ -344,7 +344,7 @@ impl CodexMessageProcessor {
             &remote_plugin_service_config,
             auth.as_ref(),
             &remote_marketplace_name,
-            &plugin_name,
+            &remote_plugin_id,
             &skill_name,
         )
         .await

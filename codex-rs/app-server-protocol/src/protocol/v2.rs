@@ -4614,7 +4614,7 @@ pub struct PluginReadResponse {
 #[ts(export_to = "v2/")]
 pub struct PluginSkillReadParams {
     pub remote_marketplace_name: String,
-    pub plugin_name: String,
+    pub remote_plugin_id: String,
     pub skill_name: String,
 }
 
@@ -10680,6 +10680,23 @@ mod tests {
                 remote_marketplace_name: Some("openai-curated".to_string()),
                 plugin_name: "gmail".to_string(),
             },
+        );
+    }
+
+    #[test]
+    fn plugin_skill_read_params_serialization_uses_remote_plugin_id() {
+        assert_eq!(
+            serde_json::to_value(PluginSkillReadParams {
+                remote_marketplace_name: "chatgpt-global".to_string(),
+                remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                skill_name: "plan-work".to_string(),
+            })
+            .unwrap(),
+            json!({
+                "remoteMarketplaceName": "chatgpt-global",
+                "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+                "skillName": "plan-work",
+            }),
         );
     }
 

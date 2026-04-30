@@ -2219,10 +2219,10 @@
     },
     "PluginSkillReadParams": {
       "properties": {
-        "pluginName": {
+        "remoteMarketplaceName": {
           "type": "string"
         },
-        "remoteMarketplaceName": {
+        "remotePluginId": {
           "type": "string"
         },
         "skillName": {
@@ -2230,8 +2230,8 @@
         }
       },
       "required": [
-        "pluginName",
         "remoteMarketplaceName",
+        "remotePluginId",
         "skillName"
       ],
       "type": "object"
