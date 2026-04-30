@@ -1098,12 +1098,12 @@ impl ThreadManagerState {
                 threads.remove(&resumed.conversation_id);
             }
         }
-        let resolved_environments =
+        let environment_selections =
             resolve_environment_selections(self.environment_manager.as_ref(), &environments)?;
-        let effective_cwd = resolved_environments.primary_cwd_or_fallback(&config.cwd);
+        let effective_cwd = environment_selections.primary_cwd_or_fallback(&config.cwd);
         let mut load_config = config.clone();
         load_config.cwd = effective_cwd;
-        let watch_registration = match resolved_environments.primary_environment() {
+        let watch_registration = match environment_selections.primary_environment() {
             Some(turn_environment) if !turn_environment.environment.is_remote() => {
                 self.skills_watcher
                     .register_config(
@@ -1142,8 +1142,7 @@ impl ThreadManagerState {
             parent_rollout_thread_trace,
             user_shell_override,
             parent_trace,
-            environments,
-            resolved_environments: Some(resolved_environments),
+            environment_selections,
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
         })
