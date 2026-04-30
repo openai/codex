@@ -160,8 +160,8 @@ mod tests {
         assert!(err.to_string().contains("duplicate"));
     }
 
-    #[test]
-    fn resolved_environment_selections_use_first_selection_as_primary() {
+    #[tokio::test]
+    async fn resolved_environment_selections_use_first_selection_as_primary() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let selected_cwd = cwd.join("selected");
         let manager = EnvironmentManager::default_for_tests();
@@ -185,8 +185,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resolved_environment_selections_use_fallback_without_selections() {
+    #[tokio::test]
+    async fn resolved_environment_selections_use_fallback_without_selections() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let manager = EnvironmentManager::default_for_tests();
 
