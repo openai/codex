@@ -420,6 +420,10 @@ impl ConfigRequestProcessor {
 }
 
 fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigRequirements {
+    let allow_managed_hooks_only = requirements
+        .hooks
+        .as_ref()
+        .and_then(|hooks| hooks.allow_managed_hooks_only);
     ConfigRequirements {
         allowed_approval_policies: requirements.allowed_approval_policies.map(|policies| {
             policies
@@ -449,6 +453,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             }
             normalized
         }),
+        allow_managed_hooks_only,
         feature_requirements: requirements
             .feature_requirements
             .map(|requirements| requirements.entries),
@@ -462,6 +467,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
 
 fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> ManagedHooksRequirements {
     let ManagedHooksRequirementsToml {
+        allow_managed_hooks_only: _,
         managed_dir,
         windows_managed_dir,
         hooks,

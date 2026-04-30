@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -19,7 +20,6 @@ use codex_plugin::PluginHookSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::HashMap;
 
 use super::ConfiguredHandler;
 use super::HookListEntry;
@@ -46,6 +46,17 @@ struct HookHandlerSource<'a> {
     plugin_id: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+struct HookDiscoveryPolicy {
+    allow_managed_hooks_only: bool,
+}
+
+impl HookDiscoveryPolicy {
+    fn allows(self, source: &HookHandlerSource<'_>) -> bool {
+        !self.allow_managed_hooks_only || source.is_managed
+    }
+}
+
 pub(crate) fn discover_handlers(
     config_layer_stack: Option<&ConfigLayerStack>,
     plugin_hook_sources: Vec<PluginHookSource>,
@@ -56,6 +67,15 @@ pub(crate) fn discover_handlers(
     let mut warnings = plugin_hook_load_warnings;
     let mut display_order = 0_i64;
     let hook_states = hook_states_from_stack(config_layer_stack);
+    let policy = HookDiscoveryPolicy {
+        allow_managed_hooks_only: config_layer_stack.is_some_and(|config_layer_stack| {
+            config_layer_stack
+                .requirements()
+                .allow_managed_hooks_only
+                .as_ref()
+                .is_some_and(|requirement| requirement.value)
+        }),
+    };
 
     if let Some(config_layer_stack) = config_layer_stack {
         append_managed_requirement_handlers(
@@ -65,6 +85,7 @@ pub(crate) fn discover_handlers(
             &mut display_order,
             config_layer_stack,
             &hook_states,
+            policy,
         );
 
         for layer in config_layer_stack.get_layers(
@@ -72,6 +93,19 @@ pub(crate) fn discover_handlers(
             /*include_disabled*/ false,
         ) {
             let (hook_source, is_managed) = hook_metadata_for_config_layer_source(&layer.name);
+            let policy_path = config_toml_source_path(layer);
+            let policy_source = HookHandlerSource {
+                path: &policy_path,
+                key_source: policy_path.display().to_string(),
+                source: hook_source,
+                is_managed,
+                hook_states: &hook_states,
+                env: HashMap::new(),
+                plugin_id: None,
+            };
+            if !policy.allows(&policy_source) {
+                continue;
+            }
             let json_hooks = load_hooks_json(layer.config_folder().as_deref(), &mut warnings);
             let toml_hooks = load_toml_hooks_from_layer(layer, &mut warnings);
 
@@ -103,6 +137,7 @@ pub(crate) fn discover_handlers(
                         plugin_id: None,
                     },
                     hook_events,
+                    policy,
                 );
             }
         }
@@ -115,6 +150,7 @@ pub(crate) fn discover_handlers(
         &mut display_order,
         plugin_hook_sources,
         &hook_states,
+        policy,
     );
 
     DiscoveryResult {
@@ -131,15 +167,12 @@ fn append_managed_requirement_handlers(
     display_order: &mut i64,
     config_layer_stack: &ConfigLayerStack,
     hook_states: &HashMap<String, HookStateToml>,
+    policy: HookDiscoveryPolicy,
 ) {
     let Some(managed_hooks) = config_layer_stack.requirements().managed_hooks.as_ref() else {
         return;
     };
-    let Some(source_path) =
-        managed_hooks_source_path(managed_hooks.get(), managed_hooks.source.as_ref(), warnings)
-    else {
-        return;
-    };
+    let source_path = managed_hooks_source_path(managed_hooks.get(), managed_hooks.source.as_ref());
     append_hook_events(
         handlers,
         hook_entries,
@@ -155,6 +188,7 @@ fn append_managed_requirement_handlers(
             plugin_id: None,
         },
         managed_hooks.get().hooks.clone(),
+        policy,
     );
 }
 
@@ -165,6 +199,7 @@ fn append_plugin_hook_sources(
     display_order: &mut i64,
     plugin_hook_sources: Vec<PluginHookSource>,
     hook_states: &HashMap<String, HookStateToml>,
+    policy: HookDiscoveryPolicy,
 ) {
     for source in plugin_hook_sources {
         let PluginHookSource {
@@ -203,6 +238,7 @@ fn append_plugin_hook_sources(
                 plugin_id: Some(plugin_id),
             },
             hooks,
+            policy,
         );
     }
 }
@@ -210,45 +246,35 @@ fn append_plugin_hook_sources(
 fn managed_hooks_source_path(
     managed_hooks: &ManagedHooksRequirementsToml,
     requirement_source: Option<&RequirementSource>,
-    warnings: &mut Vec<String>,
-) -> Option<AbsolutePathBuf> {
-    let source = requirement_source
-        .map(ToString::to_string)
-        .unwrap_or_else(|| "managed requirements".to_string());
-    let Some(source_path) = managed_hooks.managed_dir_for_current_platform() else {
-        warnings.push(format!(
-            "skipping managed hooks from {source}: no managed hook directory is configured for this platform"
-        ));
-        return None;
-    };
+) -> AbsolutePathBuf {
+    if let Some(source_path) = managed_hooks.managed_dir_for_current_platform()
+        && source_path.is_absolute()
+        && let Ok(source_path) = AbsolutePathBuf::from_absolute_path(source_path)
+    {
+        return source_path;
+    }
 
-    if !source_path.is_absolute() {
-        warnings.push(format!(
-            "skipping managed hooks from {source}: managed hook directory {} is not absolute",
-            source_path.display()
-        ));
-        None
-    } else if !source_path.exists() {
-        warnings.push(format!(
-            "skipping managed hooks from {source}: managed hook directory {} does not exist",
-            source_path.display()
-        ));
-        None
-    } else if !source_path.is_dir() {
-        warnings.push(format!(
-            "skipping managed hooks from {source}: managed hook directory {} is not a directory",
-            source_path.display()
-        ));
-        None
-    } else {
-        AbsolutePathBuf::from_absolute_path(source_path)
-            .inspect_err(|err| {
-                warnings.push(format!(
-                    "skipping managed hooks from {source}: could not normalize managed hook directory {}: {err}",
-                    source_path.display()
-                ));
-            })
-            .ok()
+    fallback_managed_hooks_source_path(requirement_source)
+}
+
+fn fallback_managed_hooks_source_path(
+    requirement_source: Option<&RequirementSource>,
+) -> AbsolutePathBuf {
+    match requirement_source {
+        Some(RequirementSource::SystemRequirementsToml { file })
+        | Some(RequirementSource::LegacyManagedConfigTomlFromFile { file }) => file.clone(),
+        Some(RequirementSource::MdmManagedPreferences { domain, key }) => {
+            synthetic_layer_path(&format!("<mdm:{domain}:{key}>/requirements.toml"))
+        }
+        Some(RequirementSource::CloudRequirements) => {
+            synthetic_layer_path("<cloud-requirements>/requirements.toml")
+        }
+        Some(RequirementSource::LegacyManagedConfigTomlFromMdm) => {
+            synthetic_layer_path("<legacy-managed-config.toml-mdm>/managed_config.toml")
+        }
+        Some(RequirementSource::Unknown) | None => {
+            synthetic_layer_path("<managed-requirements>/requirements.toml")
+        }
     }
 }
 
@@ -350,7 +376,12 @@ fn append_hook_events(
     display_order: &mut i64,
     source: HookHandlerSource<'_>,
     hook_events: HookEventsToml,
+    policy: HookDiscoveryPolicy,
 ) {
+    if !policy.allows(&source) {
+        return;
+    }
+
     for (event_name, groups) in hook_events.into_matcher_groups() {
         append_matcher_groups(
             handlers,
