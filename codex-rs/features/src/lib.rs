@@ -225,7 +225,6 @@ pub enum Feature {
     ResponsesWebsocketsV2,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
-    Tester1,
 }
 
 impl Feature {
@@ -1110,12 +1109,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "workspace_dependencies",
         stage: Stage::Stable,
         default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::Tester1,
-        key: "workspace_dependencies",
-        stage: Stage::Stable,
-        default_enabled: false,
     },
 ];
 
