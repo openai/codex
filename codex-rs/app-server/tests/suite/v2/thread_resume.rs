@@ -1767,6 +1767,28 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
         resume_err.error.message
     );
 
+    let other_thread_id = ThreadId::new().to_string();
+    let resume_by_path_id = primary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: other_thread_id.clone(),
+            path: thread.path,
+            ..Default::default()
+        })
+        .await?;
+    let resume_by_path_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_error_message(RequestId::Integer(resume_by_path_id)),
+    )
+    .await??;
+    assert!(
+        resume_by_path_err
+            .error
+            .message
+            .contains("from source thread"),
+        "unexpected resume error: {}",
+        resume_by_path_err.error.message
+    );
+
     primary
         .interrupt_turn_and_wait_for_aborted(thread_id, running_turn.id, DEFAULT_READ_TIMEOUT)
         .await?;

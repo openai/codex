@@ -154,7 +154,13 @@ async fn resolve_rollout_path(
     thread_id: codex_protocol::ThreadId,
     include_archived: bool,
 ) -> ThreadStoreResult<Option<std::path::PathBuf>> {
-    if let Ok(path) = live_writer::rollout_path(store, thread_id).await {
+    if let Ok(path) = live_writer::rollout_path(store, thread_id).await
+        && tokio::fs::try_exists(path.as_path()).await.map_err(|err| {
+            ThreadStoreError::InvalidRequest {
+                message: format!("failed to check rollout path for thread id {thread_id}: {err}"),
+            }
+        })?
+    {
         return Ok(Some(path));
     }
 

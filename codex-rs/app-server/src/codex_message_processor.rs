@@ -4531,6 +4531,14 @@ impl CodexMessageProcessor {
                     /*include_history*/ true,
                 )
                 .await?;
+            if let Ok(requested_thread_id) = ThreadId::from_string(&params.thread_id)
+                && source_thread.thread_id != requested_thread_id
+            {
+                return Err(invalid_request(format!(
+                    "cannot resume running thread {requested_thread_id} from source thread {}",
+                    source_thread.thread_id
+                )));
+            }
             let existing_thread_id = source_thread.thread_id;
             if let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await {
                 if params.history.is_some() {
