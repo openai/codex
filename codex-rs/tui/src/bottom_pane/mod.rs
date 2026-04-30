@@ -1567,12 +1567,12 @@ impl Renderable for BottomPane {
 mod tests {
     use super::*;
     use crate::app::app_server_requests::ResolvedAppServerRequest;
+    use crate::app_command::AppCommand;
     use crate::app_event::AppEvent;
     use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
     use crate::status_indicator_widget::StatusDetailsCapitalization;
     use crate::test_support::PathBufExt;
     use crate::test_support::test_path_buf;
-    use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::SkillScope;
     use crossterm::event::KeyCode;
@@ -1890,7 +1890,7 @@ mod tests {
         let mut approval_decision = None;
         while let Ok(event) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::ExecApproval { decision, .. },
+                op: AppCommand::ExecApproval { decision, .. },
                 ..
             } = event
             {
@@ -2371,7 +2371,7 @@ mod tests {
 
         while let Ok(ev) = rx.try_recv() {
             assert!(
-                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
+                !matches!(ev, AppEvent::CodexOp(AppCommand::Interrupt)),
                 "expected Esc to not send Op::Interrupt when dismissing skill popup"
             );
         }
@@ -2409,7 +2409,7 @@ mod tests {
 
         while let Ok(ev) = rx.try_recv() {
             assert!(
-                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
+                !matches!(ev, AppEvent::CodexOp(AppCommand::Interrupt)),
                 "expected Esc to not send Op::Interrupt while command popup is active"
             );
         }
@@ -2445,7 +2445,7 @@ mod tests {
 
         while let Ok(ev) = rx.try_recv() {
             assert!(
-                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
+                !matches!(ev, AppEvent::CodexOp(AppCommand::Interrupt)),
                 "expected Esc to not send Op::Interrupt while typing `/agent`"
             );
         }
@@ -2490,7 +2490,7 @@ mod tests {
 
         while let Ok(ev) = rx.try_recv() {
             assert!(
-                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
+                !matches!(ev, AppEvent::CodexOp(AppCommand::Interrupt)),
                 "expected Esc release after dismissing agent picker to not interrupt"
             );
         }
@@ -2520,7 +2520,7 @@ mod tests {
         pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
         assert!(
-            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
+            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(AppCommand::Interrupt))),
             "expected Esc to send Op::Interrupt while a task is running"
         );
     }

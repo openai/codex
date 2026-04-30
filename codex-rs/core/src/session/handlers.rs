@@ -23,7 +23,6 @@ use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
 use codex_config::loader::load_config_layers_state;
 use codex_exec_server::LOCAL_FS;
-use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::review_prompts::resolve_review_request;
@@ -618,16 +617,12 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
                 continue;
             }
         };
-        let plugin_outcome = plugins_manager
-            .plugins_for_layer_stack(
-                &config_layer_stack,
-                config.features.enabled(Feature::Plugins),
-                /*plugin_hooks_feature_enabled*/ false,
-            )
+        let effective_skill_roots = plugins_manager
+            .effective_skill_roots_for_layer_stack(&config_layer_stack, &config)
             .await;
         let skills_input = crate::SkillsLoadInput::new(
             cwd_abs.clone(),
-            plugin_outcome.effective_skill_roots(),
+            effective_skill_roots,
             config_layer_stack,
             config.bundled_skills_enabled(),
         );

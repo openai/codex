@@ -7,10 +7,12 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::ExecCommandStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
@@ -234,10 +236,9 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     let builder = test_codex().with_config(|config| {
         config.include_apply_patch_tool = true;
         config.use_experimental_unified_exec_tool = true;
-        config
-            .features
-            .enable(Feature::UnifiedExec)
-            .expect("test config should allow feature update");
+        if let Err(err) = config.features.enable(Feature::UnifiedExec) {
+            panic!("test config should allow feature update: {err}");
+        }
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
 
@@ -779,6 +780,231 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
         end_event.aggregated_output
     );
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_network_denial_emits_failed_background_end_event() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+    let (test, sandbox_policy) = unified_exec_network_denial_test(&server).await?;
+
+    let call_id = "uexec-network-denied";
+    let args = json!({
+        "cmd": "python3 -c \"import os, socket, time, urllib.parse; time.sleep(0.3); proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY']); sock = socket.create_connection((proxy.hostname, proxy.port), timeout=2); sock.sendall(b'GET http://codex-network-denied.invalid/ HTTP/1.1\\r\\nHost: codex-network-denied.invalid\\r\\n\\r\\n'); sock.recv(1024); time.sleep(5)\"",
+        "yield_time_ms": 50,
+    });
+    let response_mock =
+        mount_unified_exec_network_denial_responses(&server, call_id, &args).await?;
+
+    submit_unified_exec_turn(&test, "exercise network denial", sandbox_policy).await?;
+
+    let (end_event, turn_completed) =
+        wait_for_unified_exec_end(&test, call_id, &response_mock).await;
+
+    assert_eq!(end_event.status, ExecCommandStatus::Failed);
+    assert_eq!(end_event.exit_code, -1);
+    assert!(
+        end_event.aggregated_output.contains("Network access"),
+        "expected network denial message in aggregated output: {:?}",
+        end_event.aggregated_output
+    );
+    assert!(
+        end_event.process_id.is_some(),
+        "background denial should end the stored unified exec process"
+    );
+
+    if !turn_completed {
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_short_lived_network_denial_emits_failed_end_event() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+    let (test, sandbox_policy) = unified_exec_network_denial_test(&server).await?;
+
+    let call_id = "uexec-short-network-denied";
+    let args = json!({
+        "cmd": "python3 -c \"import os, socket, urllib.parse; proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY']); sock = socket.create_connection((proxy.hostname, proxy.port), timeout=2); sock.sendall(b'GET http://codex-short-network-denied.invalid/ HTTP/1.1\\r\\nHost: codex-short-network-denied.invalid\\r\\n\\r\\n'); sock.recv(1024)\"",
+        "yield_time_ms": 1000,
+    });
+    let response_mock =
+        mount_unified_exec_network_denial_responses(&server, call_id, &args).await?;
+
+    submit_unified_exec_turn(&test, "exercise short network denial", sandbox_policy).await?;
+
+    let (end_event, turn_completed) =
+        wait_for_unified_exec_end(&test, call_id, &response_mock).await;
+
+    assert_eq!(end_event.status, ExecCommandStatus::Failed);
+    assert_eq!(end_event.exit_code, -1);
+    assert!(
+        end_event.aggregated_output.contains("Network access"),
+        "expected network denial message in aggregated output: {:?}",
+        end_event.aggregated_output
+    );
+    assert!(
+        end_event.process_id.is_some(),
+        "short-lived denial should still emit an end event for the command"
+    );
+
+    if !turn_completed {
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
+    Ok(())
+}
+
+#[allow(clippy::expect_used)]
+async fn unified_exec_network_denial_test(
+    server: &wiremock::MockServer,
+) -> Result<(TestCodex, SandboxPolicy)> {
+    use codex_config::ConfigLayerStack;
+    use codex_config::ConfigLayerStackOrdering;
+    use codex_config::Constrained;
+    use codex_config::NetworkConstraints;
+    use codex_config::NetworkRequirementsToml;
+    use codex_config::RequirementSource;
+    use codex_config::Sourced;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    let home = Arc::new(TempDir::new()?);
+    fs::write(
+        home.path().join("config.toml"),
+        r#"default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+":minimal" = "read"
+
+[permissions.workspace.network]
+enabled = true
+mode = "limited"
+allow_local_binding = true
+"#,
+    )?;
+    let mut sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+    if let SandboxPolicy::WorkspaceWrite { network_access, .. } = &mut sandbox_policy {
+        *network_access = true;
+    }
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let mut builder = test_codex().with_home(home).with_config(move |config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
+        config.permissions.permission_profile = Constrained::allow_any(
+            PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy_for_config),
+        );
+        let layers = config
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .into_iter()
+            .cloned()
+            .collect();
+        let mut requirements = config.config_layer_stack.requirements().clone();
+        requirements.network = Some(Sourced::new(
+            NetworkConstraints {
+                enabled: Some(true),
+                allow_local_binding: Some(true),
+                ..Default::default()
+            },
+            RequirementSource::CloudRequirements,
+        ));
+        let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
+        requirements_toml.network = Some(NetworkRequirementsToml {
+            enabled: Some(true),
+            allow_local_binding: Some(true),
+            ..Default::default()
+        });
+        config.config_layer_stack =
+            match ConfigLayerStack::new(layers, requirements, requirements_toml) {
+                Ok(stack) => stack,
+                Err(err) => panic!("rebuild config layer stack with network requirements: {err}"),
+            };
+    });
+    let test = builder.build_remote_aware(server).await?;
+    assert!(
+        test.config.permissions.network.is_some(),
+        "expected managed network proxy config to be present"
+    );
+
+    Ok((test, sandbox_policy))
+}
+
+async fn mount_unified_exec_network_denial_responses(
+    server: &wiremock::MockServer,
+    call_id: &str,
+    args: &Value,
+) -> Result<core_test_support::responses::ResponseMock> {
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "finished"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    Ok(mount_sse_sequence(server, responses).await)
+}
+
+async fn wait_for_unified_exec_end(
+    test: &TestCodex,
+    call_id: &str,
+    response_mock: &core_test_support::responses::ResponseMock,
+) -> (codex_protocol::protocol::ExecCommandEndEvent, bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let mut observed_events = Vec::new();
+    let mut turn_completed = false;
+    let end_event = loop {
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .unwrap_or_default();
+        if remaining.is_zero() {
+            panic!(
+                "timed out waiting for network denial end event; observed {observed_events:?}; response requests: {}",
+                response_mock.requests().len()
+            );
+        }
+        let event = match tokio::time::timeout(remaining, test.codex.next_event()).await {
+            Ok(Ok(event)) => event.msg,
+            Ok(Err(err)) => panic!("event stream ended unexpectedly: {err}"),
+            Err(_) => panic!(
+                "timed out waiting for network denial end event; observed {observed_events:?}; response requests: {}",
+                response_mock.requests().len()
+            ),
+        };
+        turn_completed |= matches!(event, EventMsg::TurnComplete(_));
+        observed_events.push(format!("{event:?}"));
+        if let EventMsg::ExecCommandEnd(ev) = event
+            && ev.call_id == call_id
+        {
+            break ev;
+        }
+    };
+    (end_event, turn_completed)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -105,7 +105,8 @@ async fn emits_warning_when_resumed_model_differs() {
         ..
     } = thread_manager
         .resume_thread_with_history(
-            config,
+            config.clone(),
+            codex_core::thread_store_from_config(&config),
             initial_history,
             auth_manager,
             /*persist_extended_history*/ false,

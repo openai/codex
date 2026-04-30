@@ -617,7 +617,7 @@ impl ChatWidget {
                 let control_command = match trimmed.to_ascii_lowercase().as_str() {
                     "clear" => Some(GoalControlCommand::Clear),
                     "pause" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Paused)),
-                    "unpause" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Active)),
+                    "resume" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Active)),
                     _ => None,
                 };
                 if let Some(command) = control_command {

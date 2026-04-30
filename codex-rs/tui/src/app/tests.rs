@@ -6,6 +6,7 @@ use super::*;
 use crate::app_backtrack::BacktrackSelection;
 use crate::app_backtrack::BacktrackState;
 use crate::app_backtrack::user_count;
+use crate::app_command::AppCommand;
 
 use crate::chatwidget::ChatWidgetInit;
 use crate::chatwidget::create_initial_user_message;
@@ -441,12 +442,12 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
             }
             AppEvent::SubmitThreadOp {
                 thread_id: op_thread_id,
-                op: Op::UserTurn { items, .. },
+                op: AppCommand::UserTurn { items, .. },
             } => {
                 assert_eq!(op_thread_id, thread_id);
                 submitted_items = Some(items);
             }
-            AppEvent::CodexOp(Op::UserTurn { items, .. }) => {
+            AppEvent::CodexOp(AppCommand::UserTurn { items, .. }) => {
                 submitted_items = Some(items);
             }
             _ => {}

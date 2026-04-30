@@ -470,6 +470,7 @@ pub(crate) fn feedback_upload_consent_params(
     app_event_tx: AppEventSender,
     category: FeedbackCategory,
     rollout_path: Option<std::path::PathBuf>,
+    auto_review_rollout_filename: Option<String>,
     feedback_diagnostics: &FeedbackDiagnostics,
 ) -> super::SelectionViewParams {
     use super::popup_consts::standard_popup_hint_line;
@@ -506,6 +507,9 @@ pub(crate) fn feedback_upload_consent_params(
         && let Some(name) = path.file_name().map(|s| s.to_string_lossy().to_string())
     {
         header_lines.push(Line::from(vec!["  • ".into(), name.into()]).into());
+    }
+    if let Some(filename) = auto_review_rollout_filename {
+        header_lines.push(Line::from(vec!["  • ".into(), filename.into()]).into());
     }
     if !feedback_diagnostics.is_empty() {
         header_lines.push(

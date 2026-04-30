@@ -330,22 +330,20 @@ pub fn spawn_from_driver(driver: ProcessDriver) -> SpawnedProcess {
          output_tx: mpsc::Sender<Vec<u8>>,
          mut exit_seen_rx: watch::Receiver<bool>| {
             tokio::spawn(async move {
-                let mut process_exited = false;
                 loop {
-                    let recv_result = if process_exited {
-                        match tokio::time::timeout(
-                            std::time::Duration::from_millis(200),
-                            output_rx.recv(),
-                        )
-                        .await
-                        {
-                            Ok(result) => result,
-                            Err(_) => break,
-                        }
+                    let recv_result = if *exit_seen_rx.borrow() {
+                        // Once exit has been observed, we no longer want a timer here. Some
+                        // backends publish the exit code before their final stdout/stderr bytes
+                        // have been forwarded through the broadcast channel, so a fixed grace
+                        // period can still drop the tail of the stream under load.
+                        //
+                        // Instead, keep waiting until the driver closes the broadcast sender.
+                        // That makes the shutdown contract explicit: the backend is responsible
+                        // for dropping its sender when it has truly finished forwarding output.
+                        output_rx.recv().await
                     } else {
                         tokio::select! {
                             _ = exit_seen_rx.changed() => {
-                                process_exited = *exit_seen_rx.borrow();
                                 continue;
                             }
                             result = output_rx.recv() => result,

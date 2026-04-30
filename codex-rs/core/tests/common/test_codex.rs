@@ -18,6 +18,7 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
+use codex_core::thread_store_from_config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
@@ -450,6 +451,7 @@ impl TestCodexBuilder {
                     codex_core::test_support::resume_thread_from_rollout_with_user_shell_override(
                         thread_manager.as_ref(),
                         config.clone(),
+                        thread_store_from_config(&config),
                         path,
                         auth_manager,
                         user_shell_override,
@@ -461,6 +463,7 @@ impl TestCodexBuilder {
                 let auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
                 Box::pin(thread_manager.resume_thread_from_rollout(
                     config.clone(),
+                    thread_store_from_config(&config),
                     path,
                     auth_manager,
                     /*parent_trace*/ None,
@@ -472,12 +475,18 @@ impl TestCodexBuilder {
                     codex_core::test_support::start_thread_with_user_shell_override(
                         thread_manager.as_ref(),
                         config.clone(),
+                        thread_store_from_config(&config),
                         user_shell_override,
                     ),
                 )
                 .await?
             }
-            (None, None) => Box::pin(thread_manager.start_thread(config.clone())).await?,
+            (None, None) => {
+                Box::pin(
+                    thread_manager.start_thread(config.clone(), thread_store_from_config(&config)),
+                )
+                .await?
+            }
         };
 
         Ok(TestCodex {

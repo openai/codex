@@ -8,6 +8,7 @@ use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_config::CloudRequirementsLoader;
+use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirements;
@@ -17,6 +18,7 @@ use codex_config::FeatureRequirementsToml;
 use codex_config::LoaderOverrides;
 use codex_config::McpServerIdentity;
 use codex_config::McpServerRequirement;
+use codex_config::PluginRequirementsToml;
 use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
@@ -54,6 +56,7 @@ use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
+use codex_features::AppsMcpPathOverrideConfigToml;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
@@ -646,6 +649,9 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
+    /// Optional path override for the built-in apps MCP server.
+    pub apps_mcp_path_override: Option<String>,
+
     /// Machine-local realtime audio device preferences used by realtime voice.
     pub realtime_audio: RealtimeAudioConfig,
 
@@ -970,12 +976,31 @@ impl Config {
     ) -> McpConfig {
         let loaded_plugins = plugins_manager.plugins_for_config(self).await;
         let mut configured_mcp_servers = self.mcp_servers.get().clone();
-        for (name, plugin_server) in loaded_plugins.effective_mcp_servers() {
-            configured_mcp_servers.entry(name).or_insert(plugin_server);
+        for plugin in loaded_plugins
+            .plugins()
+            .iter()
+            .filter(|plugin| plugin.is_active())
+        {
+            let mut plugin_mcp_servers = plugin.mcp_servers.clone();
+            filter_plugin_mcp_servers_by_requirements(
+                &plugin.config_name,
+                &mut plugin_mcp_servers,
+                self.config_layer_stack.requirements().plugins.as_ref(),
+            );
+            for (name, plugin_server) in plugin_mcp_servers {
+                configured_mcp_servers.entry(name).or_insert(plugin_server);
+            }
+        }
+        if let Some(mcp_requirements) = self.config_layer_stack.requirements().mcp_servers.as_ref()
+            && mcp_requirements.value.is_empty()
+        {
+            // A present empty allowlist bans all MCPs, including plugin MCPs merged above.
+            filter_mcp_servers_by_requirements(&mut configured_mcp_servers, Some(mcp_requirements));
         }
 
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
+            apps_mcp_path_override: self.apps_mcp_path_override.clone(),
             codex_home: self.codex_home.to_path_buf(),
             mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
             mcp_oauth_callback_port: self.mcp_oauth_callback_port,
@@ -1168,6 +1193,35 @@ fn filter_mcp_servers_by_requirements(
         let allowed = allowlist
             .value
             .get(name)
+            .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
+        if allowed {
+            server.disabled_reason = None;
+        } else {
+            server.enabled = false;
+            server.disabled_reason = Some(McpServerDisabledReason::Requirements {
+                source: source.clone(),
+            });
+        }
+    }
+}
+
+fn filter_plugin_mcp_servers_by_requirements(
+    plugin_config_name: &str,
+    mcp_servers: &mut HashMap<String, McpServerConfig>,
+    plugin_requirements: Option<&Sourced<BTreeMap<String, PluginRequirementsToml>>>,
+) {
+    let Some(requirements) = plugin_requirements else {
+        return;
+    };
+    let source = requirements.source.clone();
+    let plugin_mcp_requirements = requirements
+        .value
+        .get(plugin_config_name)
+        .and_then(|plugin| plugin.mcp_servers.as_ref());
+
+    for (name, server) in mcp_servers.iter_mut() {
+        let allowed = plugin_mcp_requirements
+            .and_then(|mcp_requirements| mcp_requirements.get(name))
             .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
         if allowed {
             server.disabled_reason = None;
@@ -1531,7 +1585,30 @@ fn resolve_permission_config_syntax(
     sandbox_mode_override: Option<SandboxMode>,
     profile_sandbox_mode: Option<SandboxMode>,
 ) -> Option<PermissionConfigSyntax> {
-    if sandbox_mode_override.is_some() || profile_sandbox_mode.is_some() {
+    if sandbox_mode_override.is_some() {
+        return Some(PermissionConfigSyntax::Legacy);
+    }
+
+    let session_flags_select_profiles = config_layer_stack
+        .get_layers(
+            ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            /*include_disabled*/ false,
+        )
+        .into_iter()
+        .find(|layer| matches!(layer.name, ConfigLayerSource::SessionFlags))
+        .and_then(|layer| {
+            layer
+                .config
+                .clone()
+                .try_into::<PermissionSelectionToml>()
+                .ok()
+        })
+        .is_some_and(|selection| selection.default_permissions.is_some());
+    if session_flags_select_profiles {
+        return Some(PermissionConfigSyntax::Profiles);
+    }
+
+    if profile_sandbox_mode.is_some() {
         return Some(PermissionConfigSyntax::Legacy);
     }
 
@@ -1762,6 +1839,15 @@ fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiA
     }
 }
 
+fn apps_mcp_path_override_toml_config(
+    features: Option<&FeaturesToml>,
+) -> Option<&AppsMcpPathOverrideConfigToml> {
+    match features?.apps_mcp_path_override.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
     permission_profile: &PermissionProfile,
@@ -1838,6 +1924,7 @@ impl Config {
             feature_requirements,
             managed_hooks: _,
             mcp_servers,
+            plugins: _,
             exec_policy: _,
             enforce_residency,
             network: network_requirements,
@@ -2213,6 +2300,16 @@ impl Config {
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg, &config_profile);
+        let apps_mcp_path_override = if features.enabled(Feature::AppsMcpPathOverride) {
+            let base = apps_mcp_path_override_toml_config(cfg.features.as_ref());
+            let profile = apps_mcp_path_override_toml_config(config_profile.features.as_ref());
+            profile
+                .and_then(|config| config.path.as_ref())
+                .or_else(|| base.and_then(|config| config.path.as_ref()))
+                .cloned()
+        } else {
+            None
+        };
         let terminal_resize_reflow = resolve_terminal_resize_reflow_config(&cfg);
 
         let agent_roles =
@@ -2714,6 +2811,7 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            apps_mcp_path_override,
             realtime_audio: cfg
                 .audio
                 .map_or_else(RealtimeAudioConfig::default, |audio| RealtimeAudioConfig {

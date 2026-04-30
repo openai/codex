@@ -1484,6 +1484,8 @@ Use `hooks/list` to fetch the discovered hooks for one or more `cwds`. Disabled 
         "pluginId": null,
         "displayOrder": 0,
         "enabled": true
+        "displayOrder": 0,
+        "enabled": true
       }],
       "warnings": [],
       "errors": []
@@ -1514,7 +1516,6 @@ To disable a non-managed hook, upsert a state entry at `hooks.state` with `confi
 ```
 
 To re-enable it, upsert the same hook key with `"enabled": true`.
-
 ## Apps
 
 Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, `branding`, `appMetadata`, `labels`, whether it is currently accessible, and whether it is enabled in config.

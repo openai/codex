@@ -1,0 +1,17 @@
+[package]
+name = "codex-thread-manager-sample"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+# Keep this sample limited to a single Codex workspace dependency.
+# Add new Codex surface area to `codex-core-api` instead of depending on
+# additional `codex-*` crates here.
+codex-core-api = { workspace = true }
+tracing = { workspace = true }
