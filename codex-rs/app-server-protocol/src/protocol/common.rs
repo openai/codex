@@ -2558,7 +2558,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(Some("You are on a call".to_string())),
-                session_id: Some("sess_456".to_string()),
+                realtime_session_id: Some("sess_456".to_string()),
                 transport: None,
                 voice: Some(RealtimeVoice::Marin),
             },
@@ -2571,7 +2571,7 @@ mod tests {
                     "threadId": "thr_123",
                     "outputModality": "audio",
                     "prompt": "You are on a call",
-                    "sessionId": "sess_456",
+                    "realtimeSessionId": "sess_456",
                     "transport": null,
                     "voice": "marin"
                 }
@@ -2589,7 +2589,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: None,
-                session_id: None,
+                realtime_session_id: None,
                 transport: None,
                 voice: None,
             },
@@ -2601,7 +2601,7 @@ mod tests {
                 "params": {
                     "threadId": "thr_123",
                     "outputModality": "audio",
-                    "sessionId": null,
+                    "realtimeSessionId": null,
                     "transport": null,
                     "voice": null
                 }
@@ -2615,7 +2615,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(None),
-                session_id: None,
+                realtime_session_id: None,
                 transport: None,
                 voice: None,
             },
@@ -2628,7 +2628,7 @@ mod tests {
                     "threadId": "thr_123",
                     "outputModality": "audio",
                     "prompt": null,
-                    "sessionId": null,
+                    "realtimeSessionId": null,
                     "transport": null,
                     "voice": null
                 }
@@ -2642,7 +2642,7 @@ mod tests {
             "params": {
                 "threadId": "thr_123",
                 "outputModality": "audio",
-                "sessionId": null,
+                "realtimeSessionId": null,
                 "transport": null,
                 "voice": null
             }
@@ -2659,7 +2659,7 @@ mod tests {
                 "threadId": "thr_123",
                 "outputModality": "audio",
                 "prompt": null,
-                "sessionId": null,
+                "realtimeSessionId": null,
                 "transport": null,
                 "voice": null
             }
@@ -2667,6 +2667,38 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<ClientRequest>(null_prompt_value)?,
             null_prompt_request,
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_thread_realtime_start_accepts_legacy_session_id() -> Result<()> {
+        let legacy_request = json!({
+            "method": "thread/realtime/start",
+            "id": 9,
+            "params": {
+                "threadId": "thr_123",
+                "outputModality": "audio",
+                "sessionId": "sess_456",
+                "transport": null,
+                "voice": null
+            }
+        });
+
+        assert_eq!(
+            serde_json::from_value::<ClientRequest>(legacy_request)?,
+            ClientRequest::ThreadRealtimeStart {
+                request_id: RequestId::Integer(9),
+                params: v2::ThreadRealtimeStartParams {
+                    thread_id: "thr_123".to_string(),
+                    output_modality: RealtimeOutputModality::Audio,
+                    prompt: None,
+                    realtime_session_id: Some("sess_456".to_string()),
+                    transport: None,
+                    voice: None,
+                },
+            }
         );
 
         Ok(())
@@ -2771,7 +2803,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(Some("You are on a call".to_string())),
-                session_id: None,
+                realtime_session_id: None,
                 transport: None,
                 voice: None,
             },
@@ -2854,7 +2886,7 @@ mod tests {
         let notification =
             ServerNotification::ThreadRealtimeStarted(v2::ThreadRealtimeStartedNotification {
                 thread_id: "thr_123".to_string(),
-                session_id: Some("sess_456".to_string()),
+                realtime_session_id: Some("sess_456".to_string()),
                 version: RealtimeConversationVersion::V1,
             });
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&notification);

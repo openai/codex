@@ -387,7 +387,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::RealtimeConversationStarted(event) => {
             let notification = ThreadRealtimeStartedNotification {
                 thread_id: conversation_id.to_string(),
-                session_id: event.session_id,
+                realtime_session_id: event.realtime_session_id,
                 version: event.version,
             };
             outgoing

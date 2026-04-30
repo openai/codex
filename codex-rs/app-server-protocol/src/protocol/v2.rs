@@ -5292,8 +5292,9 @@ pub struct ThreadRealtimeStartParams {
     )]
     #[ts(optional = nullable)]
     pub prompt: Option<Option<String>>,
+    #[serde(alias = "sessionId")]
     #[ts(optional = nullable)]
-    pub session_id: Option<String>,
+    pub realtime_session_id: Option<String>,
     #[ts(optional = nullable)]
     pub transport: Option<ThreadRealtimeStartTransport>,
     #[ts(optional = nullable)]
@@ -5383,7 +5384,7 @@ pub struct ThreadRealtimeListVoicesResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartedNotification {
     pub thread_id: String,
-    pub session_id: Option<String>,
+    pub realtime_session_id: Option<String>,
     pub version: RealtimeConversationVersion,
 }
 

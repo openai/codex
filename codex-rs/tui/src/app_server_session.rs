@@ -922,7 +922,7 @@ impl AppServerSession {
                     thread_id: thread_id.to_string(),
                     output_modality: params.output_modality,
                     prompt: params.prompt,
-                    session_id: params.session_id,
+                    realtime_session_id: params.realtime_session_id,
                     voice: params.voice,
                     transport: params.transport.map(|transport| match transport {
                         ConversationStartTransport::Websocket => {
