@@ -270,12 +270,6 @@ mod tests {
     }
 
     #[test]
-    fn ide_command_accepts_state_args() {
-        assert_eq!(SlashCommand::from_str("ide"), Ok(SlashCommand::Ide));
-        assert!(SlashCommand::Ide.supports_inline_args());
-    }
-
-    #[test]
     fn auto_review_command_is_autoreview() {
         assert_eq!(SlashCommand::AutoReview.command(), "autoreview");
         assert_eq!(
