@@ -2,10 +2,6 @@
 
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::mpsc;
-use std::sync::mpsc::Receiver;
-use std::sync::mpsc::Sender;
-use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -22,12 +18,15 @@ use super::IdeContext;
 // deadline can incorrectly skip context even though the IDE answers normally.
 const IDE_CONTEXT_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(any(unix, windows))]
-const IDE_CONTEXT_IDLE_READ_TIMEOUT: Duration = Duration::from_millis(50);
-#[cfg(any(unix, windows))]
-const IDE_CONTEXT_IDLE_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
-// Prompt rendering applies its own smaller cap to selected text before injection.
+const IPC_READ_CHUNK_BYTES: usize = 64 * 1024;
 #[cfg(any(unix, windows))]
 const MAX_IPC_FRAME_BYTES: usize = 256 * 1024 * 1024;
+#[cfg(any(unix, windows))]
+const BROADCAST_TYPE_JSON: &[u8] = br#""type":"broadcast""#;
+#[cfg(any(unix, windows))]
+const BROADCAST_PREFIX_SCAN_BYTES: usize = 256;
+#[cfg(any(unix, windows))]
+const TUI_SOURCE_CLIENT_ID: &str = "codex-tui";
 
 #[derive(Debug, Error)]
 pub(crate) enum IdeContextError {
@@ -170,11 +169,15 @@ impl IdeContextError {
     #[cfg(any(unix, windows))]
     pub(crate) fn should_reset_client(&self) -> bool {
         match self {
-            IdeContextError::Connect(_)
-            | IdeContextError::Send(_)
-            | IdeContextError::Read(_)
-            | IdeContextError::InvalidResponse(_)
-            | IdeContextError::ResponseTooLarge => true,
+            IdeContextError::Connect(_) | IdeContextError::Send(_) => true,
+            IdeContextError::Read(error) => matches!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::UnexpectedEof
+            ),
+            IdeContextError::InvalidResponse(_) | IdeContextError::ResponseTooLarge => true,
             IdeContextError::RequestFailed(_) => false,
         }
     }
@@ -205,15 +208,12 @@ impl IdeContextError {
     }
 }
 
-/// Persistent IPC client used while TUI `/ide` mode is enabled.
+/// IPC request handle used while TUI `/ide` mode is enabled.
 ///
-/// The initial connection and initialize handshake happen once on `/ide on`, and each user turn
-/// asks for a fresh IDE context snapshot over the same route with a short prompt-time deadline.
+/// Each fetch uses a short-lived socket without sending `initialize`. That keeps the TUI out of
+/// the router's broadcast fanout while still using the same `ide-context` request route.
 #[cfg(any(unix, windows))]
-pub(crate) struct IdeContextClient {
-    commands: Sender<IdeContextClientCommand>,
-    reader: Option<JoinHandle<()>>,
-}
+pub(crate) struct IdeContextClient;
 
 #[cfg(unix)]
 type IdeContextStream = UnixDeadlineStream;
@@ -222,72 +222,37 @@ type IdeContextStream = UnixDeadlineStream;
 type IdeContextStream = super::windows_pipe::WindowsPipeStream;
 
 #[cfg(any(unix, windows))]
-enum IdeContextClientCommand {
-    FetchIdeContext {
-        workspace_root: PathBuf,
-        timeout: Duration,
-        response_tx: Sender<Result<IdeContext, IdeContextError>>,
-    },
-    Shutdown,
-}
-
-#[cfg(any(unix, windows))]
-struct PendingIdeContextRequest {
-    request_id: String,
-    deadline: Instant,
-    response_tx: Sender<Result<IdeContext, IdeContextError>>,
-}
-
-#[cfg(any(unix, windows))]
 #[derive(Default)]
 struct IpcFrameBuffer {
     buffer: Vec<u8>,
     expected_len: Option<usize>,
+    discard_remaining: usize,
+}
+
+#[cfg(any(unix, windows))]
+enum IpcFrame {
+    Message(Value),
+    IgnoredBroadcast,
 }
 
 #[cfg(any(unix, windows))]
 impl IpcFrameBuffer {
-    fn read_available_messages(
-        &mut self,
-        stream: &mut IdeContextStream,
-    ) -> Result<Vec<Value>, IdeContextError> {
-        let mut chunk = [0_u8; 8192];
-        loop {
-            match stream
-                .try_read_available(&mut chunk)
-                .map_err(IdeContextError::Read)?
-            {
-                Some(0) => {
-                    return Err(IdeContextError::Read(std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        "IDE context IPC stream closed",
-                    )));
-                }
-                Some(bytes_read) => self.buffer.extend_from_slice(&chunk[..bytes_read]),
-                None => break,
-            }
-        }
-
-        let mut messages = Vec::new();
-        while let Some(message) = self.pop_complete_message()? {
-            messages.push(message);
-        }
-        Ok(messages)
-    }
-
     fn read_next_message(
         &mut self,
         stream: &mut IdeContextStream,
         deadline: Instant,
     ) -> Result<Value, IdeContextError> {
         loop {
-            if let Some(message) = self.pop_complete_message()? {
-                return Ok(message);
+            while let Some(frame) = self.pop_complete_frame()? {
+                match frame {
+                    IpcFrame::Message(message) => return Ok(message),
+                    IpcFrame::IgnoredBroadcast => {}
+                }
             }
 
             ensure_deadline_not_expired(deadline)?;
             stream.set_deadline(deadline);
-            let mut chunk = [0_u8; 8192];
+            let mut chunk = [0_u8; IPC_READ_CHUNK_BYTES];
             match std::io::Read::read(stream, &mut chunk) {
                 Ok(0) => {
                     return Err(IdeContextError::Read(std::io::Error::new(
@@ -295,116 +260,115 @@ impl IpcFrameBuffer {
                         "IDE context IPC stream closed",
                     )));
                 }
-                Ok(bytes_read) => self.buffer.extend_from_slice(&chunk[..bytes_read]),
+                Ok(bytes_read) => self.push_bytes(&chunk[..bytes_read]),
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(IdeContextError::Read(error)),
             }
         }
     }
 
-    fn pop_complete_message(&mut self) -> Result<Option<Value>, IdeContextError> {
-        if self.expected_len.is_none() && self.buffer.len() >= 4 {
-            let mut len_bytes = [0_u8; 4];
-            len_bytes.copy_from_slice(&self.buffer[..4]);
-            self.buffer.drain(..4);
-            let len = u32::from_le_bytes(len_bytes) as usize;
-            if len > MAX_IPC_FRAME_BYTES {
-                return Err(IdeContextError::ResponseTooLarge);
+    fn push_bytes(&mut self, mut bytes: &[u8]) {
+        while !bytes.is_empty() {
+            if self.discard_remaining > 0 {
+                let bytes_to_discard = bytes.len().min(self.discard_remaining);
+                self.discard_remaining -= bytes_to_discard;
+                bytes = &bytes[bytes_to_discard..];
+                continue;
             }
-            self.expected_len = Some(len);
+
+            self.buffer.extend_from_slice(bytes);
+            self.maybe_start_discarding_broadcast();
+            break;
+        }
+    }
+
+    fn maybe_start_discarding_broadcast(&mut self) {
+        if self.expected_len.is_none() && self.buffer.len() >= 4 {
+            self.read_frame_len();
+        }
+
+        let Some(expected_len) = self.expected_len else {
+            return;
+        };
+        if expected_len > MAX_IPC_FRAME_BYTES {
+            return;
+        }
+        if self.buffer.len() >= expected_len {
+            return;
+        }
+
+        let prefix_len = self.buffer.len().min(BROADCAST_PREFIX_SCAN_BYTES);
+        if prefix_len < BROADCAST_TYPE_JSON.len() {
+            return;
+        }
+
+        if frame_payload_is_broadcast(&self.buffer[..prefix_len]) {
+            self.discard_remaining = expected_len - self.buffer.len();
+            self.buffer.clear();
+            self.expected_len = None;
+        }
+    }
+
+    fn pop_complete_frame(&mut self) -> Result<Option<IpcFrame>, IdeContextError> {
+        if self.expected_len.is_none() && self.buffer.len() >= 4 {
+            self.read_frame_len();
         }
 
         let Some(expected_len) = self.expected_len else {
             return Ok(None);
         };
+        if expected_len > MAX_IPC_FRAME_BYTES {
+            return Err(IdeContextError::ResponseTooLarge);
+        }
         if self.buffer.len() < expected_len {
             return Ok(None);
+        }
+
+        if frame_payload_is_broadcast(&self.buffer[..expected_len]) {
+            self.buffer.drain(..expected_len);
+            self.expected_len = None;
+            return Ok(Some(IpcFrame::IgnoredBroadcast));
         }
 
         let payload = self.buffer.drain(..expected_len).collect::<Vec<_>>();
         self.expected_len = None;
         serde_json::from_slice(&payload)
+            .map(IpcFrame::Message)
             .map(Some)
             .map_err(|err| IdeContextError::InvalidResponse(format!("invalid JSON payload: {err}")))
     }
+
+    fn read_frame_len(&mut self) {
+        let mut len_bytes = [0_u8; 4];
+        len_bytes.copy_from_slice(&self.buffer[..4]);
+        self.buffer.drain(..4);
+        self.expected_len = Some(u32::from_le_bytes(len_bytes) as usize);
+    }
+}
+
+#[cfg(any(unix, windows))]
+fn frame_payload_is_broadcast(payload: &[u8]) -> bool {
+    let prefix = &payload[..payload.len().min(BROADCAST_PREFIX_SCAN_BYTES)];
+    prefix
+        .windows(BROADCAST_TYPE_JSON.len())
+        .any(|window| window == BROADCAST_TYPE_JSON)
 }
 
 #[cfg(any(unix, windows))]
 impl IdeContextClient {
     pub(crate) fn connect() -> Result<Self, IdeContextError> {
-        Self::connect_to_socket(default_ipc_socket_path(), IDE_CONTEXT_REQUEST_TIMEOUT)
+        Ok(Self)
     }
 
     pub(crate) fn fetch_ide_context(
         &mut self,
         workspace_root: &Path,
     ) -> Result<IdeContext, IdeContextError> {
-        self.fetch_ide_context_with_timeout(workspace_root, IDE_CONTEXT_REQUEST_TIMEOUT)
-    }
-
-    fn connect_to_socket(socket_path: PathBuf, timeout: Duration) -> Result<Self, IdeContextError> {
-        let deadline = Instant::now() + timeout;
-        Self::connect_to_socket_before_deadline(socket_path, deadline)
-    }
-
-    fn connect_to_socket_before_deadline(
-        socket_path: PathBuf,
-        deadline: Instant,
-    ) -> Result<Self, IdeContextError> {
-        let mut stream = connect_stream(socket_path, deadline)?;
-        let client_id = initialize_client(&mut stream, deadline)?;
-        Ok(Self::spawn_reader(stream, client_id))
-    }
-
-    fn fetch_ide_context_with_timeout(
-        &mut self,
-        workspace_root: &Path,
-        timeout: Duration,
-    ) -> Result<IdeContext, IdeContextError> {
-        let (response_tx, response_rx) = mpsc::channel();
-        self.commands
-            .send(IdeContextClientCommand::FetchIdeContext {
-                workspace_root: workspace_root.to_path_buf(),
-                timeout,
-                response_tx,
-            })
-            .map_err(|_| IdeContextError::Send(ipc_reader_closed_io_error()))?;
-
-        match response_rx.recv_timeout(timeout + IDE_CONTEXT_IDLE_READ_TIMEOUT) {
-            Ok(result) => result,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                tracing::warn!("IDE context fetch timed out waiting for IPC reader response");
-                Err(timeout_error())
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                tracing::warn!(
-                    "IDE context fetch response channel closed before IPC reader responded"
-                );
-                Err(timeout_error())
-            }
-        }
-    }
-
-    fn spawn_reader(stream: IdeContextStream, client_id: String) -> Self {
-        let (commands_tx, commands_rx) = mpsc::channel();
-        let reader = std::thread::spawn(move || {
-            run_ide_context_reader(stream, client_id, commands_rx);
-        });
-
-        Self {
-            commands: commands_tx,
-            reader: Some(reader),
-        }
-    }
-}
-
-#[cfg(any(unix, windows))]
-impl Drop for IdeContextClient {
-    fn drop(&mut self) {
-        let _ = self.commands.send(IdeContextClientCommand::Shutdown);
-        if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
-        }
+        fetch_ide_context_from_socket(
+            default_ipc_socket_path(),
+            workspace_root,
+            IDE_CONTEXT_REQUEST_TIMEOUT,
+        )
     }
 }
 
@@ -443,14 +407,15 @@ fn default_ipc_socket_path() -> PathBuf {
     PathBuf::new()
 }
 
-#[cfg(all(test, unix))]
+#[cfg(any(unix, windows))]
 fn fetch_ide_context_from_socket(
     socket_path: PathBuf,
     workspace_root: &Path,
     timeout: Duration,
 ) -> Result<IdeContext, IdeContextError> {
-    let mut client = IdeContextClient::connect_to_socket(socket_path, timeout)?;
-    client.fetch_ide_context_with_timeout(workspace_root, timeout)
+    let deadline = Instant::now() + timeout;
+    let mut stream = connect_stream(socket_path, deadline)?;
+    fetch_ide_context_from_stream(&mut stream, workspace_root, deadline)
 }
 
 #[cfg(unix)]
@@ -527,17 +492,6 @@ impl UnixDeadlineStream {
             }
             if poll_fd.revents & (events | libc::POLLERR | libc::POLLHUP) != 0 {
                 return Ok(());
-            }
-        }
-    }
-
-    fn try_read_available(&mut self, buf: &mut [u8]) -> std::io::Result<Option<usize>> {
-        loop {
-            match std::io::Read::read(&mut self.stream, buf) {
-                Ok(bytes_read) => return Ok(Some(bytes_read)),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(None),
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(error) => return Err(error),
             }
         }
     }
@@ -703,246 +657,46 @@ fn connect_stream(
         .map_err(IdeContextError::Connect)
 }
 
-// This mirrors the desktop app's attached IPC message reader, not a context poller. IDE context is
-// requested only by FetchIdeContext commands; idle reads just keep router broadcasts and discovery
-// requests from piling up until the next prompt-submit deadline.
 #[cfg(any(unix, windows))]
-fn run_ide_context_reader(
-    mut stream: IdeContextStream,
-    client_id: String,
-    commands_rx: Receiver<IdeContextClientCommand>,
-) {
-    let mut pending_request: Option<PendingIdeContextRequest> = None;
-    let mut frame_buffer = IpcFrameBuffer::default();
-
-    loop {
-        if let Err(err) =
-            drain_available_reader_messages(&mut stream, &mut frame_buffer, &mut pending_request)
-        {
-            fail_pending_request(pending_request.take(), err);
-            break;
-        }
-
-        if matches!(
-            drain_ide_context_reader_commands(
-                &mut stream,
-                &client_id,
-                &commands_rx,
-                &mut pending_request,
-            ),
-            IdeContextReaderCommandState::Shutdown
-        ) {
-            break;
-        }
-
-        let Some(pending) = pending_request.as_ref() else {
-            if let Err(err) = wait_for_idle_reader_message(&mut stream) {
-                fail_pending_request(pending_request.take(), err);
-                break;
-            }
-            continue;
-        };
-
-        if Instant::now() >= pending.deadline {
-            fail_pending_request(pending_request.take(), timeout_error());
-            continue;
-        }
-
-        match frame_buffer.read_next_message(&mut stream, pending.deadline) {
-            Ok(message) => {
-                if let Err(err) = handle_reader_message(&mut stream, &mut pending_request, message)
-                {
-                    fail_pending_request(pending_request.take(), err);
-                    break;
-                }
-            }
-            Err(err) => {
-                fail_pending_request(pending_request.take(), err);
-                break;
-            }
-        }
-    }
-}
-
-#[cfg(any(unix, windows))]
-enum IdeContextReaderCommandState {
-    Continue,
-    Shutdown,
-}
-
-#[cfg(any(unix, windows))]
-fn drain_ide_context_reader_commands(
-    stream: &mut IdeContextStream,
-    client_id: &str,
-    commands_rx: &Receiver<IdeContextClientCommand>,
-    pending_request: &mut Option<PendingIdeContextRequest>,
-) -> IdeContextReaderCommandState {
-    loop {
-        match commands_rx.try_recv() {
-            Ok(IdeContextClientCommand::FetchIdeContext {
-                workspace_root,
-                timeout,
-                response_tx,
-            }) => {
-                if pending_request.is_some() {
-                    let _ = response_tx.send(Err(IdeContextError::RequestFailed(
-                        "request-in-flight".to_string(),
-                    )));
-                    continue;
-                }
-
-                let request_id = uuid::Uuid::new_v4().to_string();
-                let deadline = Instant::now() + timeout;
-                stream.set_deadline(deadline);
-                match write_ide_context_request(stream, &request_id, client_id, &workspace_root) {
-                    Ok(()) => {
-                        *pending_request = Some(PendingIdeContextRequest {
-                            request_id,
-                            deadline,
-                            response_tx,
-                        });
-                    }
-                    Err(err) => {
-                        tracing::warn!(error = %err, "IDE context IPC reader failed to write ide-context request");
-                        let _ = response_tx.send(Err(IdeContextError::Send(err)));
-                        return IdeContextReaderCommandState::Shutdown;
-                    }
-                }
-            }
-            Ok(IdeContextClientCommand::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => {
-                return IdeContextReaderCommandState::Shutdown;
-            }
-            Err(mpsc::TryRecvError::Empty) => {
-                return IdeContextReaderCommandState::Continue;
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-fn wait_for_idle_reader_message(stream: &mut IdeContextStream) -> Result<(), IdeContextError> {
-    let idle_deadline = Instant::now() + IDE_CONTEXT_IDLE_READ_TIMEOUT;
-    stream.set_deadline(idle_deadline);
-    match stream.wait_for_ready(libc::POLLIN) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::TimedOut => Ok(()),
-        Err(err) => Err(IdeContextError::Read(err)),
-    }
-}
-
-#[cfg(windows)]
-fn wait_for_idle_reader_message(stream: &mut IdeContextStream) -> Result<(), IdeContextError> {
-    let idle_deadline = Instant::now() + IDE_CONTEXT_IDLE_READ_TIMEOUT;
-    stream
-        .wait_until_readable(idle_deadline)
-        .map(|_| ())
-        .map_err(IdeContextError::Read)
-}
-
-#[cfg(any(unix, windows))]
-fn drain_available_reader_messages(
-    stream: &mut IdeContextStream,
-    frame_buffer: &mut IpcFrameBuffer,
-    pending_request: &mut Option<PendingIdeContextRequest>,
+fn answer_unsupported_request<T: std::io::Write + ?Sized>(
+    stream: &mut T,
+    message: &Value,
 ) -> Result<(), IdeContextError> {
-    let messages = frame_buffer.read_available_messages(stream)?;
-    for message in messages {
-        handle_reader_message(stream, pending_request, message)?;
+    if let Some(inbound_request_id) = message.get("requestId").and_then(Value::as_str) {
+        let response = json!({
+            "type": "response",
+            "requestId": inbound_request_id,
+            "resultType": "error",
+            "error": "no-handler-for-request",
+        });
+        write_frame(stream, &response).map_err(IdeContextError::Send)?;
     }
     Ok(())
 }
 
 #[cfg(any(unix, windows))]
-fn fail_pending_request(pending_request: Option<PendingIdeContextRequest>, err: IdeContextError) {
-    if let Some(pending) = pending_request {
-        let _ = pending.response_tx.send(Err(err));
-    } else {
-        tracing::warn!(error = %err, "IDE context IPC reader exiting without a pending request");
-    }
-}
-
-#[cfg(any(unix, windows))]
-fn handle_reader_message(
+fn fetch_ide_context_from_stream(
     stream: &mut IdeContextStream,
-    pending_request: &mut Option<PendingIdeContextRequest>,
-    message: Value,
-) -> Result<(), IdeContextError> {
-    match message.get("type").and_then(Value::as_str) {
-        Some("response") => {
-            let matches_pending = pending_request.as_ref().is_some_and(|pending| {
-                message.get("requestId").and_then(Value::as_str)
-                    == Some(pending.request_id.as_str())
-            });
-            if matches_pending && let Some(pending) = pending_request.take() {
-                let _ = pending.response_tx.send(extract_ide_context(message));
-            }
-            Ok(())
-        }
-        Some("broadcast") => Ok(()),
-        Some("client-discovery-request") => {
-            if let Some(discovery_request_id) = message.get("requestId").and_then(Value::as_str) {
-                let response = json!({
-                    "type": "client-discovery-response",
-                    "requestId": discovery_request_id,
-                    "response": {
-                        "canHandle": false,
-                    },
-                });
-                stream.set_deadline(Instant::now() + IDE_CONTEXT_IDLE_WRITE_TIMEOUT);
-                write_frame(stream, &response).map_err(IdeContextError::Send)?;
-            }
-            Ok(())
-        }
-        Some("request") => {
-            if let Some(inbound_request_id) = message.get("requestId").and_then(Value::as_str) {
-                let response = json!({
-                    "type": "response",
-                    "requestId": inbound_request_id,
-                    "resultType": "error",
-                    "error": "no-handler-for-request",
-                });
-                stream.set_deadline(Instant::now() + IDE_CONTEXT_IDLE_WRITE_TIMEOUT);
-                write_frame(stream, &response).map_err(IdeContextError::Send)?;
-            }
-            Ok(())
-        }
-        Some(_) | None => Ok(()),
-    }
-}
-
-#[cfg(any(unix, windows))]
-fn initialize_client<T: std::io::Read + std::io::Write + ?Sized>(
-    stream: &mut T,
+    workspace_root: &Path,
     deadline: Instant,
-) -> Result<String, IdeContextError> {
-    let initialize_request_id = uuid::Uuid::new_v4().to_string();
-    let initialize_request = json!({
-        "type": "request",
-        "requestId": initialize_request_id.clone(),
-        "sourceClientId": "initializing-client",
-        "version": 0,
-        "method": "initialize",
-        "params": {
-            // Match the desktop client type so the current IDE extension can handle us unchanged.
-            "clientType": "desktop",
-        },
-    });
-    write_frame(stream, &initialize_request).map_err(IdeContextError::Send)?;
-    let initialize_response = read_response_frame(stream, &initialize_request_id, deadline)?;
-    extract_client_id(&initialize_response)
+) -> Result<IdeContext, IdeContextError> {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    write_ide_context_request(stream, &request_id, workspace_root)
+        .map_err(IdeContextError::Send)?;
+    let response = read_response_frame(stream, &request_id, deadline)?;
+    extract_ide_context(response)
 }
 
 #[cfg(any(unix, windows))]
 fn write_ide_context_request<T: std::io::Write + ?Sized>(
     stream: &mut T,
     request_id: &str,
-    client_id: &str,
     workspace_root: &Path,
 ) -> std::io::Result<()> {
     let ide_context_request = json!({
         "type": "request",
         "requestId": request_id,
-        "sourceClientId": client_id,
+        "sourceClientId": TUI_SOURCE_CLIENT_ID,
         "version": 0,
         "method": "ide-context",
         "params": {
@@ -971,7 +725,7 @@ fn write_frame<T: std::io::Write + ?Sized>(stream: &mut T, message: &Value) -> s
     stream.flush()
 }
 
-#[cfg(any(unix, windows))]
+#[cfg(all(test, any(unix, windows)))]
 fn read_frame<T: std::io::Read + ?Sized>(
     stream: &mut T,
     deadline: Instant,
@@ -989,7 +743,7 @@ fn read_frame<T: std::io::Read + ?Sized>(
         .map_err(|err| IdeContextError::InvalidResponse(format!("invalid JSON payload: {err}")))
 }
 
-#[cfg(any(unix, windows))]
+#[cfg(all(test, any(unix, windows)))]
 fn read_exact_before_deadline<T: std::io::Read + ?Sized>(
     stream: &mut T,
     buf: &mut [u8],
@@ -1019,14 +773,15 @@ fn read_exact_before_deadline<T: std::io::Read + ?Sized>(
 }
 
 #[cfg(any(unix, windows))]
-fn read_response_frame<T: std::io::Read + std::io::Write + ?Sized>(
-    stream: &mut T,
+fn read_response_frame(
+    stream: &mut IdeContextStream,
     request_id: &str,
     deadline: Instant,
 ) -> Result<Value, IdeContextError> {
+    let mut frame_buffer = IpcFrameBuffer::default();
     loop {
         ensure_deadline_not_expired(deadline)?;
-        let message = read_frame(stream, deadline)?;
+        let message = frame_buffer.read_next_message(stream, deadline)?;
         match message.get("type").and_then(Value::as_str) {
             Some("response") => {
                 if message.get("requestId").and_then(Value::as_str) == Some(request_id) {
@@ -1047,7 +802,10 @@ fn read_response_frame<T: std::io::Read + std::io::Write + ?Sized>(
                     write_frame(stream, &response).map_err(IdeContextError::Send)?;
                 }
             }
-            Some("client-discovery-response") | Some("request") => {}
+            Some("client-discovery-response") => {}
+            Some("request") => {
+                answer_unsupported_request(stream, &message)?;
+            }
             Some(other) => {
                 return Err(IdeContextError::InvalidResponse(format!(
                     "unexpected IDE context message type: {other}"
@@ -1084,32 +842,9 @@ fn deadline_timeout_io_error() -> std::io::Error {
     )
 }
 
-#[cfg(any(unix, windows))]
-fn ipc_reader_closed_io_error() -> std::io::Error {
-    std::io::Error::new(
-        std::io::ErrorKind::BrokenPipe,
-        "IDE context IPC reader is closed",
-    )
-}
-
 #[cfg(unix)]
 fn permission_denied_io_error(message: &'static str) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::PermissionDenied, message)
-}
-
-#[cfg(any(unix, windows))]
-fn extract_client_id(response: &Value) -> Result<String, IdeContextError> {
-    ensure_success_response(response)?;
-    response
-        .get("result")
-        .and_then(|result| result.get("clientId"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| {
-            IdeContextError::InvalidResponse(
-                "initialize response did not include result.clientId".to_string(),
-            )
-        })
 }
 
 #[cfg(any(unix, windows))]
@@ -1157,24 +892,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn write_initialize_response(stream: &mut impl std::io::Write, request_id: &str) {
-        write_frame(
-            stream,
-            &json!({
-                "type": "response",
-                "requestId": request_id,
-                "resultType": "success",
-                "method": "initialize",
-                "handledByClientId": "server",
-                "result": {
-                    "clientId": "rust-client"
-                }
-            }),
-        )
-        .expect("write initialize response");
-    }
-
-    #[cfg(unix)]
     fn write_ide_context_response(
         stream: &mut impl std::io::Write,
         request_id: &str,
@@ -1210,16 +927,17 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn write_frame_header(stream: &mut impl std::io::Write, message: &Value) -> Vec<u8> {
-        let payload = serde_json::to_vec(message).expect("serialize test IPC message");
+    fn write_raw_frame(stream: &mut impl std::io::Write, payload: &[u8]) {
         let payload_len = u32::try_from(payload.len())
             .expect("test IPC message length fits u32")
             .to_le_bytes();
         stream
             .write_all(&payload_len)
-            .expect("write test IPC frame header");
-        stream.flush().expect("flush test IPC frame header");
-        payload
+            .expect("write raw test IPC frame header");
+        stream
+            .write_all(payload)
+            .expect("write raw test IPC frame payload");
+        stream.flush().expect("flush raw test IPC frame");
     }
 
     #[cfg(any(unix, windows))]
@@ -1303,7 +1021,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn fetch_ide_context_handles_interleaved_messages() {
+    fn fetch_ide_context_uses_unregistered_request_route() {
         use std::os::unix::net::UnixListener;
         use std::thread;
 
@@ -1314,24 +1032,6 @@ mod tests {
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept");
 
-            let initialize = read_frame(&mut stream, test_deadline()).expect("read initialize");
-            assert_eq!(
-                initialize.get("method").and_then(Value::as_str),
-                Some("initialize")
-            );
-            assert_eq!(
-                initialize
-                    .get("params")
-                    .and_then(|params| params.get("clientType"))
-                    .and_then(Value::as_str),
-                Some("desktop")
-            );
-            let initialize_request_id = initialize
-                .get("requestId")
-                .and_then(Value::as_str)
-                .expect("initialize request id");
-            write_initialize_response(&mut stream, initialize_request_id);
-
             let ide_context = read_frame(&mut stream, test_deadline()).expect("read ide-context");
             assert_eq!(
                 ide_context.get("method").and_then(Value::as_str),
@@ -1339,7 +1039,7 @@ mod tests {
             );
             assert_eq!(
                 ide_context.get("sourceClientId").and_then(Value::as_str),
-                Some("rust-client")
+                Some(TUI_SOURCE_CLIENT_ID)
             );
             assert_eq!(
                 ide_context
@@ -1355,18 +1055,26 @@ mod tests {
             write_frame(
                 &mut stream,
                 &json!({
-                    "type": "broadcast",
-                    "method": "client-status-changed",
+                    "type": "request",
+                    "requestId": "inbound-request",
                     "sourceClientId": "vscode-client",
                     "version": 0,
-                    "params": {
-                        "clientId": "vscode-client",
-                        "clientType": "vscode",
-                        "status": "connected"
-                    }
+                    "method": "unknown-method",
+                    "params": {}
                 }),
             )
-            .expect("write broadcast before ide-context response");
+            .expect("write inbound request before ide-context response");
+            let inbound_response = read_frame(&mut stream, test_deadline())
+                .expect("read inbound request response before ide-context response");
+            assert_eq!(
+                inbound_response,
+                json!({
+                    "type": "response",
+                    "requestId": "inbound-request",
+                    "resultType": "error",
+                    "error": "no-handler-for-request"
+                })
+            );
 
             write_frame(
                 &mut stream,
@@ -1395,6 +1103,10 @@ mod tests {
                 Some(false)
             );
 
+            let mut broadcast =
+                br#"{"type":"broadcast","method":"thread-stream-state-changed","params":"#.to_vec();
+            broadcast.resize(2 * 1024 * 1024, b' ');
+            write_raw_frame(&mut stream, &broadcast);
             write_ide_context_response(&mut stream, ide_context_request_id, "use");
         });
 
@@ -1409,152 +1121,6 @@ mod tests {
                 .as_ref()
                 .map(|file| file.active_selection_content.as_str()),
             Some("use")
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ide_context_client_sends_request_while_idle_frame_is_incomplete() {
-        use std::io::Write;
-        use std::os::unix::net::UnixListener;
-        use std::thread;
-
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let socket_path = tempdir.path().join("codex-ipc.sock");
-        let listener = UnixListener::bind(&socket_path).expect("bind socket");
-
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
-
-            let initialize = read_frame(&mut stream, test_deadline()).expect("read initialize");
-            let initialize_request_id = initialize
-                .get("requestId")
-                .and_then(Value::as_str)
-                .expect("initialize request id");
-            write_initialize_response(&mut stream, initialize_request_id);
-
-            let payload = write_frame_header(
-                &mut stream,
-                &json!({
-                    "type": "broadcast",
-                    "method": "client-status-changed",
-                    "sourceClientId": "vscode-client",
-                    "version": 0,
-                    "params": {
-                        "clientId": "vscode-client",
-                        "clientType": "vscode",
-                        "status": "connected"
-                    }
-                }),
-            );
-
-            let ide_context = read_frame(&mut stream, test_deadline())
-                .expect("client should write ide-context request before idle frame completes");
-            let ide_context_request_id = ide_context
-                .get("requestId")
-                .and_then(Value::as_str)
-                .expect("ide-context request id");
-
-            stream
-                .write_all(&payload)
-                .expect("write delayed idle frame payload");
-            stream.flush().expect("flush delayed idle frame payload");
-            write_ide_context_response(
-                &mut stream,
-                ide_context_request_id,
-                "after incomplete idle frame",
-            );
-        });
-
-        let mut client = IdeContextClient::connect_to_socket(socket_path, Duration::from_secs(1))
-            .expect("connect IDE context client");
-        std::thread::sleep(IDE_CONTEXT_IDLE_READ_TIMEOUT * 2);
-        let context = client
-            .fetch_ide_context(Path::new("/repo"))
-            .expect("fetch IDE context while idle frame is incomplete");
-
-        server.join().expect("server joins");
-        assert_eq!(
-            context
-                .active_file
-                .as_ref()
-                .map(|file| file.active_selection_content.as_str()),
-            Some("after incomplete idle frame")
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ide_context_client_reuses_initialized_connection_for_prompt_requests() {
-        use std::os::unix::net::UnixListener;
-        use std::thread;
-
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let socket_path = tempdir.path().join("codex-ipc.sock");
-        let listener = UnixListener::bind(&socket_path).expect("bind socket");
-
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
-
-            let initialize = read_frame(&mut stream, test_deadline()).expect("read initialize");
-            let initialize_request_id = initialize
-                .get("requestId")
-                .and_then(Value::as_str)
-                .expect("initialize request id");
-            write_initialize_response(&mut stream, initialize_request_id);
-
-            for active_selection_content in ["first", "second"] {
-                let ide_context =
-                    read_frame(&mut stream, test_deadline()).expect("read ide-context");
-                assert_eq!(
-                    ide_context.get("method").and_then(Value::as_str),
-                    Some("ide-context")
-                );
-                assert_eq!(
-                    ide_context.get("sourceClientId").and_then(Value::as_str),
-                    Some("rust-client")
-                );
-                assert_eq!(
-                    ide_context
-                        .get("params")
-                        .and_then(|params| params.get("workspaceRoot"))
-                        .and_then(Value::as_str),
-                    Some("/repo")
-                );
-                let ide_context_request_id = ide_context
-                    .get("requestId")
-                    .and_then(Value::as_str)
-                    .expect("ide-context request id");
-                write_ide_context_response(
-                    &mut stream,
-                    ide_context_request_id,
-                    active_selection_content,
-                );
-            }
-        });
-
-        let mut client = IdeContextClient::connect_to_socket(socket_path, Duration::from_secs(1))
-            .expect("connect IDE context client");
-        let first = client
-            .fetch_ide_context(Path::new("/repo"))
-            .expect("fetch first IDE context");
-        let second = client
-            .fetch_ide_context(Path::new("/repo"))
-            .expect("fetch second IDE context");
-
-        server.join().expect("server joins");
-        assert_eq!(
-            [
-                first
-                    .active_file
-                    .as_ref()
-                    .map(|file| file.active_selection_content.as_str()),
-                second
-                    .active_file
-                    .as_ref()
-                    .map(|file| file.active_selection_content.as_str()),
-            ],
-            [Some("first"), Some("second")]
         );
     }
 }
