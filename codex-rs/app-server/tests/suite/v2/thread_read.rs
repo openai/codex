@@ -55,9 +55,9 @@ use codex_protocol::user_input::TextElement;
 use codex_thread_store::AppendThreadItemsParams;
 use codex_thread_store::CreateThreadParams;
 use codex_thread_store::InMemoryThreadStore;
-use codex_thread_store::ThreadCreationMetadata;
 use codex_thread_store::ThreadEventPersistenceMode;
 use codex_thread_store::ThreadMetadataPatch;
+use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::UpdateThreadMetadataParams;
 use core_test_support::responses;
@@ -1030,7 +1030,7 @@ async fn seed_pathless_store_thread(
             source: ProtocolSessionSource::Cli,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
-            metadata: ThreadCreationMetadata {
+            metadata: ThreadPersistenceMetadata {
                 cwd: None,
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Disabled,

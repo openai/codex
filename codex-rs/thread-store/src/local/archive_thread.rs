@@ -48,7 +48,7 @@ pub(super) async fn archive_thread(
         }
     })?;
 
-    if let Some(ctx) = codex_rollout::state_db::get_state_db(&store.config).await {
+    if let Some(ctx) = store.state_db().await {
         let _ = ctx
             .mark_archived(thread_id, archived_path.as_path(), Utc::now())
             .await;

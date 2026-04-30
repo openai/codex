@@ -210,10 +210,16 @@ async fn read_thread_from_rollout_path(
     .ok_or_else(|| ThreadStoreError::Internal {
         message: format!("failed to read thread id from {}", path.display()),
     })?;
-    thread.forked_from_id = read_session_meta_line(path.as_path())
-        .await
-        .ok()
-        .and_then(|meta_line| meta_line.meta.forked_from_id);
+    if let Ok(meta_line) = read_session_meta_line(path.as_path()).await {
+        thread.forked_from_id = meta_line.meta.forked_from_id;
+        if let Some(model_provider) = meta_line
+            .meta
+            .model_provider
+            .filter(|provider| !provider.is_empty())
+        {
+            thread.model_provider = model_provider;
+        }
+    }
     if let Ok(Some(title)) =
         find_thread_name_by_id(store.config.codex_home.as_path(), &thread.thread_id).await
     {
@@ -721,6 +727,7 @@ mod tests {
         assert_eq!(thread.rollout_path, Some(rollout_path));
         assert_eq!(thread.preview, "Hello from rollout");
         assert_eq!(thread.name, Some("Saved title".to_string()));
+        assert_eq!(thread.model_provider, "rollout-provider");
         assert_eq!(thread.cwd, rollout_cwd);
     }
 

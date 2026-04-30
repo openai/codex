@@ -202,8 +202,8 @@ mod tests {
     use super::*;
     use crate::ResumeThreadParams;
     use crate::ThreadEventPersistenceMode;
-    use crate::ThreadMetadataDefaults;
     use crate::ThreadMetadataPatch;
+    use crate::ThreadPersistenceMetadata;
     use crate::ThreadStore;
     use crate::local::LocalThreadStore;
     use crate::local::test_support::test_config;
@@ -300,9 +300,7 @@ mod tests {
                 rollout_path: Some(path.clone()),
                 history: None,
                 include_archived: true,
-                metadata_defaults: ThreadMetadataDefaults {
-                    model_provider: "test-provider".to_string(),
-                },
+                metadata: test_thread_metadata(),
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -491,9 +489,7 @@ mod tests {
                 rollout_path: Some(archived_path.clone()),
                 history: None,
                 include_archived: true,
-                metadata_defaults: ThreadMetadataDefaults {
-                    model_provider: "test-provider".to_string(),
-                },
+                metadata: test_thread_metadata(),
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -521,6 +517,14 @@ mod tests {
                 .archived_at
                 .is_some()
         );
+    }
+
+    fn test_thread_metadata() -> ThreadPersistenceMetadata {
+        ThreadPersistenceMetadata {
+            cwd: Some(std::env::current_dir().expect("cwd")),
+            model_provider: "test-provider".to_string(),
+            memory_mode: ThreadMemoryMode::Enabled,
+        }
     }
 
     fn last_rollout_item(path: &std::path::Path) -> Value {

@@ -71,7 +71,7 @@ pub(super) async fn unarchive_thread(
         message: format!("failed to update unarchived thread timestamp: {err}"),
     })?;
 
-    if let Some(ctx) = codex_rollout::state_db::get_state_db(&store.config).await {
+    if let Some(ctx) = store.state_db().await {
         let _ = ctx
             .mark_unarchived(thread_id, restored_path.as_path())
             .await;

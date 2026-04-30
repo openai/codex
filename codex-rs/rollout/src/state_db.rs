@@ -25,9 +25,23 @@ pub type StateDbHandle = Arc<codex_state::StateRuntime>;
 /// Initialize the state runtime for thread state persistence and backfill checks.
 pub async fn init(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
     let config = RolloutConfig::from_view(config);
+    init_with_roots(
+        config.codex_home,
+        config.sqlite_home,
+        config.model_provider_id,
+    )
+    .await
+}
+
+/// Initialize the state runtime for a local thread store.
+pub async fn init_with_roots(
+    codex_home: PathBuf,
+    sqlite_home: PathBuf,
+    default_model_provider_id: String,
+) -> Option<StateDbHandle> {
     let runtime = match codex_state::StateRuntime::init(
-        config.sqlite_home.clone(),
-        config.model_provider_id.clone(),
+        sqlite_home.clone(),
+        default_model_provider_id.clone(),
     )
     .await
     {
@@ -35,7 +49,7 @@ pub async fn init(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
         Err(err) => {
             warn!(
                 "failed to initialize state runtime at {}: {err}",
-                config.sqlite_home.display()
+                sqlite_home.display()
             );
             return None;
         }
@@ -45,16 +59,20 @@ pub async fn init(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
         Err(err) => {
             warn!(
                 "failed to read backfill state at {}: {err}",
-                config.codex_home.display()
+                codex_home.display()
             );
             return None;
         }
     };
     if backfill_state.status != codex_state::BackfillStatus::Complete {
         let runtime_for_backfill = runtime.clone();
-        let config = config.clone();
         tokio::spawn(async move {
-            metadata::backfill_sessions(runtime_for_backfill.as_ref(), &config).await;
+            metadata::backfill_sessions(
+                runtime_for_backfill.as_ref(),
+                codex_home.as_path(),
+                default_model_provider_id.as_str(),
+            )
+            .await;
         });
     }
     Some(runtime)

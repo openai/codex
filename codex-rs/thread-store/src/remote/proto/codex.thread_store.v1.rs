@@ -40,7 +40,7 @@ pub struct ResumeThreadRequest {
     #[prost(enumeration = "ThreadEventPersistenceMode", tag = "6")]
     pub event_persistence_mode: i32,
     #[prost(string, tag = "7")]
-    pub metadata_defaults_json: ::prost::alloc::string::String,
+    pub metadata_json: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AppendThreadItemsRequest {

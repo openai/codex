@@ -26,24 +26,17 @@ pub enum ThreadEventPersistenceMode {
     Extended,
 }
 
-/// Thread metadata captured at creation time by persistence backends.
+/// Thread-scoped metadata used when opening live persistence.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ThreadCreationMetadata {
+pub struct ThreadPersistenceMetadata {
     /// Effective working directory for environment-backed threads.
     ///
     /// `None` means the thread has no filesystem/environment context.
     pub cwd: Option<PathBuf>,
     /// Model provider associated with the thread.
     pub model_provider: String,
-    /// Initial memory mode for the thread.
+    /// Memory mode associated with the live thread.
     pub memory_mode: MemoryMode,
-}
-
-/// Defaults used only when decoding legacy stored metadata that omitted fields.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ThreadMetadataDefaults {
-    /// Model provider to use when older persisted metadata omitted one.
-    pub model_provider: String,
 }
 
 /// Parameters required to create a persisted thread.
@@ -60,7 +53,7 @@ pub struct CreateThreadParams {
     /// Dynamic tools available to the thread at startup.
     pub dynamic_tools: Vec<DynamicToolSpec>,
     /// Metadata captured for the newly created thread.
-    pub metadata: ThreadCreationMetadata,
+    pub metadata: ThreadPersistenceMetadata,
     /// Whether persistence should include the extended event surface.
     pub event_persistence_mode: ThreadEventPersistenceMode,
 }
@@ -76,8 +69,8 @@ pub struct ResumeThreadParams {
     pub history: Option<Vec<RolloutItem>>,
     /// Whether archived threads may be reopened.
     pub include_archived: bool,
-    /// Defaults used only when older persisted metadata is incomplete.
-    pub metadata_defaults: ThreadMetadataDefaults,
+    /// Metadata for future writes appended to the resumed live thread.
+    pub metadata: ThreadPersistenceMetadata,
     /// Whether persistence should include the extended event surface.
     pub event_persistence_mode: ThreadEventPersistenceMode,
 }

@@ -69,7 +69,7 @@ impl ThreadStore for RemoteThreadStore {
                 params.event_persistence_mode,
             )
             .into(),
-            metadata_json: helpers::thread_creation_metadata_json(&params.metadata)?,
+            metadata_json: helpers::thread_persistence_metadata_json(&params.metadata)?,
         };
         self.client()
             .await?
@@ -97,9 +97,7 @@ impl ThreadStore for RemoteThreadStore {
                 params.event_persistence_mode,
             )
             .into(),
-            metadata_defaults_json: helpers::thread_metadata_defaults_json(
-                &params.metadata_defaults,
-            )?,
+            metadata_json: helpers::thread_persistence_metadata_json(&params.metadata)?,
         };
         self.client()
             .await?
@@ -281,9 +279,8 @@ mod tests {
     use tonic::transport::Server;
 
     use super::*;
-    use crate::ThreadCreationMetadata;
     use crate::ThreadEventPersistenceMode;
-    use crate::ThreadMetadataDefaults;
+    use crate::ThreadPersistenceMetadata;
     use proto::thread_store_server;
     use proto::thread_store_server::ThreadStoreServer;
 
@@ -350,7 +347,7 @@ mod tests {
     #[tokio::test]
     async fn create_thread_forwards_metadata() {
         let (store, mut requests_rx) = test_store().await;
-        let metadata = ThreadCreationMetadata {
+        let metadata = ThreadPersistenceMetadata {
             cwd: Some(PathBuf::from("/workspace")),
             model_provider: "test-provider".to_string(),
             memory_mode: ThreadMemoryMode::Enabled,
@@ -373,17 +370,19 @@ mod tests {
             panic!("expected create request");
         };
         assert_eq!(
-            serde_json::from_str::<ThreadCreationMetadata>(&request.metadata_json)
+            serde_json::from_str::<ThreadPersistenceMetadata>(&request.metadata_json)
                 .expect("metadata json"),
             metadata
         );
     }
 
     #[tokio::test]
-    async fn resume_thread_forwards_metadata_defaults() {
+    async fn resume_thread_forwards_metadata() {
         let (store, mut requests_rx) = test_store().await;
-        let metadata_defaults = ThreadMetadataDefaults {
+        let metadata = ThreadPersistenceMetadata {
+            cwd: Some(PathBuf::from("/workspace")),
             model_provider: "test-provider".to_string(),
+            memory_mode: ThreadMemoryMode::Disabled,
         };
 
         store
@@ -392,7 +391,7 @@ mod tests {
                 rollout_path: None,
                 history: None,
                 include_archived: false,
-                metadata_defaults: metadata_defaults.clone(),
+                metadata: metadata.clone(),
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -402,9 +401,9 @@ mod tests {
             panic!("expected resume request");
         };
         assert_eq!(
-            serde_json::from_str::<ThreadMetadataDefaults>(&request.metadata_defaults_json)
-                .expect("metadata defaults json"),
-            metadata_defaults
+            serde_json::from_str::<ThreadPersistenceMetadata>(&request.metadata_json)
+                .expect("metadata json"),
+            metadata
         );
     }
 }

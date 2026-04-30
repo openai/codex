@@ -12,7 +12,6 @@ mod test_support;
 
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
-use codex_rollout::RolloutConfigView;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::StateDbHandle;
 use std::collections::HashMap;
@@ -55,43 +54,22 @@ struct LiveRecorderEntry {
 /// Process-scoped configuration for local thread storage.
 ///
 /// This describes where local storage lives. New-thread rollout metadata such
-/// as cwd and memory mode is supplied when a thread is created.
+/// as cwd, provider, and memory mode is supplied when live persistence is opened.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalThreadStoreConfig {
     pub codex_home: PathBuf,
     pub sqlite_home: PathBuf,
+    /// Provider used only when older local metadata does not contain one.
     pub default_model_provider_id: String,
 }
 
 impl LocalThreadStoreConfig {
-    pub fn from_config(config: &impl RolloutConfigView) -> Self {
+    pub fn from_config(config: &impl codex_rollout::RolloutConfigView) -> Self {
         Self {
             codex_home: config.codex_home().to_path_buf(),
             sqlite_home: config.sqlite_home().to_path_buf(),
             default_model_provider_id: config.model_provider_id().to_string(),
         }
-    }
-}
-
-impl RolloutConfigView for LocalThreadStoreConfig {
-    fn codex_home(&self) -> &Path {
-        self.codex_home.as_path()
-    }
-
-    fn sqlite_home(&self) -> &Path {
-        self.sqlite_home.as_path()
-    }
-
-    fn cwd(&self) -> &Path {
-        self.codex_home.as_path()
-    }
-
-    fn model_provider_id(&self) -> &str {
-        self.default_model_provider_id.as_str()
-    }
-
-    fn generate_memories(&self) -> bool {
-        false
     }
 }
 
@@ -117,7 +95,13 @@ impl LocalThreadStore {
     pub async fn state_db(&self) -> Option<StateDbHandle> {
         self.state_db
             .get_or_try_init(|| async {
-                codex_rollout::state_db::init(&self.config).await.ok_or(())
+                codex_rollout::state_db::init_with_roots(
+                    self.config.codex_home.clone(),
+                    self.config.sqlite_home.clone(),
+                    self.config.default_model_provider_id.clone(),
+                )
+                .await
+                .ok_or(())
             })
             .await
             .ok()
@@ -331,9 +315,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::ThreadCreationMetadata;
     use crate::ThreadEventPersistenceMode;
-    use crate::ThreadMetadataDefaults;
+    use crate::ThreadPersistenceMetadata;
     use crate::local::test_support::test_config;
     use crate::local::test_support::write_archived_session_file;
     use crate::local::test_support::write_session_file;
@@ -485,9 +468,7 @@ mod tests {
                 rollout_path: None,
                 history: None,
                 include_archived: true,
-                metadata_defaults: ThreadMetadataDefaults {
-                    model_provider: "test-provider".to_string(),
-                },
+                metadata: thread_metadata(),
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -548,9 +529,7 @@ mod tests {
                 rollout_path: Some(rollout_path.clone()),
                 history: None,
                 include_archived: true,
-                metadata_defaults: ThreadMetadataDefaults {
-                    model_provider: "test-provider".to_string(),
-                },
+                metadata: thread_metadata(),
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -589,6 +568,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resume_thread_rejects_missing_cwd() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let uuid = uuid::Uuid::from_u128(407);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path =
+            write_session_file(home.path(), "2025-01-04T11-30-00", uuid).expect("session file");
+        let err = store
+            .resume_thread(ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(rollout_path),
+                history: None,
+                include_archived: true,
+                metadata: ThreadPersistenceMetadata {
+                    cwd: None,
+                    model_provider: "test-provider".to_string(),
+                    memory_mode: ThreadMemoryMode::Enabled,
+                },
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            })
+            .await
+            .expect_err("missing cwd should fail");
+
+        assert!(matches!(err, ThreadStoreError::InvalidRequest { .. }));
+        assert!(err.to_string().contains("requires a cwd"));
+    }
+
+    #[tokio::test]
     async fn load_history_uses_live_writer_rollout_path() {
         let home = TempDir::new().expect("temp dir");
         let external_home = TempDir::new().expect("external temp dir");
@@ -604,9 +611,7 @@ mod tests {
                 rollout_path: Some(rollout_path),
                 history: None,
                 include_archived: true,
-                metadata_defaults: ThreadMetadataDefaults {
-                    model_provider: "test-provider".to_string(),
-                },
+                metadata: thread_metadata(),
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -655,9 +660,7 @@ mod tests {
                 rollout_path: Some(rollout_path.clone()),
                 history: None,
                 include_archived: true,
-                metadata_defaults: ThreadMetadataDefaults {
-                    model_provider: "test-provider".to_string(),
-                },
+                metadata: thread_metadata(),
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -696,9 +699,7 @@ mod tests {
                 rollout_path: Some(rollout_path),
                 history: None,
                 include_archived: true,
-                metadata_defaults: ThreadMetadataDefaults {
-                    model_provider: "test-provider".to_string(),
-                },
+                metadata: thread_metadata(),
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -783,12 +784,16 @@ mod tests {
             source: SessionSource::Exec,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
-            metadata: ThreadCreationMetadata {
-                cwd: Some(std::env::current_dir().expect("cwd")),
-                model_provider: "test-provider".to_string(),
-                memory_mode: ThreadMemoryMode::Enabled,
-            },
+            metadata: thread_metadata(),
             event_persistence_mode: ThreadEventPersistenceMode::Limited,
+        }
+    }
+
+    fn thread_metadata() -> ThreadPersistenceMetadata {
+        ThreadPersistenceMetadata {
+            cwd: Some(std::env::current_dir().expect("cwd")),
+            model_provider: "test-provider".to_string(),
+            memory_mode: ThreadMemoryMode::Enabled,
         }
     }
 
