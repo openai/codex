@@ -563,7 +563,7 @@ mod tests {
             EventMsg::CollabResumeBegin(event.clone()),
             "thread-1",
             "turn-1",
-            false,
+            /*is_file_change_output*/ false,
         );
         assert_item_started_server_notification(
             notification,
@@ -601,7 +601,7 @@ mod tests {
             EventMsg::CollabResumeEnd(event.clone()),
             "thread-2",
             "turn-2",
-            false,
+            /*is_file_change_output*/ false,
         );
         assert_item_completed_server_notification(
             notification,
@@ -644,7 +644,7 @@ mod tests {
             EventMsg::McpToolCallBegin(begin_event.clone()),
             "thread-1",
             "turn_1",
-            false,
+            /*is_file_change_output*/ false,
         );
         assert_item_started_server_notification(
             notification,
@@ -682,7 +682,7 @@ mod tests {
             EventMsg::McpToolCallBegin(begin_event.clone()),
             "thread-2",
             "turn_2",
-            false,
+            /*is_file_change_output*/ false,
         );
         assert_item_started_server_notification(
             notification,
@@ -735,7 +735,7 @@ mod tests {
             EventMsg::McpToolCallEnd(end_event.clone()),
             "thread-3",
             "turn_3",
-            false,
+            /*is_file_change_output*/ false,
         );
         assert_item_completed_server_notification(
             notification,
@@ -781,7 +781,7 @@ mod tests {
             EventMsg::McpToolCallEnd(end_event.clone()),
             "thread-4",
             "turn_4",
-            false,
+            /*is_file_change_output*/ false,
         );
         assert_item_completed_server_notification(
             notification,

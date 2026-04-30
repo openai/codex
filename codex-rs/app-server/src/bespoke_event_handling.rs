@@ -887,7 +887,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 msg,
                 &conversation_id.to_string(),
                 &event_turn_id,
-                false,
+                /*is_file_change_output*/ false,
             );
             outgoing.send_server_notification(notification).await;
         }
@@ -905,7 +905,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 EventMsg::CollabCloseEnd(end_event),
                 &conversation_id.to_string(),
                 &event_turn_id,
-                false,
+                /*is_file_change_output*/ false,
             );
             outgoing.send_server_notification(notification).await;
         }
@@ -1041,7 +1041,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 msg,
                 &conversation_id.to_string(),
                 &event_turn_id,
-                false,
+                /*is_file_change_output*/ false,
             );
             outgoing.send_server_notification(notification).await;
         }
@@ -1124,7 +1124,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     EventMsg::PatchApplyBegin(patch_begin_event),
                     &conversation_id.to_string(),
                     &event_turn_id,
-                    false,
+                    /*is_file_change_output*/ false,
                 );
                 outgoing.send_server_notification(notification).await;
             }
@@ -1166,7 +1166,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     EventMsg::ExecCommandBegin(exec_command_begin_event),
                     &conversation_id.to_string(),
                     &event_turn_id,
-                    false,
+                    /*is_file_change_output*/ false,
                 );
                 outgoing.send_server_notification(notification).await;
             }
@@ -1213,7 +1213,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 EventMsg::ExecCommandEnd(exec_command_end_event),
                 &conversation_id.to_string(),
                 &event_turn_id,
-                false,
+                /*is_file_change_output*/ false,
             );
             outgoing.send_server_notification(notification).await;
         }

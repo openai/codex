@@ -319,7 +319,7 @@ async fn run_turn(thread: &CodexThread, thread_id: &str, prompt: String) -> anyh
                 current_turn_id
                     .as_deref()
                     .context("mapped notification arrived before turn started")?,
-                false,
+                /*is_file_change_output*/ false,
             )),
             _ => None,
         };
