@@ -243,9 +243,20 @@ struct TokenUserBuffer {
 }
 
 impl TokenUserBuffer {
-    fn sid(&self) -> windows_sys::Win32::Foundation::PSID {
-        let token_user = unsafe { &*(self.buffer.as_ptr() as *const TOKEN_USER) };
-        token_user.User.Sid
+    fn sid(&self) -> io::Result<windows_sys::Win32::Foundation::PSID> {
+        if self.buffer.len() < std::mem::size_of::<TOKEN_USER>() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "token user buffer is too small",
+            ));
+        }
+
+        // GetTokenInformation writes TOKEN_USER into a byte buffer. Vec<u8> has
+        // no TOKEN_USER alignment guarantee, so copy the fixed header out with
+        // an unaligned read before using its SID pointer.
+        let token_user =
+            unsafe { std::ptr::read_unaligned(self.buffer.as_ptr() as *const TOKEN_USER) };
+        Ok(token_user.User.Sid)
     }
 }
 
@@ -267,7 +278,7 @@ fn validate_pipe_server_owner(pipe_handle: HANDLE) -> io::Result<()> {
     let server_user = token_user(server_token.raw())?;
     let current_user = token_user(current_token.raw())?;
 
-    if unsafe { EqualSid(server_user.sid(), current_user.sid()) } == 0 {
+    if unsafe { EqualSid(server_user.sid()?, current_user.sid()?) } == 0 {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "IDE context provider is not owned by the current user",
