@@ -390,6 +390,21 @@ impl App {
             AppEvent::OpenMarketplaceAddLoading { source } => {
                 self.chat_widget.open_marketplace_add_loading_popup(&source);
             }
+            AppEvent::OpenMarketplaceRemoveConfirm {
+                marketplace_name,
+                marketplace_display_name,
+            } => {
+                self.chat_widget.open_marketplace_remove_confirmation(
+                    marketplace_name,
+                    marketplace_display_name,
+                );
+            }
+            AppEvent::OpenMarketplaceRemoveLoading {
+                marketplace_display_name,
+            } => {
+                self.chat_widget
+                    .open_marketplace_remove_loading_popup(&marketplace_display_name);
+            }
             AppEvent::OpenPluginDetailLoading {
                 plugin_display_name,
             } => {
@@ -423,6 +438,44 @@ impl App {
                 self.chat_widget
                     .on_marketplace_add_loaded(cwd.clone(), source, result);
                 if add_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path() {
+                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        tracing::warn!(error = %err, "failed to refresh config after marketplace add");
+                    }
+                    self.fetch_plugins_list(app_server, cwd);
+                }
+            }
+            AppEvent::FetchMarketplaceRemove {
+                cwd,
+                marketplace_name,
+                marketplace_display_name,
+            } => {
+                self.fetch_marketplace_remove(
+                    app_server,
+                    cwd,
+                    marketplace_name,
+                    marketplace_display_name,
+                );
+            }
+            AppEvent::MarketplaceRemoveLoaded {
+                cwd,
+                marketplace_name,
+                marketplace_display_name,
+                result,
+            } => {
+                let remove_succeeded = result.is_ok();
+                self.chat_widget.on_marketplace_remove_loaded(
+                    cwd.clone(),
+                    marketplace_name,
+                    marketplace_display_name,
+                    result,
+                );
+                if remove_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path()
+                {
+                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        tracing::warn!(error = %err, "failed to refresh config after marketplace remove");
+                    }
+                    self.chat_widget.refresh_plugin_mentions();
+                    self.chat_widget.submit_op(AppCommand::reload_user_config());
                     self.fetch_plugins_list(app_server, cwd);
                 }
             }

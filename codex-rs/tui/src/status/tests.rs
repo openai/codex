@@ -37,6 +37,7 @@ async fn test_config(temp_home: &TempDir) -> Config {
         .build()
         .await
         .expect("load config");
+    config.approvals_reviewer = ApprovalsReviewer::User;
     config
         .permissions
         .set_permission_profile(PermissionProfile::workspace_write_with(

@@ -975,7 +975,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Goals,
         key: "goals",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Goals",
+            menu_description: "Set a persistent goal Codex can continue over time",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {

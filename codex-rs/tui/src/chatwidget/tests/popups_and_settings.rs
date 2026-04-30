@@ -1,5 +1,6 @@
 use super::*;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_features::Stage;
 use pretty_assertions::assert_eq;
 
@@ -283,6 +284,15 @@ async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
     let marketplace_root = plugins_test_absolute_path("marketplaces/debug");
     let marketplace_path =
         plugins_test_absolute_path("marketplaces/debug/.agents/plugins/marketplace.json");
+    let temp = tempdir().expect("tempdir");
+    let config_toml_path = temp.path().join("config.toml").abs();
+    chat.config.config_layer_stack = ConfigLayerStack::default().with_user_config(
+        &config_toml_path,
+        toml::from_str::<TomlValue>(
+            "[marketplaces.debug]\nsource_type = \"git\"\nsource = \"https://github.com/owner/debug.git\"\n",
+        )
+        .expect("marketplace config"),
+    );
     render_loaded_plugins_popup(
         &mut chat,
         plugins_test_response(vec![plugins_test_curated_marketplace(Vec::new())]),
@@ -344,6 +354,117 @@ async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
         reopened_popup.contains("Installed 0 of 1 Debug Marketplace plugins.")
             && !reopened_popup.contains("installed successfully"),
         "expected reopening the marketplace tab later to use the normal header, got:\n{reopened_popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_removes_user_configured_marketplace_flow() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+    let cwd = chat.config.cwd.to_path_buf();
+    let temp = tempdir().expect("tempdir");
+    let config_toml_path = temp.path().join("config.toml").abs();
+    chat.config.config_layer_stack = ConfigLayerStack::default().with_user_config(
+        &config_toml_path,
+        toml::from_str::<TomlValue>(
+            "[marketplaces.repo]\nsource_type = \"git\"\nsource = \"https://github.com/owner/repo.git\"\n",
+        )
+        .expect("marketplace config"),
+    );
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![
+            plugins_test_curated_marketplace(Vec::new()),
+            plugins_test_repo_marketplace(vec![plugins_test_summary(
+                "plugin-debug",
+                "debug",
+                Some("Debug Plugin"),
+                Some("Debug marketplace plugin."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            )]),
+        ]),
+    );
+    while rx.try_recv().is_ok() {}
+
+    for _ in 0..3 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    }
+    let repo_tab = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        repo_tab.contains("Repo Marketplace.")
+            && repo_tab.contains("ctrl + r remove marketplace")
+            && repo_tab.contains("Debug Plugin"),
+        "expected removable user-configured marketplace tab, got:\n{repo_tab}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+    let confirmation = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        confirmation.contains("Remove Repo Marketplace marketplace?")
+            && confirmation.contains("Remove marketplace")
+            && confirmation.contains("Back to plugins"),
+        "expected marketplace removal confirmation, got:\n{confirmation}"
+    );
+    assert_chatwidget_snapshot!(
+        "plugins_popup_marketplace_remove_confirmation",
+        confirmation
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let marketplace_display_name = match rx.try_recv() {
+        Ok(AppEvent::OpenMarketplaceRemoveLoading {
+            marketplace_display_name,
+        }) => marketplace_display_name,
+        other => panic!("expected OpenMarketplaceRemoveLoading event, got {other:?}"),
+    };
+    assert_eq!(marketplace_display_name, "Repo Marketplace");
+    match rx.try_recv() {
+        Ok(AppEvent::FetchMarketplaceRemove {
+            cwd: event_cwd,
+            marketplace_name,
+            marketplace_display_name,
+        }) => {
+            assert_eq!(event_cwd, cwd);
+            assert_eq!(marketplace_name, "repo");
+            assert_eq!(marketplace_display_name, "Repo Marketplace");
+        }
+        other => panic!("expected FetchMarketplaceRemove event, got {other:?}"),
+    }
+
+    chat.open_marketplace_remove_loading_popup(&marketplace_display_name);
+    let loading = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        loading.contains("Removing Repo Marketplace...")
+            && loading.contains("Removing marketplace..."),
+        "expected marketplace removal loading state, got:\n{loading}"
+    );
+
+    chat.on_marketplace_remove_loaded(
+        cwd.clone(),
+        "repo".to_string(),
+        marketplace_display_name,
+        Ok(MarketplaceRemoveResponse {
+            marketplace_name: "repo".to_string(),
+            installed_root: Some(plugins_test_absolute_path("marketplaces/repo")),
+        }),
+    );
+    chat.on_plugins_loaded(
+        cwd,
+        Ok(plugins_test_response(vec![
+            plugins_test_curated_marketplace(Vec::new()),
+        ])),
+    );
+
+    let refreshed = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        refreshed.contains("Browse plugins from available marketplaces.")
+            && !refreshed.contains("Repo Marketplace")
+            && !refreshed.contains("Debug Plugin")
+            && !refreshed.contains("ctrl + r remove marketplace"),
+        "expected refreshed plugin list without removed marketplace, got:\n{refreshed}"
     );
 }
 
