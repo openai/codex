@@ -597,7 +597,7 @@ impl RuntimeKeymap {
                 yank: default_bindings![ctrl(KeyCode::Char('y'))],
             },
             vim_normal: VimNormalKeymap {
-                enter_insert: default_bindings![plain(KeyCode::Char('i'))],
+                enter_insert: default_bindings![plain(KeyCode::Char('i')), plain(KeyCode::Insert)],
                 append_after_cursor: default_bindings![plain(KeyCode::Char('a'))],
                 append_line_end: default_bindings![
                     shift(KeyCode::Char('a')),
@@ -612,10 +612,10 @@ impl RuntimeKeymap {
                     shift(KeyCode::Char('o')),
                     plain(KeyCode::Char('O'))
                 ],
-                move_left: default_bindings![plain(KeyCode::Char('h'))],
-                move_right: default_bindings![plain(KeyCode::Char('l'))],
-                move_up: default_bindings![plain(KeyCode::Char('k'))],
-                move_down: default_bindings![plain(KeyCode::Char('j'))],
+                move_left: default_bindings![plain(KeyCode::Char('h')), plain(KeyCode::Left)],
+                move_right: default_bindings![plain(KeyCode::Char('l')), plain(KeyCode::Right)],
+                move_up: default_bindings![plain(KeyCode::Char('k')), plain(KeyCode::Up)],
+                move_down: default_bindings![plain(KeyCode::Char('j')), plain(KeyCode::Down)],
                 move_word_forward: default_bindings![plain(KeyCode::Char('w'))],
                 move_word_backward: default_bindings![plain(KeyCode::Char('b'))],
                 move_word_end: default_bindings![plain(KeyCode::Char('e'))],
@@ -1605,6 +1605,47 @@ mod tests {
         assert_eq!(
             runtime.composer.history_search_next,
             vec![key_hint::ctrl(KeyCode::Char('s'))]
+        );
+    }
+
+    #[test]
+    fn vim_normal_defaults_include_insert_and_arrow_aliases() {
+        let runtime = RuntimeKeymap::defaults();
+
+        assert_eq!(
+            runtime.vim_normal.enter_insert,
+            vec![
+                key_hint::plain(KeyCode::Char('i')),
+                key_hint::plain(KeyCode::Insert)
+            ]
+        );
+        assert_eq!(
+            runtime.vim_normal.move_left,
+            vec![
+                key_hint::plain(KeyCode::Char('h')),
+                key_hint::plain(KeyCode::Left)
+            ]
+        );
+        assert_eq!(
+            runtime.vim_normal.move_right,
+            vec![
+                key_hint::plain(KeyCode::Char('l')),
+                key_hint::plain(KeyCode::Right)
+            ]
+        );
+        assert_eq!(
+            runtime.vim_normal.move_up,
+            vec![
+                key_hint::plain(KeyCode::Char('k')),
+                key_hint::plain(KeyCode::Up)
+            ]
+        );
+        assert_eq!(
+            runtime.vim_normal.move_down,
+            vec![
+                key_hint::plain(KeyCode::Char('j')),
+                key_hint::plain(KeyCode::Down)
+            ]
         );
     }
 

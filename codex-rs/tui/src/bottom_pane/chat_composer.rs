@@ -1261,6 +1261,11 @@ impl ChatComposer {
     fn history_navigation_cursor(&self) -> usize {
         if self.is_bash_mode && self.textarea.cursor() == 0 {
             0
+        } else if self.textarea.is_vim_normal_mode()
+            && !self.textarea.text().is_empty()
+            && self.textarea.cursor() == self.textarea.vim_normal_end_cursor()
+        {
+            self.current_text().len()
         } else {
             self.current_cursor()
         }
@@ -1344,6 +1349,16 @@ impl ChatComposer {
         self.sync_popups();
     }
 
+    fn move_cursor_to_history_entry_end(&mut self) {
+        let cursor = if self.textarea.is_vim_normal_mode() {
+            self.textarea.vim_normal_end_cursor()
+        } else {
+            self.textarea.text().len()
+        };
+        self.textarea.set_cursor(cursor);
+        self.sync_popups();
+    }
+
     /// Convert canonical composer text into the textarea's internal representation.
     ///
     /// Shell mode stores the leading `!` as prompt state instead of editable text,
@@ -1409,7 +1424,7 @@ impl ChatComposer {
     /// Rehydrate a history entry into the composer with shell-like cursor placement.
     ///
     /// This path restores text, elements, images, mention bindings, and pending paste payloads,
-    /// then moves the cursor to end-of-line. If a caller reused
+    /// then moves the cursor to the active mode's history boundary. If a caller reused
     /// [`Self::set_text_content_with_mention_bindings`] directly for history recall and forgot the
     /// final cursor move, repeated Up/Down would stop navigating history because cursor-gating
     /// treats interior positions as normal editing mode.
@@ -1430,7 +1445,7 @@ impl ChatComposer {
             mention_bindings,
         );
         self.set_pending_pastes(pending_pastes);
-        self.move_cursor_to_end();
+        self.move_cursor_to_history_entry_end();
     }
 
     pub(crate) fn text_elements(&self) -> Vec<TextElement> {
@@ -8761,17 +8776,17 @@ mod tests {
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
         assert_eq!(composer.textarea.text(), "second");
-        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+        assert_eq!(composer.textarea.cursor(), "secon".len());
 
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
         assert_eq!(composer.textarea.text(), "first");
-        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+        assert_eq!(composer.textarea.cursor(), "firs".len());
 
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         assert_eq!(composer.textarea.text(), "second");
-        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+        assert_eq!(composer.textarea.cursor(), "secon".len());
 
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
@@ -8964,11 +8979,12 @@ mod tests {
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
         assert_eq!(composer.current_text(), "!git");
+        assert_eq!(composer.textarea.cursor(), "gi".len());
 
-        composer.textarea.set_cursor(/*pos*/ 0);
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
         assert_eq!(composer.current_text(), "first");
+        assert_eq!(composer.textarea.cursor(), "firs".len());
     }
 
     #[test]

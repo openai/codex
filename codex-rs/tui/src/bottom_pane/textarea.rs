@@ -97,6 +97,7 @@ pub(crate) struct TextArea {
     elements: Vec<TextElement>,
     next_element_id: u64,
     kill_buffer: String,
+    kill_buffer_kind: KillBufferKind,
     vim_enabled: bool,
     vim_mode: VimMode,
     vim_operator: Option<VimOperator>,
@@ -123,6 +124,14 @@ enum VimMode {
     Normal,
     /// Insert mode routes input through the regular editor keymap until Escape is pressed.
     Insert,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KillBufferKind {
+    /// Characterwise kills and yanks paste at the cursor.
+    Characterwise,
+    /// Linewise kills and yanks paste as whole lines below the cursor line.
+    Linewise,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +175,7 @@ impl TextArea {
             elements: Vec::new(),
             next_element_id: 1,
             kill_buffer: String::new(),
+            kill_buffer_kind: KillBufferKind::Characterwise,
             vim_enabled: false,
             vim_mode: VimMode::Insert,
             vim_operator: None,
@@ -266,6 +276,15 @@ impl TextArea {
     /// text boundary.
     pub(crate) fn is_vim_normal_mode(&self) -> bool {
         self.vim_enabled && self.vim_mode == VimMode::Normal
+    }
+
+    /// Return the cursor position that represents the last editable item in Vim normal mode.
+    pub(crate) fn vim_normal_end_cursor(&self) -> usize {
+        if self.text.is_empty() {
+            0
+        } else {
+            self.prev_atomic_boundary(self.text.len())
+        }
     }
 
     /// Return whether a Vim operator is waiting for a motion.
@@ -716,7 +735,7 @@ impl TextArea {
             return;
         }
         if self.vim_normal_keymap.move_word_end.is_pressed(event) {
-            self.set_cursor(self.end_of_next_word());
+            self.set_cursor(self.vim_word_end_cursor());
             return;
         }
         if self.vim_normal_keymap.move_line_start.is_pressed(event) {
@@ -724,7 +743,7 @@ impl TextArea {
             return;
         }
         if self.vim_normal_keymap.move_line_end.is_pressed(event) {
-            self.set_cursor(self.end_of_current_line());
+            self.set_cursor(self.vim_line_end_cursor());
             return;
         }
         if self.vim_normal_keymap.delete_char.is_pressed(event) {
@@ -830,6 +849,9 @@ impl TextArea {
     }
 
     fn range_for_motion(&mut self, motion: VimMotion) -> Option<Range<usize>> {
+        if matches!(motion, VimMotion::Up | VimMotion::Down) {
+            return self.linewise_range_for_vertical_motion(motion);
+        }
         let start = self.cursor_pos;
         let target = self.target_for_motion(motion);
         if start == target {
@@ -841,6 +863,41 @@ impl TextArea {
             (start, target)
         };
         Some(range_start..range_end)
+    }
+
+    fn linewise_range_for_vertical_motion(&self, motion: VimMotion) -> Option<Range<usize>> {
+        let current = self.current_line_range_with_newline();
+        let range = match motion {
+            VimMotion::Up => {
+                let start = if current.start == 0 {
+                    current.start
+                } else {
+                    self.beginning_of_line(current.start.saturating_sub(1))
+                };
+                start..current.end
+            }
+            VimMotion::Down => {
+                let end = if current.end >= self.text.len() {
+                    current.end
+                } else {
+                    let next_eol = self.end_of_line(current.end);
+                    if next_eol < self.text.len() {
+                        next_eol + 1
+                    } else {
+                        next_eol
+                    }
+                };
+                current.start..end
+            }
+            VimMotion::Left
+            | VimMotion::Right
+            | VimMotion::WordForward
+            | VimMotion::WordBackward
+            | VimMotion::WordEnd
+            | VimMotion::LineStart
+            | VimMotion::LineEnd => return None,
+        };
+        (range.start < range.end).then_some(range)
     }
 
     fn target_for_motion(&mut self, motion: VimMotion) -> usize {
@@ -973,6 +1030,14 @@ impl TextArea {
     }
 
     fn kill_range(&mut self, range: Range<usize>) {
+        self.kill_range_with_kind(range, KillBufferKind::Characterwise);
+    }
+
+    fn kill_line_range(&mut self, range: Range<usize>) {
+        self.kill_range_with_kind(range, KillBufferKind::Linewise);
+    }
+
+    fn kill_range_with_kind(&mut self, range: Range<usize>, kind: KillBufferKind) {
         let range = self.expand_range_to_element_boundaries(range);
         if range.start >= range.end {
             return;
@@ -983,11 +1048,19 @@ impl TextArea {
             return;
         }
 
-        self.kill_buffer = removed;
+        self.store_kill_buffer(removed, kind);
         self.replace_range_raw(range, "");
     }
 
     fn yank_range(&mut self, range: Range<usize>) {
+        self.yank_range_with_kind(range, KillBufferKind::Characterwise);
+    }
+
+    fn yank_line_range(&mut self, range: Range<usize>) {
+        self.yank_range_with_kind(range, KillBufferKind::Linewise);
+    }
+
+    fn yank_range_with_kind(&mut self, range: Range<usize>, kind: KillBufferKind) {
         let range = self.expand_range_to_element_boundaries(range);
         if range.start >= range.end {
             return;
@@ -996,11 +1069,20 @@ impl TextArea {
         if removed.is_empty() {
             return;
         }
-        self.kill_buffer = removed;
+        self.store_kill_buffer(removed, kind);
+    }
+
+    fn store_kill_buffer(&mut self, text: String, kind: KillBufferKind) {
+        self.kill_buffer = text;
+        self.kill_buffer_kind = kind;
     }
 
     fn paste_after_cursor(&mut self) {
         if self.kill_buffer.is_empty() {
+            return;
+        }
+        if self.kill_buffer_kind == KillBufferKind::Linewise {
+            self.paste_line_after_current_line();
             return;
         }
         let insert_at = self.next_atomic_boundary(self.cursor_pos);
@@ -1009,14 +1091,35 @@ impl TextArea {
         self.insert_str(&text);
     }
 
+    fn paste_line_after_current_line(&mut self) {
+        let eol = self.end_of_current_line();
+        let insert_at = if eol < self.text.len() { eol + 1 } else { eol };
+        let cursor = if eol < self.text.len() {
+            insert_at
+        } else {
+            insert_at + 1
+        };
+        let text = if eol < self.text.len() {
+            if self.kill_buffer.ends_with('\n') {
+                self.kill_buffer.clone()
+            } else {
+                format!("{}\n", self.kill_buffer)
+            }
+        } else {
+            format!("\n{}", self.kill_buffer.trim_end_matches('\n'))
+        };
+        self.insert_str_at(insert_at, &text);
+        self.set_cursor(cursor.min(self.text.len()));
+    }
+
     fn yank_current_line(&mut self) {
         let range = self.current_line_range_with_newline();
-        self.yank_range(range);
+        self.yank_line_range(range);
     }
 
     fn delete_current_line(&mut self) {
         let range = self.current_line_range_with_newline();
-        self.kill_range(range);
+        self.kill_line_range(range);
     }
 
     fn current_line_range_with_newline(&self) -> Range<usize> {
@@ -1652,6 +1755,25 @@ impl TextArea {
         self.adjust_pos_out_of_elements(end, /*prefer_start*/ false)
     }
 
+    fn vim_word_end_cursor(&self) -> usize {
+        let end = self.end_of_next_word();
+        if end > self.cursor_pos {
+            self.prev_atomic_boundary(end)
+        } else {
+            end
+        }
+    }
+
+    fn vim_line_end_cursor(&self) -> usize {
+        let bol = self.beginning_of_current_line();
+        let eol = self.end_of_current_line();
+        if eol > bol {
+            self.prev_atomic_boundary(eol).max(bol)
+        } else {
+            eol
+        }
+    }
+
     pub(crate) fn beginning_of_next_word(&self) -> usize {
         let Some(first_non_ws) = self.text[self.cursor_pos..].find(|c: char| !c.is_whitespace())
         else {
@@ -2062,6 +2184,37 @@ mod tests {
     }
 
     #[test]
+    fn vim_insert_key_enters_insert_mode() {
+        let mut t = TextArea::new();
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Insert, KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "h");
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+    }
+
+    #[test]
+    fn vim_normal_arrow_keys_move_cursor() {
+        let mut t = ta_with("ab\ncd");
+        t.set_cursor(/*pos*/ 1);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 2);
+
+        t.input(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 5);
+
+        t.input(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 4);
+
+        t.input(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 1);
+    }
+
+    #[test]
     fn vim_escape_from_insert_at_start_does_not_underflow() {
         let mut t = TextArea::new();
         t.set_vim_enabled(/*enabled*/ true);
@@ -2177,6 +2330,54 @@ mod tests {
 
         assert_eq!(t.text(), "world");
         assert_eq!(t.kill_buffer, "hello ");
+    }
+
+    #[test]
+    fn vim_e_lands_on_word_end_character() {
+        let mut t = ta_with("abc");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+
+        assert_eq!(t.cursor(), 2);
+
+        t.input(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "ab");
+        assert_eq!(t.kill_buffer, "c");
+    }
+
+    #[test]
+    fn vim_dollar_lands_on_line_end_character() {
+        let mut t = ta_with("abc\n123");
+        t.set_cursor(/*pos*/ 1);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('$'), KeyModifiers::NONE));
+
+        assert_eq!(t.cursor(), 2);
+
+        t.input(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "ab\n123");
+        assert_eq!(t.kill_buffer, "c");
+    }
+
+    #[test]
+    fn vim_linewise_yank_pastes_below_current_line() {
+        let mut t = ta_with("abc\n123\nxyz");
+        t.set_cursor(/*pos*/ 1);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "abc\nabc\n123\nxyz");
+        assert_eq!(t.cursor(), "abc\n".len());
+        assert_eq!(t.kill_buffer, "abc\n");
+        assert_eq!(t.kill_buffer_kind, KillBufferKind::Linewise);
     }
 
     #[test]
