@@ -688,7 +688,7 @@ mod tests {
 
         let runtime = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
@@ -698,9 +698,9 @@ mod tests {
             Utc::now(),
             SessionSource::Cli,
         );
-        builder.model_provider = Some(config.model_provider_id.clone());
+        builder.model_provider = Some(config.default_model_provider_id.clone());
         builder.cwd = home.path().join("sqlite-workspace");
-        let mut metadata = builder.build(config.model_provider_id.as_str());
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.title = "Saved title".to_string();
         metadata.first_user_message = Some("Hello from sqlite".to_string());
         runtime
