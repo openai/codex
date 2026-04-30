@@ -157,7 +157,6 @@ use super::footer::FooterKeyHints;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::GoalStatusIndicator;
-use super::footer::IdeContextStatusIndicator;
 use super::footer::SummaryLeft;
 use super::footer::can_show_left_with_context;
 use super::footer::context_window_line;
@@ -384,7 +383,7 @@ pub(crate) struct ChatComposer {
     config: ChatComposerConfig,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     goal_status_indicator: Option<GoalStatusIndicator>,
-    ide_context_status_indicator: Option<IdeContextStatusIndicator>,
+    ide_context_active: bool,
     connectors_enabled: bool,
     plugins_command_enabled: bool,
     fast_command_enabled: bool,
@@ -563,7 +562,7 @@ impl ChatComposer {
             config,
             collaboration_mode_indicator: None,
             goal_status_indicator: None,
-            ide_context_status_indicator: None,
+            ide_context_active: false,
             connectors_enabled: false,
             plugins_command_enabled: false,
             fast_command_enabled: false,
@@ -721,11 +720,8 @@ impl ChatComposer {
         self.goal_status_indicator = indicator;
     }
 
-    pub fn set_ide_context_status_indicator(
-        &mut self,
-        indicator: Option<IdeContextStatusIndicator>,
-    ) {
-        self.ide_context_status_indicator = indicator;
+    pub fn set_ide_context_active(&mut self, active: bool) {
+        self.ide_context_active = active;
     }
 
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
@@ -4161,13 +4157,13 @@ impl ChatComposer {
                             let full = status_line_right_indicator_line(
                                 self.collaboration_mode_indicator,
                                 self.goal_status_indicator.as_ref(),
-                                self.ide_context_status_indicator.as_ref(),
+                                self.ide_context_active,
                                 show_cycle_hint,
                             );
                             let compact = status_line_right_indicator_line(
                                 self.collaboration_mode_indicator,
                                 self.goal_status_indicator.as_ref(),
-                                self.ide_context_status_indicator.as_ref(),
+                                self.ide_context_active,
                                 /*show_cycle_hint*/ false,
                             );
                             let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);

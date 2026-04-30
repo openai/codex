@@ -1,27 +1,13 @@
 //! Chat-widget wiring for the `/ide` command and IDE context prompt injection.
 
-use std::path::Path;
-use std::time::Duration;
-use std::time::Instant;
-
 use codex_protocol::user_input::UserInput;
 
 use super::ChatWidget;
-use crate::bottom_pane::IdeContextStatusIndicator;
-use crate::ide_context::IdeContext;
-use crate::ide_context::IdeContextClient;
-use crate::ide_context::IdeContextError;
-
-const IDE_CONTEXT_RECENT_TOGGLE_RETRY_WINDOW: Duration = Duration::from_secs(5);
-const IDE_CONTEXT_RECENT_TOGGLE_RETRY_DELAY: Duration = Duration::from_millis(250);
-const IDE_CONTEXT_RECENT_TOGGLE_RETRY_ATTEMPTS: usize = 12;
 
 #[derive(Default)]
 pub(super) struct IdeContextState {
     enabled: bool,
     prompt_fetch_warned: bool,
-    last_disabled_at: Option<Instant>,
-    client: Option<IdeContextClient>,
 }
 
 impl IdeContextState {
@@ -37,73 +23,10 @@ impl IdeContextState {
     fn disable(&mut self) {
         self.enabled = false;
         self.prompt_fetch_warned = false;
-        self.last_disabled_at = Some(Instant::now());
-        self.client = None;
     }
 
     fn mark_available(&mut self) {
         self.prompt_fetch_warned = false;
-        self.last_disabled_at = None;
-    }
-
-    fn status_indicator(&self) -> Option<IdeContextStatusIndicator> {
-        self.enabled.then_some(IdeContextStatusIndicator::Active)
-    }
-
-    fn should_retry_recent_toggle(&self) -> bool {
-        self.last_disabled_at.is_some_and(|disabled_at| {
-            disabled_at.elapsed() <= IDE_CONTEXT_RECENT_TOGGLE_RETRY_WINDOW
-        })
-    }
-
-    fn fetch_context_for_probe(
-        &mut self,
-        workspace_root: &Path,
-    ) -> Result<IdeContext, IdeContextError> {
-        let client = if let Some(client) = self.client.as_mut() {
-            client
-        } else {
-            self.client.insert(IdeContextClient::connect()?)
-        };
-
-        let result = client.fetch_ide_context(workspace_root);
-        if let Err(err) = &result
-            && err.should_reset_client()
-        {
-            self.client = None;
-        }
-        result
-    }
-
-    fn fetch_context_for_prompt(
-        &mut self,
-        workspace_root: &Path,
-    ) -> Result<IdeContext, IdeContextError> {
-        let mut retried_after_reset = false;
-        loop {
-            let client = if let Some(client) = self.client.as_mut() {
-                client
-            } else {
-                self.client.insert(IdeContextClient::connect()?)
-            };
-
-            let result = client.fetch_ide_context(workspace_root);
-            match result {
-                Ok(context) => return Ok(context),
-                Err(err) => {
-                    let should_retry =
-                        !retried_after_reset && err.should_retry_prompt_fetch_after_reset();
-                    if err.should_reset_client() || should_retry {
-                        self.client = None;
-                    }
-                    if should_retry {
-                        retried_after_reset = true;
-                        continue;
-                    }
-                    return Err(err);
-                }
-            }
-        }
     }
 }
 
@@ -146,7 +69,7 @@ impl ChatWidget {
             return;
         }
 
-        match self.ide_context.fetch_context_for_prompt(&self.config.cwd) {
+        match crate::ide_context::fetch_ide_context(&self.config.cwd) {
             Ok(context) => {
                 self.ide_context.mark_available();
                 self.sync_ide_context_status_indicator();
@@ -172,22 +95,7 @@ impl ChatWidget {
             return;
         }
 
-        let mut fetch_result = self.ide_context.fetch_context_for_probe(&self.config.cwd);
-        if self.ide_context.should_retry_recent_toggle() {
-            // The previous IDE context connection may still be winding down.
-            for _ in 0..IDE_CONTEXT_RECENT_TOGGLE_RETRY_ATTEMPTS {
-                if !matches!(
-                    fetch_result,
-                    Err(ref err) if err.is_retryable_after_recent_toggle()
-                ) {
-                    break;
-                }
-                std::thread::sleep(IDE_CONTEXT_RECENT_TOGGLE_RETRY_DELAY);
-                fetch_result = self.ide_context.fetch_context_for_probe(&self.config.cwd);
-            }
-        }
-
-        match fetch_result {
+        match crate::ide_context::fetch_ide_context(&self.config.cwd) {
             Ok(context) => {
                 self.ide_context.mark_available();
                 self.sync_ide_context_status_indicator();
@@ -219,6 +127,6 @@ impl ChatWidget {
 
     pub(super) fn sync_ide_context_status_indicator(&mut self) {
         self.bottom_pane
-            .set_ide_context_status_indicator(self.ide_context.status_indicator());
+            .set_ide_context_active(self.ide_context.is_enabled());
     }
 }

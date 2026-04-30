@@ -104,11 +104,6 @@ pub(crate) enum GoalStatusIndicator {
     Complete { usage: Option<String> },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum IdeContextStatusIndicator {
-    Active,
-}
-
 const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
 const FOOTER_CONTEXT_GAP_COLS: u16 = 1;
 
@@ -576,14 +571,12 @@ pub(crate) fn goal_status_indicator_line(
 pub(crate) fn status_line_right_indicator_line(
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     goal_status_indicator: Option<&GoalStatusIndicator>,
-    ide_context_indicator: Option<&IdeContextStatusIndicator>,
+    ide_context_active: bool,
     show_cycle_hint: bool,
 ) -> Option<Line<'static>> {
     let primary_indicator = mode_indicator_line(collaboration_mode_indicator, show_cycle_hint)
         .or_else(|| goal_status_indicator_line(goal_status_indicator));
-    let ide_context_indicator = ide_context_indicator.map(|indicator| match indicator {
-        IdeContextStatusIndicator::Active => Line::from(vec!["IDE context".cyan()]),
-    });
+    let ide_context_indicator = ide_context_active.then(|| Line::from(vec!["IDE context".cyan()]));
     let mut line: Option<Line<'static>> = None;
 
     for indicator in [primary_indicator, ide_context_indicator]
@@ -1283,7 +1276,7 @@ mod tests {
         height: u16,
         props: &FooterProps,
         collaboration_mode_indicator: Option<CollaborationModeIndicator>,
-        ide_context_indicator: Option<IdeContextStatusIndicator>,
+        ide_context_active: bool,
     ) {
         terminal
             .draw(|f| {
@@ -1347,13 +1340,13 @@ mod tests {
                     let full = status_line_right_indicator_line(
                         collaboration_mode_indicator,
                         /*goal_status_indicator*/ None,
-                        ide_context_indicator.as_ref(),
+                        ide_context_active,
                         show_cycle_hint,
                     );
                     let compact = status_line_right_indicator_line(
                         collaboration_mode_indicator,
                         /*goal_status_indicator*/ None,
-                        ide_context_indicator.as_ref(),
+                        ide_context_active,
                         /*show_cycle_hint*/ false,
                     );
                     let full_width = full.as_ref().map(|line| line.width() as u16).unwrap_or(0);
@@ -1468,7 +1461,7 @@ mod tests {
             height,
             props,
             collaboration_mode_indicator,
-            /*ide_context_indicator*/ None,
+            /*ide_context_active*/ false,
         );
         assert_snapshot!(name, terminal.backend());
     }
@@ -1485,7 +1478,7 @@ mod tests {
             height,
             props,
             collaboration_mode_indicator,
-            /*ide_context_indicator*/ None,
+            /*ide_context_active*/ false,
         );
         terminal.backend().vt100().screen().contents()
     }
@@ -1495,7 +1488,7 @@ mod tests {
         width: u16,
         props: &FooterProps,
         collaboration_mode_indicator: Option<CollaborationModeIndicator>,
-        ide_context_indicator: Option<IdeContextStatusIndicator>,
+        ide_context_active: bool,
     ) {
         let height = footer_height(props).max(1);
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -1504,7 +1497,7 @@ mod tests {
             height,
             props,
             collaboration_mode_indicator,
-            ide_context_indicator,
+            ide_context_active,
         );
         assert_snapshot!(name, terminal.backend());
     }
@@ -1839,7 +1832,7 @@ mod tests {
             /*width*/ 120,
             &props,
             Some(CollaborationModeIndicator::Plan),
-            Some(IdeContextStatusIndicator::Active),
+            /*ide_context_active*/ true,
         );
 
         let props = FooterProps {

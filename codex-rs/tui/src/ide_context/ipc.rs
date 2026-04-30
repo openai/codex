@@ -54,21 +54,6 @@ pub(crate) enum IdeContextError {
 }
 
 impl IdeContextError {
-    /// Returns true for short-lived states that can appear just after the TUI disconnects.
-    #[cfg(any(unix, windows))]
-    pub(crate) fn is_retryable_after_recent_toggle(&self) -> bool {
-        match self {
-            IdeContextError::RequestFailed(error) => {
-                matches!(error.as_str(), "no-client-found" | "client-disconnected")
-            }
-            IdeContextError::Read(error) => error.kind() == std::io::ErrorKind::WouldBlock,
-            IdeContextError::Connect(_)
-            | IdeContextError::Send(_)
-            | IdeContextError::InvalidResponse(_)
-            | IdeContextError::ResponseTooLarge => false,
-        }
-    }
-
     #[cfg(any(unix, windows))]
     pub(crate) fn user_facing_hint(&self) -> String {
         match self {
@@ -148,45 +133,6 @@ impl IdeContextError {
         }
     }
 
-    #[cfg(any(unix, windows))]
-    pub(crate) fn should_retry_prompt_fetch_after_reset(&self) -> bool {
-        match self {
-            IdeContextError::Send(_) => true,
-            IdeContextError::Read(error) => matches!(
-                error.kind(),
-                std::io::ErrorKind::BrokenPipe
-                    | std::io::ErrorKind::ConnectionAborted
-                    | std::io::ErrorKind::ConnectionReset
-                    | std::io::ErrorKind::UnexpectedEof
-            ),
-            IdeContextError::RequestFailed(error) => error == "client-disconnected",
-            IdeContextError::Connect(_)
-            | IdeContextError::InvalidResponse(_)
-            | IdeContextError::ResponseTooLarge => false,
-        }
-    }
-
-    #[cfg(any(unix, windows))]
-    pub(crate) fn should_reset_client(&self) -> bool {
-        match self {
-            IdeContextError::Connect(_) | IdeContextError::Send(_) => true,
-            IdeContextError::Read(error) => matches!(
-                error.kind(),
-                std::io::ErrorKind::BrokenPipe
-                    | std::io::ErrorKind::ConnectionAborted
-                    | std::io::ErrorKind::ConnectionReset
-                    | std::io::ErrorKind::UnexpectedEof
-            ),
-            IdeContextError::InvalidResponse(_) | IdeContextError::ResponseTooLarge => true,
-            IdeContextError::RequestFailed(_) => false,
-        }
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    pub(crate) fn is_retryable_after_recent_toggle(&self) -> bool {
-        false
-    }
-
     #[cfg(not(any(unix, windows)))]
     pub(crate) fn user_facing_hint(&self) -> String {
         self.to_string()
@@ -196,24 +142,7 @@ impl IdeContextError {
     pub(crate) fn prompt_skip_hint(&self) -> String {
         self.to_string()
     }
-
-    #[cfg(not(any(unix, windows)))]
-    pub(crate) fn should_reset_client(&self) -> bool {
-        false
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    pub(crate) fn should_retry_prompt_fetch_after_reset(&self) -> bool {
-        false
-    }
 }
-
-/// IPC request handle used while TUI `/ide` mode is enabled.
-///
-/// Each fetch uses a short-lived socket without sending `initialize`. That keeps the TUI out of
-/// the router's broadcast fanout while still using the same `ide-context` request route.
-#[cfg(any(unix, windows))]
-pub(crate) struct IdeContextClient;
 
 #[cfg(unix)]
 type IdeContextStream = UnixDeadlineStream;
@@ -355,38 +284,17 @@ fn frame_payload_is_broadcast(payload: &[u8]) -> bool {
 }
 
 #[cfg(any(unix, windows))]
-impl IdeContextClient {
-    pub(crate) fn connect() -> Result<Self, IdeContextError> {
-        Ok(Self)
-    }
-
-    pub(crate) fn fetch_ide_context(
-        &mut self,
-        workspace_root: &Path,
-    ) -> Result<IdeContext, IdeContextError> {
-        fetch_ide_context_from_socket(
-            default_ipc_socket_path(),
-            workspace_root,
-            IDE_CONTEXT_REQUEST_TIMEOUT,
-        )
-    }
+pub(crate) fn fetch_ide_context(workspace_root: &Path) -> Result<IdeContext, IdeContextError> {
+    fetch_ide_context_from_socket(
+        default_ipc_socket_path(),
+        workspace_root,
+        IDE_CONTEXT_REQUEST_TIMEOUT,
+    )
 }
 
 #[cfg(not(any(unix, windows)))]
-pub(crate) struct IdeContextClient;
-
-#[cfg(not(any(unix, windows)))]
-impl IdeContextClient {
-    pub(crate) fn connect() -> Result<Self, IdeContextError> {
-        Err(IdeContextError::UnsupportedPlatform)
-    }
-
-    pub(crate) fn fetch_ide_context(
-        &mut self,
-        _workspace_root: &Path,
-    ) -> Result<IdeContext, IdeContextError> {
-        Err(IdeContextError::UnsupportedPlatform)
-    }
+pub(crate) fn fetch_ide_context(_workspace_root: &Path) -> Result<IdeContext, IdeContextError> {
+    Err(IdeContextError::UnsupportedPlatform)
 }
 
 #[cfg(unix)]
@@ -938,49 +846,6 @@ mod tests {
             .write_all(payload)
             .expect("write raw test IPC frame payload");
         stream.flush().expect("flush raw test IPC frame");
-    }
-
-    #[cfg(any(unix, windows))]
-    #[test]
-    fn read_frame_respects_deadline_while_reading_payload() {
-        struct SlowPayloadReader {
-            header: [u8; 4],
-            header_sent: bool,
-            payload: Vec<u8>,
-        }
-
-        impl std::io::Read for SlowPayloadReader {
-            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-                if !self.header_sent {
-                    self.header_sent = true;
-                    buf[..self.header.len()].copy_from_slice(&self.header);
-                    return Ok(self.header.len());
-                }
-
-                std::thread::sleep(Duration::from_millis(20));
-                let bytes_to_copy = self.payload.len().min(buf.len());
-                buf[..bytes_to_copy].copy_from_slice(&self.payload[..bytes_to_copy]);
-                self.payload.drain(..bytes_to_copy);
-                Ok(bytes_to_copy)
-            }
-        }
-
-        let payload = br#"{"type":"response"}"#.to_vec();
-        let mut stream = SlowPayloadReader {
-            header: u32::try_from(payload.len())
-                .expect("payload length fits u32")
-                .to_le_bytes(),
-            header_sent: false,
-            payload,
-        };
-
-        let err = read_frame(&mut stream, Instant::now() + Duration::from_millis(1))
-            .expect_err("expired deadline should fail while reading payload");
-
-        assert!(matches!(
-            err,
-            IdeContextError::Read(error) if error.kind() == std::io::ErrorKind::TimedOut
-        ));
     }
 
     #[cfg(unix)]

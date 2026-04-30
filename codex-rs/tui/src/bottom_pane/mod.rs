@@ -97,7 +97,6 @@ mod skills_toggle_view;
 pub(crate) mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use footer::GoalStatusIndicator;
-pub(crate) use footer::IdeContextStatusIndicator;
 #[cfg(test)]
 pub(crate) use footer::goal_status_indicator_line;
 pub(crate) use list_selection_view::ColumnWidthMode;
@@ -377,11 +376,8 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub fn set_ide_context_status_indicator(
-        &mut self,
-        indicator: Option<IdeContextStatusIndicator>,
-    ) {
-        self.composer.set_ide_context_status_indicator(indicator);
+    pub fn set_ide_context_active(&mut self, active: bool) {
+        self.composer.set_ide_context_active(active);
         self.request_redraw();
     }
 
