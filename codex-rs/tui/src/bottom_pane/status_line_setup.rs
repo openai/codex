@@ -220,6 +220,8 @@ impl StatusLineSetupView {
             name: "Use theme colors".to_string(),
             description: Some("Apply muted colors from the active /theme.".to_string()),
             enabled: use_theme_colors,
+            orderable: false,
+            section_break_after: true,
         }];
 
         if let Some(selected_items) = status_line_items.as_ref() {
@@ -296,6 +298,8 @@ impl StatusLineSetupView {
             name: item.to_string(),
             description: Some(item.description().to_string()),
             enabled,
+            orderable: true,
+            section_break_after: false,
         }
     }
 }
@@ -435,12 +439,16 @@ mod tests {
                 name: String::new(),
                 description: None,
                 enabled: true,
+                orderable: true,
+                section_break_after: false,
             },
             MultiSelectItem {
                 id: StatusLineItem::CurrentDir.to_string(),
                 name: String::new(),
                 description: None,
                 enabled: true,
+                orderable: true,
+                section_break_after: false,
             },
         ];
 
@@ -469,12 +477,16 @@ mod tests {
                 name: String::new(),
                 description: None,
                 enabled: true,
+                orderable: true,
+                section_break_after: false,
             },
             MultiSelectItem {
                 id: StatusLineItem::GitBranch.to_string(),
                 name: String::new(),
                 description: None,
                 enabled: true,
+                orderable: true,
+                section_break_after: false,
             },
         ];
 
@@ -509,12 +521,16 @@ mod tests {
                 name: String::new(),
                 description: None,
                 enabled: true,
+                orderable: true,
+                section_break_after: false,
             },
             MultiSelectItem {
                 id: StatusLineItem::ThreadTitle.to_string(),
                 name: String::new(),
                 description: None,
                 enabled: true,
+                orderable: true,
+                section_break_after: false,
             },
         ];
 

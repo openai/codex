@@ -1,6 +1,7 @@
 //! Theme-derived styling for the configurable footer statusline.
 
 use ratatui::prelude::Stylize;
+use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -9,6 +10,8 @@ use super::status_line_setup::StatusLineItem;
 use crate::render::highlight::foreground_style_for_scopes;
 
 const STATUS_LINE_SEPARATOR: &str = " · ";
+const STATUS_LINE_COLOR_SATURATION_PERCENT: u16 = 75;
+const STATUS_LINE_COLOR_BRIGHTNESS_PERCENT: u16 = 95;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StatusLineAccent {
@@ -97,9 +100,9 @@ where
         }
         let style = if use_theme_colors {
             let accent = StatusLineAccent::for_item(item);
-            theme_style_for_accent(accent)
-                .unwrap_or_else(|| accent.fallback_style())
-                .dim()
+            soften_status_line_style(
+                theme_style_for_accent(accent).unwrap_or_else(|| accent.fallback_style()),
+            )
         } else {
             Style::default().dim()
         };
@@ -109,11 +112,63 @@ where
     (!spans.is_empty()).then(|| Line::from(spans))
 }
 
+fn soften_status_line_style(mut style: Style) -> Style {
+    if let Some(fg) = style.fg {
+        style.fg = Some(soften_status_line_color(fg));
+    }
+    style
+}
+
+#[allow(clippy::disallowed_methods)]
+fn soften_status_line_color(color: Color) -> Color {
+    match color {
+        Color::Rgb(r, g, b) => {
+            let luma = weighted_luma(r, g, b);
+            Color::Rgb(
+                soften_rgb_channel(r, luma),
+                soften_rgb_channel(g, luma),
+                soften_rgb_channel(b, luma),
+            )
+        }
+        Color::LightRed => Color::Red,
+        Color::LightGreen => Color::Green,
+        Color::LightYellow => Color::Yellow,
+        Color::LightBlue => Color::Blue,
+        Color::LightMagenta => Color::Magenta,
+        Color::LightCyan => Color::Cyan,
+        Color::White => Color::Gray,
+        Color::Reset
+        | Color::Black
+        | Color::Red
+        | Color::Green
+        | Color::Yellow
+        | Color::Blue
+        | Color::Magenta
+        | Color::Cyan
+        | Color::Gray
+        | Color::DarkGray
+        | Color::Indexed(_) => color,
+    }
+}
+
+fn weighted_luma(r: u8, g: u8, b: u8) -> u16 {
+    (77 * u16::from(r) + 150 * u16::from(g) + 29 * u16::from(b)) / 256
+}
+
+fn soften_rgb_channel(channel: u8, luma: u16) -> u8 {
+    let channel = u16::from(channel);
+    let softened = (channel * STATUS_LINE_COLOR_SATURATION_PERCENT
+        + luma * (100 - STATUS_LINE_COLOR_SATURATION_PERCENT)
+        + 50)
+        / 100;
+
+    ((softened * STATUS_LINE_COLOR_BRIGHTNESS_PERCENT + 50) / 100) as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use ratatui::style::Color;
     use ratatui::style::Modifier;
 
     fn line_text(line: &Line<'static>) -> String {
@@ -138,11 +193,11 @@ mod tests {
 
         assert_eq!(line_text(&line), "gpt-5 · /repo · main");
         assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
-        assert!(line.spans[0].style.add_modifier.contains(Modifier::DIM));
+        assert!(!line.spans[0].style.add_modifier.contains(Modifier::DIM));
         assert_eq!(line.spans[2].style.fg, Some(Color::Green));
-        assert!(line.spans[2].style.add_modifier.contains(Modifier::DIM));
+        assert!(!line.spans[2].style.add_modifier.contains(Modifier::DIM));
         assert_eq!(line.spans[4].style.fg, Some(Color::Magenta));
-        assert!(line.spans[4].style.add_modifier.contains(Modifier::DIM));
+        assert!(!line.spans[4].style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]
@@ -161,10 +216,24 @@ mod tests {
         .expect("status line");
 
         assert_eq!(line.spans[0].style.fg, Some(Color::Red));
-        assert!(line.spans[0].style.add_modifier.contains(Modifier::DIM));
+        assert!(!line.spans[0].style.add_modifier.contains(Modifier::DIM));
         assert!(line.spans[1].style.add_modifier.contains(Modifier::DIM));
         assert_eq!(line.spans[2].style.fg, Some(Color::Green));
-        assert!(line.spans[2].style.add_modifier.contains(Modifier::DIM));
+        assert!(!line.spans[2].style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn status_line_segments_soften_rgb_theme_styles_without_dimming_text() {
+        let line = status_line_from_segments_with_resolver(
+            [(StatusLineItem::ModelName, "gpt-5".to_string())],
+            /*use_theme_colors*/ true,
+            |_| Some(Style::default().fg(Color::Rgb(255, 0, 0))),
+        )
+        .expect("status line");
+
+        assert_eq!(line.spans[0].style.fg, Some(Color::Rgb(200, 18, 18)));
+        assert!(!line.spans[0].style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]
