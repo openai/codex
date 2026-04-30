@@ -121,8 +121,6 @@
 //! overall state machine, since it affects which transitions are even possible from a given UI
 //! state.
 //!
-use crate::bottom_pane::footer::goal_status_indicator_line;
-use crate::bottom_pane::footer::mode_indicator_line;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
@@ -159,6 +157,7 @@ use super::footer::FooterKeyHints;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::GoalStatusIndicator;
+use super::footer::IdeContextStatusIndicator;
 use super::footer::SummaryLeft;
 use super::footer::can_show_left_with_context;
 use super::footer::context_window_line;
@@ -176,6 +175,7 @@ use super::footer::render_footer_line;
 use super::footer::reset_mode_after_activity;
 use super::footer::side_conversation_context_line;
 use super::footer::single_line_footer_layout;
+use super::footer::status_line_right_indicator_line;
 use super::footer::toggle_shortcut_mode;
 use super::footer::uses_passive_footer_status_layout;
 use super::paste_burst::CharDecision;
@@ -384,6 +384,7 @@ pub(crate) struct ChatComposer {
     config: ChatComposerConfig,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     goal_status_indicator: Option<GoalStatusIndicator>,
+    ide_context_status_indicator: Option<IdeContextStatusIndicator>,
     connectors_enabled: bool,
     plugins_command_enabled: bool,
     fast_command_enabled: bool,
@@ -454,15 +455,6 @@ enum SlashValidation {
 }
 
 const FOOTER_SPACING_HEIGHT: u16 = 0;
-
-fn status_line_right_indicator(
-    collaboration_mode_indicator: Option<CollaborationModeIndicator>,
-    goal_status_indicator: Option<&GoalStatusIndicator>,
-    show_cycle_hint: bool,
-) -> Option<Line<'static>> {
-    mode_indicator_line(collaboration_mode_indicator, show_cycle_hint)
-        .or_else(|| goal_status_indicator_line(goal_status_indicator))
-}
 
 /// Builds the one-line nudge that replaces the ambient footer without adding layout height.
 fn plan_mode_nudge_line() -> Line<'static> {
@@ -571,6 +563,7 @@ impl ChatComposer {
             config,
             collaboration_mode_indicator: None,
             goal_status_indicator: None,
+            ide_context_status_indicator: None,
             connectors_enabled: false,
             plugins_command_enabled: false,
             fast_command_enabled: false,
@@ -726,6 +719,13 @@ impl ChatComposer {
 
     pub fn set_goal_status_indicator(&mut self, indicator: Option<GoalStatusIndicator>) {
         self.goal_status_indicator = indicator;
+    }
+
+    pub fn set_ide_context_status_indicator(
+        &mut self,
+        indicator: Option<IdeContextStatusIndicator>,
+    ) {
+        self.ide_context_status_indicator = indicator;
     }
 
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
@@ -4158,14 +4158,16 @@ impl ChatComposer {
                         } else if let Some(line) = self.shell_mode_footer_line() {
                             Some(line)
                         } else if status_line_active {
-                            let full = status_line_right_indicator(
+                            let full = status_line_right_indicator_line(
                                 self.collaboration_mode_indicator,
                                 self.goal_status_indicator.as_ref(),
+                                self.ide_context_status_indicator.as_ref(),
                                 show_cycle_hint,
                             );
-                            let compact = status_line_right_indicator(
+                            let compact = status_line_right_indicator_line(
                                 self.collaboration_mode_indicator,
                                 self.goal_status_indicator.as_ref(),
+                                self.ide_context_status_indicator.as_ref(),
                                 /*show_cycle_hint*/ false,
                             );
                             let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);

@@ -1,0 +1,543 @@
+//! Private transport for fetching IDE context for TUI `/ide` support.
+
+use std::path::Path;
+use std::path::PathBuf;
+use std::time::Duration;
+
+#[cfg(any(unix, windows))]
+use serde_json::Value;
+#[cfg(any(unix, windows, test))]
+use serde_json::json;
+use thiserror::Error;
+
+use super::IdeContext;
+
+// The desktop integration can take several seconds to determine whether an IDE can answer a
+// request. Keep this long enough that transient local read timeouts do not become user-visible.
+const IDE_CONTEXT_REQUEST_TIMEOUT: Duration = Duration::from_secs(6);
+// Prompt rendering applies its own smaller cap to selected text before injection.
+#[cfg(any(unix, windows))]
+const MAX_IPC_FRAME_BYTES: usize = 256 * 1024 * 1024;
+
+#[derive(Debug, Error)]
+pub(crate) enum IdeContextError {
+    #[cfg(any(unix, windows))]
+    #[error("failed to connect to IDE context provider: {0}")]
+    Connect(std::io::Error),
+    #[cfg(any(unix, windows))]
+    #[error("failed to request IDE context: {0}")]
+    Send(std::io::Error),
+    #[cfg(any(unix, windows))]
+    #[error("failed to read IDE context: {0}")]
+    Read(std::io::Error),
+    #[cfg(any(unix, windows))]
+    #[error("invalid IDE context response: {0}")]
+    InvalidResponse(String),
+    #[cfg(any(unix, windows))]
+    #[error("IDE context response exceeded maximum size")]
+    ResponseTooLarge,
+    #[cfg(any(unix, windows))]
+    #[error("IDE context request failed")]
+    RequestFailed(String),
+    #[cfg(not(any(unix, windows)))]
+    #[error("IDE context is not supported on this platform")]
+    UnsupportedPlatform,
+}
+
+impl IdeContextError {
+    /// Returns true for short-lived states that can appear just after the TUI disconnects.
+    #[cfg(any(unix, windows))]
+    pub(crate) fn is_retryable_after_recent_toggle(&self) -> bool {
+        match self {
+            IdeContextError::RequestFailed(error) => matches!(
+                error.as_str(),
+                "no-client-found" | "client-disconnected" | "request-timeout"
+            ),
+            IdeContextError::Read(error) => {
+                matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                )
+            }
+            IdeContextError::Connect(_)
+            | IdeContextError::Send(_)
+            | IdeContextError::InvalidResponse(_)
+            | IdeContextError::ResponseTooLarge => false,
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    pub(crate) fn user_facing_hint(&self) -> String {
+        match self {
+            IdeContextError::Connect(_) => {
+                "Open this project in VS Code or Cursor with the Codex extension active."
+                    .to_string()
+            }
+            IdeContextError::RequestFailed(error) if error == "no-client-found" => {
+                "Open this project in VS Code or Cursor with the Codex extension active."
+                    .to_string()
+            }
+            IdeContextError::RequestFailed(_) => {
+                "The IDE extension did not provide context. Try /ide again.".to_string()
+            }
+            IdeContextError::ResponseTooLarge => {
+                "The selected IDE context is too large. Clear any large selection in your IDE and try /ide again.".to_string()
+            }
+            IdeContextError::Send(_) => {
+                "Codex could not request IDE context. Try /ide again.".to_string()
+            }
+            IdeContextError::Read(_) | IdeContextError::InvalidResponse(_) => {
+                "Codex could not read IDE context. Try /ide again.".to_string()
+            }
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    pub(crate) fn is_retryable_after_recent_toggle(&self) -> bool {
+        false
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    pub(crate) fn user_facing_hint(&self) -> String {
+        self.to_string()
+    }
+}
+
+pub(crate) fn fetch_ide_context(workspace_root: &Path) -> Result<IdeContext, IdeContextError> {
+    fetch_ide_context_from_socket(
+        default_ipc_socket_path(),
+        workspace_root,
+        IDE_CONTEXT_REQUEST_TIMEOUT,
+    )
+}
+
+#[cfg(unix)]
+fn default_ipc_socket_path() -> PathBuf {
+    let uid = unsafe { libc::getuid() };
+    std::env::temp_dir()
+        .join("codex-ipc")
+        .join(format!("ipc-{uid}.sock"))
+}
+
+#[cfg(windows)]
+fn default_ipc_socket_path() -> PathBuf {
+    PathBuf::from(r"\\.\pipe\codex-ipc")
+}
+
+#[cfg(not(any(unix, windows)))]
+fn default_ipc_socket_path() -> PathBuf {
+    PathBuf::new()
+}
+
+#[cfg(unix)]
+pub(crate) fn fetch_ide_context_from_socket(
+    socket_path: PathBuf,
+    workspace_root: &Path,
+    timeout: Duration,
+) -> Result<IdeContext, IdeContextError> {
+    use std::os::unix::net::UnixStream;
+
+    let mut stream = UnixStream::connect(socket_path).map_err(IdeContextError::Connect)?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(IdeContextError::Read)?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(IdeContextError::Send)?;
+
+    fetch_ide_context_from_stream(&mut stream, workspace_root)
+}
+
+#[cfg(windows)]
+pub(crate) fn fetch_ide_context_from_socket(
+    socket_path: PathBuf,
+    workspace_root: &Path,
+    _timeout: Duration,
+) -> Result<IdeContext, IdeContextError> {
+    let mut stream = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(socket_path)
+        .map_err(IdeContextError::Connect)?;
+
+    fetch_ide_context_from_stream(&mut stream, workspace_root)
+}
+
+#[cfg(any(unix, windows))]
+fn initialize_client<T: std::io::Read + std::io::Write + ?Sized>(
+    stream: &mut T,
+) -> Result<String, IdeContextError> {
+    let initialize_request_id = uuid::Uuid::new_v4().to_string();
+    let initialize_request = json!({
+        "type": "request",
+        "requestId": initialize_request_id.clone(),
+        "sourceClientId": "initializing-client",
+        "version": 0,
+        "method": "initialize",
+        "params": {
+            // Match the desktop client type so the current IDE extension can handle us unchanged.
+            "clientType": "desktop",
+        },
+    });
+    write_frame(stream, &initialize_request).map_err(IdeContextError::Send)?;
+    let initialize_response = read_response_frame(stream, &initialize_request_id)?;
+    extract_client_id(&initialize_response)
+}
+
+#[cfg(any(unix, windows))]
+fn fetch_ide_context_with_client_id<T: std::io::Read + std::io::Write + ?Sized>(
+    stream: &mut T,
+    client_id: &str,
+    workspace_root: &Path,
+) -> Result<IdeContext, IdeContextError> {
+    let ide_context_request_id = uuid::Uuid::new_v4().to_string();
+    let ide_context_request = json!({
+        "type": "request",
+        "requestId": ide_context_request_id.clone(),
+        "sourceClientId": client_id,
+        "version": 0,
+        "method": "ide-context",
+        "params": {
+            "workspaceRoot": workspace_root.to_string_lossy(),
+        },
+    });
+    write_frame(stream, &ide_context_request).map_err(IdeContextError::Send)?;
+    let ide_context_response = read_response_frame(stream, &ide_context_request_id)?;
+    extract_ide_context(ide_context_response)
+}
+
+#[cfg(any(unix, windows))]
+fn fetch_ide_context_from_stream<T: std::io::Read + std::io::Write + ?Sized>(
+    stream: &mut T,
+    workspace_root: &Path,
+) -> Result<IdeContext, IdeContextError> {
+    let client_id = initialize_client(stream)?;
+    fetch_ide_context_with_client_id(stream, &client_id, workspace_root)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn fetch_ide_context_from_socket(
+    _socket_path: PathBuf,
+    _workspace_root: &Path,
+    _timeout: Duration,
+) -> Result<IdeContext, IdeContextError> {
+    Err(IdeContextError::UnsupportedPlatform)
+}
+
+#[cfg(any(unix, windows))]
+fn write_frame<T: std::io::Write + ?Sized>(stream: &mut T, message: &Value) -> std::io::Result<()> {
+    let payload = serde_json::to_vec(message).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid IDE context JSON message: {err}"),
+        )
+    })?;
+    let payload_len = u32::try_from(payload.len()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "IDE context payload exceeds u32 length",
+        )
+    })?;
+    stream.write_all(&payload_len.to_le_bytes())?;
+    stream.write_all(&payload)?;
+    stream.flush()
+}
+
+#[cfg(any(unix, windows))]
+fn read_frame<T: std::io::Read + ?Sized>(stream: &mut T) -> Result<Value, IdeContextError> {
+    let mut len_bytes = [0_u8; 4];
+    stream
+        .read_exact(&mut len_bytes)
+        .map_err(IdeContextError::Read)?;
+    let len = u32::from_le_bytes(len_bytes) as usize;
+    if len > MAX_IPC_FRAME_BYTES {
+        return Err(IdeContextError::ResponseTooLarge);
+    }
+
+    let mut payload = vec![0_u8; len];
+    stream
+        .read_exact(&mut payload)
+        .map_err(IdeContextError::Read)?;
+    serde_json::from_slice(&payload)
+        .map_err(|err| IdeContextError::InvalidResponse(format!("invalid JSON payload: {err}")))
+}
+
+#[cfg(any(unix, windows))]
+fn read_response_frame<T: std::io::Read + std::io::Write + ?Sized>(
+    stream: &mut T,
+    request_id: &str,
+) -> Result<Value, IdeContextError> {
+    loop {
+        let message = read_frame(stream)?;
+        match message.get("type").and_then(Value::as_str) {
+            Some("response") => {
+                if message.get("requestId").and_then(Value::as_str) == Some(request_id) {
+                    return Ok(message);
+                }
+            }
+            Some("broadcast") => {}
+            Some("client-discovery-request") => {
+                if let Some(discovery_request_id) = message.get("requestId").and_then(Value::as_str)
+                {
+                    let response = json!({
+                        "type": "client-discovery-response",
+                        "requestId": discovery_request_id,
+                        "response": {
+                            "canHandle": false,
+                        },
+                    });
+                    write_frame(stream, &response).map_err(IdeContextError::Send)?;
+                }
+            }
+            Some("client-discovery-response") | Some("request") => {}
+            Some(other) => {
+                return Err(IdeContextError::InvalidResponse(format!(
+                    "unexpected IDE context message type: {other}"
+                )));
+            }
+            None => {
+                return Err(IdeContextError::InvalidResponse(
+                    "IDE context message did not include a type".to_string(),
+                ));
+            }
+        }
+    }
+}
+
+#[cfg(any(unix, windows))]
+fn extract_client_id(response: &Value) -> Result<String, IdeContextError> {
+    ensure_success_response(response)?;
+    response
+        .get("result")
+        .and_then(|result| result.get("clientId"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            IdeContextError::InvalidResponse(
+                "initialize response did not include result.clientId".to_string(),
+            )
+        })
+}
+
+#[cfg(any(unix, windows))]
+fn extract_ide_context(response: Value) -> Result<IdeContext, IdeContextError> {
+    ensure_success_response(&response)?;
+    let ide_context = response
+        .get("result")
+        .and_then(|result| result.get("ideContext"))
+        .cloned()
+        .ok_or_else(|| {
+            IdeContextError::InvalidResponse(
+                "ide-context response did not include result.ideContext".to_string(),
+            )
+        })?;
+    serde_json::from_value(ide_context)
+        .map_err(|err| IdeContextError::InvalidResponse(err.to_string()))
+}
+
+#[cfg(any(unix, windows))]
+fn ensure_success_response(response: &Value) -> Result<(), IdeContextError> {
+    match response.get("resultType").and_then(Value::as_str) {
+        Some("success") => Ok(()),
+        Some("error") => Err(IdeContextError::RequestFailed(
+            response
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+                .to_string(),
+        )),
+        _ => Err(IdeContextError::InvalidResponse(
+            "response did not include a success or error resultType".to_string(),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn retryable_after_recent_toggle_covers_transient_errors() {
+        assert!(
+            IdeContextError::RequestFailed("no-client-found".to_string())
+                .is_retryable_after_recent_toggle()
+        );
+        assert!(
+            IdeContextError::RequestFailed("client-disconnected".to_string())
+                .is_retryable_after_recent_toggle()
+        );
+        assert!(
+            IdeContextError::RequestFailed("request-timeout".to_string())
+                .is_retryable_after_recent_toggle()
+        );
+        assert!(
+            IdeContextError::Read(std::io::Error::from(std::io::ErrorKind::TimedOut))
+                .is_retryable_after_recent_toggle()
+        );
+        assert!(
+            IdeContextError::Read(std::io::Error::from(std::io::ErrorKind::WouldBlock))
+                .is_retryable_after_recent_toggle()
+        );
+        assert!(
+            !IdeContextError::RequestFailed("other-error".to_string())
+                .is_retryable_after_recent_toggle()
+        );
+        assert!(
+            !IdeContextError::InvalidResponse("bad payload".to_string())
+                .is_retryable_after_recent_toggle()
+        );
+        assert!(!IdeContextError::ResponseTooLarge.is_retryable_after_recent_toggle());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fetch_ide_context_handles_interleaved_messages() {
+        use std::os::unix::net::UnixListener;
+        use std::thread;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let socket_path = tempdir.path().join("codex-ipc.sock");
+        let listener = UnixListener::bind(&socket_path).expect("bind socket");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+
+            let initialize = read_frame(&mut stream).expect("read initialize");
+            assert_eq!(
+                initialize.get("method").and_then(Value::as_str),
+                Some("initialize")
+            );
+            assert_eq!(
+                initialize
+                    .get("params")
+                    .and_then(|params| params.get("clientType"))
+                    .and_then(Value::as_str),
+                Some("desktop")
+            );
+            let initialize_request_id = initialize
+                .get("requestId")
+                .and_then(Value::as_str)
+                .expect("initialize request id");
+            write_frame(
+                &mut stream,
+                &json!({
+                    "type": "response",
+                    "requestId": initialize_request_id,
+                    "resultType": "success",
+                    "method": "initialize",
+                    "handledByClientId": "server",
+                    "result": {
+                        "clientId": "rust-client"
+                    }
+                }),
+            )
+            .expect("write initialize response");
+
+            let ide_context = read_frame(&mut stream).expect("read ide-context");
+            assert_eq!(
+                ide_context.get("method").and_then(Value::as_str),
+                Some("ide-context")
+            );
+            assert_eq!(
+                ide_context.get("sourceClientId").and_then(Value::as_str),
+                Some("rust-client")
+            );
+            assert_eq!(
+                ide_context
+                    .get("params")
+                    .and_then(|params| params.get("workspaceRoot"))
+                    .and_then(Value::as_str),
+                Some("/repo")
+            );
+            let ide_context_request_id = ide_context
+                .get("requestId")
+                .and_then(Value::as_str)
+                .expect("ide-context request id");
+            write_frame(
+                &mut stream,
+                &json!({
+                    "type": "broadcast",
+                    "method": "client-status-changed",
+                    "sourceClientId": "vscode-client",
+                    "version": 0,
+                    "params": {
+                        "clientId": "vscode-client",
+                        "clientType": "vscode",
+                        "status": "connected"
+                    }
+                }),
+            )
+            .expect("write broadcast before ide-context response");
+
+            write_frame(
+                &mut stream,
+                &json!({
+                    "type": "client-discovery-request",
+                    "requestId": "discovery-request",
+                    "request": ide_context.clone(),
+                }),
+            )
+            .expect("write client discovery request");
+            let discovery_response =
+                read_frame(&mut stream).expect("read client discovery response");
+            assert_eq!(
+                discovery_response.get("type").and_then(Value::as_str),
+                Some("client-discovery-response")
+            );
+            assert_eq!(
+                discovery_response.get("requestId").and_then(Value::as_str),
+                Some("discovery-request")
+            );
+            assert_eq!(
+                discovery_response
+                    .get("response")
+                    .and_then(|response| response.get("canHandle"))
+                    .and_then(Value::as_bool),
+                Some(false)
+            );
+
+            write_frame(
+                &mut stream,
+                &json!({
+                    "type": "response",
+                    "requestId": ide_context_request_id,
+                    "resultType": "success",
+                    "method": "ide-context",
+                    "handledByClientId": "vscode-client",
+                    "result": {
+                        "ideContext": {
+                            "activeFile": {
+                                "label": "lib.rs",
+                                "path": "src/lib.rs",
+                                "fsPath": "/repo/src/lib.rs",
+                                "selection": {
+                                    "start": { "line": 0, "character": 0 },
+                                    "end": { "line": 0, "character": 3 }
+                                },
+                                "activeSelectionContent": "use",
+                                "selections": []
+                            },
+                            "openTabs": []
+                        }
+                    }
+                }),
+            )
+            .expect("write ide-context response");
+        });
+
+        let context =
+            fetch_ide_context_from_socket(socket_path, Path::new("/repo"), Duration::from_secs(1))
+                .expect("fetch ide context");
+
+        server.join().expect("server joins");
+        assert_eq!(
+            context
+                .active_file
+                .as_ref()
+                .map(|file| file.active_selection_content.as_str()),
+            Some("use")
+        );
+    }
+}

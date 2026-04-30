@@ -385,6 +385,8 @@ use self::goal_status::GoalStatusState;
 #[cfg(test)]
 use self::goal_status::goal_status_indicator_from_app_goal;
 mod goal_menu;
+mod ide_context;
+use self::ide_context::IdeContextState;
 mod interrupts;
 mod mcp_startup;
 use self::interrupts::InterruptManager;
@@ -899,6 +901,7 @@ pub(crate) struct ChatWidget {
     connectors_partial_snapshot: Option<ConnectorsSnapshot>,
     connectors_prefetch_in_flight: bool,
     connectors_force_refetch_pending: bool,
+    ide_context: IdeContextState,
     plugins_cache: PluginsCacheState,
     plugins_fetch_state: PluginListFetchState,
     plugin_install_apps_needing_auth: Vec<AppSummary>,
@@ -5354,6 +5357,7 @@ impl ChatWidget {
             connectors_partial_snapshot: None,
             connectors_prefetch_in_flight: false,
             connectors_force_refetch_pending: false,
+            ide_context: IdeContextState::default(),
             plugins_cache: PluginsCacheState::default(),
             plugins_fetch_state: PluginListFetchState::default(),
             plugin_install_apps_needing_auth: Vec::new(),
@@ -6213,6 +6217,9 @@ impl ChatWidget {
             ));
             return (false, None);
         }
+
+        self.maybe_apply_ide_context(&mut items);
+
         let collaboration_mode = if self.collaboration_modes_enabled() {
             self.active_collaboration_mask
                 .as_ref()
@@ -7770,19 +7777,18 @@ impl ChatWidget {
     }
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
-        self.last_rendered_user_message_event =
-            Some(Self::rendered_user_message_event_from_event(&event));
-        let remote_image_urls = event.images.unwrap_or_default();
-        if !event.message.trim().is_empty()
-            || !event.text_elements.is_empty()
-            || !remote_image_urls.is_empty()
+        let rendered = Self::rendered_user_message_event_from_event(&event);
+        self.last_rendered_user_message_event = Some(rendered.clone());
+        if !rendered.message.trim().is_empty()
+            || !rendered.text_elements.is_empty()
+            || !rendered.remote_image_urls.is_empty()
         {
             self.record_visible_user_turn_for_copy();
             self.add_to_history(history_cell::new_user_prompt(
-                event.message,
-                event.text_elements,
-                event.local_images,
-                remote_image_urls,
+                rendered.message,
+                rendered.text_elements,
+                rendered.local_images,
+                rendered.remote_image_urls,
             ));
         }
 

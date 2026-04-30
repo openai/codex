@@ -1170,6 +1170,57 @@ fn rendered_user_message_event_from_inputs_matches_flattened_user_message_shape(
     );
 }
 
+#[test]
+fn rendered_user_message_event_from_event_hides_prompt_context() {
+    let raw_message = "# Context from my IDE setup:\n\n## Active file: src/lib.rs\n\n## My request for Codex:\nAsk $figma";
+    let mention_start = raw_message.find("$figma").expect("mention in raw message");
+    let rendered = ChatWidget::rendered_user_message_event_from_event(
+        &codex_protocol::protocol::UserMessageEvent {
+            message: raw_message.to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: vec![TextElement::new(
+                (mention_start..mention_start + "$figma".len()).into(),
+                Some("$figma".to_string()),
+            )],
+        },
+    );
+
+    assert_eq!(
+        rendered,
+        ChatWidget::rendered_user_message_event_from_parts(
+            "Ask $figma".to_string(),
+            vec![TextElement::new((4..10).into(), Some("$figma".to_string()))],
+            Vec::new(),
+            Vec::new(),
+        )
+    );
+}
+
+#[tokio::test]
+async fn committed_user_message_hides_prompt_context_in_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let raw_message = "# Context from my IDE setup:\n\n## Active file: src/lib.rs\n\n## My request for Codex:\nAsk Codex";
+
+    complete_user_message(&mut chat, "user-1", raw_message);
+
+    let mut user_message = None;
+    let mut rendered_cell = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_message = Some(cell.message.clone());
+            rendered_cell = Some(lines_to_single_string(&cell.display_lines(/*width*/ 80)));
+            break;
+        }
+    }
+
+    assert_eq!(user_message.as_deref(), Some("Ask Codex"));
+    let rendered_cell = rendered_cell.expect("rendered user history cell");
+    assert_snapshot!(rendered_cell.trim(), @"› Ask Codex");
+}
+
 #[tokio::test]
 async fn interrupt_restores_queued_messages_into_composer() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;

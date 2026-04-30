@@ -8,6 +8,7 @@ use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeOutputModality;
+use codex_protocol::user_input::ByteRange;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSession;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
@@ -80,6 +81,31 @@ pub(super) struct PendingSteerCompareKey {
     pub(super) image_count: usize,
 }
 
+fn rebase_text_elements_for_prompt_request(
+    text_elements: &[TextElement],
+    prompt_request_offset: usize,
+    prompt_request_len: usize,
+) -> Vec<TextElement> {
+    // Prompt context is folded into the raw user message for the agent, but the transcript shows
+    // only the user's request. Keep elements inside that visible request and shift their byte
+    // ranges so mentions/images still line up with the rendered text.
+    let prompt_request_end = prompt_request_offset + prompt_request_len;
+    text_elements
+        .iter()
+        .filter_map(|element| {
+            let range = element.byte_range;
+            if range.start < prompt_request_offset || range.end > prompt_request_end {
+                return None;
+            }
+
+            Some(element.map_range(|range| ByteRange {
+                start: range.start - prompt_request_offset,
+                end: range.end - prompt_request_offset,
+            }))
+        })
+        .collect()
+}
+
 impl ChatWidget {
     pub(super) fn rendered_user_message_event_from_parts(
         message: String,
@@ -98,9 +124,15 @@ impl ChatWidget {
     pub(super) fn rendered_user_message_event_from_event(
         event: &UserMessageEvent,
     ) -> RenderedUserMessageEvent {
+        let (message, prompt_request_offset) =
+            crate::ide_context::extract_prompt_request_with_offset(&event.message);
         Self::rendered_user_message_event_from_parts(
-            event.message.clone(),
-            event.text_elements.clone(),
+            message.to_string(),
+            rebase_text_elements_for_prompt_request(
+                &event.text_elements,
+                prompt_request_offset,
+                message.len(),
+            ),
             event.local_images.clone(),
             event.images.clone().unwrap_or_default(),
         )
