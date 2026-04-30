@@ -43,7 +43,7 @@ async fn mcp_startup_header_booting_snapshot() {
 }
 
 #[tokio::test]
-async fn mcp_startup_ready_does_not_clear_running_task() {
+async fn mcp_startup_complete_does_not_clear_running_task() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     handle_turn_started(&mut chat, "turn-1");

@@ -47,6 +47,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupFailure;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
@@ -243,7 +244,26 @@ impl McpConnectionManager {
             startup_cancellation_token: cancel_token.clone(),
         };
         tokio::spawn(async move {
-            let _ = join_set.join_all().await;
+            let outcomes = join_set.join_all().await;
+            let mut summary = McpStartupCompleteEvent::default();
+            for (server_name, outcome) in outcomes {
+                match outcome {
+                    Ok(_) => summary.ready.push(server_name),
+                    Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
+                    Err(StartupOutcomeError::Failed { error }) => {
+                        summary.failed.push(McpStartupFailure {
+                            server: server_name,
+                            error,
+                        })
+                    }
+                }
+            }
+            let _ = tx_event
+                .send(Event {
+                    id: startup_submit_id,
+                    msg: EventMsg::McpStartupComplete(summary),
+                })
+                .await;
         });
         (manager, cancel_token)
     }
