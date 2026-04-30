@@ -94,6 +94,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::AgentMessage(_)
         | EventMsg::AgentReasoning(_)
         | EventMsg::AgentReasoningRawContent(_)
+        | EventMsg::PatchApplyEnd(_)
         | EventMsg::TokenCount(_)
         | EventMsg::ThreadNameUpdated(_)
         | EventMsg::ContextCompacted(_)
@@ -119,7 +120,6 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::GuardianAssessment(_)
         | EventMsg::WebSearchEnd(_)
         | EventMsg::ExecCommandEnd(_)
-        | EventMsg::PatchApplyEnd(_)
         | EventMsg::McpToolCallEnd(_)
         | EventMsg::ViewImageToolCall(_)
         | EventMsg::CollabAgentSpawnEnd(_)
@@ -192,8 +192,12 @@ mod tests {
     use super::should_persist_event_msg;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::FileChange;
     use codex_protocol::protocol::ImageGenerationEndEvent;
+    use codex_protocol::protocol::PatchApplyEndEvent;
+    use codex_protocol::protocol::PatchApplyStatus;
     use codex_protocol::protocol::ThreadNameUpdatedEvent;
+    use std::path::PathBuf;
 
     #[test]
     fn persists_image_generation_end_events_in_limited_mode() {
@@ -216,6 +220,31 @@ mod tests {
         let event = EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
             thread_id: ThreadId::new(),
             thread_name: Some("saved-session".to_string()),
+        });
+
+        assert!(should_persist_event_msg(
+            &event,
+            EventPersistenceMode::Limited
+        ));
+    }
+
+    #[test]
+    fn persists_patch_apply_end_events_in_limited_mode() {
+        let event = EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+            call_id: "patch_123".into(),
+            turn_id: "turn_123".into(),
+            stdout: "Done!".into(),
+            stderr: String::new(),
+            success: true,
+            changes: [(
+                PathBuf::from("README.md"),
+                FileChange::Add {
+                    content: "hello\n".into(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            status: PatchApplyStatus::Completed,
         });
 
         assert!(should_persist_event_msg(
