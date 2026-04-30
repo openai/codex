@@ -969,7 +969,9 @@ fn scenarios() -> Vec<ScenarioSpec> {
             approval_policy: OnRequest,
             sandbox_policy: workspace_write(false),
             action: ActionKind::RunCommandWithPrefixRule {
-                command: "cat <<'EOF' > /tmp/out.txt\nhello\nEOF",
+                command: r#"cat <<'EOF' > /tmp/out.txt
+                hello
+                EOF"#,
                 prefix_rule: &["cat"],
             },
             sandbox_permissions: SandboxPermissions::RequireEscalated,
@@ -988,7 +990,9 @@ fn scenarios() -> Vec<ScenarioSpec> {
             approval_policy: OnRequest,
             sandbox_policy: workspace_write(false),
             action: ActionKind::RunCommandWithPolicy {
-                command: "PATH=/tmp/evil:$PATH cat <<'EOF'\nhello\nEOF",
+                command: r#"PATH=/tmp/evil:$PATH cat <<'EOF'
+                hello
+                EOF"#,
                 policy_src: r#"prefix_rule(pattern=["cat"], decision="allow")"#,
             },
             sandbox_permissions: SandboxPermissions::RequireEscalated,
@@ -1007,7 +1011,9 @@ fn scenarios() -> Vec<ScenarioSpec> {
             approval_policy: OnRequest,
             sandbox_policy: workspace_write(false),
             action: ActionKind::RunCommandWithPrefixRule {
-                command: "python3 <<'PY'\nprint('hello')\nPY",
+                command: r#"python3 <<'PY'
+                print('hello')
+                PY"#,
                 prefix_rule: &["python3"],
             },
             sandbox_permissions: SandboxPermissions::RequireEscalated,

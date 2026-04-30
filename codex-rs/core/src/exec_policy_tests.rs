@@ -852,7 +852,10 @@ async fn heredoc_redirect_without_escalation_runs_inside_sandbox() {
             command: vec![
                 "zsh".to_string(),
                 "-lc".to_string(),
-                "cat <<'EOF' > /some/important/folder/test.txt\nhello world\nEOF".to_string(),
+                r#"cat <<'EOF' > /some/important/folder/test.txt
+                hello world
+                EOF"#
+                    .to_string(),
             ],
             approval_policy: AskForApproval::OnRequest,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
@@ -880,7 +883,10 @@ async fn heredoc_redirect_with_escalation_requires_approval() {
             command: vec![
                 "zsh".to_string(),
                 "-lc".to_string(),
-                "cat <<'EOF' > /some/important/folder/test.txt\nhello world\nEOF".to_string(),
+                r#"cat <<'EOF' > /some/important/folder/test.txt
+                hello world
+                EOF"#
+                    .to_string(),
             ],
             approval_policy: AskForApproval::OnRequest,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
