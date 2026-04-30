@@ -7,6 +7,8 @@ use codex_features::FeatureToml;
 use codex_features::FeaturesToml;
 use codex_protocol::ThreadId;
 
+use crate::config_lock::ConfigLockReplayOptions;
+use crate::config_lock::clear_config_lock_debug_controls;
 use crate::config_lock::config_lock_metadata;
 use crate::config_lock::toml_round_trip;
 use crate::config_lock::validate_config_lock_replay;
@@ -27,7 +29,11 @@ pub(crate) async fn validate_config_lock_if_configured(
         return Ok(());
     };
     let actual = session_configuration.to_config_lock_toml()?;
-    validate_config_lock_replay(expected, &actual)
+    let config = session_configuration.original_config_do_not_use.as_ref();
+    let options = ConfigLockReplayOptions {
+        allow_codex_version_mismatch: config.config_lock_allow_codex_version_mismatch,
+    };
+    validate_config_lock_replay(expected, &actual, options)
         .context("config lock replay validation failed")?;
     Ok(())
 }
@@ -63,7 +69,7 @@ pub(crate) async fn export_config_lock_if_configured(
 impl SessionConfiguration {
     pub(crate) fn to_config_lock_toml(&self) -> anyhow::Result<ConfigToml> {
         let mut lock_config = session_configuration_to_lock_config_toml(self)?;
-        lock_config.config_lock = Some(config_lock_metadata(&self.cwd));
+        lock_config.config_lock = Some(config_lock_metadata());
         Ok(lock_config)
     }
 }
@@ -78,16 +84,18 @@ fn session_configuration_to_lock_config_toml(
         .try_into()
         .context("failed to deserialize effective config for config lock")?;
 
-    lock_config.model = Some(sc.collaboration_mode.model().to_string());
-    lock_config.model_reasoning_effort = sc.collaboration_mode.reasoning_effort();
-    lock_config.model_reasoning_summary = sc.model_reasoning_summary;
-    lock_config.service_tier = sc.service_tier;
-    lock_config.instructions = Some(sc.base_instructions.clone());
-    lock_config.developer_instructions = sc.developer_instructions.clone();
-    lock_config.compact_prompt = sc.compact_prompt.clone();
-    lock_config.personality = sc.personality;
-    lock_config.approval_policy = Some(sc.approval_policy.value());
-    lock_config.approvals_reviewer = Some(sc.approvals_reviewer);
+    if !config.config_lock_allow_dynamic_catalog {
+        lock_config.model = Some(sc.collaboration_mode.model().to_string());
+        lock_config.model_reasoning_effort = sc.collaboration_mode.reasoning_effort();
+        lock_config.model_reasoning_summary = sc.model_reasoning_summary;
+        lock_config.service_tier = sc.service_tier;
+        lock_config.instructions = Some(sc.base_instructions.clone());
+        lock_config.developer_instructions = sc.developer_instructions.clone();
+        lock_config.compact_prompt = sc.compact_prompt.clone();
+        lock_config.personality = sc.personality;
+        lock_config.approval_policy = Some(sc.approval_policy.value());
+        lock_config.approvals_reviewer = Some(sc.approvals_reviewer);
+    }
     lock_config.web_search = Some(config.web_search_mode.value());
     lock_config.model_provider = Some(config.model_provider_id.clone());
     lock_config.plan_mode_reasoning_effort = config.plan_mode_reasoning_effort;
@@ -100,8 +108,7 @@ fn session_configuration_to_lock_config_toml(
     lock_config.profile = None;
     lock_config.profiles.clear();
     lock_config.config_lock = None;
-    lock_config.config_lock_export_dir = None;
-    lock_config.config_lock_file = None;
+    clear_config_lock_debug_controls(&mut lock_config);
     lock_config.model_instructions_file = None;
     lock_config.experimental_instructions_file = None;
     lock_config.experimental_compact_prompt_file = None;
@@ -166,6 +173,7 @@ mod tests {
     use super::*;
     use codex_features::MultiAgentV2ConfigToml;
     use pretty_assertions::assert_eq;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn lock_contains_prompts_and_materializes_features() {
@@ -186,8 +194,11 @@ mod tests {
         );
         assert_eq!(lock.profile, None);
         assert!(lock.profiles.is_empty());
-        assert_eq!(lock.config_lock_export_dir, None);
-        assert_eq!(lock.config_lock_file, None);
+        assert!(
+            lock.debug
+                .as_ref()
+                .is_none_or(|debug| debug.config_lock.is_none())
+        );
         assert!(lock.memories.is_some());
 
         let features = lock
@@ -225,7 +236,31 @@ mod tests {
             .as_ref()
             .expect("lock should include metadata");
         assert_eq!(metadata.version, crate::config_lock::CONFIG_LOCK_VERSION);
-        assert_eq!(metadata.cwd, sc.cwd);
+    }
+
+    #[tokio::test]
+    async fn lock_skips_session_values_when_dynamic_catalog_is_allowed() {
+        let mut sc = crate::session::tests::make_session_configuration_for_tests().await;
+        let mut config = (*sc.original_config_do_not_use).clone();
+        config.config_lock_allow_dynamic_catalog = true;
+        sc.original_config_do_not_use = Arc::new(config);
+        sc.base_instructions = "catalog instructions".to_string();
+        sc.developer_instructions = Some("catalog developer instructions".to_string());
+        sc.compact_prompt = Some("catalog compact prompt".to_string());
+        sc.service_tier = Some(codex_protocol::config_types::ServiceTier::Flex);
+
+        let lock = sc.to_config_lock_toml().expect("lock should serialize");
+
+        assert_eq!(lock.model, None);
+        assert_eq!(lock.model_reasoning_effort, None);
+        assert_eq!(lock.model_reasoning_summary, None);
+        assert_eq!(lock.service_tier, None);
+        assert_eq!(lock.instructions, None);
+        assert_eq!(lock.developer_instructions, None);
+        assert_eq!(lock.compact_prompt, None);
+        assert_eq!(lock.personality, None);
+        assert_eq!(lock.approval_policy, None);
+        assert_eq!(lock.approvals_reviewer, None);
     }
 
     #[tokio::test]
@@ -236,12 +271,59 @@ mod tests {
         actual.model = Some("different-model".to_string());
 
         let error =
-            validate_config_lock_replay(&expected, &actual).expect_err("config drift should fail");
+            validate_config_lock_replay(&expected, &actual, ConfigLockReplayOptions::default())
+                .expect_err("config drift should fail");
         let message = error.to_string();
         assert!(
             message.contains("replayed effective config does not match config lock"),
             "{message}"
         );
         assert!(message.contains("model = "), "{message}");
+    }
+
+    #[tokio::test]
+    async fn lock_validation_rejects_codex_version_mismatch_by_default() {
+        let sc = crate::session::tests::make_session_configuration_for_tests().await;
+        let mut expected = sc.to_config_lock_toml().expect("lock should serialize");
+        expected
+            .config_lock
+            .as_mut()
+            .expect("lock should include metadata")
+            .codex_version = "older-version".to_string();
+        let actual = sc.to_config_lock_toml().expect("lock should serialize");
+
+        let error =
+            validate_config_lock_replay(&expected, &actual, ConfigLockReplayOptions::default())
+                .expect_err("version drift should fail");
+        let message = error.to_string();
+        assert!(
+            message.contains("config lock Codex version mismatch"),
+            "{message}"
+        );
+        assert!(
+            message.contains("debug.config_lock.allow_codex_version_mismatch=true"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn lock_validation_can_ignore_codex_version_mismatch() {
+        let sc = crate::session::tests::make_session_configuration_for_tests().await;
+        let mut expected = sc.to_config_lock_toml().expect("lock should serialize");
+        expected
+            .config_lock
+            .as_mut()
+            .expect("lock should include metadata")
+            .codex_version = "older-version".to_string();
+        let actual = sc.to_config_lock_toml().expect("lock should serialize");
+
+        validate_config_lock_replay(
+            &expected,
+            &actual,
+            ConfigLockReplayOptions {
+                allow_codex_version_mismatch: true,
+            },
+        )
+        .expect("version drift should be ignored");
     }
 }

@@ -625,6 +625,14 @@ pub struct Config {
     /// Directory where Codex writes effective session config lock files.
     pub config_lock_export_dir: Option<AbsolutePathBuf>,
 
+    /// Whether config lock replay ignores Codex version drift between the
+    /// lock metadata and the regenerated lock.
+    pub config_lock_allow_codex_version_mismatch: bool,
+
+    /// Whether config lock creation skips values resolved from the dynamic
+    /// model catalog/session configuration.
+    pub config_lock_allow_dynamic_catalog: bool,
+
     /// Effective config lock used for strict replay validation.
     pub config_lock_toml: Option<Arc<ConfigToml>>,
 
@@ -966,22 +974,30 @@ impl ConfigBuilder {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, err));
             }
         };
-        if let Some(config_lock_file) = config_toml.config_lock_file.as_ref() {
-            let lock_config_toml = read_config_lock_from_path(config_lock_file).await?;
-            let Some(lock_metadata) = lock_config_toml.config_lock.clone() else {
-                return Err(std::io::Error::other(
-                    "config lock file is missing [config_lock] metadata",
-                ));
-            };
+        let config_lock_settings = config_toml
+            .debug
+            .as_ref()
+            .and_then(|debug| debug.config_lock.as_ref());
+        if let Some(config_lock_load_path) =
+            config_lock_settings.and_then(|config_lock| config_lock.load_path.as_ref())
+        {
+            let allow_codex_version_mismatch = config_lock_settings
+                .and_then(|config_lock| config_lock.allow_codex_version_mismatch)
+                .unwrap_or(false);
+            let allow_dynamic_catalog = config_toml
+                .debug
+                .as_ref()
+                .and_then(|debug| debug.allow_dynamic_catalog)
+                .unwrap_or(false);
+            let lock_config_toml = read_config_lock_from_path(config_lock_load_path).await?;
             let expected_lock_config = lock_config_toml.clone();
-            let lock_layer = lock_layer_from_config(config_lock_file, &lock_config_toml)?;
+            let lock_layer = lock_layer_from_config(config_lock_load_path, &lock_config_toml)?;
             let lock_config_toml = config_without_lock_controls(&lock_config_toml);
             let lock_config_layer_stack = ConfigLayerStack::new(
                 vec![lock_layer],
                 config_layer_stack.requirements().clone(),
                 config_layer_stack.requirements_toml().clone(),
             )?;
-            harness_overrides.cwd = Some(lock_metadata.cwd.to_path_buf());
             let mut config = Config::load_config_with_layer_stack(
                 LOCAL_FS.as_ref(),
                 lock_config_toml,
@@ -991,6 +1007,8 @@ impl ConfigBuilder {
             )
             .await?;
             config.config_lock_toml = Some(Arc::new(expected_lock_config));
+            config.config_lock_allow_codex_version_mismatch = allow_codex_version_mismatch;
+            config.config_lock_allow_dynamic_catalog = allow_dynamic_catalog;
             return Ok(config);
         }
         Config::load_config_with_layer_stack(
@@ -2922,7 +2940,22 @@ impl Config {
             codex_home,
             sqlite_home,
             log_dir,
-            config_lock_export_dir: cfg.config_lock_export_dir,
+            config_lock_export_dir: cfg
+                .debug
+                .as_ref()
+                .and_then(|debug| debug.config_lock.as_ref())
+                .and_then(|config_lock| config_lock.export_dir.clone()),
+            config_lock_allow_codex_version_mismatch: cfg
+                .debug
+                .as_ref()
+                .and_then(|debug| debug.config_lock.as_ref())
+                .and_then(|config_lock| config_lock.allow_codex_version_mismatch)
+                .unwrap_or(false),
+            config_lock_allow_dynamic_catalog: cfg
+                .debug
+                .as_ref()
+                .and_then(|debug| debug.allow_dynamic_catalog)
+                .unwrap_or(false),
             config_lock_toml: None,
             config_layer_stack,
             history,

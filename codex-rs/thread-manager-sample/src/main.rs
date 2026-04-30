@@ -216,6 +216,8 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         sqlite_home: codex_home.to_path_buf(),
         log_dir: codex_home.join("log").to_path_buf(),
         config_lock_export_dir: None,
+        config_lock_allow_codex_version_mismatch: false,
+        config_lock_allow_dynamic_catalog: false,
         config_lock_toml: None,
         codex_home,
         history: History::default(),

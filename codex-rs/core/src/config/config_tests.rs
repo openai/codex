@@ -6310,6 +6310,8 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             sqlite_home: fixture.codex_home().to_path_buf(),
             log_dir: fixture.codex_home().join("log").to_path_buf(),
             config_lock_export_dir: None,
+            config_lock_allow_codex_version_mismatch: false,
+            config_lock_allow_dynamic_catalog: false,
             config_lock_toml: None,
             config_layer_stack: Default::default(),
             startup_warnings: Vec::new(),
@@ -6508,6 +6510,8 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
         config_lock_export_dir: None,
+        config_lock_allow_codex_version_mismatch: false,
+        config_lock_allow_dynamic_catalog: false,
         config_lock_toml: None,
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
@@ -6660,6 +6664,8 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
         config_lock_export_dir: None,
+        config_lock_allow_codex_version_mismatch: false,
+        config_lock_allow_dynamic_catalog: false,
         config_lock_toml: None,
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
@@ -6797,6 +6803,8 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
         config_lock_export_dir: None,
+        config_lock_allow_codex_version_mismatch: false,
+        config_lock_allow_dynamic_catalog: false,
         config_lock_toml: None,
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
@@ -7922,6 +7930,80 @@ async fn browser_feature_requirements_are_valid() -> std::io::Result<()> {
 
     assert!(!config.features.enabled(Feature::InAppBrowser));
     assert!(!config.features.enabled(Feature::BrowserUse));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn debug_config_lock_export_settings_load_from_nested_table() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[debug]
+allow_dynamic_catalog = true
+
+[debug.config_lock]
+export_dir = "locks"
+allow_codex_version_mismatch = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.config_lock_export_dir,
+        Some(AbsolutePathBuf::resolve_path_against_base(
+            "locks",
+            codex_home.path()
+        ))
+    );
+    assert!(config.config_lock_allow_codex_version_mismatch);
+    assert!(config.config_lock_allow_dynamic_catalog);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn debug_config_lock_load_path_loads_lock_from_nested_table() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let lock_path = codex_home.path().join("session.config.lock.toml");
+    std::fs::write(
+        &lock_path,
+        format!(
+            r#"[config_lock]
+version = {}
+codex_version = "older-version"
+"#,
+            crate::config_lock::CONFIG_LOCK_VERSION
+        ),
+    )?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"[debug]
+allow_dynamic_catalog = true
+
+[debug.config_lock]
+load_path = '{}'
+allow_codex_version_mismatch = true
+"#,
+            lock_path.display()
+        ),
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(config.config_lock_toml.is_some());
+    assert!(config.config_lock_allow_codex_version_mismatch);
+    assert!(config.config_lock_allow_dynamic_catalog);
 
     Ok(())
 }
