@@ -33,7 +33,7 @@ pub fn command_might_be_dangerous(command: &[String]) -> bool {
 pub fn is_dangerous_powershell_words(command: &[String]) -> bool {
     #[cfg(windows)]
     {
-        return windows_dangerous_commands::is_dangerous_powershell_words(command);
+        windows_dangerous_commands::is_dangerous_powershell_words(command)
     }
 
     #[cfg(not(windows))]
