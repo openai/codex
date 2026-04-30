@@ -71,7 +71,6 @@ async fn window_id_advances_after_compact_persists_on_resume_and_resets_on_fork(
         .fork_thread(
             /*snapshot*/ 0usize,
             resumed.config.clone(),
-            codex_core::thread_store_from_config(&resumed.config),
             rollout_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,

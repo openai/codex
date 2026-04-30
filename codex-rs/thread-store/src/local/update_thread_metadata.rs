@@ -202,6 +202,7 @@ mod tests {
     use super::*;
     use crate::ResumeThreadParams;
     use crate::ThreadEventPersistenceMode;
+    use crate::ThreadMetadataDefaults;
     use crate::ThreadMetadataPatch;
     use crate::ThreadStore;
     use crate::local::LocalThreadStore;
@@ -299,6 +300,9 @@ mod tests {
                 rollout_path: Some(path.clone()),
                 history: None,
                 include_archived: true,
+                metadata_defaults: ThreadMetadataDefaults {
+                    model_provider: "test-provider".to_string(),
+                },
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -487,6 +491,9 @@ mod tests {
                 rollout_path: Some(archived_path.clone()),
                 history: None,
                 include_archived: true,
+                metadata_defaults: ThreadMetadataDefaults {
+                    model_provider: "test-provider".to_string(),
+                },
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await

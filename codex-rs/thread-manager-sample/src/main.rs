@@ -118,12 +118,13 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         SessionSource::Exec,
         environment_manager,
         /*analytics_events_client*/ None,
+        Arc::clone(&thread_store),
     );
 
     let NewThread {
         thread_id, thread, ..
     } = thread_manager
-        .start_thread(config, thread_store)
+        .start_thread(config)
         .await
         .context("start Codex thread")?;
 

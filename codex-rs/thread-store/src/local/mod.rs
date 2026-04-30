@@ -251,11 +251,14 @@ mod tests {
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::ThreadMemoryMode;
     use codex_protocol::protocol::UserMessageEvent;
     use tempfile::TempDir;
 
     use super::*;
+    use crate::ThreadCreationMetadata;
     use crate::ThreadEventPersistenceMode;
+    use crate::ThreadMetadataDefaults;
     use crate::local::test_support::test_config;
     use crate::local::test_support::write_archived_session_file;
     use crate::local::test_support::write_session_file;
@@ -307,6 +310,26 @@ mod tests {
         assert!(
             matches!(err, ThreadStoreError::ThreadNotFound { thread_id: missing } if missing == thread_id)
         );
+    }
+
+    #[tokio::test]
+    async fn create_thread_rejects_missing_cwd() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let thread_id = ThreadId::default();
+        let mut params = create_thread_params(thread_id);
+        params.metadata.cwd = None;
+
+        let err = store
+            .create_thread(params)
+            .await
+            .expect_err("local thread store should require cwd");
+
+        assert!(matches!(
+            err,
+            ThreadStoreError::InvalidRequest { message }
+                if message == "local thread store requires a cwd"
+        ));
     }
 
     #[tokio::test]
@@ -387,6 +410,9 @@ mod tests {
                 rollout_path: None,
                 history: None,
                 include_archived: true,
+                metadata_defaults: ThreadMetadataDefaults {
+                    model_provider: "test-provider".to_string(),
+                },
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -443,6 +469,9 @@ mod tests {
                 rollout_path: Some(rollout_path),
                 history: None,
                 include_archived: true,
+                metadata_defaults: ThreadMetadataDefaults {
+                    model_provider: "test-provider".to_string(),
+                },
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -490,6 +519,9 @@ mod tests {
                 rollout_path: Some(rollout_path),
                 history: None,
                 include_archived: true,
+                metadata_defaults: ThreadMetadataDefaults {
+                    model_provider: "test-provider".to_string(),
+                },
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -574,6 +606,11 @@ mod tests {
             source: SessionSource::Exec,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            metadata: ThreadCreationMetadata {
+                cwd: Some(std::env::current_dir().expect("cwd")),
+                model_provider: "test-provider".to_string(),
+                memory_mode: ThreadMemoryMode::Enabled,
+            },
             event_persistence_mode: ThreadEventPersistenceMode::Limited,
         }
     }

@@ -26,6 +26,26 @@ pub enum ThreadEventPersistenceMode {
     Extended,
 }
 
+/// Thread metadata captured at creation time by persistence backends.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadCreationMetadata {
+    /// Effective working directory for environment-backed threads.
+    ///
+    /// `None` means the thread has no filesystem/environment context.
+    pub cwd: Option<PathBuf>,
+    /// Model provider associated with the thread.
+    pub model_provider: String,
+    /// Initial memory mode for the thread.
+    pub memory_mode: MemoryMode,
+}
+
+/// Defaults used only when decoding legacy stored metadata that omitted fields.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadMetadataDefaults {
+    /// Model provider to use when older persisted metadata omitted one.
+    pub model_provider: String,
+}
+
 /// Parameters required to create a persisted thread.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateThreadParams {
@@ -39,6 +59,8 @@ pub struct CreateThreadParams {
     pub base_instructions: BaseInstructions,
     /// Dynamic tools available to the thread at startup.
     pub dynamic_tools: Vec<DynamicToolSpec>,
+    /// Metadata captured for the newly created thread.
+    pub metadata: ThreadCreationMetadata,
     /// Whether persistence should include the extended event surface.
     pub event_persistence_mode: ThreadEventPersistenceMode,
 }
@@ -54,6 +76,8 @@ pub struct ResumeThreadParams {
     pub history: Option<Vec<RolloutItem>>,
     /// Whether archived threads may be reopened.
     pub include_archived: bool,
+    /// Defaults used only when older persisted metadata is incomplete.
+    pub metadata_defaults: ThreadMetadataDefaults,
     /// Whether persistence should include the extended event surface.
     pub event_persistence_mode: ThreadEventPersistenceMode,
 }

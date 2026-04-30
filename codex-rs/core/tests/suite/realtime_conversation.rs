@@ -1671,7 +1671,6 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
         .thread_manager
         .resume_thread_with_history(
             test.config.clone(),
-            codex_core::thread_store_from_config(&test.config),
             InitialHistory::Forked(history),
             auth_manager_from_auth(CodexAuth::from_api_key("dummy")),
             /*persist_extended_history*/ false,

@@ -14,7 +14,6 @@ use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::thread_manager::ResumeThreadFromRolloutOptions;
 use crate::thread_manager::ThreadManagerState;
-use crate::thread_manager::thread_store_from_config;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
@@ -235,7 +234,6 @@ impl AgentControl {
                 state
                     .spawn_new_thread_with_source(
                         config.clone(),
-                        thread_store_from_config(&config),
                         self.clone(),
                         session_source,
                         /*persist_extended_history*/ false,
@@ -246,15 +244,7 @@ impl AgentControl {
                     )
                     .await?
             }
-            (None, _) => {
-                state
-                    .spawn_new_thread(
-                        config.clone(),
-                        thread_store_from_config(&config),
-                        self.clone(),
-                    )
-                    .await?
-            }
+            (None, _) => state.spawn_new_thread(config.clone(), self.clone()).await?,
         };
         agent_metadata.agent_id = Some(new_thread.thread_id);
         reservation.commit(agent_metadata.clone());
@@ -436,7 +426,6 @@ impl AgentControl {
         state
             .fork_thread_with_source(
                 config.clone(),
-                thread_store_from_config(&config),
                 InitialHistory::Forked(forked_rollout_items),
                 self.clone(),
                 session_source,
@@ -592,7 +581,6 @@ impl AgentControl {
         let resumed_thread = state
             .resume_thread_from_rollout_with_source(ResumeThreadFromRolloutOptions {
                 config: config.clone(),
-                thread_store: thread_store_from_config(&config),
                 rollout_path,
                 agent_control: self.clone(),
                 session_source,

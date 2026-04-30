@@ -825,7 +825,6 @@ async fn resume_conversation(
     );
     Box::pin(manager.resume_thread_from_rollout(
         config.clone(),
-        codex_core::thread_store_from_config(config),
         path,
         auth_manager,
         /*parent_trace*/ None,
@@ -845,7 +844,6 @@ async fn fork_thread(
     Box::pin(manager.fork_thread(
         nth_user_message,
         config.clone(),
-        codex_core::thread_store_from_config(config),
         path,
         /*persist_extended_history*/ false,
         /*parent_trace*/ None,

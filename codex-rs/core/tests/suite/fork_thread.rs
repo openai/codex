@@ -100,7 +100,6 @@ async fn fork_thread_twice_drops_to_first_message() {
         .fork_thread(
             ForkSnapshot::TruncateBeforeNthUserMessage(1),
             config_for_fork.clone(),
-            codex_core::thread_store_from_config(&config_for_fork),
             base_path.clone(),
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -125,7 +124,6 @@ async fn fork_thread_twice_drops_to_first_message() {
         .fork_thread(
             ForkSnapshot::TruncateBeforeNthUserMessage(0),
             config_for_fork.clone(),
-            codex_core::thread_store_from_config(&config_for_fork),
             fork1_path.clone(),
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -194,7 +192,6 @@ async fn fork_thread_from_history_does_not_require_source_rollout_path() {
         .fork_thread_from_history(
             ForkSnapshot::Interrupted,
             test.config.clone(),
-            codex_core::thread_store_from_config(&test.config),
             InitialHistory::Resumed(ResumedHistory {
                 conversation_id: test.session_configured.session_id,
                 history: source_items.clone(),
