@@ -570,7 +570,7 @@ async fn refreshed_stdio_server_uses_stored_environment_cwd() -> anyhow::Result<
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let server_name = "rmcp_stored_environment_fallback_cwd";
+    let server_name = "rmcp_stored_environment_cwd";
     let selected_dir = "mcp-turn-environment-cwd";
     let selected_cwd = Arc::new(Mutex::new(None::<PathBuf>));
     let selected_cwd_for_setup = Arc::clone(&selected_cwd);
@@ -614,7 +614,7 @@ async fn refreshed_stdio_server_uses_stored_environment_cwd() -> anyhow::Result<
                 rmcp_test_server_bin,
                 Some(HashMap::from([(
                     "MCP_TEST_VALUE".to_string(),
-                    "stored-environment-fallback-cwd".to_string(),
+                    "stored-environment-cwd".to_string(),
                 )])),
                 Vec::new(),
             ),
@@ -677,7 +677,7 @@ async fn refreshed_stdio_server_uses_stored_environment_cwd() -> anyhow::Result<
         &server,
         &fixture,
         server_name,
-        "call-stored-environment-fallback-cwd",
+        "call-stored-environment-cwd",
         read_only_user_turn(&fixture, "call the rmcp cwd tool"),
     )
     .await?;

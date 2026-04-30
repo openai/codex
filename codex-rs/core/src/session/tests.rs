@@ -3340,9 +3340,9 @@ async fn relative_cwd_update_without_environments_resolves_under_session_cwd() {
 }
 
 #[tokio::test]
-async fn relative_cwd_update_with_turn_environment_resolves_under_turn_environment_cwd() {
+async fn relative_cwd_update_with_turn_environment_keeps_turn_environment_cwd() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
-    let (stored_cwd, turn_environment_cwd, expected_cwd) = {
+    let (stored_cwd, turn_environment_cwd, expected_session_cwd) = {
         let mut state = session.state.lock().await;
         let stored_cwd = state.session_configuration.cwd.clone();
         let stored_environment_cwd = stored_cwd.join("stored-environment");
@@ -3351,10 +3351,10 @@ async fn relative_cwd_update_with_turn_environment_resolves_under_turn_environme
             environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
             cwd: stored_environment_cwd,
         }];
-        let expected_cwd = turn_environment_cwd.join("project");
-        (stored_cwd, turn_environment_cwd, expected_cwd)
+        let expected_session_cwd = turn_environment_cwd.join("project");
+        (stored_cwd, turn_environment_cwd, expected_session_cwd)
     };
-    std::fs::create_dir_all(expected_cwd.as_path()).expect("create project dir");
+    std::fs::create_dir_all(expected_session_cwd.as_path()).expect("create project dir");
 
     let turn_context = session
         .new_turn_with_sub_id(
@@ -3372,18 +3372,18 @@ async fn relative_cwd_update_with_turn_environment_resolves_under_turn_environme
         .expect("turn should start");
 
     let state = session.state.lock().await;
-    assert_eq!(state.session_configuration.cwd, expected_cwd);
+    assert_eq!(state.session_configuration.cwd, expected_session_cwd);
     assert_eq!(
         state.session_configuration.environments[0].cwd,
         stored_cwd.join("stored-environment")
     );
-    assert_eq!(turn_context.cwd, expected_cwd);
+    assert_eq!(turn_context.cwd, turn_environment_cwd);
     assert_eq!(
         turn_context
             .primary_environment()
             .expect("primary environment")
             .cwd,
-        expected_cwd
+        turn_environment_cwd
     );
 }
 
