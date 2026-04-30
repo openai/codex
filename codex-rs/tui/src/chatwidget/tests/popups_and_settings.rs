@@ -163,6 +163,7 @@ async fn marketplace_upgrade_failure_includes_backend_messages_snapshot() {
     );
 }
 
+#[tokio::test]
 async fn hooks_popup_shows_list_diagnostics() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let cwd = chat.config.cwd.clone();
