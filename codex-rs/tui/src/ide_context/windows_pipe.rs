@@ -6,8 +6,6 @@ use std::io::Write;
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::ptr;
-use std::thread;
-use std::time::Duration;
 use std::time::Instant;
 
 use windows_sys::Win32::Foundation::BOOL;
@@ -38,7 +36,6 @@ use windows_sys::Win32::System::IO::CancelIoEx;
 use windows_sys::Win32::System::IO::GetOverlappedResult;
 use windows_sys::Win32::System::IO::OVERLAPPED;
 use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
-use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 use windows_sys::Win32::System::Threading::CreateEventW;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::Win32::System::Threading::OpenProcess;
@@ -86,39 +83,6 @@ impl WindowsPipeStream {
 
     pub(super) fn set_deadline(&mut self, deadline: Instant) {
         self.deadline = deadline;
-    }
-
-    pub(super) fn wait_until_readable(&self, deadline: Instant) -> io::Result<bool> {
-        loop {
-            if self.has_bytes_available()? {
-                return Ok(true);
-            }
-            let now = Instant::now();
-            if now >= deadline {
-                return Ok(false);
-            }
-
-            thread::sleep((deadline - now).min(Duration::from_millis(5)));
-        }
-    }
-
-    fn has_bytes_available(&self) -> io::Result<bool> {
-        let mut bytes_available = 0;
-        let result = unsafe {
-            PeekNamedPipe(
-                self.handle.raw(),
-                ptr::null_mut(),
-                0,
-                ptr::null_mut(),
-                &mut bytes_available,
-                ptr::null_mut(),
-            )
-        };
-        if result == 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        Ok(bytes_available > 0)
     }
 }
 
