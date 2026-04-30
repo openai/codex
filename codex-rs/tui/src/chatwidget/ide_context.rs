@@ -90,7 +90,7 @@ impl ChatWidget {
             return;
         }
 
-        match crate::ide_context::fetch_ide_context(&self.config.cwd) {
+        match crate::ide_context::fetch_ide_context_for_prompt(&self.config.cwd) {
             Ok(context) => {
                 self.ide_context.mark_available();
                 self.sync_ide_context_status_indicator();

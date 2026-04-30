@@ -13,9 +13,11 @@ use thiserror::Error;
 
 use super::IdeContext;
 
-// The desktop integration can take several seconds to determine whether an IDE can answer a
-// request. Keep this long enough that transient local read timeouts do not become user-visible.
-const IDE_CONTEXT_REQUEST_TIMEOUT: Duration = Duration::from_secs(6);
+// The desktop integration can take several seconds to determine whether an IDE can answer an
+// initial probe. Keep this long enough that transient local read timeouts do not prevent enabling
+// the feature, but use a much shorter budget on the prompt-submit path below.
+const IDE_CONTEXT_PROBE_TIMEOUT: Duration = Duration::from_secs(6);
+const IDE_CONTEXT_PROMPT_TIMEOUT: Duration = Duration::from_millis(500);
 // Prompt rendering applies its own smaller cap to selected text before injection.
 #[cfg(any(unix, windows))]
 const MAX_IPC_FRAME_BYTES: usize = 256 * 1024 * 1024;
@@ -102,7 +104,17 @@ pub(crate) fn fetch_ide_context(workspace_root: &Path) -> Result<IdeContext, Ide
     fetch_ide_context_from_socket(
         default_ipc_socket_path(),
         workspace_root,
-        IDE_CONTEXT_REQUEST_TIMEOUT,
+        IDE_CONTEXT_PROBE_TIMEOUT,
+    )
+}
+
+pub(crate) fn fetch_ide_context_for_prompt(
+    workspace_root: &Path,
+) -> Result<IdeContext, IdeContextError> {
+    fetch_ide_context_from_socket(
+        default_ipc_socket_path(),
+        workspace_root,
+        IDE_CONTEXT_PROMPT_TIMEOUT,
     )
 }
 
@@ -149,6 +161,7 @@ impl UnixDeadlineStream {
         validate_unix_socket_path(&socket_path)?;
         let stream = std::os::unix::net::UnixStream::connect(socket_path)?;
         validate_unix_peer_owner(&stream)?;
+        stream.set_nonblocking(true)?;
         Ok(Self::new(stream, deadline))
     }
 
@@ -162,29 +175,85 @@ impl UnixDeadlineStream {
             .filter(|duration| !duration.is_zero())
             .ok_or_else(deadline_timeout_io_error)
     }
+
+    fn remaining_timeout_ms(&self) -> std::io::Result<libc::c_int> {
+        let millis = self.remaining_timeout()?.as_millis().max(1);
+        Ok(libc::c_int::try_from(millis).unwrap_or(libc::c_int::MAX))
+    }
+
+    fn wait_for_ready(&self, events: libc::c_short) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+
+        loop {
+            // Keep deadline handling in user space. Some macOS Unix socket environments reject
+            // SO_RCVTIMEO/SO_SNDTIMEO, but poll works consistently for our request-scoped timeout.
+            let mut poll_fd = libc::pollfd {
+                fd: self.stream.as_raw_fd(),
+                events,
+                revents: 0,
+            };
+            let result = unsafe { libc::poll(&mut poll_fd, 1, self.remaining_timeout_ms()?) };
+            if result == 0 {
+                return Err(deadline_timeout_io_error());
+            }
+            if result < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            if poll_fd.revents & libc::POLLNVAL != 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "invalid IDE context Unix socket",
+                ));
+            }
+            if poll_fd.revents & (events | libc::POLLERR | libc::POLLHUP) != 0 {
+                return Ok(());
+            }
+        }
+    }
 }
 
 #[cfg(unix)]
 impl std::io::Read for UnixDeadlineStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.stream
-            .set_read_timeout(Some(self.remaining_timeout()?))?;
-        self.stream.read(buf).map_err(normalize_timeout_io_error)
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        loop {
+            self.wait_for_ready(libc::POLLIN)?;
+            match self.stream.read(buf) {
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                result => return result,
+            }
+        }
     }
 }
 
 #[cfg(unix)]
 impl std::io::Write for UnixDeadlineStream {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.stream
-            .set_write_timeout(Some(self.remaining_timeout()?))?;
-        self.stream.write(buf).map_err(normalize_timeout_io_error)
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        loop {
+            self.wait_for_ready(libc::POLLOUT)?;
+            match self.stream.write(buf) {
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                result => return result,
+            }
+        }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.stream
-            .set_write_timeout(Some(self.remaining_timeout()?))?;
-        self.stream.flush().map_err(normalize_timeout_io_error)
+        self.wait_for_ready(libc::POLLOUT)?;
+        self.stream.flush()
     }
 }
 
@@ -510,16 +579,6 @@ fn deadline_timeout_io_error() -> std::io::Error {
 #[cfg(unix)]
 fn permission_denied_io_error(message: &'static str) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::PermissionDenied, message)
-}
-
-#[cfg(unix)]
-fn normalize_timeout_io_error(error: std::io::Error) -> std::io::Error {
-    match error.kind() {
-        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
-            deadline_timeout_io_error()
-        }
-        _ => error,
-    }
 }
 
 #[cfg(any(unix, windows))]
