@@ -9654,6 +9654,9 @@
           "handlerType": {
             "$ref": "#/definitions/v2/HookHandlerType"
           },
+          "isManaged": {
+            "type": "boolean"
+          },
           "key": {
             "type": "string"
           },
@@ -9692,6 +9695,7 @@
           "enabled",
           "eventName",
           "handlerType",
+          "isManaged",
           "key",
           "source",
           "sourcePath",

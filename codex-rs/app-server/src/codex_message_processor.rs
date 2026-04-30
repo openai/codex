@@ -8725,6 +8725,7 @@ fn hooks_to_info(hooks: &[codex_hooks::HookListEntry]) -> Vec<HookMetadata> {
             plugin_id: hook.plugin_id.clone(),
             display_order: hook.display_order,
             enabled: hook.enabled,
+            is_managed: hook.is_managed,
         })
         .collect()
 }

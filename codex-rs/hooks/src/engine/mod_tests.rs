@@ -224,8 +224,10 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
     assert_eq!(discovered.hook_entries.len(), 2);
     assert_eq!(discovered.hook_entries[0].key, managed_disabled_key);
     assert_eq!(discovered.hook_entries[0].enabled, true);
+    assert!(discovered.hook_entries[0].is_managed);
     assert_eq!(discovered.hook_entries[1].key, user_disabled_key);
     assert_eq!(discovered.hook_entries[1].enabled, false);
+    assert!(!discovered.hook_entries[1].is_managed);
 }
 
 #[test]
@@ -275,6 +277,7 @@ fn user_disablement_does_not_filter_managed_layer_hooks() {
     assert_eq!(discovered.hook_entries.len(), 1);
     assert_eq!(discovered.hook_entries[0].key, managed_key);
     assert_eq!(discovered.hook_entries[0].enabled, true);
+    assert!(discovered.hook_entries[0].is_managed);
 }
 
 fn config_with_hook_state(key: &str, enabled: bool) -> TomlValue {

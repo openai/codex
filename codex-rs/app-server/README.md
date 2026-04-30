@@ -1475,6 +1475,7 @@ Use `hooks/list` to fetch the discovered hooks for one or more `cwds`. Each entr
         "key": "/Users/me/.codex/config.toml:pre_tool_use:0:0",
         "eventName": "pre_tool_use",
         "handlerType": "command",
+        "isManaged": false,
         "matcher": "Bash",
         "command": "python3 /Users/me/hook.py",
         "timeoutSec": 5,
