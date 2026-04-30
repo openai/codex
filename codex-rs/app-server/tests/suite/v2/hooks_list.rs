@@ -215,7 +215,7 @@ async fn hooks_list_shows_plugin_hook_load_warnings() -> Result<()> {
 }
 
 #[tokio::test]
-async fn hooks_list_uses_real_session_feature_enablement() -> Result<()> {
+async fn hooks_list_uses_each_cwds_effective_feature_enablement() -> Result<()> {
     let codex_home = TempDir::new()?;
     let workspace = TempDir::new()?;
     std::fs::write(
@@ -261,6 +261,8 @@ timeout = 5
     )
     .await??;
     let HooksListResponse { data } = to_response(response)?;
+    let project_config_path =
+        AbsolutePathBuf::try_from(workspace.path().join(".codex/config.toml"))?;
     assert_eq!(
         data,
         vec![
@@ -272,7 +274,23 @@ timeout = 5
             },
             HooksListEntry {
                 cwd: workspace.path().to_path_buf(),
-                hooks: Vec::new(),
+                hooks: vec![HookMetadata {
+                    key: format!(
+                        "{}:pre_tool_use:0:0",
+                        project_config_path.as_path().display()
+                    ),
+                    event_name: HookEventName::PreToolUse,
+                    handler_type: HookHandlerType::Command,
+                    matcher: Some("Bash".to_string()),
+                    command: Some("echo project hook".to_string()),
+                    timeout_sec: 5,
+                    status_message: None,
+                    source_path: project_config_path,
+                    source: HookSource::Project,
+                    plugin_id: None,
+                    display_order: 0,
+                    enabled: true,
+                }],
                 warnings: Vec::new(),
                 errors: Vec::new(),
             },

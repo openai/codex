@@ -1453,7 +1453,7 @@ To enable or disable a skill by name:
 }
 ```
 
-Use `hooks/list` to fetch the discovered hooks for one or more `cwds`. Disabled hooks are still returned with `"enabled": false` so clients can render and re-enable them. Hook state is stored under `hooks.state`; clients should treat hooks from managed sources as non-configurable, and user config entries for those keys are ignored during loading. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
+Use `hooks/list` to fetch the discovered hooks for one or more `cwds`. Each entry is evaluated using that `cwd`'s effective config, so feature gating and discovered config layers can differ across entries in the same request. Disabled hooks are still returned with `"enabled": false` so clients can render and re-enable them. Hook state is stored under `hooks.state`; clients should treat hooks from managed sources as non-configurable, and user config entries for those keys are ignored during loading. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
 
 ```json
 {
@@ -1482,8 +1482,6 @@ Use `hooks/list` to fetch the discovered hooks for one or more `cwds`. Disabled 
         "sourcePath": "/Users/me/.codex/config.toml",
         "source": "user",
         "pluginId": null,
-        "displayOrder": 0,
-        "enabled": true
         "displayOrder": 0,
         "enabled": true
       }],
