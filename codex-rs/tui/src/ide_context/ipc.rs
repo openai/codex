@@ -50,10 +50,9 @@ impl IdeContextError {
     #[cfg(any(unix, windows))]
     pub(crate) fn is_retryable_after_recent_toggle(&self) -> bool {
         match self {
-            IdeContextError::RequestFailed(error) => matches!(
-                error.as_str(),
-                "no-client-found" | "client-disconnected" | "request-timeout"
-            ),
+            IdeContextError::RequestFailed(error) => {
+                matches!(error.as_str(), "no-client-found" | "client-disconnected")
+            }
             IdeContextError::Read(error) => error.kind() == std::io::ErrorKind::WouldBlock,
             IdeContextError::Connect(_)
             | IdeContextError::Send(_)
@@ -147,7 +146,9 @@ struct UnixDeadlineStream {
 #[cfg(unix)]
 impl UnixDeadlineStream {
     fn connect(socket_path: PathBuf, deadline: Instant) -> std::io::Result<Self> {
+        validate_unix_socket_path(&socket_path)?;
         let stream = std::os::unix::net::UnixStream::connect(socket_path)?;
+        validate_unix_peer_owner(&stream)?;
         Ok(Self::new(stream, deadline))
     }
 
@@ -185,6 +186,113 @@ impl std::io::Write for UnixDeadlineStream {
             .set_write_timeout(Some(self.remaining_timeout()?))?;
         self.stream.flush().map_err(normalize_timeout_io_error)
     }
+}
+
+#[cfg(unix)]
+fn validate_unix_socket_path(socket_path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::FileTypeExt;
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    let uid = unsafe { libc::getuid() };
+    let parent = socket_path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "IDE context socket has no parent directory",
+        )
+    })?;
+    let parent_metadata = std::fs::symlink_metadata(parent)?;
+    if !parent_metadata.is_dir() || parent_metadata.uid() != uid {
+        return Err(permission_denied_io_error(
+            "IDE context socket directory is not owned by the current user",
+        ));
+    }
+    if parent_metadata.permissions().mode() & 0o022 != 0 {
+        return Err(permission_denied_io_error(
+            "IDE context socket directory is writable by other users",
+        ));
+    }
+
+    let socket_metadata = std::fs::symlink_metadata(socket_path)?;
+    if !socket_metadata.file_type().is_socket() || socket_metadata.uid() != uid {
+        return Err(permission_denied_io_error(
+            "IDE context socket is not owned by the current user",
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn validate_unix_peer_owner(stream: &std::os::unix::net::UnixStream) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    let mut credentials = unsafe { std::mem::zeroed::<libc::ucred>() };
+    let mut credentials_len: libc::socklen_t =
+        std::mem::size_of::<libc::ucred>().try_into().map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid peer credential length",
+            )
+        })?;
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut credentials as *mut _ as *mut libc::c_void,
+            &mut credentials_len,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    ensure_peer_uid_matches_current_user(credentials.uid)
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+fn validate_unix_peer_owner(stream: &std::os::unix::net::UnixStream) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    let mut peer_uid: libc::uid_t = 0;
+    let mut peer_gid: libc::gid_t = 0;
+    let result = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut peer_uid, &mut peer_gid) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    ensure_peer_uid_matches_current_user(peer_uid)
+}
+
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+)))]
+fn validate_unix_peer_owner(_stream: &std::os::unix::net::UnixStream) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_peer_uid_matches_current_user(peer_uid: libc::uid_t) -> std::io::Result<()> {
+    if peer_uid != unsafe { libc::getuid() } {
+        return Err(permission_denied_io_error(
+            "IDE context provider is not owned by the current user",
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -397,6 +505,11 @@ fn deadline_timeout_io_error() -> std::io::Error {
 }
 
 #[cfg(unix)]
+fn permission_denied_io_error(message: &'static str) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::PermissionDenied, message)
+}
+
+#[cfg(unix)]
 fn normalize_timeout_io_error(error: std::io::Error) -> std::io::Error {
     match error.kind() {
         std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
@@ -477,7 +590,7 @@ mod tests {
                 .is_retryable_after_recent_toggle()
         );
         assert!(
-            IdeContextError::RequestFailed("request-timeout".to_string())
+            !IdeContextError::RequestFailed("request-timeout".to_string())
                 .is_retryable_after_recent_toggle()
         );
         assert!(
@@ -588,6 +701,24 @@ mod tests {
 
         assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
         assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_unix_socket_path_rejects_unsafe_parent_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::net::UnixListener;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        std::fs::set_permissions(tempdir.path(), std::fs::Permissions::from_mode(0o777))
+            .expect("set unsafe permissions");
+        let socket_path = tempdir.path().join("codex-ipc.sock");
+        let _listener = UnixListener::bind(&socket_path).expect("bind socket");
+
+        let err = validate_unix_socket_path(&socket_path)
+            .expect_err("world-writable parent directory should be rejected");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
     #[cfg(unix)]

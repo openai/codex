@@ -18,6 +18,11 @@ use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Foundation::WAIT_FAILED;
 use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
 use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
+use windows_sys::Win32::Security::EqualSid;
+use windows_sys::Win32::Security::GetTokenInformation;
+use windows_sys::Win32::Security::TOKEN_QUERY;
+use windows_sys::Win32::Security::TOKEN_USER;
+use windows_sys::Win32::Security::TokenUser;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OVERLAPPED;
@@ -29,7 +34,12 @@ use windows_sys::Win32::Storage::FileSystem::WriteFile;
 use windows_sys::Win32::System::IO::CancelIoEx;
 use windows_sys::Win32::System::IO::GetOverlappedResult;
 use windows_sys::Win32::System::IO::OVERLAPPED;
+use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
 use windows_sys::Win32::System::Threading::CreateEventW;
+use windows_sys::Win32::System::Threading::GetCurrentProcess;
+use windows_sys::Win32::System::Threading::OpenProcess;
+use windows_sys::Win32::System::Threading::OpenProcessToken;
+use windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 const TRUE: BOOL = 1;
@@ -64,10 +74,10 @@ impl WindowsPipeStream {
             return Err(io::Error::last_os_error());
         }
 
-        Ok(Self {
-            handle: OwnedHandle(handle),
-            deadline,
-        })
+        let handle = OwnedHandle(handle);
+        validate_pipe_server_owner(handle.raw())?;
+
+        Ok(Self { handle, deadline })
     }
 }
 
@@ -207,6 +217,81 @@ impl Drop for OwnedHandle {
             }
         }
     }
+}
+
+struct TokenUserBuffer {
+    buffer: Vec<u8>,
+}
+
+impl TokenUserBuffer {
+    fn sid(&self) -> windows_sys::Win32::Foundation::PSID {
+        let token_user = unsafe { &*(self.buffer.as_ptr() as *const TOKEN_USER) };
+        token_user.User.Sid
+    }
+}
+
+fn validate_pipe_server_owner(pipe_handle: HANDLE) -> io::Result<()> {
+    let mut server_process_id = 0;
+    let result = unsafe { GetNamedPipeServerProcessId(pipe_handle, &mut server_process_id) };
+    if result == 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let server_process =
+        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, server_process_id) };
+    if server_process == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let server_process = OwnedHandle(server_process);
+    let server_token = open_process_token(server_process.raw())?;
+    let current_token = open_process_token(unsafe { GetCurrentProcess() })?;
+    let server_user = token_user(server_token.raw())?;
+    let current_user = token_user(current_token.raw())?;
+
+    if unsafe { EqualSid(server_user.sid(), current_user.sid()) } == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "IDE context provider is not owned by the current user",
+        ));
+    }
+
+    Ok(())
+}
+
+fn open_process_token(process: HANDLE) -> io::Result<OwnedHandle> {
+    let mut token = 0;
+    let result = unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) };
+    if result == 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    Ok(OwnedHandle(token))
+}
+
+fn token_user(token: HANDLE) -> io::Result<TokenUserBuffer> {
+    let mut return_length = 0;
+    unsafe {
+        GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut return_length);
+    }
+    if return_length == 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let mut buffer = vec![0_u8; return_length as usize];
+    let result = unsafe {
+        GetTokenInformation(
+            token,
+            TokenUser,
+            buffer.as_mut_ptr() as *mut _,
+            return_length,
+            &mut return_length,
+        )
+    };
+    if result == 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    Ok(TokenUserBuffer { buffer })
 }
 
 fn remaining_timeout_ms(deadline: Instant) -> io::Result<u32> {
