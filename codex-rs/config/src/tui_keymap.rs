@@ -199,9 +199,9 @@ pub struct TuiVimNormalKeymap {
     pub move_left: Option<KeybindingsSpec>,
     /// Move cursor right (`l`).
     pub move_right: Option<KeybindingsSpec>,
-    /// Move cursor up (`k`).
+    /// Move cursor up (`k`), or recall older composer history at history boundaries.
     pub move_up: Option<KeybindingsSpec>,
-    /// Move cursor down (`j`).
+    /// Move cursor down (`j`), or recall newer composer history at history boundaries.
     pub move_down: Option<KeybindingsSpec>,
     /// Move cursor to start of next word (`w`).
     pub move_word_forward: Option<KeybindingsSpec>,

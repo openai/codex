@@ -3273,7 +3273,7 @@
               "$ref": "#/definitions/KeybindingsSpec"
             }
           ],
-          "description": "Move cursor down (`j`)."
+          "description": "Move cursor down (`j`), or recall newer composer history at history boundaries."
         },
         "move_left": {
           "allOf": [
@@ -3313,7 +3313,7 @@
               "$ref": "#/definitions/KeybindingsSpec"
             }
           ],
-          "description": "Move cursor up (`k`)."
+          "description": "Move cursor up (`k`), or recall older composer history at history boundaries."
         },
         "move_word_backward": {
           "allOf": [

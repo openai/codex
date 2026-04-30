@@ -243,6 +243,10 @@ impl TextArea {
         self.vim_enabled && self.vim_mode == VimMode::Normal
     }
 
+    pub(crate) fn is_vim_operator_pending(&self) -> bool {
+        self.vim_operator.is_some()
+    }
+
     pub(crate) fn enter_vim_insert_mode(&mut self) {
         if self.vim_enabled {
             self.vim_mode = VimMode::Insert;
