@@ -263,6 +263,9 @@ pub(crate) async fn handle_output_item_done(
                 plan_mode,
             )
             .await;
+            // Some built-in activity (currently server-executed `tool_search`)
+            // bypasses turn-item normalization, so preserve goal continuation
+            // progress for those response items here.
             let counts_as_raw_continuation_activity = turn_item.is_none()
                 && response_item_counts_as_goal_continuation_activity_without_turn_item(&item);
             if counts_as_raw_continuation_activity {
