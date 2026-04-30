@@ -3341,9 +3341,9 @@ async fn relative_cwd_update_without_environments_resolves_under_session_cwd() {
 }
 
 #[tokio::test]
-async fn relative_cwd_update_with_turn_environment_keeps_turn_environment_cwd() {
+async fn relative_cwd_update_with_turn_environment_is_rejected() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
-    let (stored_cwd, turn_environment_cwd, expected_session_cwd) = {
+    let (stored_cwd, turn_environment_cwd) = {
         let mut state = session.state.lock().await;
         let stored_cwd = state.session_configuration.cwd.clone();
         let stored_environment_cwd = stored_cwd.join("stored-environment");
@@ -3352,12 +3352,12 @@ async fn relative_cwd_update_with_turn_environment_keeps_turn_environment_cwd() 
             environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
             cwd: stored_environment_cwd,
         }];
-        let expected_session_cwd = turn_environment_cwd.join("project");
-        (stored_cwd, turn_environment_cwd, expected_session_cwd)
+        (stored_cwd, turn_environment_cwd)
     };
-    std::fs::create_dir_all(expected_session_cwd.as_path()).expect("create project dir");
+    std::fs::create_dir_all(turn_environment_cwd.join("project").as_path())
+        .expect("create project dir");
 
-    let turn_context = session
+    let err = session
         .new_turn_with_sub_id(
             "sub-1".to_string(),
             SessionSettingsUpdate {
@@ -3370,40 +3370,33 @@ async fn relative_cwd_update_with_turn_environment_keeps_turn_environment_cwd() 
             },
         )
         .await
-        .expect("turn should start");
+        .expect_err("cwd and explicit environments should be rejected");
 
     let state = session.state.lock().await;
-    assert_eq!(state.session_configuration.cwd, expected_session_cwd);
+    assert!(matches!(err, CodexErr::InvalidRequest(_)));
+    assert!(err.to_string().contains("cannot be updated together"));
+    assert_eq!(state.session_configuration.cwd, stored_cwd);
     assert_eq!(
         state.session_configuration.environments[0].cwd,
         stored_cwd.join("stored-environment")
     );
-    assert_eq!(turn_context.cwd, turn_environment_cwd);
-    assert_eq!(
-        turn_context
-            .primary_environment()
-            .expect("primary environment")
-            .cwd,
-        turn_environment_cwd
-    );
 }
 
 #[tokio::test]
-async fn relative_cwd_update_with_empty_turn_environments_resolves_under_session_cwd() {
+async fn relative_cwd_update_with_empty_turn_environments_is_rejected() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
-    let (stored_cwd, expected_cwd) = {
+    let stored_cwd = {
         let mut state = session.state.lock().await;
         let stored_cwd = state.session_configuration.cwd.clone();
         state.session_configuration.environments = vec![TurnEnvironmentSelection {
             environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
             cwd: stored_cwd.join("stored-environment"),
         }];
-        let expected_cwd = stored_cwd.join("project");
-        (stored_cwd, expected_cwd)
+        stored_cwd
     };
-    std::fs::create_dir_all(expected_cwd.as_path()).expect("create project dir");
+    std::fs::create_dir_all(stored_cwd.join("project").as_path()).expect("create project dir");
 
-    let turn_context = session
+    let err = session
         .new_turn_with_sub_id(
             "sub-1".to_string(),
             SessionSettingsUpdate {
@@ -3413,17 +3406,16 @@ async fn relative_cwd_update_with_empty_turn_environments_resolves_under_session
             },
         )
         .await
-        .expect("turn should start");
+        .expect_err("cwd and explicit empty environments should be rejected");
 
     let state = session.state.lock().await;
-    assert_eq!(state.session_configuration.cwd, expected_cwd);
+    assert!(matches!(err, CodexErr::InvalidRequest(_)));
+    assert!(err.to_string().contains("cannot be updated together"));
+    assert_eq!(state.session_configuration.cwd, stored_cwd);
     assert_eq!(
         state.session_configuration.environments[0].cwd,
         stored_cwd.join("stored-environment")
     );
-    assert_eq!(turn_context.cwd, expected_cwd);
-    assert!(turn_context.primary_environment().is_none());
-    assert!(turn_context.environments.is_empty());
 }
 
 #[tokio::test]

@@ -1,5 +1,6 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
+use codex_config::ConstraintError;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -145,6 +146,12 @@ impl SessionConfiguration {
     }
 
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
+        if updates.cwd.is_some() && updates.environments.is_some() {
+            return Err(ConstraintError::invalid_combination(
+                "`cwd` cannot be updated together with turn-local `environments`",
+            ));
+        }
+
         let mut next_configuration = self.clone();
         let current_sandbox_policy = self.sandbox_policy();
         let current_file_system_sandbox_policy = self.file_system_sandbox_policy();
@@ -945,8 +952,16 @@ impl Session {
                 cancel_guard.cancel();
                 *cancel_guard = CancellationToken::new();
             }
-            let mcp_runtime_environment =
-                sess.mcp_runtime_environment_for_configuration(&session_configuration)?;
+            let mcp_runtime_environment = match sess
+                .mcp_runtime_environment_for_configuration(&session_configuration)
+            {
+                Ok(runtime_environment) => runtime_environment,
+                Err(_) if enabled_mcp_server_count == 0 => sess.fallback_mcp_runtime_environment(
+                    &session_configuration.cwd,
+                    /*require_default_environment*/ false,
+                )?,
+                Err(err) => return Err(err.into()),
+            };
             let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
                 &mcp_servers,
                 config.mcp_oauth_credentials_store_mode,

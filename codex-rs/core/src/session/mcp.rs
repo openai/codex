@@ -1,6 +1,30 @@
 use super::*;
 
 impl Session {
+    pub(crate) fn fallback_mcp_runtime_environment(
+        &self,
+        fallback_cwd: &AbsolutePathBuf,
+        require_default_environment: bool,
+    ) -> CodexResult<McpRuntimeEnvironment> {
+        if let Some(default_environment) = self.services.environment_manager.default_environment() {
+            return Ok(McpRuntimeEnvironment::new(
+                default_environment,
+                fallback_cwd.to_path_buf(),
+            ));
+        }
+
+        if require_default_environment {
+            return Err(CodexErr::InvalidRequest(
+                "MCP runtime environment requires a default environment".to_string(),
+            ));
+        }
+
+        Ok(McpRuntimeEnvironment::new(
+            self.services.environment_manager.local_environment(),
+            fallback_cwd.to_path_buf(),
+        ))
+    }
+
     pub(crate) fn mcp_runtime_environment_for_configuration(
         &self,
         session_configuration: &SessionConfiguration,
@@ -25,20 +49,22 @@ impl Session {
             ));
         }
 
-        let default_environment = self
-            .services
-            .environment_manager
-            .default_environment()
-            .ok_or_else(|| {
-                CodexErr::InvalidRequest(
-                    "MCP runtime environment requires a default environment".to_string(),
-                )
-            })?;
+        self.fallback_mcp_runtime_environment(&session_configuration.cwd, true)
+    }
 
-        Ok(McpRuntimeEnvironment::new(
-            default_environment,
-            session_configuration.cwd.to_path_buf(),
-        ))
+    pub(crate) fn mcp_runtime_environment_for_turn_context(
+        &self,
+        turn_context: &TurnContext,
+        require_default_environment: bool,
+    ) -> CodexResult<McpRuntimeEnvironment> {
+        if let Some(turn_environment) = turn_context.primary_environment() {
+            return Ok(McpRuntimeEnvironment::new(
+                Arc::clone(&turn_environment.environment),
+                turn_environment.cwd.to_path_buf(),
+            ));
+        }
+
+        self.fallback_mcp_runtime_environment(&turn_context.cwd, require_default_environment)
     }
 
     #[expect(
@@ -261,18 +287,16 @@ impl Session {
         let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
         let auth_statuses =
             compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
-        let session_configuration = {
-            let state = self.state.lock().await;
-            state.session_configuration.clone()
+        let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
+        let mcp_runtime_environment = match self
+            .mcp_runtime_environment_for_turn_context(turn_context, enabled_mcp_server_count > 0)
+        {
+            Ok(runtime_environment) => runtime_environment,
+            Err(err) => {
+                warn!("failed to resolve MCP runtime environment for refresh: {err}");
+                return;
+            }
         };
-        let mcp_runtime_environment =
-            match self.mcp_runtime_environment_for_configuration(&session_configuration) {
-                Ok(runtime_environment) => runtime_environment,
-                Err(err) => {
-                    warn!("failed to resolve MCP runtime environment for refresh: {err}");
-                    return;
-                }
-            };
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             guard.cancel();

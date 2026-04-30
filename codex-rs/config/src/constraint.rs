@@ -24,12 +24,21 @@ pub enum ConstraintError {
         requirement_source: RequirementSource,
         reason: String,
     },
+
+    #[error("invalid combination: {reason}")]
+    InvalidCombination { reason: String },
 }
 
 impl ConstraintError {
     pub fn empty_field(field_name: impl Into<String>) -> Self {
         Self::EmptyField {
             field_name: field_name.into(),
+        }
+    }
+
+    pub fn invalid_combination(reason: impl Into<String>) -> Self {
+        Self::InvalidCombination {
+            reason: reason.into(),
         }
     }
 }

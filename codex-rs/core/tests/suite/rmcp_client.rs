@@ -567,7 +567,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_cwd)]
-async fn refreshed_stdio_server_uses_stored_environment_cwd() -> anyhow::Result<()> {
+async fn refreshed_stdio_server_uses_turn_environment_cwd() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -635,35 +635,6 @@ async fn refreshed_stdio_server_uses_stored_environment_cwd() -> anyhow::Result<
         },
     )]);
 
-    mount_sse_once(
-        &server,
-        responses::sse(vec![
-            responses::ev_response_created("resp-store-environment"),
-            responses::ev_assistant_message(
-                "msg-store-environment",
-                "stored environment selected.",
-            ),
-            responses::ev_completed("resp-store-environment"),
-        ]),
-    )
-    .await;
-    fixture
-        .codex
-        .submit(Op::UserInput {
-            environments: Some(vec![TurnEnvironmentSelection {
-                environment_id: environment_id.to_string(),
-                cwd: selected_cwd.clone().abs(),
-            }]),
-            items: vec![UserInput::Text {
-                text: "store the selected environment".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-        })
-        .await?;
-    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
     fixture
         .codex
         .submit(Op::RefreshMcpServers {
@@ -680,8 +651,19 @@ async fn refreshed_stdio_server_uses_stored_environment_cwd() -> anyhow::Result<
         &server,
         &fixture,
         server_name,
-        "call-stored-environment-cwd",
-        read_only_user_turn(&fixture, "call the rmcp cwd tool"),
+        "call-turn-environment-cwd",
+        Op::UserInput {
+            environments: Some(vec![TurnEnvironmentSelection {
+                environment_id: environment_id.to_string(),
+                cwd: selected_cwd.clone().abs(),
+            }]),
+            items: vec![UserInput::Text {
+                text: "call the rmcp cwd tool".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        },
     )
     .await?;
 
