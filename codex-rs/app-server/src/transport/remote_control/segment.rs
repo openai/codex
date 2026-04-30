@@ -118,10 +118,13 @@ impl ClientSegmentReassembler {
             }
         }
         let result = {
-            let assembly = self
-                .assemblies
-                .get_mut(&envelope.client_id)
-                .expect("segment assembly should exist before processing");
+            let Some(assembly) = self.assemblies.get_mut(&envelope.client_id) else {
+                warn!(
+                    client_id = envelope.client_id.0.as_str(),
+                    "dropping segmented remote-control client envelope without assembly"
+                );
+                return None;
+            };
             if assembly.metadata != metadata {
                 warn!(
                     client_id = envelope.client_id.0.as_str(),
