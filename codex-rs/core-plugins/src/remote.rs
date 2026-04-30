@@ -791,24 +791,13 @@ async fn fetch_installed_plugins_for_scope(
     auth: &CodexAuth,
     scope: RemotePluginScope,
 ) -> Result<Vec<RemotePluginInstalledItem>, RemotePluginCatalogError> {
-    fetch_installed_plugins_for_scope_with_download_url_option(
+    fetch_installed_plugins_for_scope_with_download_url(
         config, auth, scope, /*include_download_urls*/ false,
     )
     .await
 }
 
-async fn fetch_installed_plugins_for_scope_with_download_urls(
-    config: &RemotePluginServiceConfig,
-    auth: &CodexAuth,
-    scope: RemotePluginScope,
-) -> Result<Vec<RemotePluginInstalledItem>, RemotePluginCatalogError> {
-    fetch_installed_plugins_for_scope_with_download_url_option(
-        config, auth, scope, /*include_download_urls*/ true,
-    )
-    .await
-}
-
-async fn fetch_installed_plugins_for_scope_with_download_url_option(
+async fn fetch_installed_plugins_for_scope_with_download_url(
     config: &RemotePluginServiceConfig,
     auth: &CodexAuth,
     scope: RemotePluginScope,

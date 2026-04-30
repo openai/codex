@@ -4,7 +4,7 @@ use super::RemotePluginCatalogError;
 use super::RemotePluginScope;
 use super::RemotePluginServiceConfig;
 use super::ensure_chatgpt_auth;
-use super::fetch_installed_plugins_for_scope_with_download_urls;
+use super::fetch_installed_plugins_for_scope_with_download_url;
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
 use crate::store::PluginStoreError;
@@ -126,14 +126,18 @@ pub async fn sync_remote_installed_plugin_bundles_once(
     let auth = ensure_chatgpt_auth(auth)?;
     let global = async {
         let scope = RemotePluginScope::Global;
-        let installed_plugins =
-            fetch_installed_plugins_for_scope_with_download_urls(config, auth, scope).await?;
+        let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
+            config, auth, scope, /*include_download_urls*/ true,
+        )
+        .await?;
         Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
     };
     let workspace = async {
         let scope = RemotePluginScope::Workspace;
-        let installed_plugins =
-            fetch_installed_plugins_for_scope_with_download_urls(config, auth, scope).await?;
+        let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
+            config, auth, scope, /*include_download_urls*/ true,
+        )
+        .await?;
         Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
     };
 
