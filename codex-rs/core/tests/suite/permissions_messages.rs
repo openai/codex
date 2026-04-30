@@ -5,10 +5,11 @@ use codex_core::config::Constrained;
 use codex_core::context::ContextualUserFragment;
 use codex_core::context::PermissionsInstructions;
 use codex_core::load_exec_policy;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::ResponsesRequest;
@@ -494,7 +495,8 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
         .thread_manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            fork_config,
+            fork_config.clone(),
+            codex_core::thread_store_from_config(&fork_config),
             rollout_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -540,20 +542,19 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
     .await;
     let writable = TempDir::new()?;
     let writable_root = AbsolutePathBuf::try_from(writable.path())?;
-    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![writable_root],
-        network_access: false,
-        exclude_tmpdir_env_var: false,
-        exclude_slash_tmp: false,
-    };
-    let sandbox_policy_for_config = sandbox_policy.clone();
+    let permission_profile = PermissionProfile::workspace_write_with(
+        &[writable_root],
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ false,
+        /*exclude_slash_tmp*/ false,
+    );
 
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         config
             .permissions
-            .set_legacy_sandbox_policy(sandbox_policy_for_config, config.cwd.as_path())
-            .expect("test sandbox policy should be allowed");
+            .set_permission_profile(permission_profile)
+            .expect("test permission profile should be allowed");
         config.config_layer_stack = ConfigLayerStack::default();
     });
     let test = builder.build(&server).await?;
@@ -574,6 +575,7 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
     let permissions = permissions_texts(&req.single_request());
     let normalize_line_endings = |s: &str| s.replace("\r\n", "\n");
     let exec_policy = load_exec_policy(&test.config.config_layer_stack).await?;
+    let sandbox_policy = test.config.legacy_sandbox_policy();
     let expected = PermissionsInstructions::from_policy(
         &sandbox_policy,
         AskForApproval::OnRequest,

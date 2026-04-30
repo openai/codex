@@ -173,6 +173,7 @@ impl TurnContext {
             /*developer_instructions*/ None,
         );
         let features = self.features.clone();
+        let provider_capabilities = self.provider.capabilities();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             available_models: &models_manager
@@ -187,6 +188,9 @@ impl TurnContext {
             permission_profile: &self.permission_profile,
             windows_sandbox_level: self.windows_sandbox_level,
         })
+        .with_namespace_tools_capability(provider_capabilities.namespace_tools)
+        .with_image_generation_capability(provider_capabilities.image_generation)
+        .with_web_search_capability(provider_capabilities.web_search)
         .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
@@ -200,6 +204,12 @@ impl TurnContext {
                 .features
                 .enabled(Feature::MultiAgentV2)
                 .then_some(config.multi_agent_v2.max_concurrent_threads_per_session),
+        )
+        .with_wait_agent_min_timeout_ms(
+            config
+                .features
+                .enabled(Feature::MultiAgentV2)
+                .then_some(config.multi_agent_v2.min_wait_timeout_ms),
         )
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &config.agent_roles,
@@ -442,6 +452,7 @@ impl Session {
             image_generation_tool_auth_allowed(auth_manager.as_deref());
         let auth_manager_for_context = auth_manager.clone();
         let provider_for_context = create_model_provider(provider, auth_manager);
+        let provider_capabilities = provider_for_context.capabilities();
         let session_telemetry_for_context = session_telemetry;
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
@@ -453,6 +464,9 @@ impl Session {
             permission_profile: &session_configuration.permission_profile(),
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         })
+        .with_namespace_tools_capability(provider_capabilities.namespace_tools)
+        .with_image_generation_capability(provider_capabilities.image_generation)
+        .with_web_search_capability(provider_capabilities.web_search)
         .with_unified_exec_shell_mode_for_session(
             crate::tools::spec::tool_user_shell_type(user_shell),
             shell_zsh_path,
@@ -474,6 +488,12 @@ impl Session {
                         .multi_agent_v2
                         .max_concurrent_threads_per_session,
                 ),
+        )
+        .with_wait_agent_min_timeout_ms(
+            per_turn_config
+                .features
+                .enabled(Feature::MultiAgentV2)
+                .then_some(per_turn_config.multi_agent_v2.min_wait_timeout_ms),
         )
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &per_turn_config.agent_roles,

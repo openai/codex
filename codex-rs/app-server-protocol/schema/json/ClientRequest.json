@@ -354,6 +354,17 @@
       ],
       "type": "object"
     },
+    "CommandMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "ConfigBatchWriteParams": {
       "properties": {
         "edits": {
@@ -849,7 +860,11 @@
         "CONFIG",
         "SKILLS",
         "PLUGINS",
-        "MCP_SERVER_CONFIG"
+        "MCP_SERVER_CONFIG",
+        "SUBAGENTS",
+        "HOOKS",
+        "COMMANDS",
+        "SESSIONS"
       ],
       "type": "string"
     },
@@ -1389,6 +1404,29 @@
       },
       "type": "object"
     },
+    "HookMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "HooksListParams": {
+      "properties": {
+        "cwds": {
+          "description": "When empty, defaults to the current session working directory.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ImageDetail": {
       "enum": [
         "auto",
@@ -1560,6 +1598,9 @@
         },
         {
           "properties": {
+            "codexStreamlinedLogin": {
+              "type": "boolean"
+            },
             "type": {
               "enum": [
                 "chatgpt"
@@ -1695,6 +1736,17 @@
       ],
       "type": "object"
     },
+    "McpServerMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "McpServerOauthLoginParams": {
       "properties": {
         "name": {
@@ -1778,16 +1830,49 @@
     },
     "MigrationDetails": {
       "properties": {
+        "commands": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/CommandMigration"
+          },
+          "type": "array"
+        },
+        "hooks": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/HookMigration"
+          },
+          "type": "array"
+        },
+        "mcpServers": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/McpServerMigration"
+          },
+          "type": "array"
+        },
         "plugins": {
+          "default": [],
           "items": {
             "$ref": "#/definitions/PluginsMigration"
           },
           "type": "array"
+        },
+        "sessions": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/SessionMigration"
+          },
+          "type": "array"
+        },
+        "subagents": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/SubagentMigration"
+          },
+          "type": "array"
         }
       },
-      "required": [
-        "plugins"
-      ],
       "type": "object"
     },
     "ModeKind": {
@@ -1824,6 +1909,9 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "ModelProviderCapabilitiesReadParams": {
       "type": "object"
     },
     "NetworkAccess": {
@@ -1951,6 +2039,31 @@
         }
       ]
     },
+    "PermissionProfileModificationParams": {
+      "oneOf": [
+        {
+          "description": "Additional concrete directory that should be writable.",
+          "properties": {
+            "path": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "additionalWritableRoot"
+              ],
+              "title": "AdditionalWritableRootPermissionProfileModificationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "AdditionalWritableRootPermissionProfileModificationParams",
+          "type": "object"
+        }
+      ]
+    },
     "PermissionProfileNetworkPermissions": {
       "properties": {
         "enabled": {
@@ -1961,6 +2074,40 @@
         "enabled"
       ],
       "type": "object"
+    },
+    "PermissionProfileSelectionParams": {
+      "oneOf": [
+        {
+          "description": "Select a named built-in or user-defined profile and optionally apply bounded modifications that Codex knows how to validate.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "modifications": {
+              "items": {
+                "$ref": "#/definitions/PermissionProfileModificationParams"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "profile"
+              ],
+              "title": "ProfilePermissionProfileSelectionParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "ProfilePermissionProfileSelectionParams",
+          "type": "object"
+        }
+      ]
     },
     "Personality": {
       "enum": [
@@ -2036,6 +2183,37 @@
       },
       "required": [
         "pluginName"
+      ],
+      "type": "object"
+    },
+    "PluginShareDeleteParams": {
+      "properties": {
+        "remotePluginId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "remotePluginId"
+      ],
+      "type": "object"
+    },
+    "PluginShareListParams": {
+      "type": "object"
+    },
+    "PluginShareSaveParams": {
+      "properties": {
+        "pluginPath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "remotePluginId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "pluginPath"
       ],
       "type": "object"
     },
@@ -3022,6 +3200,27 @@
       ],
       "type": "string"
     },
+    "SessionMigration": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cwd",
+        "path"
+      ],
+      "type": "object"
+    },
     "Settings": {
       "description": "Settings for a collaboration mode.",
       "properties": {
@@ -3130,6 +3329,17 @@
         "desc"
       ],
       "type": "string"
+    },
+    "SubagentMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
     },
     "TextElement": {
       "properties": {
@@ -4759,6 +4969,30 @@
         },
         "method": {
           "enum": [
+            "hooks/list"
+          ],
+          "title": "Hooks/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/HooksListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Hooks/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "marketplace/add"
           ],
           "title": "Marketplace/addRequestMethod",
@@ -4870,6 +5104,78 @@
         "params"
       ],
       "title": "Plugin/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/share/save"
+          ],
+          "title": "Plugin/share/saveRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginShareSaveParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/share/saveRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/share/list"
+          ],
+          "title": "Plugin/share/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginShareListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/share/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/share/delete"
+          ],
+          "title": "Plugin/share/deleteRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginShareDeleteParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/share/deleteRequest",
       "type": "object"
     },
     {
@@ -5374,6 +5680,30 @@
         "params"
       ],
       "title": "Model/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "modelProvider/capabilities/read"
+          ],
+          "title": "ModelProvider/capabilities/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ModelProviderCapabilitiesReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ModelProvider/capabilities/readRequest",
       "type": "object"
     },
     {

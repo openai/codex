@@ -11,12 +11,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-SCRIPT_VERSION = 2
+SCRIPT_VERSION = 4
 QUALIFYING_KIND_LABELS = ("bug", "enhancement")
 REACTION_KEYS = ("+1", "-1", "laugh", "hooray", "confused", "heart", "rocket", "eyes")
 BASE_ATTENTION_WINDOW_HOURS = 24.0
-ONE_ATTENTION_INTERACTION_THRESHOLD = 10
-TWO_ATTENTION_INTERACTION_THRESHOLD = 20
+ONE_ATTENTION_INTERACTION_THRESHOLD = 5
+TWO_ATTENTION_INTERACTION_THRESHOLD = 10
 ALL_LABEL_PHRASES = {"all", "all areas", "all labels", "all-areas", "all-labels", "*"}
 
 
@@ -305,6 +305,7 @@ def search_issue_numbers(queries, limit):
     numbers = {}
     for query in queries:
         page = 1
+        seen_for_query = 0
         while True:
             payload = gh_json(
                 [
@@ -314,6 +315,10 @@ def search_issue_numbers(queries, limit):
                     "GET",
                     "-f",
                     f"q={query}",
+                    "-f",
+                    "sort=updated",
+                    "-f",
+                    "order=desc",
                     "-f",
                     "per_page=100",
                     "-f",
@@ -331,7 +336,8 @@ def search_issue_numbers(queries, limit):
                 number = item.get("number")
                 if isinstance(number, int):
                     numbers[number] = str(item.get("updated_at") or "")
-            if len(items) < 100 or len(numbers) >= limit:
+                    seen_for_query += 1
+            if len(items) < 100 or seen_for_query >= limit:
                 break
             page += 1
     ordered = sorted(

@@ -179,6 +179,14 @@ fn auth_identity(auth: &CodexAuth) -> (Option<String>, Option<String>) {
     (auth.get_chatgpt_user_id(), auth.get_account_id())
 }
 
+fn cloud_requirements_eligible_auth(auth: &CodexAuth) -> bool {
+    let Some(plan_type) = auth.account_plan_type() else {
+        return false;
+    };
+    auth.uses_codex_backend()
+        && (plan_type.is_business_like() || matches!(plan_type, PlanType::Enterprise))
+}
+
 fn cache_payload_bytes(payload: &CloudRequirementsCacheSignedPayload) -> Option<Vec<u8>> {
     serde_json::to_vec(&payload).ok()
 }
@@ -329,17 +337,7 @@ impl CloudRequirementsService {
         let Some(auth) = self.auth_manager.auth().await else {
             return Ok(None);
         };
-        if matches!(auth, CodexAuth::AgentIdentity(_)) {
-            // AgentIdentity does not carry a human bearer token, and identity-edge
-            // only allowlists task-scoped AgentAssertion calls for the Codex runtime.
-            return Ok(None);
-        }
-        let Some(plan_type) = auth.account_plan_type() else {
-            return Ok(None);
-        };
-        if !auth.uses_codex_backend()
-            || !(plan_type.is_business_like() || matches!(plan_type, PlanType::Enterprise))
-        {
+        if !cloud_requirements_eligible_auth(&auth) {
             return Ok(None);
         }
         let (chatgpt_user_id, account_id) = auth_identity(&auth);
@@ -554,12 +552,7 @@ impl CloudRequirementsService {
         let Some(auth) = self.auth_manager.auth().await else {
             return false;
         };
-        let Some(plan_type) = auth.account_plan_type() else {
-            return false;
-        };
-        if !auth.uses_codex_backend()
-            || !(plan_type.is_business_like() || matches!(plan_type, PlanType::Enterprise))
-        {
+        if !cloud_requirements_eligible_auth(&auth) {
             return false;
         }
 
@@ -837,17 +830,40 @@ mod tests {
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use codex_config::types::AuthCredentialsStoreMode;
+    use codex_login::auth::AgentIdentityAuth;
+    use codex_login::auth::AgentIdentityAuthRecord;
     use codex_protocol::protocol::AskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::BTreeMap;
     use std::collections::VecDeque;
+    use std::ffi::OsString;
     use std::future::pending;
+    use std::io::Read;
+    use std::io::Write;
+    use std::net::TcpListener;
     use std::path::Path;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
+    use std::thread;
     use tempfile::TempDir;
     use tempfile::tempdir;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.original {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
 
     fn write_auth_json(codex_home: &Path, value: serde_json::Value) -> std::io::Result<()> {
         std::fs::write(codex_home.join("auth.json"), serde_json::to_string(&value)?)?;
@@ -1191,6 +1207,7 @@ mod tests {
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -1198,6 +1215,55 @@ mod tests {
                 permissions: None,
             }))
         );
+    }
+
+    #[tokio::test]
+    async fn cloud_requirements_eligible_auth_allows_agent_identity_business_plan() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind task registration server");
+        let addr = listener
+            .local_addr()
+            .expect("task registration server addr");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept task registration request");
+            let mut request = [0; 4096];
+            let _ = stream
+                .read(&mut request)
+                .expect("read task registration request");
+            let body = r#"{"task_id":"task-123"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("write task registration response");
+        });
+        let record = AgentIdentityAuthRecord {
+            agent_runtime_id: "agent-runtime-123".to_string(),
+            agent_private_key: "MC4CAQAwBQYDK2VwBCIEIDQg14jybCLydjHQwXeBzsDM7oB6BSAenodx6oCovQ/D"
+                .to_string(),
+            account_id: "account-12345".to_string(),
+            chatgpt_user_id: "user-12345".to_string(),
+            email: "user@example.com".to_string(),
+            plan_type: PlanType::Business,
+            chatgpt_account_is_fedramp: false,
+        };
+        let authapi_base_url = format!("http://{addr}/backend-api");
+        let original_authapi_base_url = std::env::var_os("CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL");
+        unsafe {
+            std::env::set_var("CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL", &authapi_base_url);
+        }
+        let _authapi_guard = EnvVarGuard {
+            key: "CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL",
+            original: original_authapi_base_url,
+        };
+        let auth = AgentIdentityAuth::load(record)
+            .await
+            .map(CodexAuth::AgentIdentity)
+            .expect("agent identity auth");
+        server.join().expect("task registration server joined");
+
+        assert!(cloud_requirements_eligible_auth(&auth));
     }
 
     #[tokio::test]
@@ -1223,6 +1289,7 @@ mod tests {
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -1255,6 +1322,7 @@ mod tests {
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -1304,6 +1372,7 @@ mod tests {
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -1333,6 +1402,36 @@ enabled = false
                         },
                     )]),
                 }),
+                ..Default::default()
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_cloud_requirements_parses_plugin_mcp_requirements_toml() {
+        let result = parse_for_fetch(Some(
+            r#"
+[plugins."sample@test".mcp_servers.sample.identity]
+command = "sample-mcp"
+"#,
+        ));
+
+        assert_eq!(
+            result,
+            Some(ConfigRequirementsToml {
+                plugins: Some(BTreeMap::from([(
+                    "sample@test".to_string(),
+                    codex_config::PluginRequirementsToml {
+                        mcp_servers: Some(BTreeMap::from([(
+                            "sample".to_string(),
+                            codex_config::McpServerRequirement {
+                                identity: codex_config::McpServerIdentity::Command {
+                                    command: "sample-mcp".to_string(),
+                                },
+                            },
+                        )])),
+                    },
+                )])),
                 ..Default::default()
             })
         );
@@ -1389,6 +1488,7 @@ enabled = false
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -1468,6 +1568,7 @@ enabled = false
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -1545,6 +1646,7 @@ enabled = false
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -1750,6 +1852,7 @@ enabled = false
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -1789,6 +1892,7 @@ enabled = false
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -1848,6 +1952,7 @@ enabled = false
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -1903,6 +2008,7 @@ enabled = false
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -1960,6 +2066,7 @@ enabled = false
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -2018,6 +2125,7 @@ enabled = false
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -2076,6 +2184,7 @@ enabled = false
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -2164,6 +2273,7 @@ enabled = false
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -2194,6 +2304,7 @@ enabled = false
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,

@@ -1,4 +1,11 @@
 use super::*;
+use codex_app_server_protocol::FileSystemAccessMode;
+use codex_app_server_protocol::FileSystemPath;
+use codex_app_server_protocol::FileSystemSandboxEntry;
+use codex_app_server_protocol::FileSystemSpecialPath;
+use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
+use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
+use codex_app_server_protocol::PermissionProfileNetworkPermissions;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -7,9 +14,10 @@ async fn submission_preserves_text_elements_and_local_images() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_protocol::protocol::SessionConfiguredEvent {
-        session_id: conversation_id,
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id: conversation_id,
         forked_from_id: None,
+        fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -17,18 +25,16 @@ async fn submission_preserves_text_elements_and_local_images() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
-        initial_messages: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
-    chat.handle_codex_event(Event {
-        id: "initial".into(),
-        msg: EventMsg::SessionConfigured(configured),
-    });
+    chat.handle_thread_session(configured);
     drain_insert_history(&mut rx);
 
     let placeholder = "[Image #1]";
@@ -58,7 +64,7 @@ async fn submission_preserves_text_elements_and_local_images() {
         items[1],
         UserInput::Text {
             text: text.clone(),
-            text_elements: text_elements.clone(),
+            text_elements: text_elements.clone().into_iter().map(Into::into).collect(),
         }
     );
 
@@ -91,29 +97,31 @@ async fn submission_includes_configured_permission_profile() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let expected_permission_profile = PermissionProfile::Managed {
-        network: codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
-        file_system: codex_protocol::models::ManagedFileSystemPermissions::Restricted {
+    let expected_permission_profile: PermissionProfile = AppServerPermissionProfile::Managed {
+        network: PermissionProfileNetworkPermissions { enabled: false },
+        file_system: PermissionProfileFileSystemPermissions::Restricted {
             entries: vec![
-                codex_protocol::permissions::FileSystemSandboxEntry {
-                    path: codex_protocol::permissions::FileSystemPath::Special {
-                        value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Root,
                     },
-                    access: codex_protocol::permissions::FileSystemAccessMode::Read,
+                    access: FileSystemAccessMode::Read,
                 },
-                codex_protocol::permissions::FileSystemSandboxEntry {
-                    path: codex_protocol::permissions::FileSystemPath::GlobPattern {
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
                         pattern: "/home/user/project/secrets/**".to_string(),
                     },
-                    access: codex_protocol::permissions::FileSystemAccessMode::None,
+                    access: FileSystemAccessMode::None,
                 },
             ],
             glob_scan_max_depth: None,
         },
-    };
-    let configured = codex_protocol::protocol::SessionConfiguredEvent {
-        session_id: conversation_id,
+    }
+    .into();
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id: conversation_id,
         forked_from_id: None,
+        fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -121,18 +129,16 @@ async fn submission_includes_configured_permission_profile() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: expected_permission_profile.clone(),
+        active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
-        initial_messages: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
-    chat.handle_codex_event(Event {
-        id: "initial".into(),
-        msg: EventMsg::SessionConfigured(configured),
-    });
+    chat.handle_thread_session(configured);
     drain_insert_history(&mut rx);
 
     chat.bottom_pane.set_composer_text(
@@ -148,7 +154,7 @@ async fn submission_includes_configured_permission_profile() {
         } => permission_profile,
         other => panic!("expected Op::UserTurn, got {other:?}"),
     };
-    assert_eq!(permission_profile, Some(expected_permission_profile));
+    assert_eq!(permission_profile, expected_permission_profile);
 }
 
 #[tokio::test]
@@ -157,13 +163,15 @@ async fn submission_keeps_profile_when_legacy_projection_is_external() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let expected_permission_profile = PermissionProfile::Managed {
-        network: codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
-        file_system: codex_protocol::models::ManagedFileSystemPermissions::Unrestricted,
-    };
-    let configured = codex_protocol::protocol::SessionConfiguredEvent {
-        session_id: conversation_id,
+    let expected_permission_profile: PermissionProfile = AppServerPermissionProfile::Managed {
+        network: PermissionProfileNetworkPermissions { enabled: false },
+        file_system: PermissionProfileFileSystemPermissions::Unrestricted,
+    }
+    .into();
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id: conversation_id,
         forked_from_id: None,
+        fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -171,18 +179,16 @@ async fn submission_keeps_profile_when_legacy_projection_is_external() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: expected_permission_profile.clone(),
+        active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
-        initial_messages: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
-    chat.handle_codex_event(Event {
-        id: "initial".into(),
-        msg: EventMsg::SessionConfigured(configured),
-    });
+    chat.handle_thread_session(configured);
     drain_insert_history(&mut rx);
 
     chat.bottom_pane
@@ -195,7 +201,7 @@ async fn submission_keeps_profile_when_legacy_projection_is_external() {
         } => permission_profile,
         other => panic!("expected Op::UserTurn, got {other:?}"),
     };
-    assert_eq!(permission_profile, Some(expected_permission_profile));
+    assert_eq!(permission_profile, expected_permission_profile);
 }
 
 #[tokio::test]
@@ -204,9 +210,10 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_protocol::protocol::SessionConfiguredEvent {
-        session_id: conversation_id,
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id: conversation_id,
         forked_from_id: None,
+        fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -214,18 +221,16 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
-        initial_messages: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
-    chat.handle_codex_event(Event {
-        id: "initial".into(),
-        msg: EventMsg::SessionConfigured(configured),
-    });
+    chat.handle_thread_session(configured);
     drain_insert_history(&mut rx);
 
     let remote_url = "https://example.com/remote.png".to_string();
@@ -252,7 +257,7 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
     assert_eq!(
         items[0],
         UserInput::Image {
-            image_url: remote_url.clone(),
+            url: remote_url.clone(),
         }
     );
     assert_eq!(
@@ -265,7 +270,7 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
         items[2],
         UserInput::Text {
             text: text.clone(),
-            text_elements: text_elements.clone(),
+            text_elements: text_elements.clone().into_iter().map(Into::into).collect(),
         }
     );
     assert_eq!(text_elements[0].placeholder(&text), Some("[Image #2]"));
@@ -299,9 +304,10 @@ async fn enter_with_only_remote_images_submits_user_turn() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_protocol::protocol::SessionConfiguredEvent {
-        session_id: conversation_id,
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id: conversation_id,
         forked_from_id: None,
+        fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -309,18 +315,16 @@ async fn enter_with_only_remote_images_submits_user_turn() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
-        initial_messages: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
-    chat.handle_codex_event(Event {
-        id: "initial".into(),
-        msg: EventMsg::SessionConfigured(configured),
-    });
+    chat.handle_thread_session(configured);
     drain_insert_history(&mut rx);
 
     let remote_url = "https://example.com/remote-only.png".to_string();
@@ -336,7 +340,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
     assert_eq!(
         items,
         vec![UserInput::Image {
-            image_url: remote_url.clone(),
+            url: remote_url.clone(),
         }]
     );
     assert_eq!(summary, None);
@@ -364,9 +368,10 @@ async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_protocol::protocol::SessionConfiguredEvent {
-        session_id: conversation_id,
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id: conversation_id,
         forked_from_id: None,
+        fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -374,18 +379,16 @@ async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
-        initial_messages: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
-    chat.handle_codex_event(Event {
-        id: "initial".into(),
-        msg: EventMsg::SessionConfigured(configured),
-    });
+    chat.handle_thread_session(configured);
     drain_insert_history(&mut rx);
 
     let remote_url = "https://example.com/remote-only.png".to_string();
@@ -404,9 +407,10 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_protocol::protocol::SessionConfiguredEvent {
-        session_id: conversation_id,
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id: conversation_id,
         forked_from_id: None,
+        fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -414,18 +418,16 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
-        initial_messages: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
-    chat.handle_codex_event(Event {
-        id: "initial".into(),
-        msg: EventMsg::SessionConfigured(configured),
-    });
+    chat.handle_thread_session(configured);
     drain_insert_history(&mut rx);
 
     let remote_url = "https://example.com/remote-only.png".to_string();
@@ -444,9 +446,10 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_protocol::protocol::SessionConfiguredEvent {
-        session_id: conversation_id,
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id: conversation_id,
         forked_from_id: None,
+        fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -454,18 +457,16 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
-        initial_messages: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
-    chat.handle_codex_event(Event {
-        id: "initial".into(),
-        msg: EventMsg::SessionConfigured(configured),
-    });
+    chat.handle_thread_session(configured);
     drain_insert_history(&mut rx);
 
     let remote_url = "https://example.com/remote-only.png".to_string();
@@ -487,9 +488,10 @@ async fn submission_prefers_selected_duplicate_skill_path() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_protocol::protocol::SessionConfiguredEvent {
-        session_id: conversation_id,
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id: conversation_id,
         forked_from_id: None,
+        fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -497,18 +499,16 @@ async fn submission_prefers_selected_duplicate_skill_path() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
-        initial_messages: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
-    chat.handle_codex_event(Event {
-        id: "initial".into(),
-        msg: EventMsg::SessionConfigured(configured),
-    });
+    chat.handle_thread_session(configured);
     drain_insert_history(&mut rx);
 
     let repo_skill_path = test_path_buf("/tmp/repo/figma/SKILL.md").abs();
@@ -522,7 +522,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             dependencies: None,
             policy: None,
             path_to_skills_md: repo_skill_path,
-            scope: SkillScope::Repo,
+            scope: crate::test_support::skill_scope_repo(),
         },
         SkillMetadata {
             name: "figma".to_string(),
@@ -532,7 +532,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             dependencies: None,
             policy: None,
             path_to_skills_md: user_skill_path.clone(),
-            scope: SkillScope::User,
+            scope: crate::test_support::skill_scope_user(),
         },
     ]));
 
@@ -729,15 +729,7 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
     );
     chat.refresh_pending_input_preview();
 
-    chat.handle_codex_event(Event {
-        id: "interrupt".into(),
-        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
-            turn_id: Some("turn-1".to_string()),
-            reason: TurnAbortReason::Interrupted,
-            completed_at: None,
-            duration_ms: None,
-        }),
-    });
+    handle_turn_interrupted(&mut chat, "turn-1");
 
     assert_eq!(chat.bottom_pane.composer_text(), "Implement the plan.");
     assert!(chat.queued_user_messages.is_empty());
@@ -1120,15 +1112,15 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
 }
 
 #[test]
-fn rendered_user_message_event_from_inputs_matches_flattened_user_message_shape() {
+fn user_message_display_from_inputs_matches_flattened_user_message_shape() {
     let local_image = PathBuf::from("/tmp/local.png");
-    let rendered = ChatWidget::rendered_user_message_event_from_inputs(&[
+    let rendered = ChatWidget::user_message_display_from_inputs(&[
         UserInput::Text {
             text: "hello ".to_string(),
-            text_elements: vec![TextElement::new((0..5).into(), /*placeholder*/ None)],
+            text_elements: vec![TextElement::new((0..5).into(), /*placeholder*/ None).into()],
         },
         UserInput::Image {
-            image_url: "https://example.com/remote.png".to_string(),
+            url: "https://example.com/remote.png".to_string(),
         },
         UserInput::LocalImage {
             path: local_image.clone(),
@@ -1143,13 +1135,13 @@ fn rendered_user_message_event_from_inputs_matches_flattened_user_message_shape(
         },
         UserInput::Text {
             text: "world".to_string(),
-            text_elements: vec![TextElement::new((0..5).into(), Some("planet".to_string()))],
+            text_elements: vec![TextElement::new((0..5).into(), Some("planet".to_string())).into()],
         },
     ]);
 
     assert_eq!(
         rendered,
-        ChatWidget::rendered_user_message_event_from_parts(
+        ChatWidget::user_message_display_from_parts(
             "hello world".to_string(),
             vec![
                 TextElement::new((0..5).into(), Some("hello".to_string())),
@@ -1175,16 +1167,8 @@ async fn interrupt_restores_queued_messages_into_composer() {
         .push_back(UserMessage::from("second queued".to_string()).into());
     chat.refresh_pending_input_preview();
 
-    // Deliver a TurnAborted event with Interrupted reason (as if Esc was pressed).
-    chat.handle_codex_event(Event {
-        id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
-            turn_id: Some("turn-1".to_string()),
-            reason: TurnAbortReason::Interrupted,
-            completed_at: None,
-            duration_ms: None,
-        }),
-    });
+    // Deliver an interrupted turn notification as if Esc was pressed.
+    handle_turn_interrupted(&mut chat, "turn-1");
 
     // Composer should now contain the queued messages joined by newlines, in order.
     assert_eq!(
@@ -1217,15 +1201,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
         .push_back(UserMessage::from("second queued".to_string()).into());
     chat.refresh_pending_input_preview();
 
-    chat.handle_codex_event(Event {
-        id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
-            turn_id: Some("turn-1".to_string()),
-            reason: TurnAbortReason::Interrupted,
-            completed_at: None,
-            duration_ms: None,
-        }),
-    });
+    handle_turn_interrupted(&mut chat, "turn-1");
 
     assert_eq!(
         chat.bottom_pane.composer_text(),

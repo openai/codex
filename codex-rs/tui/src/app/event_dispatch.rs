@@ -313,15 +313,14 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
-                self.submit_active_thread_op(app_server, op.into()).await?;
+                self.submit_active_thread_op(app_server, op).await?;
             }
             AppEvent::ApproveRecentAutoReviewDenial { thread_id, id } => {
                 self.chat_widget
                     .approve_recent_auto_review_denial(thread_id, id);
             }
             AppEvent::SubmitThreadOp { thread_id, op } => {
-                self.submit_thread_op(app_server, thread_id, op.into())
-                    .await?;
+                self.submit_thread_op(app_server, thread_id, op).await?;
             }
             AppEvent::ThreadHistoryEntryResponse { thread_id, event } => {
                 self.enqueue_thread_history_entry_response(thread_id, event)
@@ -385,6 +384,30 @@ impl App {
             AppEvent::FetchPluginsList { cwd } => {
                 self.fetch_plugins_list(app_server, cwd);
             }
+            AppEvent::FetchHooksList { cwd } => {
+                self.fetch_hooks_list(app_server, cwd);
+            }
+            AppEvent::OpenMarketplaceAddPrompt => {
+                self.chat_widget.open_marketplace_add_prompt();
+            }
+            AppEvent::OpenMarketplaceAddLoading { source } => {
+                self.chat_widget.open_marketplace_add_loading_popup(&source);
+            }
+            AppEvent::OpenMarketplaceRemoveConfirm {
+                marketplace_name,
+                marketplace_display_name,
+            } => {
+                self.chat_widget.open_marketplace_remove_confirmation(
+                    marketplace_name,
+                    marketplace_display_name,
+                );
+            }
+            AppEvent::OpenMarketplaceRemoveLoading {
+                marketplace_display_name,
+            } => {
+                self.chat_widget
+                    .open_marketplace_remove_loading_popup(&marketplace_display_name);
+            }
             AppEvent::OpenPluginDetailLoading {
                 plugin_display_name,
             } => {
@@ -405,6 +428,62 @@ impl App {
             }
             AppEvent::PluginsLoaded { cwd, result } => {
                 self.chat_widget.on_plugins_loaded(cwd, result);
+            }
+            AppEvent::HooksLoaded { cwd, result } => {
+                self.chat_widget.on_hooks_loaded(cwd, result);
+            }
+            AppEvent::FetchMarketplaceAdd { cwd, source } => {
+                self.fetch_marketplace_add(app_server, cwd, source);
+            }
+            AppEvent::MarketplaceAddLoaded {
+                cwd,
+                source,
+                result,
+            } => {
+                let add_succeeded = result.is_ok();
+                self.chat_widget
+                    .on_marketplace_add_loaded(cwd.clone(), source, result);
+                if add_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path() {
+                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        tracing::warn!(error = %err, "failed to refresh config after marketplace add");
+                    }
+                    self.fetch_plugins_list(app_server, cwd);
+                }
+            }
+            AppEvent::FetchMarketplaceRemove {
+                cwd,
+                marketplace_name,
+                marketplace_display_name,
+            } => {
+                self.fetch_marketplace_remove(
+                    app_server,
+                    cwd,
+                    marketplace_name,
+                    marketplace_display_name,
+                );
+            }
+            AppEvent::MarketplaceRemoveLoaded {
+                cwd,
+                marketplace_name,
+                marketplace_display_name,
+                result,
+            } => {
+                let remove_succeeded = result.is_ok();
+                self.chat_widget.on_marketplace_remove_loaded(
+                    cwd.clone(),
+                    marketplace_name,
+                    marketplace_display_name,
+                    result,
+                );
+                if remove_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path()
+                {
+                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        tracing::warn!(error = %err, "failed to refresh config after marketplace remove");
+                    }
+                    self.chat_widget.refresh_plugin_mentions();
+                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                    self.fetch_plugins_list(app_server, cwd);
+                }
             }
             AppEvent::FetchPluginDetail { cwd, params } => {
                 self.fetch_plugin_detail(app_server, cwd, params);
@@ -703,7 +782,7 @@ impl App {
             AppEvent::BeginWindowsSandboxElevatedSetup { preset } => {
                 #[cfg(target_os = "windows")]
                 {
-                    let policy = preset.sandbox.clone();
+                    let permission_profile = preset.permission_profile.clone();
                     let policy_cwd = self.config.cwd.clone();
                     let command_cwd = policy_cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =
@@ -726,6 +805,18 @@ impl App {
                     self.chat_widget.show_windows_sandbox_setup_status();
                     self.windows_sandbox.setup_started_at = Some(Instant::now());
                     let session_telemetry = self.session_telemetry.clone();
+                    let Ok(policy) = permission_profile
+                        .to_legacy_sandbox_policy(policy_cwd.as_path())
+                        .inspect_err(|err| {
+                            tracing::error!(
+                                %err,
+                                "approval preset permissions cannot be projected for elevated Windows sandbox setup"
+                            );
+                        })
+                    else {
+                        tx.send(AppEvent::OpenWindowsSandboxFallbackPrompt { preset });
+                        return Ok(AppRunControl::Continue);
+                    };
                     tokio::task::spawn_blocking(move || {
                         let result = crate::legacy_core::windows_sandbox::run_elevated_setup(
                             &policy,
@@ -789,7 +880,7 @@ impl App {
             AppEvent::BeginWindowsSandboxLegacySetup { preset } => {
                 #[cfg(target_os = "windows")]
                 {
-                    let policy = preset.sandbox.clone();
+                    let permission_profile = preset.permission_profile.clone();
                     let policy_cwd = self.config.cwd.clone();
                     let command_cwd = policy_cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =
@@ -799,6 +890,18 @@ impl App {
                     let session_telemetry = self.session_telemetry.clone();
 
                     self.chat_widget.show_windows_sandbox_setup_status();
+                    let Ok(policy) = permission_profile
+                        .to_legacy_sandbox_policy(policy_cwd.as_path())
+                        .inspect_err(|err| {
+                            tracing::error!(
+                                %err,
+                                "approval preset permissions cannot be projected for legacy Windows sandbox setup"
+                            );
+                        })
+                    else {
+                        tx.send(AppEvent::OpenWindowsSandboxFallbackPrompt { preset });
+                        return Ok(AppRunControl::Continue);
+                    };
                     tokio::task::spawn_blocking(move || {
                         if let Err(err) =
                             crate::legacy_core::windows_sandbox::run_legacy_setup_preflight(
@@ -935,7 +1038,7 @@ impl App {
                                         /*cwd*/ None,
                                         /*approval_policy*/ None,
                                         /*approvals_reviewer*/ None,
-                                        /*sandbox_policy*/ None,
+                                        /*permission_profile*/ None,
                                         #[cfg(target_os = "windows")]
                                         Some(windows_sandbox_level),
                                         /*model*/ None,
@@ -944,8 +1047,7 @@ impl App {
                                         /*service_tier*/ None,
                                         /*collaboration_mode*/ None,
                                         /*personality*/ None,
-                                    )
-                                    .into(),
+                                    ),
                                 ));
                                 self.app_event_tx.send(
                                     AppEvent::OpenWorldWritableWarningConfirmation {
@@ -959,9 +1061,9 @@ impl App {
                                 self.app_event_tx.send(AppEvent::CodexOp(
                                     AppCommand::override_turn_context(
                                         /*cwd*/ None,
-                                        Some(preset.approval),
+                                        Some(AskForApproval::from(preset.approval)),
                                         Some(self.config.approvals_reviewer),
-                                        Some(preset.sandbox.clone()),
+                                        Some(preset.permission_profile.clone()),
                                         #[cfg(target_os = "windows")]
                                         Some(windows_sandbox_level),
                                         /*model*/ None,
@@ -970,13 +1072,14 @@ impl App {
                                         /*service_tier*/ None,
                                         /*collaboration_mode*/ None,
                                         /*personality*/ None,
-                                    )
-                                    .into(),
+                                    ),
                                 ));
-                                self.app_event_tx
-                                    .send(AppEvent::UpdateAskForApprovalPolicy(preset.approval));
-                                self.app_event_tx
-                                    .send(AppEvent::UpdateSandboxPolicy(preset.sandbox.clone()));
+                                self.app_event_tx.send(AppEvent::UpdateAskForApprovalPolicy(
+                                    AskForApproval::from(preset.approval),
+                                ));
+                                self.app_event_tx.send(AppEvent::UpdatePermissionProfile(
+                                    preset.permission_profile.clone(),
+                                ));
                                 let _ = mode;
                                 self.chat_widget.add_plain_history_lines(vec![
                                     Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
@@ -1221,47 +1324,45 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 self.config = config;
-                self.runtime_approval_policy_override =
-                    Some(self.config.permissions.approval_policy.value());
-                self.chat_widget
-                    .set_approval_policy(self.config.permissions.approval_policy.value());
+                let approval_policy =
+                    AskForApproval::from(self.config.permissions.approval_policy.value());
+                self.runtime_approval_policy_override = Some(approval_policy);
+                self.chat_widget.set_approval_policy(approval_policy);
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
             }
-            AppEvent::UpdateSandboxPolicy(policy) => {
+            AppEvent::UpdatePermissionProfile(permission_profile) => {
                 #[cfg(target_os = "windows")]
-                let policy_is_workspace_write_or_ro = matches!(
-                    &policy,
-                    codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
-                );
-                let policy_for_chat = policy.clone();
+                let permission_profile_is_managed_restricted =
+                    managed_filesystem_sandbox_is_restricted(&permission_profile);
+                let permission_profile_for_chat = permission_profile.clone();
 
                 let mut config = self.config.clone();
-                if !self.try_set_sandbox_policy_on_config(
+                if !self.try_set_permission_profile_on_config(
                     &mut config,
-                    policy,
-                    "Failed to set sandbox policy",
-                    "failed to set sandbox policy on app config",
+                    permission_profile,
+                    "Failed to set permission profile",
+                    "failed to set permission profile on app config",
                 ) {
                     return Ok(AppRunControl::Continue);
                 }
                 self.config = config;
-                if let Err(err) = self.chat_widget.set_sandbox_policy(policy_for_chat) {
-                    tracing::warn!(%err, "failed to set sandbox policy on chat config");
+                if let Err(err) = self
+                    .chat_widget
+                    .set_permission_profile(permission_profile_for_chat)
+                {
+                    tracing::warn!(%err, "failed to set permission profile on chat config");
                     self.chat_widget
-                        .add_error_message(format!("Failed to set sandbox policy: {err}"));
+                        .add_error_message(format!("Failed to set permission profile: {err}"));
                     return Ok(AppRunControl::Continue);
                 }
-                self.runtime_sandbox_policy_override = Some(
-                    self.config
-                        .permissions
-                        .legacy_sandbox_policy(self.config.cwd.as_path()),
-                );
+                self.runtime_permission_profile_override =
+                    Some(self.config.permissions.permission_profile());
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
 
-                // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.
+                // If a managed filesystem sandbox is active, run the Windows
+                // world-writable scan.
                 #[cfg(target_os = "windows")]
                 {
                     // One-shot suppression if the user just confirmed continue.
@@ -1272,7 +1373,7 @@ impl App {
 
                     let should_check = WindowsSandboxLevel::from_config(&self.config)
                         != WindowsSandboxLevel::Disabled
-                        && policy_is_workspace_write_or_ro
+                        && permission_profile_is_managed_restricted
                         && !self.chat_widget.world_writable_warning_hidden();
                     if should_check {
                         let cwd = self.config.cwd.clone();
@@ -1280,15 +1381,12 @@ impl App {
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
                         let logs_base_dir = self.config.codex_home.clone();
-                        let sandbox_policy = self
-                            .config
-                            .permissions
-                            .legacy_sandbox_policy(self.config.cwd.as_path());
+                        let permission_profile = self.config.permissions.permission_profile();
                         Self::spawn_world_writable_scan(
                             cwd,
                             env_map,
                             logs_base_dir,
-                            sandbox_policy,
+                            permission_profile,
                             tx,
                         );
                     }
@@ -1559,6 +1657,33 @@ impl App {
                         self.chat_widget.add_error_message(format!(
                             "Failed to update app config for {id}: {err}"
                         ));
+                    }
+                }
+            }
+            AppEvent::SetHookEnabled { key, enabled } => {
+                self.set_hook_enabled(app_server, key, enabled);
+            }
+            AppEvent::HookEnabledSet {
+                key,
+                enabled,
+                result,
+            } => {
+                let queued_enabled = self
+                    .pending_hook_enabled_writes
+                    .get_mut(&key)
+                    .and_then(Option::take);
+                let should_apply_result = if let Some(queued_enabled) = queued_enabled
+                    && (result.is_err() || queued_enabled != enabled)
+                {
+                    self.spawn_hook_enabled_write(app_server, key.clone(), queued_enabled);
+                    false
+                } else {
+                    true
+                };
+                if should_apply_result {
+                    self.pending_hook_enabled_writes.remove(&key);
+                    if let Err(err) = result {
+                        self.chat_widget.add_error_message(err);
                     }
                 }
             }

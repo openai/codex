@@ -22,10 +22,7 @@ use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tracing::error;
 
-type PendingInterruptQueue = Vec<(
-    ConnectionRequestId,
-    crate::codex_message_processor::ApiVersion,
-)>;
+type PendingInterruptQueue = Vec<ConnectionRequestId>;
 
 pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,

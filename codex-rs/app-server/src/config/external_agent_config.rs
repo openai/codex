@@ -9,6 +9,17 @@ use codex_core_plugins::marketplace::find_marketplace_manifest_path;
 use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
 use codex_core_plugins::marketplace_add::add_marketplace;
 use codex_core_plugins::marketplace_add::is_local_marketplace_source;
+use codex_external_agent_migration::build_mcp_config_from_external;
+use codex_external_agent_migration::count_missing_commands;
+use codex_external_agent_migration::count_missing_subagents;
+use codex_external_agent_migration::hook_migration_event_names;
+use codex_external_agent_migration::import_commands;
+use codex_external_agent_migration::import_hooks;
+use codex_external_agent_migration::import_subagents;
+use codex_external_agent_migration::missing_command_names;
+use codex_external_agent_migration::missing_subagent_names;
+use codex_external_agent_sessions::ExternalAgentSessionMigration;
+use codex_external_agent_sessions::detect_recent_sessions;
 use codex_protocol::protocol::Product;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
@@ -41,6 +52,10 @@ pub(crate) enum ExternalAgentConfigMigrationItemType {
     AgentsMd,
     Plugins,
     McpServerConfig,
+    Subagents,
+    Hooks,
+    Commands,
+    Sessions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,8 +65,18 @@ pub(crate) struct PluginsMigration {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NamedMigration {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct MigrationDetails {
     pub plugins: Vec<PluginsMigration>,
+    pub sessions: Vec<ExternalAgentSessionMigration>,
+    pub mcp_servers: Vec<NamedMigration>,
+    pub hooks: Vec<NamedMigration>,
+    pub subagents: Vec<NamedMigration>,
+    pub commands: Vec<NamedMigration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +144,26 @@ impl ExternalAgentConfigService {
         Ok(items)
     }
 
+    pub(crate) fn external_agent_session_source_path(
+        &self,
+        path: &Path,
+    ) -> io::Result<Option<PathBuf>> {
+        if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+            return Ok(None);
+        }
+        let path = match fs::canonicalize(path) {
+            Ok(path) => path,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        let projects_root = match fs::canonicalize(self.external_agent_home.join("projects")) {
+            Ok(projects_root) => projects_root,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        Ok(path.starts_with(projects_root).then_some(path))
+    }
+
     pub(crate) async fn import(
         &self,
         migration_items: Vec<ExternalAgentConfigMigrationItem>,
@@ -174,7 +219,39 @@ impl ExternalAgentConfigService {
                         /*skills_count*/ None,
                     );
                 }
-                ExternalAgentConfigMigrationItemType::McpServerConfig => {}
+                ExternalAgentConfigMigrationItemType::McpServerConfig => {
+                    self.import_mcp_server_config(migration_item.cwd.as_deref())?;
+                    emit_migration_metric(
+                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
+                        ExternalAgentConfigMigrationItemType::McpServerConfig,
+                        /*skills_count*/ None,
+                    );
+                }
+                ExternalAgentConfigMigrationItemType::Subagents => {
+                    let subagents_count = self.import_subagents(migration_item.cwd.as_deref())?;
+                    emit_migration_metric(
+                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
+                        ExternalAgentConfigMigrationItemType::Subagents,
+                        Some(subagents_count),
+                    );
+                }
+                ExternalAgentConfigMigrationItemType::Hooks => {
+                    self.import_hooks(migration_item.cwd.as_deref())?;
+                    emit_migration_metric(
+                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
+                        ExternalAgentConfigMigrationItemType::Hooks,
+                        /*skills_count*/ None,
+                    );
+                }
+                ExternalAgentConfigMigrationItemType::Commands => {
+                    let commands_count = self.import_commands(migration_item.cwd.as_deref())?;
+                    emit_migration_metric(
+                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
+                        ExternalAgentConfigMigrationItemType::Commands,
+                        Some(commands_count),
+                    );
+                }
+                ExternalAgentConfigMigrationItemType::Sessions => {}
             }
         }
 
@@ -191,7 +268,7 @@ impl ExternalAgentConfigService {
             || self.external_agent_home.join("settings.json"),
             |repo_root| repo_root.join(EXTERNAL_AGENT_DIR).join("settings.json"),
         );
-        let settings = read_external_settings(&source_settings)?;
+        let settings = effective_external_settings(&source_settings)?;
         let target_config = repo_root.map_or_else(
             || self.codex_home.join("config.toml"),
             |repo_root| repo_root.join(".codex").join("config.toml"),
@@ -232,6 +309,81 @@ impl ExternalAgentConfigService {
             }
         }
 
+        let source_root = self.source_root(repo_root);
+        let mcp_settings = self.mcp_settings(repo_root, settings.clone())?;
+        let migrated_mcp = build_mcp_config_from_external(
+            source_root.as_path(),
+            Some(self.external_agent_home.as_path()),
+            mcp_settings.as_ref(),
+        )?;
+        let mcp_server_names = migrated_mcp_server_names(&migrated_mcp);
+        if !is_empty_toml_table(&migrated_mcp) {
+            let mut should_include = true;
+            if target_config.exists() {
+                let existing_raw = fs::read_to_string(&target_config)?;
+                let mut existing = if existing_raw.trim().is_empty() {
+                    TomlValue::Table(Default::default())
+                } else {
+                    toml::from_str::<TomlValue>(&existing_raw).map_err(|err| {
+                        invalid_data_error(format!("invalid existing config.toml: {err}"))
+                    })?
+                };
+                should_include = merge_missing_toml_values(&mut existing, &migrated_mcp)?;
+            }
+
+            if should_include {
+                items.push(ExternalAgentConfigMigrationItem {
+                    item_type: ExternalAgentConfigMigrationItemType::McpServerConfig,
+                    description: format!(
+                        "Migrate MCP servers from {} into {}",
+                        source_root.display(),
+                        target_config.display()
+                    ),
+                    cwd: cwd.clone(),
+                    details: Some(MigrationDetails {
+                        mcp_servers: named_migrations(mcp_server_names.clone()),
+                        ..Default::default()
+                    }),
+                });
+                emit_migration_metric(
+                    EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
+                    ExternalAgentConfigMigrationItemType::McpServerConfig,
+                    /*skills_count*/ None,
+                );
+            }
+        }
+
+        let source_external_agent_dir = repo_root.map_or_else(
+            || self.external_agent_home.clone(),
+            |repo_root| repo_root.join(EXTERNAL_AGENT_DIR),
+        );
+        let target_hooks = repo_root.map_or_else(
+            || self.codex_home.join("hooks.json"),
+            |repo_root| repo_root.join(".codex").join("hooks.json"),
+        );
+        let hook_event_names =
+            hook_migration_event_names(source_external_agent_dir.as_path(), &target_hooks)?;
+        if !hook_event_names.is_empty() && is_missing_or_empty_text_file(&target_hooks)? {
+            items.push(ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Hooks,
+                description: format!(
+                    "Migrate hooks from {} to {}",
+                    source_external_agent_dir.display(),
+                    target_hooks.display()
+                ),
+                cwd: cwd.clone(),
+                details: Some(MigrationDetails {
+                    hooks: named_migrations(hook_event_names),
+                    ..Default::default()
+                }),
+            });
+            emit_migration_metric(
+                EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
+                ExternalAgentConfigMigrationItemType::Hooks,
+                /*skills_count*/ None,
+            );
+        }
+
         let source_skills = repo_root.map_or_else(
             || self.external_agent_home.join("skills"),
             |repo_root| repo_root.join(EXTERNAL_AGENT_DIR).join("skills"),
@@ -256,6 +408,62 @@ impl ExternalAgentConfigService {
                 EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
                 ExternalAgentConfigMigrationItemType::Skills,
                 Some(skills_count),
+            );
+        }
+
+        let source_commands = source_external_agent_dir.join("commands");
+        let target_command_skills = repo_root.map_or_else(
+            || self.home_target_skills_dir(),
+            |repo_root| repo_root.join(".agents").join("skills"),
+        );
+        let commands_count = count_missing_commands(&source_commands, &target_command_skills)?;
+        if commands_count > 0 {
+            let command_names = missing_command_names(&source_commands, &target_command_skills)?;
+            items.push(ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Commands,
+                description: format!(
+                    "Migrate commands from {} to {}",
+                    source_commands.display(),
+                    target_command_skills.display()
+                ),
+                cwd: cwd.clone(),
+                details: Some(MigrationDetails {
+                    commands: named_migrations(command_names),
+                    ..Default::default()
+                }),
+            });
+            emit_migration_metric(
+                EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
+                ExternalAgentConfigMigrationItemType::Commands,
+                Some(commands_count),
+            );
+        }
+
+        let source_subagents = source_external_agent_dir.join("agents");
+        let target_subagents = repo_root.map_or_else(
+            || self.codex_home.join("agents"),
+            |repo_root| repo_root.join(".codex").join("agents"),
+        );
+        let subagents_count = count_missing_subagents(&source_subagents, &target_subagents)?;
+        if subagents_count > 0 {
+            let subagent_names = missing_subagent_names(&source_subagents, &target_subagents)?;
+            items.push(ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Subagents,
+                description: format!(
+                    "Migrate subagents from {} to {}",
+                    source_subagents.display(),
+                    target_subagents.display()
+                ),
+                cwd: cwd.clone(),
+                details: Some(MigrationDetails {
+                    subagents: named_migrations(subagent_names),
+                    ..Default::default()
+                }),
+            });
+            emit_migration_metric(
+                EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
+                ExternalAgentConfigMigrationItemType::Subagents,
+                Some(subagents_count),
             );
         }
 
@@ -337,6 +545,29 @@ impl ExternalAgentConfigService {
             }
         }
 
+        if repo_root.is_none() {
+            let sessions = detect_recent_sessions(&self.external_agent_home, &self.codex_home)?;
+            if !sessions.is_empty() {
+                items.push(ExternalAgentConfigMigrationItem {
+                    item_type: ExternalAgentConfigMigrationItemType::Sessions,
+                    description: format!(
+                        "Migrate recent sessions from {}",
+                        self.external_agent_home.join("projects").display()
+                    ),
+                    cwd: None,
+                    details: Some(MigrationDetails {
+                        sessions,
+                        ..Default::default()
+                    }),
+                });
+                emit_migration_metric(
+                    EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
+                    ExternalAgentConfigMigrationItemType::Sessions,
+                    /*skills_count*/ None,
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -345,6 +576,41 @@ impl ExternalAgentConfigService {
             .parent()
             .map(|parent| parent.join(".agents").join("skills"))
             .unwrap_or_else(|| PathBuf::from(".agents").join("skills"))
+    }
+
+    fn mcp_settings(
+        &self,
+        repo_root: Option<&Path>,
+        source_settings: Option<JsonValue>,
+    ) -> io::Result<Option<JsonValue>> {
+        if repo_root.is_some() && source_settings.is_none() {
+            let home_settings = self.external_agent_home.join("settings.json");
+            match effective_external_settings(&home_settings) {
+                Ok(settings) => Ok(settings),
+                Err(err) => {
+                    tracing::warn!(
+                        path = %home_settings.display(),
+                        error = %err,
+                        "ignoring invalid external agent home settings during repo MCP migration"
+                    );
+                    Ok(None)
+                }
+            }
+        } else {
+            Ok(source_settings)
+        }
+    }
+
+    fn source_root(&self, repo_root: Option<&Path>) -> PathBuf {
+        repo_root.map_or_else(
+            || {
+                self.external_agent_home
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| PathBuf::from("."))
+            },
+            Path::to_path_buf,
+        )
     }
 
     fn detect_plugin_migration(
@@ -386,7 +652,7 @@ impl ExternalAgentConfigService {
             |cwd| cwd.join(EXTERNAL_AGENT_DIR).join("settings.json"),
         );
         let source_root = cwd.unwrap_or(self.external_agent_home.as_path());
-        let import_sources = read_external_settings(&source_settings)?
+        let import_sources = effective_external_settings(&source_settings)?
             .map(|settings| collect_marketplace_import_sources(&settings, source_root))
             .unwrap_or_default();
 
@@ -413,9 +679,11 @@ impl ExternalAgentConfigService {
 
         let local_details = (!local_plugins.is_empty()).then_some(MigrationDetails {
             plugins: local_plugins,
+            ..Default::default()
         });
         let remote_details = (!remote_plugins.is_empty()).then_some(MigrationDetails {
             plugins: remote_plugins,
+            ..Default::default()
         });
 
         Ok((local_details, remote_details))
@@ -426,7 +694,7 @@ impl ExternalAgentConfigService {
         cwd: Option<&Path>,
         details: Option<MigrationDetails>,
     ) -> io::Result<PluginImportOutcome> {
-        let Some(MigrationDetails { plugins }) = details else {
+        let Some(MigrationDetails { plugins, .. }) = details else {
             return Err(invalid_data_error(
                 "plugins migration item is missing details".to_string(),
             ));
@@ -445,9 +713,11 @@ impl ExternalAgentConfigService {
                 |cwd| cwd.join(EXTERNAL_AGENT_DIR).join("settings.json"),
             );
             let source_root = cwd.unwrap_or(self.external_agent_home.as_path());
-            let import_source = read_external_settings(&source_settings)?.and_then(|settings| {
-                collect_marketplace_import_sources(&settings, source_root).remove(&marketplace_name)
-            });
+            let import_source =
+                effective_external_settings(&source_settings)?.and_then(|settings| {
+                    collect_marketplace_import_sources(&settings, source_root)
+                        .remove(&marketplace_name)
+                });
             let Some(import_source) = import_source else {
                 outcome.failed_marketplaces.push(marketplace_name);
                 outcome.failed_plugin_ids.extend(plugin_ids);
@@ -501,7 +771,8 @@ impl ExternalAgentConfigService {
     }
 
     fn import_config(&self, cwd: Option<&Path>) -> io::Result<()> {
-        let (source_settings, target_config) = if let Some(repo_root) = find_repo_root(cwd)? {
+        let repo_root = find_repo_root(cwd)?;
+        let (source_settings, target_config) = if let Some(repo_root) = repo_root.as_ref() {
             (
                 repo_root.join(EXTERNAL_AGENT_DIR).join("settings.json"),
                 repo_root.join(".codex").join("config.toml"),
@@ -514,13 +785,9 @@ impl ExternalAgentConfigService {
                 self.codex_home.join("config.toml"),
             )
         };
-        if !source_settings.is_file() {
+        let Some(settings) = effective_external_settings(&source_settings)? else {
             return Ok(());
-        }
-
-        let raw_settings = fs::read_to_string(&source_settings)?;
-        let settings: JsonValue = serde_json::from_str(&raw_settings)
-            .map_err(|err| invalid_data_error(err.to_string()))?;
+        };
         let migrated = build_config_from_external(&settings)?;
         if is_empty_toml_table(&migrated) {
             return Ok(());
@@ -550,6 +817,112 @@ impl ExternalAgentConfigService {
 
         write_toml_file(&target_config, &existing)?;
         Ok(())
+    }
+
+    fn import_mcp_server_config(&self, cwd: Option<&Path>) -> io::Result<()> {
+        let repo_root = find_repo_root(cwd)?;
+        let (source_settings, target_config) = if let Some(repo_root) = repo_root.as_ref() {
+            (
+                repo_root.join(EXTERNAL_AGENT_DIR).join("settings.json"),
+                repo_root.join(".codex").join("config.toml"),
+            )
+        } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
+            return Ok(());
+        } else {
+            (
+                self.external_agent_home.join("settings.json"),
+                self.codex_home.join("config.toml"),
+            )
+        };
+        let settings = self.mcp_settings(
+            repo_root.as_deref(),
+            effective_external_settings(&source_settings)?,
+        )?;
+        let migrated = build_mcp_config_from_external(
+            self.source_root(repo_root.as_deref()).as_path(),
+            Some(self.external_agent_home.as_path()),
+            settings.as_ref(),
+        )?;
+        if is_empty_toml_table(&migrated) {
+            return Ok(());
+        }
+
+        let Some(target_parent) = target_config.parent() else {
+            return Err(invalid_data_error("config target path has no parent"));
+        };
+        fs::create_dir_all(target_parent)?;
+        if !target_config.exists() {
+            write_toml_file(&target_config, &migrated)?;
+            return Ok(());
+        }
+
+        let existing_raw = fs::read_to_string(&target_config)?;
+        let mut existing = if existing_raw.trim().is_empty() {
+            TomlValue::Table(Default::default())
+        } else {
+            toml::from_str::<TomlValue>(&existing_raw)
+                .map_err(|err| invalid_data_error(format!("invalid existing config.toml: {err}")))?
+        };
+        if merge_missing_toml_values(&mut existing, &migrated)? {
+            write_toml_file(&target_config, &existing)?;
+        }
+        Ok(())
+    }
+
+    fn import_subagents(&self, cwd: Option<&Path>) -> io::Result<usize> {
+        let (source_agents, target_agents) = if let Some(repo_root) = find_repo_root(cwd)? {
+            (
+                repo_root.join(EXTERNAL_AGENT_DIR).join("agents"),
+                repo_root.join(".codex").join("agents"),
+            )
+        } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
+            return Ok(0);
+        } else {
+            (
+                self.external_agent_home.join("agents"),
+                self.codex_home.join("agents"),
+            )
+        };
+
+        import_subagents(&source_agents, &target_agents)
+    }
+
+    fn import_hooks(&self, cwd: Option<&Path>) -> io::Result<()> {
+        let (source_external_agent_dir, target_hooks) =
+            if let Some(repo_root) = find_repo_root(cwd)? {
+                (
+                    repo_root.join(EXTERNAL_AGENT_DIR),
+                    repo_root.join(".codex").join("hooks.json"),
+                )
+            } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
+                return Ok(());
+            } else {
+                (
+                    self.external_agent_home.clone(),
+                    self.codex_home.join("hooks.json"),
+                )
+            };
+
+        import_hooks(&source_external_agent_dir, &target_hooks)?;
+        Ok(())
+    }
+
+    fn import_commands(&self, cwd: Option<&Path>) -> io::Result<usize> {
+        let (source_commands, target_skills) = if let Some(repo_root) = find_repo_root(cwd)? {
+            (
+                repo_root.join(EXTERNAL_AGENT_DIR).join("commands"),
+                repo_root.join(".agents").join("skills"),
+            )
+        } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
+            return Ok(0);
+        } else {
+            (
+                self.external_agent_home.join("commands"),
+                self.home_target_skills_dir(),
+            )
+        };
+
+        import_commands(&source_commands, &target_skills)
     }
 
     fn import_skills(&self, cwd: Option<&Path>) -> io::Result<usize> {
@@ -640,6 +1013,43 @@ fn read_external_settings(path: &Path) -> io::Result<Option<JsonValue>> {
     Ok(Some(settings))
 }
 
+fn effective_external_settings(project_settings: &Path) -> io::Result<Option<JsonValue>> {
+    let mut effective = read_external_settings(project_settings)?;
+    let Some(settings_dir) = project_settings.parent() else {
+        return Ok(effective);
+    };
+    let local_settings = settings_dir.join("settings.local.json");
+    let local_settings = match read_external_settings(&local_settings) {
+        Ok(Some(local_settings)) => local_settings,
+        Ok(None) => return Ok(effective),
+        Err(err) if err.kind() == io::ErrorKind::InvalidData => return Ok(effective),
+        Err(err) => return Err(err),
+    };
+    if let Some(effective) = effective.as_mut() {
+        merge_json_settings(effective, &local_settings);
+    } else {
+        effective = Some(local_settings);
+    }
+    Ok(effective)
+}
+
+fn merge_json_settings(existing: &mut JsonValue, incoming: &JsonValue) {
+    match (existing, incoming) {
+        (JsonValue::Object(existing), JsonValue::Object(incoming)) => {
+            for (key, incoming_value) in incoming {
+                match existing.get_mut(key) {
+                    Some(existing_value) => merge_json_settings(existing_value, incoming_value),
+                    None => {
+                        existing.insert(key.clone(), incoming_value.clone());
+                    }
+                }
+            }
+        }
+        (existing, incoming) => {
+            *existing = incoming.clone();
+        }
+    }
+}
 fn extract_plugin_migration_details(
     settings: &JsonValue,
     source_root: &Path,
@@ -694,7 +1104,10 @@ fn extract_plugin_migration_details(
         return None;
     }
 
-    Some(MigrationDetails { plugins })
+    Some(MigrationDetails {
+        plugins,
+        ..Default::default()
+    })
 }
 
 fn collect_enabled_plugins(settings: &JsonValue) -> Vec<String> {
@@ -1130,6 +1543,21 @@ fn write_toml_file(path: &Path, value: &TomlValue) -> io::Result<()> {
     fs::write(path, format!("{}\n", serialized.trim_end()))
 }
 
+fn migrated_mcp_server_names(value: &TomlValue) -> Vec<String> {
+    value
+        .get("mcp_servers")
+        .and_then(TomlValue::as_table)
+        .map(|servers| servers.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+fn named_migrations(names: Vec<String>) -> Vec<NamedMigration> {
+    names
+        .into_iter()
+        .map(|name| NamedMigration { name })
+        .collect()
+}
+
 fn is_empty_toml_table(value: &TomlValue) -> bool {
     match value {
         TomlValue::Table(table) => table.is_empty(),
@@ -1156,9 +1584,18 @@ fn migration_metric_tags(
         ExternalAgentConfigMigrationItemType::AgentsMd => "agents_md",
         ExternalAgentConfigMigrationItemType::Plugins => "plugins",
         ExternalAgentConfigMigrationItemType::McpServerConfig => "mcp_server_config",
+        ExternalAgentConfigMigrationItemType::Subagents => "subagents",
+        ExternalAgentConfigMigrationItemType::Hooks => "hooks",
+        ExternalAgentConfigMigrationItemType::Commands => "commands",
+        ExternalAgentConfigMigrationItemType::Sessions => "sessions",
     };
     let mut tags = vec![("migration_type", migration_type.to_string())];
-    if item_type == ExternalAgentConfigMigrationItemType::Skills {
+    if matches!(
+        item_type,
+        ExternalAgentConfigMigrationItemType::Skills
+            | ExternalAgentConfigMigrationItemType::Subagents
+            | ExternalAgentConfigMigrationItemType::Commands
+    ) {
         tags.push(("skills_count", skills_count.unwrap_or(0).to_string()));
     }
     tags

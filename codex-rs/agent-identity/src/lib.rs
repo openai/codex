@@ -8,7 +8,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
 use chrono::Utc;
-use codex_protocol::account::PlanType as AccountPlanType;
+use codex_protocol::auth::PlanType as AuthPlanType;
 use codex_protocol::protocol::SessionSource;
 use crypto_box::SecretKey as Curve25519SecretKey;
 use ed25519_dalek::Signer as _;
@@ -19,6 +19,9 @@ use ed25519_dalek::pkcs8::EncodePrivateKey;
 use jsonwebtoken::Algorithm;
 use jsonwebtoken::DecodingKey;
 use jsonwebtoken::Validation;
+use jsonwebtoken::decode;
+use jsonwebtoken::decode_header;
+use jsonwebtoken::jwk::JwkSet;
 use rand::TryRngCore;
 use rand::rngs::OsRng;
 use serde::Deserialize;
@@ -28,6 +31,9 @@ use sha2::Digest as _;
 use sha2::Sha512;
 
 const AGENT_TASK_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(30);
+const AGENT_IDENTITY_JWKS_TIMEOUT: Duration = Duration::from_secs(10);
+const AGENT_IDENTITY_JWT_AUDIENCE: &str = "codex-app-server";
+const AGENT_IDENTITY_JWT_ISSUER: &str = "https://chatgpt.com/codex-backend/agent-identity";
 
 /// Stored key material for a registered agent identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,12 +64,16 @@ pub struct GeneratedAgentKeyMaterial {
 /// Claims carried by an Agent Identity JWT.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct AgentIdentityJwtClaims {
+    pub iss: String,
+    pub aud: String,
+    pub iat: usize,
+    pub exp: usize,
     pub agent_runtime_id: String,
     pub agent_private_key: String,
     pub account_id: String,
     pub chatgpt_user_id: String,
     pub email: String,
-    pub plan_type: AccountPlanType,
+    pub plan_type: AuthPlanType,
     pub chatgpt_account_is_fedramp: bool,
 }
 
@@ -115,27 +125,49 @@ pub fn authorization_header_for_agent_task(
     Ok(format!("AgentAssertion {serialized_assertion}"))
 }
 
+pub async fn fetch_agent_identity_jwks(
+    client: &reqwest::Client,
+    chatgpt_base_url: &str,
+) -> Result<JwkSet> {
+    let response = client
+        .get(agent_identity_jwks_url(chatgpt_base_url))
+        .timeout(AGENT_IDENTITY_JWKS_TIMEOUT)
+        .send()
+        .await
+        .context("failed to request agent identity JWKS")?
+        .error_for_status()
+        .context("agent identity JWKS endpoint returned an error")?;
+
+    response
+        .json()
+        .await
+        .context("failed to decode agent identity JWKS")
+}
+
 pub fn decode_agent_identity_jwt(
     jwt: &str,
-    public_key_base64: Option<&str>,
+    jwks: Option<&JwkSet>,
 ) -> Result<AgentIdentityJwtClaims> {
-    let Some(public_key_base64) = public_key_base64 else {
+    let Some(jwks) = jwks else {
         return decode_agent_identity_jwt_payload(jwt);
     };
 
-    let mut validation = Validation::new(Algorithm::EdDSA);
-    validation.required_spec_claims.clear();
-    validation.validate_exp = false;
-    validation.validate_aud = false;
-
-    let public_key = BASE64_STANDARD
-        .decode(public_key_base64)
-        .context("agent identity JWT public key is not valid base64")?;
-    let decoding_key = DecodingKey::from_ed_der(&public_key);
-
-    jsonwebtoken::decode::<AgentIdentityJwtClaims>(jwt, &decoding_key, &validation)
+    let header = decode_header(jwt).context("failed to decode agent identity JWT header")?;
+    let kid = header
+        .kid
+        .context("agent identity JWT header does not include a kid")?;
+    let jwk = jwks
+        .find(&kid)
+        .with_context(|| format!("agent identity JWT kid {kid} is not trusted"))?;
+    let decoding_key = DecodingKey::from_jwk(jwk).context("failed to build JWT decoding key")?;
+    let mut validation = Validation::new(Algorithm::RS256);
+    validation.set_audience(&[AGENT_IDENTITY_JWT_AUDIENCE]);
+    validation.set_issuer(&[AGENT_IDENTITY_JWT_ISSUER]);
+    validation.required_spec_claims.insert("iss".to_string());
+    validation.required_spec_claims.insert("aud".to_string());
+    decode::<AgentIdentityJwtClaims>(jwt, &decoding_key, &validation)
         .map(|data| data.claims)
-        .context("failed to decode agent identity JWT")
+        .context("failed to verify agent identity JWT")
 }
 
 fn decode_agent_identity_jwt_payload<T: DeserializeOwned>(jwt: &str) -> Result<T> {
@@ -279,6 +311,15 @@ pub fn agent_identity_biscuit_url(chatgpt_base_url: &str) -> String {
     format!("{trimmed}/authenticate_app_v2")
 }
 
+pub fn agent_identity_jwks_url(chatgpt_base_url: &str) -> String {
+    let trimmed = chatgpt_base_url.trim_end_matches('/');
+    if trimmed.contains("/backend-api") {
+        format!("{trimmed}/wham/agent-identities/jwks")
+    } else {
+        format!("{trimmed}/agent-identities/jwks")
+    }
+}
+
 pub fn agent_identity_request_id() -> Result<String> {
     let mut request_id_bytes = [0u8; 16];
     OsRng
@@ -288,29 +329,6 @@ pub fn agent_identity_request_id() -> Result<String> {
         "codex-agent-identity-{}",
         URL_SAFE_NO_PAD.encode(request_id_bytes)
     ))
-}
-
-pub fn normalize_chatgpt_base_url(chatgpt_base_url: &str) -> String {
-    let mut base_url = chatgpt_base_url.trim_end_matches('/').to_string();
-    for suffix in [
-        "/wham/remote/control/server/enroll",
-        "/wham/remote/control/server",
-    ] {
-        if let Some(stripped) = base_url.strip_suffix(suffix) {
-            base_url = stripped.to_string();
-            break;
-        }
-    }
-    if let Some(stripped) = base_url.strip_suffix("/codex") {
-        base_url = stripped.to_string();
-    }
-    if (base_url.starts_with("https://chatgpt.com")
-        || base_url.starts_with("https://chat.openai.com"))
-        && !base_url.contains("/backend-api")
-    {
-        base_url = format!("{base_url}/backend-api");
-    }
-    base_url
 }
 
 pub fn build_abom(session_source: SessionSource) -> AgentBillOfMaterials {
@@ -389,6 +407,8 @@ mod tests {
     use jsonwebtoken::EncodingKey;
     use jsonwebtoken::Header;
     use pretty_assertions::assert_eq;
+
+    use codex_protocol::auth::KnownPlan;
 
     use super::*;
 
@@ -472,6 +492,10 @@ mod tests {
     #[test]
     fn decode_agent_identity_jwt_reads_claims() {
         let jwt = jwt_with_payload(serde_json::json!({
+            "iss": AGENT_IDENTITY_JWT_ISSUER,
+            "aud": AGENT_IDENTITY_JWT_AUDIENCE,
+            "iat": 1_700_000_000usize,
+            "exp": 4_000_000_000usize,
             "agent_runtime_id": "agent-runtime-id",
             "agent_private_key": "private-key",
             "account_id": "account-id",
@@ -481,44 +505,70 @@ mod tests {
             "chatgpt_account_is_fedramp": false,
         }));
 
-        let claims =
-            decode_agent_identity_jwt(&jwt, /*public_key_base64*/ None).expect("JWT should decode");
+        let claims = decode_agent_identity_jwt(&jwt, /*jwks*/ None).expect("JWT should decode");
 
         assert_eq!(
             claims,
             AgentIdentityJwtClaims {
+                iss: AGENT_IDENTITY_JWT_ISSUER.to_string(),
+                aud: AGENT_IDENTITY_JWT_AUDIENCE.to_string(),
+                iat: 1_700_000_000,
+                exp: 4_000_000_000,
                 agent_runtime_id: "agent-runtime-id".to_string(),
                 agent_private_key: "private-key".to_string(),
                 account_id: "account-id".to_string(),
                 chatgpt_user_id: "user-id".to_string(),
                 email: "user@example.com".to_string(),
-                plan_type: AccountPlanType::Pro,
+                plan_type: AuthPlanType::Known(KnownPlan::Pro),
                 chatgpt_account_is_fedramp: false,
             }
         );
     }
 
     #[test]
-    fn decode_agent_identity_jwt_verifies_when_public_key_is_present() {
-        let mut secret_key_bytes = [0u8; 32];
-        secret_key_bytes[0] = 1;
-        let signing_key = SigningKey::from_bytes(&secret_key_bytes);
-        let private_key_pkcs8 = signing_key
-            .to_pkcs8_der()
-            .expect("private key should encode");
-        let public_key_base64 = BASE64_STANDARD.encode(signing_key.verifying_key().as_bytes());
+    fn decode_agent_identity_jwt_maps_raw_plan_aliases() {
+        let jwt = jwt_with_payload(serde_json::json!({
+            "iss": AGENT_IDENTITY_JWT_ISSUER,
+            "aud": AGENT_IDENTITY_JWT_AUDIENCE,
+            "iat": 1_700_000_000usize,
+            "exp": 4_000_000_000usize,
+            "agent_runtime_id": "agent-runtime-id",
+            "agent_private_key": "private-key",
+            "account_id": "account-id",
+            "chatgpt_user_id": "user-id",
+            "email": "user@example.com",
+            "plan_type": "hc",
+            "chatgpt_account_is_fedramp": false,
+        }));
+
+        let claims = decode_agent_identity_jwt(&jwt, /*jwks*/ None).expect("JWT should decode");
+
+        assert_eq!(claims.plan_type, AuthPlanType::Known(KnownPlan::Enterprise));
+    }
+
+    #[test]
+    fn decode_agent_identity_jwt_verifies_when_jwks_is_present() {
+        let jwks = test_jwks("test-key");
         let claims = AgentIdentityJwtClaims {
+            iss: AGENT_IDENTITY_JWT_ISSUER.to_string(),
+            aud: AGENT_IDENTITY_JWT_AUDIENCE.to_string(),
+            iat: 1_700_000_000,
+            exp: 4_000_000_000,
             agent_runtime_id: "agent-runtime-id".to_string(),
             agent_private_key: "private-key".to_string(),
             account_id: "account-id".to_string(),
             chatgpt_user_id: "user-id".to_string(),
             email: "user@example.com".to_string(),
-            plan_type: AccountPlanType::Pro,
+            plan_type: AuthPlanType::Known(KnownPlan::Pro),
             chatgpt_account_is_fedramp: false,
         };
         let jwt = jsonwebtoken::encode(
-            &Header::new(Algorithm::EdDSA),
+            &test_jwt_header("test-key"),
             &serde_json::json!({
+                "iss": claims.iss,
+                "aud": claims.aud,
+                "iat": claims.iat,
+                "exp": claims.exp,
                 "agent_runtime_id": claims.agent_runtime_id,
                 "agent_private_key": claims.agent_private_key,
                 "account_id": claims.account_id,
@@ -527,45 +577,40 @@ mod tests {
                 "plan_type": "pro",
                 "chatgpt_account_is_fedramp": claims.chatgpt_account_is_fedramp,
             }),
-            &EncodingKey::from_ed_der(private_key_pkcs8.as_bytes()),
+            &test_rsa_encoding_key(),
         )
         .expect("JWT should encode");
 
         let expected_claims = AgentIdentityJwtClaims {
+            iss: AGENT_IDENTITY_JWT_ISSUER.to_string(),
+            aud: AGENT_IDENTITY_JWT_AUDIENCE.to_string(),
+            iat: 1_700_000_000,
+            exp: 4_000_000_000,
             agent_runtime_id: "agent-runtime-id".to_string(),
             agent_private_key: "private-key".to_string(),
             account_id: "account-id".to_string(),
             chatgpt_user_id: "user-id".to_string(),
             email: "user@example.com".to_string(),
-            plan_type: AccountPlanType::Pro,
+            plan_type: AuthPlanType::Known(KnownPlan::Pro),
             chatgpt_account_is_fedramp: false,
         };
         assert_eq!(
-            decode_agent_identity_jwt(&jwt, Some(&public_key_base64)).expect("JWT should verify"),
+            decode_agent_identity_jwt(&jwt, Some(&jwks)).expect("JWT should verify"),
             expected_claims
         );
     }
 
     #[test]
-    fn decode_agent_identity_jwt_rejects_wrong_public_key() {
-        let mut signing_secret_key_bytes = [0u8; 32];
-        signing_secret_key_bytes[0] = 1;
-        let signing_key = SigningKey::from_bytes(&signing_secret_key_bytes);
-        let private_key_pkcs8 = signing_key
-            .to_pkcs8_der()
-            .expect("private key should encode");
-
-        let mut other_secret_key_bytes = [0u8; 32];
-        other_secret_key_bytes[0] = 2;
-        let other_public_key_base64 = BASE64_STANDARD.encode(
-            SigningKey::from_bytes(&other_secret_key_bytes)
-                .verifying_key()
-                .as_bytes(),
-        );
+    fn decode_agent_identity_jwt_rejects_untrusted_kid() {
+        let jwks = test_jwks("other-key");
 
         let jwt = jsonwebtoken::encode(
-            &Header::new(Algorithm::EdDSA),
+            &test_jwt_header("test-key"),
             &serde_json::json!({
+                "iss": AGENT_IDENTITY_JWT_ISSUER,
+                "aud": AGENT_IDENTITY_JWT_AUDIENCE,
+                "iat": 1_700_000_000,
+                "exp": 4_000_000_000usize,
                 "agent_runtime_id": "agent-runtime-id",
                 "agent_private_key": "private-key",
                 "account_id": "account-id",
@@ -574,19 +619,111 @@ mod tests {
                 "plan_type": "pro",
                 "chatgpt_account_is_fedramp": false,
             }),
-            &EncodingKey::from_ed_der(private_key_pkcs8.as_bytes()),
+            &test_rsa_encoding_key(),
         )
         .expect("JWT should encode");
 
-        decode_agent_identity_jwt(&jwt, Some(&other_public_key_base64))
-            .expect_err("JWT should not verify");
+        decode_agent_identity_jwt(&jwt, Some(&jwks)).expect_err("JWT should not verify");
     }
 
     #[test]
-    fn normalize_chatgpt_base_url_strips_codex_before_backend_api() {
+    fn decode_agent_identity_jwt_requires_issuer_and_audience() {
+        let jwks = test_jwks("test-key");
+        let jwt = jsonwebtoken::encode(
+            &test_jwt_header("test-key"),
+            &serde_json::json!({
+                "iat": 1_700_000_000,
+                "exp": 4_000_000_000usize,
+                "agent_runtime_id": "agent-runtime-id",
+                "agent_private_key": "private-key",
+                "account_id": "account-id",
+                "chatgpt_user_id": "user-id",
+                "email": "user@example.com",
+                "plan_type": "pro",
+                "chatgpt_account_is_fedramp": false,
+            }),
+            &test_rsa_encoding_key(),
+        )
+        .expect("JWT should encode");
+
+        decode_agent_identity_jwt(&jwt, Some(&jwks)).expect_err("JWT should not verify");
+    }
+
+    fn test_jwt_header(kid: &str) -> Header {
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some(kid.to_string());
+        header
+    }
+
+    fn test_rsa_encoding_key() -> EncodingKey {
+        EncodingKey::from_rsa_pem(
+            br#"-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDWpAXYypOsYAwO
+bvBduMk/mxaoYDze0AZSzaSzLuIlcsl2EKDgC3AabhIWXh/qTGEJLOU3VB1e5mO9
+FPbBlmIZSL3FQTbyt/hYutPFKfCou5PLmScw/TzILS3/RhT8UY9kxxZvXiEbTki9
+mvxRuZFpVqDFJHwfitIjKZGhXDCYVKurPTrxetYZJg0h8sQBLKjkZ0BqqaTUkAsg
+0eBgZAlXEzG3By8PGhUqYLt6W1Q3KYw0FmGy/gTyzH1g0ukGgSJvOd8SkNT8MbOs
+zl5kKxDNqpuEE6UZ3jbuJ+5382d31w+rOAJRzbf7QVdI9+luCSwJcDACYPQ4WNBa
+uCpV0ovpAgMBAAECggEAVu84LwZdqYN9XpswX8VoPYrjMm9IODapWQBRpQFoNyK2
+1ksF3bjEPvA2Azk8U/l7k+vLKw22l6lY3EyRZPcz5GnB8xLm3ogE3mtNOp4yCyVu
+RxhQ91aaN7mU17/a4BdorLi2LYVCg3zBmYociD1Q2AluNGsCmwPu+K7tfR2J0Sg8
+NjqiTbDG1XDpR/icwgC9t6vh8lZpCHDhF4tbQfLLVLeA/OdcuzXDyMCXbmdVIdBQ
+rm4aIFmr2e1/2ctTbCg85S6AGFTH+pSLjrwTzyvf+F6NW5uNjLQAQLFj+EznBDxj
+Xdx90cySrjsKK6PVWQF4RiTvkSW8eWL7R6B2FZbGwQKBgQDuVQRj72hWloR7mbEL
+aUEEv3pIXTMXWEsoMBNczos/1L1RnAN1AI44TurznasPZAWvQj+kVbLDR+TAeZrL
+iA8HIWswQUI18hFmgKzSkwIXGtubcKVrgsKeS4lMDKCM/Ef6WAYdeq6ronoY5lCN
+YrJFmGp81W5zcV7lyiycgbSiGwKBgQDmjWYf6pZjrK7Z+OJ3X1AZfi2vss15SCvL
+3fPgzIDbViztpGyQhc3DQZIsBNIu0xZp/veGce9TEeTds2ro9NfdJFeou8+fC7Pq
+sOsM3amGFFi+ZW/9BWyjZEM88bgWWAjqLHbpfHDxjAf5CSxddqxgHlbP0Ytyb1Vg
+gmPDn9YKSwKBgQDbTi3hC35WFuDHn0/zcSHcDZmnFuOZeqyFyV83yfMGhGrEuqvP
+sPgtRikajJ3IZsB4WZyYSidZXEFY/0z6NjOl2xF38MTNQPbT/FmK1q1Yt2UWrlv5
+BvSwlk87RG9D7C0LZo4R+D7cPoDdgqjiwMvMEIkEX5zn641oI1ZTmWKuuwKBgQCD
+KF+3unnRvHRAVoFnTZbA2fJdqMeRvogD04GhGlYX8V9f1hFY6nXTJaNlXVzA/J8c
+r8ra9kgjJuPfZ+ljG58OFFW2DRohLcQtuHYPfK6rMzoFHqnl9EcIcMp7ijuionR3
+29HOJFgQYgxLFXfit9d6WugiE+BTupiEbckZif13HwKBgE/lAlkVHP6YahOO2Ljc
+J1bwkqKZTB5dHolX9A58e/xXnfZ5P8f3Z83+Izap3FwqQulk7b1WO1MQcHuVg2NN
+5da0D4h2rYOXnbYIg0BVu4spQbaM6ewsp66b8+MzLOBvj8SzWdt1Oyw0q/MRyQAR
+8U4M2TSWCKUY/A6sT4W8+mT9
+-----END PRIVATE KEY-----"#,
+        )
+        .expect("test RSA key should parse")
+    }
+
+    fn test_jwks(kid: &str) -> jsonwebtoken::jwk::JwkSet {
+        serde_json::from_value(serde_json::json!({
+            "keys": [{
+                "kty": "RSA",
+                "kid": kid,
+                "use": "sig",
+                "alg": "RS256",
+                "n": "1qQF2MqTrGAMDm7wXbjJP5sWqGA83tAGUs2ksy7iJXLJdhCg4AtwGm4SFl4f6kxhCSzlN1QdXuZjvRT2wZZiGUi9xUE28rf4WLrTxSnwqLuTy5knMP08yC0t_0YU_FGPZMcWb14hG05IvZr8UbmRaVagxSR8H4rSIymRoVwwmFSrqz068XrWGSYNIfLEASyo5GdAaqmk1JALINHgYGQJVxMxtwcvDxoVKmC7eltUNymMNBZhsv4E8sx9YNLpBoEibznfEpDU_DGzrM5eZCsQzaqbhBOlGd427ifud_Nnd9cPqzgCUc23-0FXSPfpbgksCXAwAmD0OFjQWrgqVdKL6Q",
+                "e": "AQAB",
+            }]
+        }))
+        .expect("test JWKS should parse")
+    }
+
+    #[test]
+    fn agent_identity_jwks_url_uses_backend_api_base_url() {
         assert_eq!(
-            normalize_chatgpt_base_url("https://chatgpt.com/codex"),
-            "https://chatgpt.com/backend-api"
+            agent_identity_jwks_url("https://chatgpt.com/backend-api"),
+            "https://chatgpt.com/backend-api/wham/agent-identities/jwks"
+        );
+        assert_eq!(
+            agent_identity_jwks_url("https://chatgpt.com/backend-api/"),
+            "https://chatgpt.com/backend-api/wham/agent-identities/jwks"
+        );
+    }
+
+    #[test]
+    fn agent_identity_jwks_url_uses_codex_api_base_url() {
+        assert_eq!(
+            agent_identity_jwks_url("http://localhost:8080/api/codex"),
+            "http://localhost:8080/api/codex/agent-identities/jwks"
+        );
+        assert_eq!(
+            agent_identity_jwks_url("http://localhost:8080/api/codex/"),
+            "http://localhost:8080/api/codex/agent-identities/jwks"
         );
     }
 

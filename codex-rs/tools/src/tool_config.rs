@@ -1,6 +1,8 @@
 use crate::can_request_original_image_detail;
+use crate::request_user_input_available_modes;
 use codex_features::Feature;
 use codex_features::Features;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -94,6 +96,7 @@ pub struct ToolsConfig {
     pub web_search_tool_type: WebSearchToolType,
     pub image_gen_tool: bool,
     pub search_tool: bool,
+    pub namespace_tools: bool,
     pub tool_suggest: bool,
     pub exec_permission_approvals_enabled: bool,
     pub request_permissions_tool_enabled: bool,
@@ -107,7 +110,8 @@ pub struct ToolsConfig {
     pub spawn_agent_usage_hint: bool,
     pub spawn_agent_usage_hint_text: Option<String>,
     pub max_concurrent_threads_per_session: Option<usize>,
-    pub default_mode_request_user_input: bool,
+    pub wait_agent_min_timeout_ms: Option<i64>,
+    pub request_user_input_available_modes: Vec<ModeKind>,
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
@@ -134,18 +138,15 @@ impl ToolsConfig {
             image_generation_tool_auth_allowed,
             web_search_mode,
             session_source,
-            permission_profile,
-            windows_sandbox_level,
+            ..
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_code_mode = features.enabled(Feature::CodeMode);
         let include_code_mode_only = include_code_mode && features.enabled(Feature::CodeModeOnly);
-        let include_collab_tools = features.enabled(Feature::Collab);
         let include_goal_tools = features.enabled(Feature::Goals);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
+        let include_collab_tools = include_multi_agent_v2 || features.enabled(Feature::Collab);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
-        let include_default_mode_request_user_input =
-            features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool =
             model_info.supports_search_tool && features.enabled(Feature::ToolSearch);
         let include_tool_suggest = features.enabled(Feature::ToolSuggest)
@@ -165,26 +166,25 @@ impl ToolsConfig {
             } else {
                 ShellCommandBackendConfig::Classic
             };
-        let unified_exec_allowed = unified_exec_allowed_in_environment(
-            cfg!(target_os = "windows"),
-            permission_profile,
-            *windows_sandbox_level,
-        );
+        let unified_exec_enabled = features.enabled(Feature::UnifiedExec);
+        let model_shell_type = match model_info.shell_type {
+            ConfigShellToolType::UnifiedExec if !unified_exec_enabled => {
+                ConfigShellToolType::ShellCommand
+            }
+            other => other,
+        };
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
         } else if features.enabled(Feature::ShellZshFork) {
             ConfigShellToolType::ShellCommand
-        } else if features.enabled(Feature::UnifiedExec) && unified_exec_allowed {
+        } else if unified_exec_enabled {
             if codex_utils_pty::conpty_supported() {
                 ConfigShellToolType::UnifiedExec
             } else {
                 ConfigShellToolType::ShellCommand
             }
-        } else if model_info.shell_type == ConfigShellToolType::UnifiedExec && !unified_exec_allowed
-        {
-            ConfigShellToolType::ShellCommand
         } else {
-            model_info.shell_type
+            model_shell_type
         };
 
         let apply_patch_tool_type = match model_info.apply_patch_tool_type {
@@ -213,6 +213,7 @@ impl ToolsConfig {
             web_search_tool_type: model_info.web_search_tool_type,
             image_gen_tool: include_image_gen_tool,
             search_tool: include_search_tool,
+            namespace_tools: true,
             tool_suggest: include_tool_suggest,
             exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
@@ -226,7 +227,8 @@ impl ToolsConfig {
             spawn_agent_usage_hint: true,
             spawn_agent_usage_hint_text: None,
             max_concurrent_threads_per_session: None,
-            default_mode_request_user_input: include_default_mode_request_user_input,
+            wait_agent_min_timeout_ms: None,
+            request_user_input_available_modes: request_user_input_available_modes(features),
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
@@ -236,6 +238,27 @@ impl ToolsConfig {
 
     pub fn with_agent_type_description(mut self, agent_type_description: String) -> Self {
         self.agent_type_description = agent_type_description;
+        self
+    }
+
+    pub fn with_namespace_tools_capability(mut self, namespace_tools: bool) -> Self {
+        if !namespace_tools {
+            self.namespace_tools = false;
+        }
+        self
+    }
+
+    pub fn with_image_generation_capability(mut self, image_generation: bool) -> Self {
+        if !image_generation {
+            self.image_gen_tool = false;
+        }
+        self
+    }
+
+    pub fn with_web_search_capability(mut self, web_search: bool) -> Self {
+        if !web_search {
+            self.web_search_mode = None;
+        }
         self
     }
 
@@ -267,6 +290,14 @@ impl ToolsConfig {
         max_concurrent_threads_per_session: Option<usize>,
     ) -> Self {
         self.max_concurrent_threads_per_session = max_concurrent_threads_per_session;
+        self
+    }
+
+    pub fn with_wait_agent_min_timeout_ms(
+        mut self,
+        wait_agent_min_timeout_ms: Option<i64>,
+    ) -> Self {
+        self.wait_agent_min_timeout_ms = wait_agent_min_timeout_ms;
         self
     }
 
@@ -318,23 +349,6 @@ impl ToolsConfig {
 
 fn supports_image_generation(model_info: &ModelInfo) -> bool {
     model_info.input_modalities.contains(&InputModality::Image)
-}
-
-fn unified_exec_allowed_in_environment(
-    is_windows: bool,
-    permission_profile: &PermissionProfile,
-    windows_sandbox_level: WindowsSandboxLevel,
-) -> bool {
-    let managed_sandbox_required = match permission_profile {
-        PermissionProfile::Managed {
-            file_system,
-            network,
-        } => !file_system.to_sandbox_policy().has_full_disk_write_access() || !network.is_enabled(),
-        PermissionProfile::Disabled | PermissionProfile::External { .. } => false,
-    };
-    !(is_windows
-        && windows_sandbox_level != WindowsSandboxLevel::Disabled
-        && managed_sandbox_required)
 }
 
 #[cfg(test)]

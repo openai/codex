@@ -218,6 +218,18 @@
       },
       "type": "object"
     },
+    "AppsMcpPathOverrideConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "AskForApproval": {
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
       "oneOf": [
@@ -355,7 +367,13 @@
             "apps": {
               "type": "boolean"
             },
+            "apps_mcp_path_override": {
+              "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
+            },
             "browser_use": {
+              "type": "boolean"
+            },
+            "browser_use_external": {
               "type": "boolean"
             },
             "child_agents_md": {
@@ -461,6 +479,9 @@
               "$ref": "#/definitions/FeatureToml_for_MultiAgentV2ConfigToml"
             },
             "personality": {
+              "type": "boolean"
+            },
+            "plugin_hooks": {
               "type": "boolean"
             },
             "plugins": {
@@ -702,6 +723,16 @@
       },
       "type": "object"
     },
+    "FeatureToml_for_AppsMcpPathOverrideConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/AppsMcpPathOverrideConfigToml"
+        }
+      ]
+    },
     "FeatureToml_for_MultiAgentV2ConfigToml": {
       "anyOf": [
         {
@@ -856,53 +887,6 @@
         }
       ]
     },
-    "HookEventsToml": {
-      "properties": {
-        "PermissionRequest": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        },
-        "PostToolUse": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        },
-        "PreToolUse": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        },
-        "SessionStart": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        },
-        "Stop": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        },
-        "UserPromptSubmit": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
     "HookHandlerConfig": {
       "oneOf": [
         {
@@ -966,6 +950,67 @@
           "type": "object"
         }
       ]
+    },
+    "HookStateToml": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "HooksToml": {
+      "properties": {
+        "PermissionRequest": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "PostToolUse": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "PreToolUse": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "SessionStart": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "Stop": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "UserPromptSubmit": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "state": {
+          "additionalProperties": {
+            "$ref": "#/definitions/HookStateToml"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
     },
     "KeybindingsSpec": {
       "anyOf": [
@@ -1333,6 +1378,12 @@
         },
         "max_concurrent_threads_per_session": {
           "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "min_wait_timeout_ms": {
+          "format": "int64",
+          "maximum": 3600000.0,
           "minimum": 1.0,
           "type": "integer"
         },
@@ -1726,6 +1777,54 @@
         "enabled": {
           "default": true,
           "type": "boolean"
+        },
+        "mcp_servers": {
+          "additionalProperties": {
+            "$ref": "#/definitions/PluginMcpServerConfig"
+          },
+          "description": "Per-MCP-server policy overlays for MCP servers contributed by this plugin.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "PluginMcpServerConfig": {
+      "additionalProperties": false,
+      "description": "Policy settings for a plugin-provided MCP server.\n\nThis intentionally excludes transport settings: plugin manifests own how the MCP server is launched, while user config owns enablement and tool policy.",
+      "properties": {
+        "default_tools_approval_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            }
+          ],
+          "description": "Approval mode for tools in this server unless a tool override exists."
+        },
+        "disabled_tools": {
+          "description": "Explicit deny-list of tools. These tools are removed after applying `enabled_tools`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "description": "When `false`, Codex skips initializing this plugin MCP server.",
+          "type": "boolean"
+        },
+        "enabled_tools": {
+          "description": "Explicit allow-list of tools exposed from this server.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tools": {
+          "additionalProperties": {
+            "$ref": "#/definitions/McpServerToolConfig"
+          },
+          "description": "Per-tool approval settings keyed by tool name.",
+          "type": "object"
         }
       },
       "type": "object"
@@ -2160,6 +2259,13 @@
     "ToolSuggestConfig": {
       "additionalProperties": false,
       "properties": {
+        "disabled_tools": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ToolSuggestDisabledTool"
+          },
+          "type": "array"
+        },
         "discoverables": {
           "default": [],
           "items": {
@@ -2168,6 +2274,22 @@
           "type": "array"
         }
       },
+      "type": "object"
+    },
+    "ToolSuggestDisabledTool": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/definitions/ToolSuggestDiscoverableType"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
       "type": "object"
     },
     "ToolSuggestDiscoverable": {
@@ -3194,7 +3316,7 @@
       "type": "string"
     },
     "default_permissions": {
-      "description": "Default named permissions profile to apply from the `[permissions]` table.",
+      "description": "Default permissions profile to apply. Names starting with `:` refer to built-in profiles; other names are resolved from the `[permissions]` table.",
       "type": "string"
     },
     "developer_instructions": {
@@ -3265,7 +3387,13 @@
         "apps": {
           "type": "boolean"
         },
+        "apps_mcp_path_override": {
+          "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
+        },
         "browser_use": {
+          "type": "boolean"
+        },
+        "browser_use_external": {
           "type": "boolean"
         },
         "child_agents_md": {
@@ -3371,6 +3499,9 @@
           "$ref": "#/definitions/FeatureToml_for_MultiAgentV2ConfigToml"
         },
         "personality": {
+          "type": "boolean"
+        },
+        "plugin_hooks": {
           "type": "boolean"
         },
         "plugins": {
@@ -3542,10 +3673,10 @@
     "hooks": {
       "allOf": [
         {
-          "$ref": "#/definitions/HookEventsToml"
+          "$ref": "#/definitions/HooksToml"
         }
       ],
-      "description": "Lifecycle hooks configured inline in TOML."
+      "description": "Lifecycle hooks configured inline in TOML plus user-level overrides."
     },
     "include_apps_instructions": {
       "description": "Whether to inject the `<apps_instructions>` developer block.",

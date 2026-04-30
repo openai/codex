@@ -92,41 +92,46 @@ pub async fn load_config_layers_state(
     cloud_requirements: CloudRequirementsLoader,
     thread_config_loader: &dyn ThreadConfigLoader,
 ) -> io::Result<ConfigLayerStack> {
+    let ignore_managed_requirements = overrides.ignore_managed_requirements;
     let ignore_user_config = overrides.ignore_user_config;
     let ignore_user_and_project_exec_policy_rules =
         overrides.ignore_user_and_project_exec_policy_rules;
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
-    if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
-        merge_requirements_with_remote_sandbox_config(
+    if !ignore_managed_requirements {
+        if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
+            merge_requirements_with_remote_sandbox_config(
+                &mut config_requirements_toml,
+                RequirementSource::CloudRequirements,
+                requirements,
+            );
+        }
+
+        #[cfg(target_os = "macos")]
+        macos::load_managed_admin_requirements_toml(
             &mut config_requirements_toml,
-            RequirementSource::CloudRequirements,
-            requirements,
-        );
+            overrides
+                .macos_managed_config_requirements_base64
+                .as_deref(),
+        )
+        .await?;
+
+        // Honor the system requirements.toml location.
+        let requirements_toml_file = system_requirements_toml_file_with_overrides(&overrides)?;
+        load_requirements_toml(fs, &mut config_requirements_toml, &requirements_toml_file).await?;
     }
-
-    #[cfg(target_os = "macos")]
-    macos::load_managed_admin_requirements_toml(
-        &mut config_requirements_toml,
-        overrides
-            .macos_managed_config_requirements_base64
-            .as_deref(),
-    )
-    .await?;
-
-    // Honor the system requirements.toml location.
-    let requirements_toml_file = system_requirements_toml_file_with_overrides(&overrides)?;
-    load_requirements_toml(fs, &mut config_requirements_toml, &requirements_toml_file).await?;
 
     // Make a best-effort to support the legacy `managed_config.toml` as a
     // requirements specification.
     let loaded_config_layers =
         layer_io::load_config_layers_internal(fs, codex_home, overrides.clone()).await?;
-    load_requirements_from_legacy_scheme(
-        &mut config_requirements_toml,
-        loaded_config_layers.clone(),
-    )
-    .await?;
+    if !ignore_managed_requirements {
+        load_requirements_from_legacy_scheme(
+            &mut config_requirements_toml,
+            loaded_config_layers.clone(),
+        )
+        .await?;
+    }
 
     let thread_config_context = ThreadConfigContext {
         thread_id: None,

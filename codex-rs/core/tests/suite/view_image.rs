@@ -6,6 +6,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
@@ -17,7 +18,6 @@ use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -30,6 +30,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event_with_timeout;
 use image::DynamicImage;
 use image::GenericImageView;
@@ -49,6 +50,27 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::body_string_contains;
 
 const VIEW_IMAGE_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn disabled_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -> Op {
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
+    Op::UserTurn {
+        environments: None,
+        items,
+        final_output_json_schema: None,
+        cwd: test.config.cwd.to_path_buf(),
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: None,
+        sandbox_policy,
+        permission_profile,
+        model,
+        effort: None,
+        summary: None,
+        service_tier: None,
+        collaboration_mode: None,
+        personality: None,
+    }
+}
 
 fn image_messages(body: &Value) -> Vec<&Value> {
     body.get("input")
@@ -137,7 +159,6 @@ async fn assert_user_turn_local_image_resizes_to(
     let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        config,
         session_configured,
         ..
     } = &test;
@@ -158,24 +179,13 @@ async fn assert_user_turn_local_image_resizes_to(
     let session_model = session_configured.model.clone();
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::LocalImage {
+        .submit(disabled_user_turn(
+            &test,
+            vec![UserInput::LocalImage {
                 path: abs_path.clone(),
             }],
-            final_output_json_schema: None,
-            cwd: config.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
+            session_model,
+        ))
         .await?;
 
     wait_for_event_with_timeout(
@@ -279,25 +289,14 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     let session_model = session_configured.model.clone();
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::Text {
+        .submit(disabled_user_turn(
+            &test,
+            vec![UserInput::Text {
                 text: "please add the screenshot".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
+            session_model,
+        ))
         .await?;
 
     let mut tool_event = None;
@@ -376,7 +375,6 @@ async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5
     let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        config,
         session_configured,
         ..
     } = &test;
@@ -412,25 +410,14 @@ async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5
     let session_model = session_configured.model.clone();
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::Text {
+        .submit(disabled_user_turn(
+            &test,
+            vec![UserInput::Text {
                 text: "please add the original screenshot".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: config.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            service_tier: None,
-            summary: None,
-            collaboration_mode: None,
-            personality: None,
-        })
+            session_model,
+        ))
         .await?;
 
     wait_for_event_with_timeout(
@@ -479,7 +466,6 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
     let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        config,
         session_configured,
         ..
     } = &test;
@@ -513,25 +499,14 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
     let session_model = session_configured.model.clone();
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::Text {
+        .submit(disabled_user_turn(
+            &test,
+            vec![UserInput::Text {
                 text: "please attach the image at low detail".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: config.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            service_tier: None,
-            summary: None,
-            collaboration_mode: None,
-            personality: None,
-        })
+            session_model,
+        ))
         .await?;
 
     wait_for_event_with_timeout(
@@ -569,7 +544,6 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
     let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        config,
         session_configured,
         ..
     } = &test;
@@ -605,25 +579,14 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
     let session_model = session_configured.model.clone();
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::Text {
+        .submit(disabled_user_turn(
+            &test,
+            vec![UserInput::Text {
                 text: "please attach the image with a null detail".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: config.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            service_tier: None,
-            summary: None,
-            collaboration_mode: None,
-            personality: None,
-        })
+            session_model,
+        ))
         .await?;
 
     wait_for_event_with_timeout(
@@ -671,7 +634,6 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
     let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        config,
         session_configured,
         ..
     } = &test;
@@ -707,25 +669,14 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
     let session_model = session_configured.model.clone();
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::Text {
+        .submit(disabled_user_turn(
+            &test,
+            vec![UserInput::Text {
                 text: "please add the screenshot".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: config.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            service_tier: None,
-            summary: None,
-            collaboration_mode: None,
-            personality: None,
-        })
+            session_model,
+        ))
         .await?;
 
     wait_for_event_with_timeout(
@@ -777,7 +728,6 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_only
     let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        config,
         session_configured,
         ..
     } = &test;
@@ -813,25 +763,14 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_only
     let session_model = session_configured.model.clone();
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::Text {
+        .submit(disabled_user_turn(
+            &test,
+            vec![UserInput::Text {
                 text: "please add the screenshot".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: config.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            service_tier: None,
-            summary: None,
-            collaboration_mode: None,
-            personality: None,
-        })
+            session_model,
+        ))
         .await?;
 
     wait_for_event_with_timeout(
@@ -880,7 +819,6 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
     let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        config,
         session_configured,
         ..
     } = &test;
@@ -907,25 +845,14 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
     let session_model = session_configured.model.clone();
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::Text {
+        .submit(disabled_user_turn(
+            &test,
+            vec![UserInput::Text {
                 text: "please attach the folder".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: config.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
+            session_model,
+        ))
         .await?;
 
     wait_for_event_with_timeout(
@@ -962,7 +889,6 @@ async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
     let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        config,
         session_configured,
         ..
     } = &test;
@@ -990,25 +916,14 @@ async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
     let session_model = session_configured.model.clone();
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::Text {
+        .submit(disabled_user_turn(
+            &test,
+            vec![UserInput::Text {
                 text: "please use the view_image tool to read the json file".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: config.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
+            session_model,
+        ))
         .await?;
 
     wait_for_event_with_timeout(
@@ -1078,25 +993,14 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
     let session_model = session_configured.model.clone();
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::Text {
+        .submit(disabled_user_turn(
+            &test,
+            vec![UserInput::Text {
                 text: "please attach the missing image".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: config.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
+            session_model,
+        ))
         .await?;
 
     wait_for_event_with_timeout(
@@ -1189,7 +1093,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
             config.model = Some(model_slug.to_string());
         });
     let test = builder.build_remote_aware(&server).await?;
-    let TestCodex { codex, config, .. } = &test;
+    let TestCodex { codex, .. } = &test;
 
     let rel_path = "assets/example.png";
     write_workspace_png(
@@ -1217,25 +1121,14 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
     let mock = responses::mount_sse_once(&server, second_response).await;
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::Text {
+        .submit(disabled_user_turn(
+            &test,
+            vec![UserInput::Text {
                 text: "please attach the image".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: config.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: model_slug.to_string(),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
+            model_slug.to_string(),
+        ))
         .await?;
 
     wait_for_event_with_timeout(
@@ -1289,7 +1182,6 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
     let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        config,
         session_configured,
         ..
     } = &test;
@@ -1300,24 +1192,13 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
     let session_model = session_configured.model.clone();
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::LocalImage {
+        .submit(disabled_user_turn(
+            &test,
+            vec![UserInput::LocalImage {
                 path: abs_path.clone(),
             }],
-            final_output_json_schema: None,
-            cwd: config.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
+            session_model,
+        ))
         .await?;
 
     wait_for_event_with_timeout(

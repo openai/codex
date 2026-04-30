@@ -1,3 +1,4 @@
+mod config_rules;
 mod engine;
 pub(crate) mod events;
 mod legacy_notify;
@@ -5,6 +6,28 @@ mod registry;
 mod schema;
 mod types;
 
+pub use engine::HookListEntry;
+/// Hook event names as they appear in hooks JSON and config files.
+pub const HOOK_EVENT_NAMES: [&str; 6] = [
+    "PreToolUse",
+    "PermissionRequest",
+    "PostToolUse",
+    "SessionStart",
+    "UserPromptSubmit",
+    "Stop",
+];
+
+/// Hook event names whose matcher fields are meaningful during dispatch.
+///
+/// Other events can appear in hooks JSON, but Codex ignores their matcher
+/// fields because those events do not dispatch against a tool or session-start
+/// source.
+pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 4] = [
+    "PreToolUse",
+    "PermissionRequest",
+    "PostToolUse",
+    "SessionStart",
+];
 pub use events::permission_request::PermissionRequestDecision;
 pub use events::permission_request::PermissionRequestOutcome;
 pub use events::permission_request::PermissionRequestRequest;
@@ -21,9 +44,11 @@ pub use events::user_prompt_submit::UserPromptSubmitOutcome;
 pub use events::user_prompt_submit::UserPromptSubmitRequest;
 pub use legacy_notify::legacy_notify_json;
 pub use legacy_notify::notify_hook;
+pub use registry::HookListOutcome;
 pub use registry::Hooks;
 pub use registry::HooksConfig;
 pub use registry::command_from_argv;
+pub use registry::list_hooks;
 pub use schema::write_schema_fixtures;
 pub use types::Hook;
 pub use types::HookEvent;

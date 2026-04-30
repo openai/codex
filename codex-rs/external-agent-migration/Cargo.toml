@@ -1,0 +1,23 @@
+[package]
+name = "codex-external-agent-migration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+name = "codex_external_agent_migration"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-hooks = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

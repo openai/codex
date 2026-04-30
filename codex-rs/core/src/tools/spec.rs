@@ -107,7 +107,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
     use crate::tools::handlers::unavailable_tool_message;
-    use crate::tools::tool_search_entry::build_tool_search_entries;
+    use crate::tools::tool_search_entry::build_tool_search_entries_for_config;
 
     let mut builder = ToolRegistryBuilder::new();
     let mcp_tool_plan_inputs = mcp_tools.as_ref().map(map_mcp_tools_for_plan);
@@ -124,6 +124,16 @@ pub(crate) fn build_specs_with_discoverable_tools(
     });
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
+    let min_wait_timeout_ms = if config.multi_agent_v2 {
+        config
+            .wait_agent_min_timeout_ms
+            .unwrap_or(MIN_WAIT_TIMEOUT_MS)
+            .clamp(1, MAX_WAIT_TIMEOUT_MS)
+    } else {
+        MIN_WAIT_TIMEOUT_MS
+    };
+    let default_wait_timeout_ms =
+        DEFAULT_WAIT_TIMEOUT_MS.clamp(min_wait_timeout_ms, MAX_WAIT_TIMEOUT_MS);
     let plan = build_tool_registry_plan(
         config,
         ToolRegistryPlanParams {
@@ -138,8 +148,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
             dynamic_tools,
             default_agent_type_description: &default_agent_type_description,
             wait_agent_timeouts: WaitAgentTimeoutOptions {
-                default_timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
-                min_timeout_ms: MIN_WAIT_TIMEOUT_MS,
+                default_timeout_ms: default_wait_timeout_ms,
+                min_timeout_ms: min_wait_timeout_ms,
                 max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
             },
         },
@@ -156,11 +166,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let shell_command_handler = Arc::new(ShellCommandHandler::from(config.shell_command_backend));
     let request_permissions_handler = Arc::new(RequestPermissionsHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
-        default_mode_request_user_input: config.default_mode_request_user_input,
+        available_modes: config.request_user_input_available_modes.clone(),
     });
     let deferred_dynamic_tools = dynamic_tools
         .iter()
-        .filter(|tool| tool.defer_loading)
+        .filter(|tool| tool.defer_loading && (config.namespace_tools || tool.namespace.is_none()))
         .cloned()
         .collect::<Vec<_>>();
     let mut tool_search_handler = None;
@@ -260,7 +270,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::ToolSearch => {
                 if tool_search_handler.is_none() {
-                    let entries = build_tool_search_entries(
+                    let entries = build_tool_search_entries_for_config(
+                        config,
                         deferred_mcp_tools.as_ref(),
                         &deferred_dynamic_tools,
                     );

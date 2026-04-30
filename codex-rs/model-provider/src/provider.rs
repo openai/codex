@@ -7,7 +7,6 @@ use codex_api::SharedAuthProvider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
@@ -18,6 +17,28 @@ use crate::amazon_bedrock::AmazonBedrockModelProvider;
 use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 use crate::models_endpoint::OpenAiModelsEndpoint;
+
+/// Optional provider-backed features that Codex may expose at runtime.
+///
+/// These capabilities are a provider-owned upper bound. Callers can disable
+/// more functionality through normal config, but should not expose a feature
+/// that the active provider marks unsupported here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderCapabilities {
+    pub namespace_tools: bool,
+    pub image_generation: bool,
+    pub web_search: bool,
+}
+
+impl Default for ProviderCapabilities {
+    fn default() -> Self {
+        Self {
+            namespace_tools: true,
+            image_generation: true,
+            web_search: true,
+        }
+    }
+}
 
 /// Current app-visible account state for a model provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +80,11 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the configured provider metadata.
     fn info(&self) -> &ModelProviderInfo;
 
+    /// Returns the provider-owned capability upper bounds.
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities::default()
+    }
+
     /// Returns the provider-scoped auth manager, when this provider uses one.
     ///
     /// TODO(celia-oai): Make auth manager access internal to this crate so callers
@@ -80,6 +106,11 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
             .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))
     }
 
+    /// Returns the provider base URL that will be used at request time.
+    async fn runtime_base_url(&self) -> codex_protocol::error::Result<Option<String>> {
+        Ok(self.info().base_url.clone())
+    }
+
     /// Returns the auth provider used to attach request credentials.
     async fn api_auth(&self) -> codex_protocol::error::Result<SharedAuthProvider> {
         let auth = self.auth().await;
@@ -91,7 +122,6 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         &self,
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
-        collaboration_modes_config: CollaborationModesConfig,
     ) -> SharedModelsManager;
 }
 
@@ -148,7 +178,13 @@ impl ModelProvider for ConfiguredModelProvider {
         let account = if self.info.requires_openai_auth {
             self.auth_manager
                 .as_ref()
-                .and_then(|auth_manager| auth_manager.auth_cached())
+                .and_then(|auth_manager| {
+                    let auth = auth_manager.auth_cached()?;
+                    if auth_manager.refresh_failure_for_auth(&auth).is_some() {
+                        return None;
+                    }
+                    Some(auth)
+                })
                 .map(|auth| match &auth {
                     CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
                     CodexAuth::Chatgpt(_)
@@ -180,13 +216,11 @@ impl ModelProvider for ConfiguredModelProvider {
         &self,
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
-        collaboration_modes_config: CollaborationModesConfig,
     ) -> SharedModelsManager {
         match config_model_catalog {
             Some(model_catalog) => Arc::new(StaticModelsManager::new(
                 self.auth_manager.clone(),
                 model_catalog,
-                collaboration_modes_config,
             )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
@@ -197,7 +231,6 @@ impl ModelProvider for ConfiguredModelProvider {
                     codex_home,
                     endpoint,
                     self.auth_manager.clone(),
-                    collaboration_modes_config,
                 ))
             }
         }
@@ -293,6 +326,32 @@ mod tests {
             "experimental_supported_tools": [],
         }))
         .expect("valid model")
+    }
+
+    #[test]
+    fn configured_provider_uses_default_capabilities() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(provider.capabilities(), ProviderCapabilities::default());
+    }
+
+    #[tokio::test]
+    async fn configured_provider_runtime_base_url_uses_configured_base_url() {
+        let provider = create_model_provider(
+            provider_for("https://example.test/v1".to_string()),
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(
+            provider
+                .runtime_base_url()
+                .await
+                .expect("runtime base URL should resolve"),
+            Some("https://example.test/v1".to_string())
+        );
     }
 
     #[test]
@@ -402,11 +461,8 @@ mod tests {
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
             /*auth_manager*/ None,
         );
-        let manager = provider.models_manager(
-            test_codex_home(),
-            /*config_model_catalog*/ None,
-            Default::default(),
-        );
+        let manager =
+            provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
 
         let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
         let model_ids = catalog
@@ -418,7 +474,7 @@ mod tests {
         assert_eq!(
             model_ids,
             vec![
-                "openai.gpt-5.4-cmb",
+                "openai.gpt-5.4",
                 "openai.gpt-oss-120b",
                 "openai.gpt-oss-20b"
             ]
@@ -431,7 +487,7 @@ mod tests {
             .find(|preset| preset.is_default)
             .expect("Bedrock catalog should have a default model");
 
-        assert_eq!(default_model.model, "openai.gpt-5.4-cmb");
+        assert_eq!(default_model.model, "openai.gpt-5.4");
     }
 
     #[tokio::test]
@@ -448,7 +504,6 @@ mod tests {
             Some(ModelsResponse {
                 models: vec![custom_model],
             }),
-            Default::default(),
         );
 
         let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
@@ -485,11 +540,8 @@ mod tests {
             )),
         );
 
-        let manager = provider.models_manager(
-            test_codex_home(),
-            /*config_model_catalog*/ None,
-            Default::default(),
-        );
+        let manager =
+            provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
         let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
 
         assert!(

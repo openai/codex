@@ -1,5 +1,7 @@
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::SandboxPolicy;
+use std::path::Path;
 
 pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
     match sandbox_policy {
@@ -45,6 +47,19 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
                 summary.push_str(" (network access enabled)");
             }
             summary
+        }
+    }
+}
+
+pub fn summarize_permission_profile(permission_profile: &PermissionProfile, cwd: &Path) -> String {
+    match permission_profile.to_legacy_sandbox_policy(cwd) {
+        Ok(policy) => summarize_sandbox_policy(&policy),
+        Err(_) => {
+            if permission_profile.network_sandbox_policy().is_enabled() {
+                "custom permissions (network access enabled)".to_string()
+            } else {
+                "custom permissions".to_string()
+            }
         }
     }
 }

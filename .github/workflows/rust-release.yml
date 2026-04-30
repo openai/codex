@@ -49,7 +49,9 @@ jobs:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
-    timeout-minutes: 60
+    # Release builds can take a long time, so leave some headroom to avoid
+    # having to restart the full workflow due to a timeout.
+    timeout-minutes: 90
     permissions:
       contents: read
       id-token: write

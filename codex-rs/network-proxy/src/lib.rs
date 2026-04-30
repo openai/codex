@@ -2,6 +2,7 @@
 
 mod certs;
 mod config;
+mod connect_policy;
 mod http_proxy;
 mod mitm;
 mod network_policy;

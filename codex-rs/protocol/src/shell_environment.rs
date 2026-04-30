@@ -2,7 +2,6 @@ use crate::config_types::EnvironmentVariablePattern;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyInherit;
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
 
@@ -58,21 +57,18 @@ where
         ShellEnvironmentPolicyInherit::All => vars.into_iter().collect(),
         ShellEnvironmentPolicyInherit::None => HashMap::new(),
         ShellEnvironmentPolicyInherit::Core => {
-            let core_vars: HashSet<&str> = COMMON_CORE_VARS
-                .iter()
-                .copied()
-                .chain(PLATFORM_CORE_VARS.iter().copied())
-                .collect();
-            let is_core_var = |name: &str| {
-                if cfg!(target_os = "windows") {
-                    core_vars
+            #[cfg(not(target_os = "windows"))]
+            let core_env_vars = UNIX_CORE_ENV_VARS;
+            #[cfg(target_os = "windows")]
+            let core_env_vars = WINDOWS_CORE_ENV_VARS;
+
+            vars.into_iter()
+                .filter(|(k, _)| {
+                    core_env_vars
                         .iter()
-                        .any(|allowed| allowed.eq_ignore_ascii_case(name))
-                } else {
-                    core_vars.contains(name)
-                }
-            };
-            vars.into_iter().filter(|(k, _)| is_core_var(k)).collect()
+                        .any(|allowed| allowed.eq_ignore_ascii_case(k))
+                })
+                .collect()
         }
     };
 
@@ -113,10 +109,142 @@ where
     env_map
 }
 
-const COMMON_CORE_VARS: &[&str] = &["PATH", "SHELL", "TMPDIR", "TEMP", "TMP"];
+#[cfg(not(target_os = "windows"))]
+const UNIX_CORE_ENV_VARS: &[&str] = &[
+    "PATH", "SHELL", "TMPDIR", "TEMP", "TMP", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME",
+    "USER",
+];
 
 #[cfg(target_os = "windows")]
-const PLATFORM_CORE_VARS: &[&str] = &["PATHEXT", "USERNAME", "USERPROFILE"];
+pub const WINDOWS_CORE_ENV_VARS: &[&str] = &[
+    // Core path resolution
+    "PATH",
+    "PATHEXT",
+    // Shell and system roots
+    "SHELL",
+    "COMSPEC",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    // User context and profiles
+    "USERNAME",
+    "USERDOMAIN",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    // Program locations
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMW6432",
+    "PROGRAMDATA",
+    // App data and caches
+    "LOCALAPPDATA",
+    "APPDATA",
+    // Temp locations
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    // Common shells/pwsh hints
+    "POWERSHELL",
+    "PWSH",
+];
 
-#[cfg(unix)]
-const PLATFORM_CORE_VARS: &[&str] = &["HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "USER"];
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn make_vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn core_inherit_preserves_windows_startup_vars_case_insensitively() {
+        let vars = make_vars(&[
+            ("Shell", "C:\\Program Files\\Git\\bin\\bash.exe"),
+            ("SystemRoot", "C:\\Windows"),
+            ("AppData", "C:\\Users\\codex\\AppData\\Roaming"),
+            ("TmpDir", "C:\\Temp\\custom"),
+            ("OPENAI_API_KEY", "secret"),
+        ]);
+
+        let policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::Core,
+            ignore_default_excludes: true,
+            ..Default::default()
+        };
+
+        // Check a few sample vars instead of the full Windows core list.
+        let result = populate_env(vars, &policy, /*thread_id*/ None);
+        let expected = HashMap::from([
+            (
+                "Shell".to_string(),
+                "C:\\Program Files\\Git\\bin\\bash.exe".to_string(),
+            ),
+            ("SystemRoot".to_string(), "C:\\Windows".to_string()),
+            (
+                "AppData".to_string(),
+                "C:\\Users\\codex\\AppData\\Roaming".to_string(),
+            ),
+            ("TmpDir".to_string(), "C:\\Temp\\custom".to_string()),
+        ]);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn create_env_inserts_pathext_on_windows_when_missing() {
+        let policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::None,
+            ignore_default_excludes: true,
+            ..Default::default()
+        };
+
+        let result = create_env_from_vars(Vec::new(), &policy, /*thread_id*/ None);
+        let expected = HashMap::from([("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string())]);
+
+        assert_eq!(result, expected);
+    }
+}
+
+#[cfg(all(test, not(target_os = "windows")))]
+mod non_windows_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn make_vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn core_inherit_preserves_non_windows_core_vars_case_insensitively() {
+        let vars = make_vars(&[
+            ("path", "/usr/bin"),
+            ("home", "/home/codex"),
+            ("TmpDir", "/tmp/custom"),
+            ("OPENAI_API_KEY", "secret"),
+        ]);
+
+        let policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::Core,
+            ignore_default_excludes: true,
+            ..Default::default()
+        };
+
+        let result = populate_env(vars, &policy, /*thread_id*/ None);
+        let expected = HashMap::from([
+            ("path".to_string(), "/usr/bin".to_string()),
+            ("home".to_string(), "/home/codex".to_string()),
+            ("TmpDir".to_string(), "/tmp/custom".to_string()),
+        ]);
+
+        assert_eq!(result, expected);
+    }
+}

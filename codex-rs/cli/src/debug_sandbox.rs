@@ -6,6 +6,7 @@ mod seatbelt;
 use std::path::PathBuf;
 use std::process::Stdio;
 
+use codex_config::LoaderOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -16,7 +17,8 @@ use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_policies;
+use codex_sandboxing::landlock::allow_network_for_proxy;
+use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_permission_profile;
 #[cfg(target_os = "macos")]
 use codex_sandboxing::seatbelt::CreateSeatbeltCommandArgsParams;
 #[cfg(target_os = "macos")]
@@ -41,14 +43,24 @@ pub async fn run_command_under_seatbelt(
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     let SeatbeltCommand {
-        full_auto,
+        permissions_profile,
+        cwd,
+        include_managed_config,
         allow_unix_sockets,
         log_denials,
         config_overrides,
         command,
     } = command;
+    let managed_requirements_mode = ManagedRequirementsMode::for_profile_invocation(
+        &permissions_profile,
+        include_managed_config,
+    );
     run_command_under_sandbox(
-        full_auto,
+        DebugSandboxConfigOptions {
+            permissions_profile,
+            cwd,
+            managed_requirements_mode,
+        },
         command,
         config_overrides,
         codex_linux_sandbox_exe,
@@ -72,12 +84,22 @@ pub async fn run_command_under_landlock(
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     let LandlockCommand {
-        full_auto,
+        permissions_profile,
+        cwd,
+        include_managed_config,
         config_overrides,
         command,
     } = command;
+    let managed_requirements_mode = ManagedRequirementsMode::for_profile_invocation(
+        &permissions_profile,
+        include_managed_config,
+    );
     run_command_under_sandbox(
-        full_auto,
+        DebugSandboxConfigOptions {
+            permissions_profile,
+            cwd,
+            managed_requirements_mode,
+        },
         command,
         config_overrides,
         codex_linux_sandbox_exe,
@@ -93,12 +115,22 @@ pub async fn run_command_under_windows(
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     let WindowsCommand {
-        full_auto,
+        permissions_profile,
+        cwd,
+        include_managed_config,
         config_overrides,
         command,
     } = command;
+    let managed_requirements_mode = ManagedRequirementsMode::for_profile_invocation(
+        &permissions_profile,
+        include_managed_config,
+    );
     run_command_under_sandbox(
-        full_auto,
+        DebugSandboxConfigOptions {
+            permissions_profile,
+            cwd,
+            managed_requirements_mode,
+        },
         command,
         config_overrides,
         codex_linux_sandbox_exe,
@@ -116,8 +148,34 @@ enum SandboxType {
     Windows,
 }
 
+#[derive(Debug)]
+struct DebugSandboxConfigOptions {
+    permissions_profile: Option<String>,
+    cwd: Option<PathBuf>,
+    managed_requirements_mode: ManagedRequirementsMode,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ManagedRequirementsMode {
+    Include,
+    Ignore,
+}
+
+impl ManagedRequirementsMode {
+    fn for_profile_invocation(
+        permissions_profile: &Option<String>,
+        include_managed_config: bool,
+    ) -> Self {
+        if permissions_profile.is_some() && !include_managed_config {
+            Self::Ignore
+        } else {
+            Self::Include
+        }
+    }
+}
+
 async fn run_command_under_sandbox(
-    full_auto: bool,
+    config_options: DebugSandboxConfigOptions,
     command: Vec<String>,
     config_overrides: CliConfigOverrides,
     codex_linux_sandbox_exe: Option<PathBuf>,
@@ -131,7 +189,7 @@ async fn run_command_under_sandbox(
             .parse_overrides()
             .map_err(anyhow::Error::msg)?,
         codex_linux_sandbox_exe,
-        full_auto,
+        config_options,
     )
     .await?;
 
@@ -222,19 +280,14 @@ async fn run_command_under_sandbox(
                 .codex_linux_sandbox_exe
                 .expect("codex-linux-sandbox executable not found");
             let use_legacy_landlock = config.features.use_legacy_landlock();
-            let file_system_sandbox_policy = config.permissions.file_system_sandbox_policy();
             let network_sandbox_policy = config.permissions.network_sandbox_policy();
-            let args = create_linux_sandbox_command_args_for_policies(
+            let args = create_linux_sandbox_command_args_for_permission_profile(
                 command,
                 cwd.as_path(),
-                &config
-                    .permissions
-                    .legacy_sandbox_policy(sandbox_policy_cwd.as_path()),
-                &file_system_sandbox_policy,
-                network_sandbox_policy,
+                &config.permissions.permission_profile(),
                 sandbox_policy_cwd.as_path(),
                 use_legacy_landlock,
-                /*allow_network_for_proxy*/ false,
+                allow_network_for_proxy(managed_network_requirements_enabled),
             );
             spawn_debug_sandbox_child(
                 codex_linux_sandbox_exe,
@@ -406,14 +459,6 @@ async fn run_command_under_windows_session(
     std::process::exit(exit_code);
 }
 
-pub fn create_sandbox_mode(full_auto: bool) -> SandboxMode {
-    if full_auto {
-        SandboxMode::WorkspaceWrite
-    } else {
-        SandboxMode::ReadOnly
-    }
-}
-
 async fn spawn_debug_sandbox_child(
     program: PathBuf,
     args: Vec<String>,
@@ -583,50 +628,68 @@ mod windows_stdio_bridge {
 async fn load_debug_sandbox_config(
     cli_overrides: Vec<(String, TomlValue)>,
     codex_linux_sandbox_exe: Option<PathBuf>,
-    full_auto: bool,
+    options: DebugSandboxConfigOptions,
 ) -> anyhow::Result<Config> {
     load_debug_sandbox_config_with_codex_home(
         cli_overrides,
         codex_linux_sandbox_exe,
-        full_auto,
+        options,
         /*codex_home*/ None,
     )
     .await
 }
 
 async fn load_debug_sandbox_config_with_codex_home(
-    cli_overrides: Vec<(String, TomlValue)>,
+    mut cli_overrides: Vec<(String, TomlValue)>,
     codex_linux_sandbox_exe: Option<PathBuf>,
-    full_auto: bool,
+    options: DebugSandboxConfigOptions,
     codex_home: Option<PathBuf>,
 ) -> anyhow::Result<Config> {
+    let DebugSandboxConfigOptions {
+        permissions_profile,
+        cwd,
+        managed_requirements_mode,
+    } = options;
+
+    if let Some(permissions_profile) = permissions_profile {
+        cli_overrides.push((
+            "default_permissions".to_string(),
+            TomlValue::String(permissions_profile),
+        ));
+    }
+
+    // For legacy configs, `codex sandbox` historically defaulted to read-only
+    // instead of inheriting ambient `sandbox_mode` settings from user/system
+    // config. Keep that behavior unless this invocation explicitly passes a
+    // legacy `sandbox_mode` CLI override, which is now the documented writable
+    // replacement for the removed `--full-auto` flag.
+    let uses_legacy_sandbox_mode_override = cli_overrides_use_legacy_sandbox_mode(&cli_overrides);
     let config = build_debug_sandbox_config(
         cli_overrides.clone(),
         ConfigOverrides {
+            cwd: cwd.clone(),
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.clone(),
             ..Default::default()
         },
         codex_home.clone(),
+        managed_requirements_mode,
     )
     .await?;
 
-    if config_uses_permission_profiles(&config) {
-        if full_auto {
-            anyhow::bail!(
-                "`codex sandbox --full-auto` is only supported for legacy `sandbox_mode` configs; choose a writable `[permissions]` profile instead"
-            );
-        }
+    if config_uses_permission_profiles(&config) || uses_legacy_sandbox_mode_override {
         return Ok(config);
     }
 
     build_debug_sandbox_config(
         cli_overrides,
         ConfigOverrides {
-            sandbox_mode: Some(create_sandbox_mode(full_auto)),
+            sandbox_mode: Some(SandboxMode::ReadOnly),
+            cwd,
             codex_linux_sandbox_exe,
             ..Default::default()
         },
         codex_home,
+        managed_requirements_mode,
     )
     .await
     .map_err(Into::into)
@@ -636,10 +699,17 @@ async fn build_debug_sandbox_config(
     cli_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
     codex_home: Option<PathBuf>,
+    managed_requirements_mode: ManagedRequirementsMode,
 ) -> std::io::Result<Config> {
     let mut builder = ConfigBuilder::default()
         .cli_overrides(cli_overrides)
         .harness_overrides(harness_overrides);
+    if let ManagedRequirementsMode::Ignore = managed_requirements_mode {
+        builder = builder.loader_overrides(LoaderOverrides {
+            ignore_managed_requirements: true,
+            ..Default::default()
+        });
+    }
     if let Some(codex_home) = codex_home {
         builder = builder
             .codex_home(codex_home.clone())
@@ -656,9 +726,14 @@ fn config_uses_permission_profiles(config: &Config) -> bool {
         .is_some()
 }
 
+fn cli_overrides_use_legacy_sandbox_mode(cli_overrides: &[(String, TomlValue)]) -> bool {
+    cli_overrides.iter().any(|(key, _)| key == "sandbox_mode")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
     fn escape_toml_path(path: &std::path::Path) -> String {
@@ -700,22 +775,28 @@ mod tests {
             Vec::new(),
             ConfigOverrides::default(),
             Some(codex_home_path.clone()),
+            ManagedRequirementsMode::Include,
         )
         .await?;
         let legacy_config = build_debug_sandbox_config(
             Vec::new(),
             ConfigOverrides {
-                sandbox_mode: Some(create_sandbox_mode(/*full_auto*/ false)),
+                sandbox_mode: Some(SandboxMode::ReadOnly),
                 ..Default::default()
             },
             Some(codex_home_path.clone()),
+            ManagedRequirementsMode::Include,
         )
         .await?;
 
         let config = load_debug_sandbox_config_with_codex_home(
             Vec::new(),
             /*codex_linux_sandbox_exe*/ None,
-            /*full_auto*/ false,
+            DebugSandboxConfigOptions {
+                permissions_profile: None,
+                cwd: None,
+                managed_requirements_mode: ManagedRequirementsMode::Include,
+            },
             Some(codex_home_path),
         )
         .await?;
@@ -739,26 +820,223 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn debug_sandbox_rejects_full_auto_for_permission_profiles() -> anyhow::Result<()> {
+    async fn debug_sandbox_honors_explicit_legacy_sandbox_mode() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let codex_home_path = codex_home.path().to_path_buf();
+        let cli_overrides = vec![(
+            "sandbox_mode".to_string(),
+            TomlValue::String("workspace-write".to_string()),
+        )];
+
+        let workspace_write_config = build_debug_sandbox_config(
+            cli_overrides.clone(),
+            ConfigOverrides::default(),
+            Some(codex_home_path.clone()),
+            ManagedRequirementsMode::Include,
+        )
+        .await?;
+        let read_only_config = build_debug_sandbox_config(
+            Vec::new(),
+            ConfigOverrides {
+                sandbox_mode: Some(SandboxMode::ReadOnly),
+                ..Default::default()
+            },
+            Some(codex_home_path.clone()),
+            ManagedRequirementsMode::Include,
+        )
+        .await?;
+
+        let config = load_debug_sandbox_config_with_codex_home(
+            cli_overrides,
+            /*codex_linux_sandbox_exe*/ None,
+            DebugSandboxConfigOptions {
+                permissions_profile: None,
+                cwd: None,
+                managed_requirements_mode: ManagedRequirementsMode::Include,
+            },
+            Some(codex_home_path),
+        )
+        .await?;
+
+        if cfg!(target_os = "windows") {
+            assert_eq!(
+                workspace_write_config
+                    .permissions
+                    .file_system_sandbox_policy(),
+                read_only_config.permissions.file_system_sandbox_policy(),
+                "workspace-write downgrades to read-only when the Windows sandbox is disabled"
+            );
+        } else {
+            assert_ne!(
+                workspace_write_config
+                    .permissions
+                    .file_system_sandbox_policy(),
+                read_only_config.permissions.file_system_sandbox_policy(),
+                "test fixture should distinguish explicit workspace-write from read-only"
+            );
+        }
+        assert_eq!(
+            config.permissions.file_system_sandbox_policy(),
+            workspace_write_config
+                .permissions
+                .file_system_sandbox_policy(),
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debug_sandbox_defaults_legacy_configs_to_read_only() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let codex_home_path = codex_home.path().to_path_buf();
+
+        let read_only_config = build_debug_sandbox_config(
+            Vec::new(),
+            ConfigOverrides {
+                sandbox_mode: Some(SandboxMode::ReadOnly),
+                ..Default::default()
+            },
+            Some(codex_home_path.clone()),
+            ManagedRequirementsMode::Include,
+        )
+        .await?;
+
+        let config = load_debug_sandbox_config_with_codex_home(
+            Vec::new(),
+            /*codex_linux_sandbox_exe*/ None,
+            DebugSandboxConfigOptions {
+                permissions_profile: None,
+                cwd: None,
+                managed_requirements_mode: ManagedRequirementsMode::Include,
+            },
+            Some(codex_home_path),
+        )
+        .await?;
+
+        assert!(!config_uses_permission_profiles(&config));
+        assert_eq!(
+            config.permissions.file_system_sandbox_policy(),
+            read_only_config.permissions.file_system_sandbox_policy(),
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debug_sandbox_honors_explicit_builtin_permission_profile() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let config = load_debug_sandbox_config_with_codex_home(
+            Vec::new(),
+            /*codex_linux_sandbox_exe*/ None,
+            DebugSandboxConfigOptions {
+                permissions_profile: Some(":workspace".to_string()),
+                cwd: None,
+                managed_requirements_mode: ManagedRequirementsMode::Ignore,
+            },
+            Some(codex_home.path().to_path_buf()),
+        )
+        .await?;
+
+        assert_eq!(
+            config.permissions.file_system_sandbox_policy(),
+            codex_protocol::models::PermissionProfile::workspace_write()
+                .file_system_sandbox_policy()
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_permission_profile_overrides_active_profile_sandbox_mode()
+    -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            "profile = \"legacy\"\n\
+             \n\
+             [profiles.legacy]\n\
+             sandbox_mode = \"danger-full-access\"\n",
+        )?;
+
+        let config = load_debug_sandbox_config_with_codex_home(
+            Vec::new(),
+            /*codex_linux_sandbox_exe*/ None,
+            DebugSandboxConfigOptions {
+                permissions_profile: Some(":workspace".to_string()),
+                cwd: None,
+                managed_requirements_mode: ManagedRequirementsMode::Ignore,
+            },
+            Some(codex_home.path().to_path_buf()),
+        )
+        .await?;
+
+        assert_eq!(
+            config.permissions.file_system_sandbox_policy(),
+            codex_protocol::models::PermissionProfile::workspace_write()
+                .file_system_sandbox_policy()
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debug_sandbox_honors_explicit_named_permission_profile() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
         let sandbox_paths = TempDir::new()?;
         let docs = sandbox_paths.path().join("docs");
         let private = docs.join("private");
         write_permissions_profile_config(&codex_home, &docs, &private)?;
 
-        let err = load_debug_sandbox_config_with_codex_home(
+        let config = load_debug_sandbox_config_with_codex_home(
             Vec::new(),
             /*codex_linux_sandbox_exe*/ None,
-            /*full_auto*/ true,
+            DebugSandboxConfigOptions {
+                permissions_profile: Some("limited-read-test".to_string()),
+                cwd: None,
+                managed_requirements_mode: ManagedRequirementsMode::Ignore,
+            },
             Some(codex_home.path().to_path_buf()),
         )
-        .await
-        .expect_err("full-auto should be rejected for active permission profiles");
+        .await?;
 
-        assert!(
-            err.to_string().contains("--full-auto"),
-            "unexpected error: {err}"
+        let expected = build_debug_sandbox_config(
+            vec![(
+                "default_permissions".to_string(),
+                TomlValue::String("limited-read-test".to_string()),
+            )],
+            ConfigOverrides::default(),
+            Some(codex_home.path().to_path_buf()),
+            ManagedRequirementsMode::Include,
+        )
+        .await?;
+
+        assert_eq!(
+            config.permissions.file_system_sandbox_policy(),
+            expected.permissions.file_system_sandbox_policy()
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debug_sandbox_uses_explicit_profile_cwd() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cwd = TempDir::new()?;
+
+        let config = load_debug_sandbox_config_with_codex_home(
+            Vec::new(),
+            /*codex_linux_sandbox_exe*/ None,
+            DebugSandboxConfigOptions {
+                permissions_profile: Some(":workspace".to_string()),
+                cwd: Some(cwd.path().to_path_buf()),
+                managed_requirements_mode: ManagedRequirementsMode::Ignore,
+            },
+            Some(codex_home.path().to_path_buf()),
+        )
+        .await?;
+
+        assert_eq!(config.cwd.as_path(), cwd.path());
 
         Ok(())
     }

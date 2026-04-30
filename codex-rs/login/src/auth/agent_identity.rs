@@ -82,7 +82,7 @@ mod tests {
     use serial_test::serial;
 
     #[test]
-    #[serial(agent_identity_authapi_base_url_env)]
+    #[serial(codex_auth_env)]
     fn agent_identity_authapi_base_url_prefers_env_value() {
         let _guard = EnvVarGuard::set(
             CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL_ENV_VAR,
@@ -95,7 +95,7 @@ mod tests {
     }
 
     #[test]
-    #[serial(agent_identity_authapi_base_url_env)]
+    #[serial(codex_auth_env)]
     fn agent_identity_authapi_base_url_uses_prod_authapi_by_default() {
         let _guard = EnvVarGuard::remove(CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL_ENV_VAR);
         assert_eq!(

@@ -755,6 +755,9 @@ fn parse_data_url(url: &str) -> Option<(String, String)> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("starting rmcp test server");
+    if let Ok(pid_file) = std::env::var("MCP_TEST_PID_FILE") {
+        std::fs::write(pid_file, std::process::id().to_string())?;
+    }
     // Run the server with STDIO transport. If the client disconnects we simply
     // bubble up the error so the process exits.
     let service = TestToolServer::new();

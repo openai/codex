@@ -5,20 +5,18 @@
 
 use crate::app_backtrack::BacktrackState;
 use crate::app_command::AppCommand;
-use crate::app_command::AppCommandView;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
+use crate::app_event::HistoryLookupResponse;
 use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
-use crate::app_server_approval_conversions::network_approval_context_to_core;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::AppServerStartedThread;
-use crate::app_server_session::ThreadSessionState;
-use crate::app_server_session::app_server_rate_limit_snapshots_to_core;
+use crate::app_server_session::app_server_rate_limit_snapshots;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::McpServerElicitationFormRequest;
@@ -62,17 +60,18 @@ use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
 use crate::pager_overlay::Overlay;
-use crate::read_session_model;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::resume_picker::SessionTarget;
+use crate::session_state::ThreadSessionState;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
 #[cfg(test)]
 use crate::test_support::test_path_buf;
 #[cfg(test)]
 use crate::test_support::test_path_display;
+use crate::token_usage::TokenUsage;
 use crate::transcript_reflow::TranscriptReflowState;
 use crate::tui;
 use crate::tui::TuiEvent;
@@ -82,16 +81,22 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
+use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
+use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
+use codex_app_server_protocol::HooksListParams;
+use codex_app_server_protocol::HooksListResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
+#[cfg(test)]
+use codex_app_server_protocol::McpAuthStatus;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::MergeStrategy;
@@ -103,10 +108,11 @@ use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
-use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SkillErrorInfo;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadItem;
@@ -122,31 +128,22 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_model_provider::create_model_provider;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
-use codex_protocol::approvals::ExecApprovalRequestEvent;
 use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::FinalOutput;
-use codex_protocol::protocol::GetHistoryEntryResponseEvent;
-use codex_protocol::protocol::ListSkillsResponseEvent;
-#[cfg(test)]
-use codex_protocol::protocol::McpAuthStatus;
-use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SkillErrorInfo;
-use codex_protocol::protocol::TokenUsage;
+#[cfg(target_os = "windows")]
+use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
@@ -182,7 +179,8 @@ use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
 use uuid::Uuid;
 mod agent_navigation;
-mod app_server_adapter;
+mod app_server_event_targets;
+mod app_server_events;
 pub(crate) mod app_server_requests;
 mod background_requests;
 mod config_persistence;
@@ -222,48 +220,6 @@ enum ThreadInteractiveRequest {
     McpServerElicitation(McpServerElicitationFormRequest),
 }
 
-fn app_server_request_id_to_mcp_request_id(
-    request_id: &codex_app_server_protocol::RequestId,
-) -> codex_protocol::mcp::RequestId {
-    match request_id {
-        codex_app_server_protocol::RequestId::String(value) => {
-            codex_protocol::mcp::RequestId::String(value.clone())
-        }
-        codex_app_server_protocol::RequestId::Integer(value) => {
-            codex_protocol::mcp::RequestId::Integer(*value)
-        }
-    }
-}
-
-fn command_execution_decision_to_review_decision(
-    decision: codex_app_server_protocol::CommandExecutionApprovalDecision,
-) -> codex_protocol::protocol::ReviewDecision {
-    match decision {
-        codex_app_server_protocol::CommandExecutionApprovalDecision::Accept => {
-            codex_protocol::protocol::ReviewDecision::Approved
-        }
-        codex_app_server_protocol::CommandExecutionApprovalDecision::AcceptForSession => {
-            codex_protocol::protocol::ReviewDecision::ApprovedForSession
-        }
-        codex_app_server_protocol::CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
-            execpolicy_amendment,
-        } => codex_protocol::protocol::ReviewDecision::ApprovedExecpolicyAmendment {
-            proposed_execpolicy_amendment: execpolicy_amendment.into_core(),
-        },
-        codex_app_server_protocol::CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
-            network_policy_amendment,
-        } => codex_protocol::protocol::ReviewDecision::NetworkPolicyAmendment {
-            network_policy_amendment: network_policy_amendment.into_core(),
-        },
-        codex_app_server_protocol::CommandExecutionApprovalDecision::Decline => {
-            codex_protocol::protocol::ReviewDecision::Denied
-        }
-        codex_app_server_protocol::CommandExecutionApprovalDecision::Cancel => {
-            codex_protocol::protocol::ReviewDecision::Abort
-        }
-    }
-}
-
 /// Extracts `receiver_thread_ids` from collab agent tool-call notifications.
 ///
 /// Only `ItemStarted` and `ItemCompleted` notifications with a `CollabAgentToolCall` item carry
@@ -289,26 +245,60 @@ fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[Str
 }
 
 fn default_exec_approval_decisions(
-    network_approval_context: Option<&codex_protocol::protocol::NetworkApprovalContext>,
-    proposed_execpolicy_amendment: Option<&codex_protocol::approvals::ExecPolicyAmendment>,
+    network_approval_context: Option<&codex_app_server_protocol::NetworkApprovalContext>,
+    proposed_execpolicy_amendment: Option<&codex_app_server_protocol::ExecPolicyAmendment>,
     proposed_network_policy_amendments: Option<
-        &[codex_protocol::approvals::NetworkPolicyAmendment],
+        &[codex_app_server_protocol::NetworkPolicyAmendment],
     >,
-    additional_permissions: Option<&codex_protocol::models::AdditionalPermissionProfile>,
-) -> Vec<codex_protocol::protocol::ReviewDecision> {
-    ExecApprovalRequestEvent::default_available_decisions(
-        network_approval_context,
-        proposed_execpolicy_amendment,
-        proposed_network_policy_amendments,
-        additional_permissions,
-    )
+    additional_permissions: Option<&codex_app_server_protocol::AdditionalPermissionProfile>,
+) -> Vec<codex_app_server_protocol::CommandExecutionApprovalDecision> {
+    use codex_app_server_protocol::CommandExecutionApprovalDecision;
+    use codex_app_server_protocol::NetworkPolicyRuleAction;
+
+    if network_approval_context.is_some() {
+        let mut decisions = vec![
+            CommandExecutionApprovalDecision::Accept,
+            CommandExecutionApprovalDecision::AcceptForSession,
+        ];
+        if let Some(amendment) = proposed_network_policy_amendments.and_then(|amendments| {
+            amendments
+                .iter()
+                .find(|amendment| amendment.action == NetworkPolicyRuleAction::Allow)
+        }) {
+            decisions.push(
+                CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
+                    network_policy_amendment: amendment.clone(),
+                },
+            );
+        }
+        decisions.push(CommandExecutionApprovalDecision::Cancel);
+        return decisions;
+    }
+
+    if additional_permissions.is_some() {
+        return vec![
+            CommandExecutionApprovalDecision::Accept,
+            CommandExecutionApprovalDecision::Cancel,
+        ];
+    }
+
+    let mut decisions = vec![CommandExecutionApprovalDecision::Accept];
+    if let Some(execpolicy_amendment) = proposed_execpolicy_amendment {
+        decisions.push(
+            CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+                execpolicy_amendment: execpolicy_amendment.clone(),
+            },
+        );
+    }
+    decisions.push(CommandExecutionApprovalDecision::Cancel);
+    decisions
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AutoReviewMode {
     approval_policy: AskForApproval,
     approvals_reviewer: ApprovalsReviewer,
-    sandbox_policy: SandboxPolicy,
+    permission_profile: PermissionProfile,
 }
 
 /// Enabling the Auto-review experiment in the TUI should also switch the
@@ -319,9 +309,18 @@ fn auto_review_mode() -> AutoReviewMode {
     AutoReviewMode {
         approval_policy: AskForApproval::OnRequest,
         approvals_reviewer: ApprovalsReviewer::AutoReview,
-        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+        permission_profile: PermissionProfile::workspace_write(),
     }
 }
+
+#[cfg(target_os = "windows")]
+fn managed_filesystem_sandbox_is_restricted(permission_profile: &PermissionProfile) -> bool {
+    matches!(
+        permission_profile.file_system_sandbox_policy().kind,
+        FileSystemSandboxKind::Restricted
+    )
+}
+
 /// Baseline cadence for periodic stream commit animation ticks.
 ///
 /// Smooth-mode streaming drains one line per tick, so this interval controls
@@ -367,7 +366,7 @@ fn session_summary(
     thread_name: Option<String>,
     rollout_path: Option<&Path>,
 ) -> Option<SessionSummary> {
-    let usage_line = (!token_usage.is_zero()).then(|| FinalOutput::from(token_usage).to_string());
+    let usage_line = (!token_usage.is_zero()).then(|| token_usage.to_string());
     let thread_id =
         resumable_thread(thread_id, thread_name, rollout_path).map(|thread| thread.thread_id);
     let resume_command =
@@ -406,84 +405,13 @@ fn rollout_path_is_resumable(rollout_path: &Path) -> bool {
     std::fs::metadata(rollout_path).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
 }
 
-fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
+fn errors_for_cwd(cwd: &Path, response: &SkillsListResponse) -> Vec<SkillErrorInfo> {
     response
-        .skills
+        .data
         .iter()
         .find(|entry| entry.cwd.as_path() == cwd)
         .map(|entry| entry.errors.clone())
         .unwrap_or_default()
-}
-
-fn list_skills_response_to_core(response: SkillsListResponse) -> ListSkillsResponseEvent {
-    ListSkillsResponseEvent {
-        skills: response
-            .data
-            .into_iter()
-            .map(|entry| codex_protocol::protocol::SkillsListEntry {
-                cwd: entry.cwd,
-                skills: entry
-                    .skills
-                    .into_iter()
-                    .map(|skill| codex_protocol::protocol::SkillMetadata {
-                        name: skill.name,
-                        description: skill.description,
-                        short_description: skill.short_description,
-                        interface: skill.interface.map(|interface| {
-                            codex_protocol::protocol::SkillInterface {
-                                display_name: interface.display_name,
-                                short_description: interface.short_description,
-                                icon_small: interface.icon_small,
-                                icon_large: interface.icon_large,
-                                brand_color: interface.brand_color,
-                                default_prompt: interface.default_prompt,
-                            }
-                        }),
-                        dependencies: skill.dependencies.map(|dependencies| {
-                            codex_protocol::protocol::SkillDependencies {
-                                tools: dependencies
-                                    .tools
-                                    .into_iter()
-                                    .map(|tool| codex_protocol::protocol::SkillToolDependency {
-                                        r#type: tool.r#type,
-                                        value: tool.value,
-                                        description: tool.description,
-                                        transport: tool.transport,
-                                        command: tool.command,
-                                        url: tool.url,
-                                    })
-                                    .collect(),
-                            }
-                        }),
-                        path: skill.path,
-                        scope: match skill.scope {
-                            codex_app_server_protocol::SkillScope::User => {
-                                codex_protocol::protocol::SkillScope::User
-                            }
-                            codex_app_server_protocol::SkillScope::Repo => {
-                                codex_protocol::protocol::SkillScope::Repo
-                            }
-                            codex_app_server_protocol::SkillScope::System => {
-                                codex_protocol::protocol::SkillScope::System
-                            }
-                            codex_app_server_protocol::SkillScope::Admin => {
-                                codex_protocol::protocol::SkillScope::Admin
-                            }
-                        },
-                        enabled: skill.enabled,
-                    })
-                    .collect(),
-                errors: entry
-                    .errors
-                    .into_iter()
-                    .map(|error| codex_protocol::protocol::SkillErrorInfo {
-                        path: error.path,
-                        message: error.message,
-                    })
-                    .collect(),
-            })
-            .collect(),
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -508,7 +436,7 @@ pub(crate) struct App {
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
     runtime_approval_policy_override: Option<AskForApproval>,
-    runtime_sandbox_policy_override: Option<SandboxPolicy>,
+    runtime_permission_profile_override: Option<PermissionProfile>,
 
     pub(crate) file_search: FileSearchManager,
 
@@ -573,6 +501,9 @@ pub(crate) struct App {
     // overwrite a newer toggle, even if the plugin is toggled from different
     // cwd contexts.
     pending_plugin_enabled_writes: HashMap<String, Option<bool>>,
+    // Serialize hook enablement writes per hook so stale completions cannot
+    // persist an older toggle after a newer one.
+    pending_hook_enabled_writes: HashMap<String, Option<bool>>,
 }
 
 fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<AppServerTurnError> {
@@ -585,6 +516,17 @@ fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<App
         Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable { .. })
     )
     .then_some(turn_error)
+}
+
+async fn resolve_runtime_model_provider_base_url(provider: &ModelProviderInfo) -> Option<String> {
+    let provider = create_model_provider(provider.clone(), /*auth_manager*/ None);
+    match provider.runtime_base_url().await {
+        Ok(base_url) => base_url,
+        Err(err) => {
+            tracing::warn!(%err, "failed to resolve runtime model provider base URL for status");
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -636,6 +578,10 @@ impl App {
             feedback: self.feedback.clone(),
             is_first_run: false,
             status_account_display: self.chat_widget.status_account_display().cloned(),
+            runtime_model_provider_base_url: self
+                .chat_widget
+                .runtime_model_provider_base_url()
+                .map(str::to_string),
             initial_plan_type: self.chat_widget.current_plan_type(),
             model: Some(self.chat_widget.current_model().to_string()),
             startup_tooltip_override: None,
@@ -732,14 +678,7 @@ impl App {
         if let Some(updated_model) = config.model.clone() {
             model = updated_model;
         }
-        let model_catalog = Arc::new(ModelCatalog::new(
-            available_models.clone(),
-            CollaborationModesConfig {
-                default_mode_request_user_input: config
-                    .features
-                    .enabled(Feature::DefaultModeRequestUserInput),
-            },
-        ));
+        let model_catalog = Arc::new(ModelCatalog::new(available_models.clone()));
         let feedback_audience = bootstrap.feedback_audience;
         let auth_mode = bootstrap.auth_mode;
         let has_chatgpt_account = bootstrap.has_chatgpt_account;
@@ -756,7 +695,8 @@ impl App {
             codex_login::default_client::originator().value,
             config.otel.log_user_prompt,
             user_agent(),
-            SessionSource::Cli,
+            serde_json::from_value(serde_json::json!("cli"))
+                .unwrap_or_else(|err| panic!("cli session source should deserialize: {err}")),
         );
         if config
             .tui_status_line
@@ -768,6 +708,8 @@ impl App {
 
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
         let terminal_title_invalid_items_warned = Arc::new(AtomicBool::new(false));
+        let runtime_model_provider_base_url =
+            resolve_runtime_model_provider_base_url(&config.model_provider).await;
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
@@ -794,6 +736,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
+                    runtime_model_provider_base_url: runtime_model_provider_base_url.clone(),
                     initial_plan_type,
                     model: Some(model.clone()),
                     startup_tooltip_override,
@@ -828,6 +771,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
+                    runtime_model_provider_base_url: runtime_model_provider_base_url.clone(),
                     initial_plan_type,
                     model: config.model.clone(),
                     startup_tooltip_override: None,
@@ -867,6 +811,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
+                    runtime_model_provider_base_url: runtime_model_provider_base_url.clone(),
                     initial_plan_type,
                     model: config.model.clone(),
                     startup_tooltip_override: None,
@@ -906,7 +851,7 @@ See the Codex keymap documentation for supported actions and examples."
             cli_kv_overrides,
             harness_overrides,
             runtime_approval_policy_override: None,
-            runtime_sandbox_policy_override: None,
+            runtime_permission_profile_override: None,
             file_search,
             enhanced_keys_supported,
             keymap: runtime_keymap,
@@ -941,26 +886,21 @@ See the Codex keymap documentation for supported actions and examples."
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_plugin_enabled_writes: HashMap::new(),
+            pending_hook_enabled_writes: HashMap::new(),
         };
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
                 .await?;
         }
 
-        // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
+        // On startup, if a managed filesystem sandbox is active, warn about
+        // world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
         {
-            let startup_sandbox_policy = app
-                .config
-                .permissions
-                .legacy_sandbox_policy(app.config.cwd.as_path());
+            let startup_permission_profile = app.config.permissions.permission_profile();
             let should_check = WindowsSandboxLevel::from_config(&app.config)
                 != WindowsSandboxLevel::Disabled
-                && matches!(
-                    &startup_sandbox_policy,
-                    codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
-                )
+                && managed_filesystem_sandbox_is_restricted(&startup_permission_profile)
                 && !app
                     .config
                     .notices
@@ -971,8 +911,13 @@ See the Codex keymap documentation for supported actions and examples."
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
-                let sandbox_policy = startup_sandbox_policy;
-                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
+                Self::spawn_world_writable_scan(
+                    cwd,
+                    env_map,
+                    logs_base_dir,
+                    startup_permission_profile,
+                    tx,
+                );
             }
         }
 

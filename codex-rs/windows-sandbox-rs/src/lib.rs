@@ -27,6 +27,8 @@ windows_modules!(
     policy,
     process,
     token,
+    wfp,
+    wfp_setup,
     winutil,
     workspace_acl
 );
@@ -201,15 +203,26 @@ pub use setup_error::setup_error_path;
 #[cfg(target_os = "windows")]
 pub use setup_error::write_setup_error_report;
 #[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use spawn_prep::LocalSid;
+#[cfg(target_os = "windows")]
 pub use token::convert_string_sid_to_sid;
 #[cfg(target_os = "windows")]
 pub use token::create_readonly_token_with_cap_from;
 #[cfg(target_os = "windows")]
+pub use token::create_readonly_token_with_caps_and_user_from;
+#[cfg(target_os = "windows")]
 pub use token::create_readonly_token_with_caps_from;
+#[cfg(target_os = "windows")]
+pub use token::create_workspace_write_token_with_caps_and_user_from;
 #[cfg(target_os = "windows")]
 pub use token::create_workspace_write_token_with_caps_from;
 #[cfg(target_os = "windows")]
 pub use token::get_current_token_for_restriction;
+#[cfg(target_os = "windows")]
+pub use wfp::install_wfp_filters_for_account;
+#[cfg(target_os = "windows")]
+pub use wfp_setup::install_wfp_filters;
 #[cfg(target_os = "windows")]
 pub use windows_impl::CaptureResult;
 #[cfg(target_os = "windows")]

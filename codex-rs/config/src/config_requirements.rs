@@ -89,6 +89,7 @@ pub struct ConfigRequirements {
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub managed_hooks: Option<ConstrainedWithSource<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
+    pub plugins: Option<Sourced<BTreeMap<String, PluginRequirementsToml>>>,
     pub exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
     /// Managed network constraints derived from requirements.
@@ -121,6 +122,7 @@ impl Default for ConfigRequirements {
             feature_requirements: None,
             managed_hooks: None,
             mcp_servers: None,
+            plugins: None,
             exec_policy: None,
             enforce_residency: ConstrainedWithSource::new(
                 Constrained::allow_any(/*initial_value*/ None),
@@ -149,6 +151,17 @@ pub enum McpServerIdentity {
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct McpServerRequirement {
     pub identity: McpServerIdentity,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginRequirementsToml {
+    pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
+}
+
+impl PluginRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.mcp_servers.as_ref().is_none_or(BTreeMap::is_empty)
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -633,6 +646,7 @@ pub struct ConfigRequirementsToml {
     pub feature_requirements: Option<FeatureRequirementsToml>,
     pub hooks: Option<ManagedHooksRequirementsToml>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
+    pub plugins: Option<BTreeMap<String, PluginRequirementsToml>>,
     pub apps: Option<AppsRequirementsToml>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
@@ -679,6 +693,7 @@ pub struct ConfigRequirementsWithSources {
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub hooks: Option<Sourced<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
+    pub plugins: Option<Sourced<BTreeMap<String, PluginRequirementsToml>>>,
     pub apps: Option<Sourced<AppsRequirementsToml>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
@@ -714,6 +729,7 @@ impl ConfigRequirementsWithSources {
             feature_requirements: _,
             hooks: _,
             mcp_servers: _,
+            plugins: _,
             apps: _,
             rules: _,
             enforce_residency: _,
@@ -742,6 +758,7 @@ impl ConfigRequirementsWithSources {
                 feature_requirements,
                 hooks,
                 mcp_servers,
+                plugins,
                 rules,
                 enforce_residency,
                 network,
@@ -768,6 +785,7 @@ impl ConfigRequirementsWithSources {
             feature_requirements,
             hooks,
             mcp_servers,
+            plugins,
             apps,
             rules,
             enforce_residency,
@@ -784,6 +802,7 @@ impl ConfigRequirementsWithSources {
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             hooks: hooks.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
+            plugins: plugins.map(|sourced| sourced.value),
             apps: apps.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
@@ -873,6 +892,10 @@ impl ConfigRequirementsToml {
                 .is_none_or(ManagedHooksRequirementsToml::is_empty)
             && self.mcp_servers.is_none()
             && self
+                .plugins
+                .as_ref()
+                .is_none_or(|plugins| plugins.values().all(PluginRequirementsToml::is_empty))
+            && self
                 .apps
                 .as_ref()
                 .is_none_or(AppsRequirementsToml::is_empty)
@@ -899,6 +922,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             feature_requirements,
             hooks,
             mcp_servers,
+            plugins,
             apps: _apps,
             rules,
             enforce_residency,
@@ -1133,6 +1157,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             feature_requirements,
             managed_hooks,
             mcp_servers,
+            plugins,
             exec_policy,
             enforce_residency,
             network,
@@ -1204,6 +1229,7 @@ mod tests {
             feature_requirements,
             hooks,
             mcp_servers,
+            plugins,
             apps,
             rules,
             enforce_residency,
@@ -1224,6 +1250,7 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             hooks: hooks.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            plugins: plugins.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             apps: apps.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             enforce_residency: enforce_residency
@@ -1269,6 +1296,7 @@ mod tests {
             feature_requirements: Some(feature_requirements.clone()),
             hooks: None,
             mcp_servers: None,
+            plugins: None,
             apps: None,
             rules: None,
             enforce_residency: Some(enforce_residency),
@@ -1301,6 +1329,7 @@ mod tests {
                 )),
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
@@ -1339,6 +1368,7 @@ mod tests {
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -1385,6 +1415,7 @@ mod tests {
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
+                plugins: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -2691,6 +2722,55 @@ command = "python3 /enterprise/hooks/pre.py"
                             identity: McpServerIdentity::Url {
                                 url: "https://example.com/mcp".to_string(),
                             },
+                        },
+                    ),
+                ]),
+                RequirementSource::Unknown,
+            ))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_plugin_mcp_server_requirements() -> Result<()> {
+        let toml_str = r#"
+            [plugins."sample@test".mcp_servers.sample.identity]
+            command = "sample-mcp"
+
+            [plugins."remote@test".mcp_servers.remote.identity]
+            url = "https://example.com/mcp"
+        "#;
+        let requirements: ConfigRequirements =
+            with_unknown_source(from_str(toml_str)?).try_into()?;
+
+        assert_eq!(
+            requirements.plugins,
+            Some(Sourced::new(
+                BTreeMap::from([
+                    (
+                        "remote@test".to_string(),
+                        PluginRequirementsToml {
+                            mcp_servers: Some(BTreeMap::from([(
+                                "remote".to_string(),
+                                McpServerRequirement {
+                                    identity: McpServerIdentity::Url {
+                                        url: "https://example.com/mcp".to_string(),
+                                    },
+                                },
+                            )])),
+                        },
+                    ),
+                    (
+                        "sample@test".to_string(),
+                        PluginRequirementsToml {
+                            mcp_servers: Some(BTreeMap::from([(
+                                "sample".to_string(),
+                                McpServerRequirement {
+                                    identity: McpServerIdentity::Command {
+                                        command: "sample-mcp".to_string(),
+                                    },
+                                },
+                            )])),
                         },
                     ),
                 ]),

@@ -38,6 +38,8 @@ use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
 use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
+use codex_protocol::models::ActivePermissionProfile as CoreActivePermissionProfile;
+use codex_protocol::models::ActivePermissionProfileModification as CoreActivePermissionProfileModification;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
 use codex_protocol::models::ManagedFileSystemPermissions as CoreManagedFileSystemPermissions;
@@ -469,6 +471,8 @@ v2_enum_from_core!(
         Project,
         Mdm,
         SessionFlags,
+        Plugin,
+        CloudRequirements,
         LegacyManagedConfigFile,
         LegacyManagedConfigMdm,
         Unknown,
@@ -1091,6 +1095,18 @@ pub enum ExternalAgentConfigMigrationItemType {
     #[serde(rename = "MCP_SERVER_CONFIG")]
     #[ts(rename = "MCP_SERVER_CONFIG")]
     McpServerConfig,
+    #[serde(rename = "SUBAGENTS")]
+    #[ts(rename = "SUBAGENTS")]
+    Subagents,
+    #[serde(rename = "HOOKS")]
+    #[ts(rename = "HOOKS")]
+    Hooks,
+    #[serde(rename = "COMMANDS")]
+    #[ts(rename = "COMMANDS")]
+    Commands,
+    #[serde(rename = "SESSIONS")]
+    #[ts(rename = "SESSIONS")]
+    Sessions,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -1108,8 +1124,56 @@ pub struct PluginsMigration {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct SessionMigration {
+    pub path: PathBuf,
+    pub cwd: PathBuf,
+    pub title: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HookMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SubagentMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct MigrationDetails {
+    #[serde(default)]
     pub plugins: Vec<PluginsMigration>,
+    #[serde(default)]
+    pub sessions: Vec<SessionMigration>,
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerMigration>,
+    #[serde(default)]
+    pub hooks: Vec<HookMigration>,
+    #[serde(default)]
+    pub subagents: Vec<SubagentMigration>,
+    #[serde(default)]
+    pub commands: Vec<CommandMigration>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -1645,6 +1709,109 @@ impl From<PermissionProfile> for CorePermissionProfile {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ActivePermissionProfile {
+    /// Identifier from `default_permissions` or the implicit built-in default,
+    /// such as `:workspace` or a user-defined `[permissions.<id>]` profile.
+    pub id: String,
+    /// Parent profile identifier once permissions profiles support
+    /// inheritance. This is currently always `null`.
+    #[serde(default)]
+    pub extends: Option<String>,
+    /// Bounded user-requested modifications applied on top of the named
+    /// profile, if any.
+    #[serde(default)]
+    pub modifications: Vec<ActivePermissionProfileModification>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum ActivePermissionProfileModification {
+    /// Additional concrete directory that should be writable.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    AdditionalWritableRoot { path: AbsolutePathBuf },
+}
+
+impl From<CoreActivePermissionProfileModification> for ActivePermissionProfileModification {
+    fn from(value: CoreActivePermissionProfileModification) -> Self {
+        match value {
+            CoreActivePermissionProfileModification::AdditionalWritableRoot { path } => {
+                Self::AdditionalWritableRoot { path }
+            }
+        }
+    }
+}
+
+impl From<ActivePermissionProfileModification> for CoreActivePermissionProfileModification {
+    fn from(value: ActivePermissionProfileModification) -> Self {
+        match value {
+            ActivePermissionProfileModification::AdditionalWritableRoot { path } => {
+                Self::AdditionalWritableRoot { path }
+            }
+        }
+    }
+}
+
+impl From<CoreActivePermissionProfile> for ActivePermissionProfile {
+    fn from(value: CoreActivePermissionProfile) -> Self {
+        Self {
+            id: value.id,
+            extends: value.extends,
+            modifications: value
+                .modifications
+                .into_iter()
+                .map(ActivePermissionProfileModification::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<ActivePermissionProfile> for CoreActivePermissionProfile {
+    fn from(value: ActivePermissionProfile) -> Self {
+        Self {
+            id: value.id,
+            extends: value.extends,
+            modifications: value
+                .modifications
+                .into_iter()
+                .map(CoreActivePermissionProfileModification::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum PermissionProfileSelectionParams {
+    /// Select a named built-in or user-defined profile and optionally apply
+    /// bounded modifications that Codex knows how to validate.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Profile {
+        id: String,
+        #[ts(optional = nullable)]
+        modifications: Option<Vec<PermissionProfileModificationParams>>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum PermissionProfileModificationParams {
+    /// Additional concrete directory that should be writable.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    AdditionalWritableRoot { path: AbsolutePathBuf },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct AdditionalPermissionProfile {
     /// Partial overlay used for per-command permission requests.
     pub network: Option<AdditionalNetworkPermissions>,
@@ -2113,9 +2280,12 @@ pub enum LoginAccountParams {
         #[ts(rename = "apiKey")]
         api_key: String,
     },
-    #[serde(rename = "chatgpt")]
-    #[ts(rename = "chatgpt")]
-    Chatgpt,
+    #[serde(rename = "chatgpt", rename_all = "camelCase")]
+    #[ts(rename = "chatgpt", rename_all = "camelCase")]
+    Chatgpt {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        codex_streamlined_login: bool,
+    },
     #[serde(rename = "chatgptDeviceCode")]
     #[ts(rename = "chatgptDeviceCode")]
     ChatgptDeviceCode,
@@ -2292,6 +2462,20 @@ pub struct GetAccountParams {
 pub struct GetAccountResponse {
     pub account: Option<Account>,
     pub requires_openai_auth: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelProviderCapabilitiesReadParams {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelProviderCapabilitiesReadResponse {
+    pub namespace_tools: bool,
+    pub image_generation: bool,
+    pub web_search: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
@@ -2862,6 +3046,25 @@ pub struct DeviceKeyPublicResponse {
     pub protection_class: DeviceKeyProtectionClass,
 }
 
+/// Current remote-control connection status and environment id exposed to clients.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlStatusChangedNotification {
+    pub status: RemoteControlConnectionStatus,
+    pub environment_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum RemoteControlConnectionStatus {
+    Disabled,
+    Connecting,
+    Connected,
+    Errored,
+}
+
 /// Audience for a remote-control client connection device-key proof.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
@@ -3365,11 +3568,12 @@ pub struct ThreadStartParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
-    /// Full permissions override for this thread. Cannot be combined with
-    /// `sandbox`.
-    #[experimental("thread/start.permissionProfile")]
+    /// Named profile selection for this thread. Cannot be combined with
+    /// `sandbox`. Use bounded `modifications` for supported turn/thread
+    /// adjustments instead of replacing the full permissions profile.
+    #[experimental("thread/start.permissions")]
     #[ts(optional = nullable)]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permissions: Option<PermissionProfileSelectionParams>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
     #[ts(optional = nullable)]
@@ -3446,14 +3650,20 @@ pub struct ThreadStartResponse {
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
-    /// Legacy sandbox policy retained for compatibility. New clients should use
-    /// `permissionProfile` when present as the canonical active permissions
-    /// view.
+    /// Legacy sandbox policy retained for compatibility. Experimental clients
+    /// should prefer `permissionProfile` when they need exact runtime
+    /// permissions.
     pub sandbox: SandboxPolicy,
-    /// Canonical active permissions view for this thread.
+    /// Full active permissions for this thread. `activePermissionProfile`
+    /// carries display/provenance metadata for this runtime profile.
     #[experimental("thread/start.permissionProfile")]
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
+    /// Named or implicit built-in profile that produced the active
+    /// permissions, when known.
+    #[experimental("thread/start.activePermissionProfile")]
+    #[serde(default)]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -3511,11 +3721,12 @@ pub struct ThreadResumeParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
-    /// Full permissions override for the resumed thread. Cannot be combined
-    /// with `sandbox`.
-    #[experimental("thread/resume.permissionProfile")]
+    /// Named profile selection for the resumed thread. Cannot be combined
+    /// with `sandbox`. Use bounded `modifications` for supported thread
+    /// adjustments instead of replacing the full permissions profile.
+    #[experimental("thread/resume.permissions")]
     #[ts(optional = nullable)]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permissions: Option<PermissionProfileSelectionParams>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -3552,14 +3763,20 @@ pub struct ThreadResumeResponse {
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
-    /// Legacy sandbox policy retained for compatibility. New clients should use
-    /// `permissionProfile` when present as the canonical active permissions
-    /// view.
+    /// Legacy sandbox policy retained for compatibility. Experimental clients
+    /// should prefer `permissionProfile` when they need exact runtime
+    /// permissions.
     pub sandbox: SandboxPolicy,
-    /// Canonical active permissions view for this thread.
+    /// Full active permissions for this thread. `activePermissionProfile`
+    /// carries display/provenance metadata for this runtime profile.
     #[experimental("thread/resume.permissionProfile")]
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
+    /// Named or implicit built-in profile that produced the active
+    /// permissions, when known.
+    #[experimental("thread/resume.activePermissionProfile")]
+    #[serde(default)]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -3608,11 +3825,12 @@ pub struct ThreadForkParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
-    /// Full permissions override for the forked thread. Cannot be combined
-    /// with `sandbox`.
-    #[experimental("thread/fork.permissionProfile")]
+    /// Named profile selection for the forked thread. Cannot be combined with
+    /// `sandbox`. Use bounded `modifications` for supported thread
+    /// adjustments instead of replacing the full permissions profile.
+    #[experimental("thread/fork.permissions")]
     #[ts(optional = nullable)]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permissions: Option<PermissionProfileSelectionParams>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -3649,14 +3867,20 @@ pub struct ThreadForkResponse {
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
-    /// Legacy sandbox policy retained for compatibility. New clients should use
-    /// `permissionProfile` when present as the canonical active permissions
-    /// view.
+    /// Legacy sandbox policy retained for compatibility. Experimental clients
+    /// should prefer `permissionProfile` when they need exact runtime
+    /// permissions.
     pub sandbox: SandboxPolicy,
-    /// Canonical active permissions view for this thread.
+    /// Full active permissions for this thread. `activePermissionProfile`
+    /// carries display/provenance metadata for this runtime profile.
     #[experimental("thread/fork.permissionProfile")]
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
+    /// Named or implicit built-in profile that produced the active
+    /// permissions, when known.
+    #[experimental("thread/fork.activePermissionProfile")]
+    #[serde(default)]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -4263,6 +4487,22 @@ pub struct SkillsListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct HooksListParams {
+    /// When empty, defaults to the current session working directory.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cwds: Vec<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HooksListResponse {
+    pub data: Vec<HooksListEntry>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct MarketplaceAddParams {
     pub source: String,
     #[ts(optional = nullable)]
@@ -4367,6 +4607,47 @@ pub struct PluginReadResponse {
     pub plugin: PluginDetail,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareSaveParams {
+    pub plugin_path: AbsolutePathBuf,
+    #[ts(optional = nullable)]
+    pub remote_plugin_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareSaveResponse {
+    pub remote_plugin_id: String,
+    pub share_url: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareListParams {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareListResponse {
+    pub data: Vec<PluginSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareDeleteParams {
+    pub remote_plugin_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareDeleteResponse {}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -4461,6 +4742,43 @@ pub struct SkillsListEntry {
     pub cwd: PathBuf,
     pub skills: Vec<SkillMetadata>,
     pub errors: Vec<SkillErrorInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HooksListEntry {
+    pub cwd: PathBuf,
+    pub hooks: Vec<HookMetadata>,
+    pub warnings: Vec<String>,
+    pub errors: Vec<HookErrorInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HookMetadata {
+    pub key: String,
+    pub event_name: HookEventName,
+    pub handler_type: HookHandlerType,
+    pub matcher: Option<String>,
+    pub command: Option<String>,
+    pub timeout_sec: u64,
+    pub status_message: Option<String>,
+    pub source_path: AbsolutePathBuf,
+    pub source: HookSource,
+    pub plugin_id: Option<String>,
+    pub display_order: i64,
+    pub enabled: bool,
+    pub is_managed: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HookErrorInfo {
+    pub path: PathBuf,
+    pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4975,7 +5293,7 @@ pub struct ThreadRealtimeStartParams {
     #[ts(optional = nullable)]
     pub prompt: Option<Option<String>>,
     #[ts(optional = nullable)]
-    pub session_id: Option<String>,
+    pub realtime_session_id: Option<String>,
     #[ts(optional = nullable)]
     pub transport: Option<ThreadRealtimeStartTransport>,
     #[ts(optional = nullable)]
@@ -5065,7 +5383,7 @@ pub struct ThreadRealtimeListVoicesResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartedNotification {
     pub thread_id: String,
-    pub session_id: Option<String>,
+    pub realtime_session_id: Option<String>,
     pub version: RealtimeConversationVersion,
 }
 
@@ -5191,11 +5509,13 @@ pub struct TurnStartParams {
     /// Override the sandbox policy for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
-    /// Override the full permissions profile for this turn and subsequent
-    /// turns. Cannot be combined with `sandboxPolicy`.
-    #[experimental("turn/start.permissionProfile")]
+    /// Select a named permissions profile for this turn and subsequent turns.
+    /// Cannot be combined with `sandboxPolicy`. Use bounded `modifications`
+    /// for supported turn adjustments instead of replacing the full
+    /// permissions profile.
+    #[experimental("turn/start.permissions")]
     #[ts(optional = nullable)]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permissions: Option<PermissionProfileSelectionParams>,
     /// Override the model for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub model: Option<String>,
@@ -6672,6 +6992,9 @@ pub struct CommandExecOutputDeltaNotification {
     pub cap_reached: bool,
 }
 
+/// Deprecated legacy notification for `apply_patch` textual output.
+///
+/// The server no longer emits this notification.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -7841,7 +8164,46 @@ mod tests {
                         marketplace_name: "team-marketplace".to_string(),
                         plugin_names: vec!["asana".to_string()],
                     }],
+                    ..Default::default()
                 }),
+            }
+        );
+    }
+
+    #[test]
+    fn external_agent_config_import_params_accept_legacy_plugin_details() {
+        let params: ExternalAgentConfigImportParams = serde_json::from_value(json!({
+            "migrationItems": [{
+                "itemType": "PLUGINS",
+                "description": "Install supported plugins from Claude settings",
+                "cwd": absolute_path_string("repo"),
+                "details": {
+                    "plugins": [
+                        {
+                            "marketplaceName": "team-marketplace",
+                            "pluginNames": ["asana"]
+                        }
+                    ]
+                }
+            }]
+        }))
+        .expect("legacy plugin import params should deserialize");
+
+        assert_eq!(
+            params,
+            ExternalAgentConfigImportParams {
+                migration_items: vec![ExternalAgentConfigMigrationItem {
+                    item_type: ExternalAgentConfigMigrationItemType::Plugins,
+                    description: "Install supported plugins from Claude settings".to_string(),
+                    cwd: Some(PathBuf::from(absolute_path_string("repo"))),
+                    details: Some(MigrationDetails {
+                        plugins: vec![PluginsMigration {
+                            marketplace_name: "team-marketplace".to_string(),
+                            plugin_names: vec!["asana".to_string()],
+                        }],
+                        ..Default::default()
+                    }),
+                }],
             }
         );
     }
@@ -10286,6 +10648,101 @@ mod tests {
     }
 
     #[test]
+    fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
+        let plugin_path = if cfg!(windows) {
+            r"C:\plugins\gmail"
+        } else {
+            "/plugins/gmail"
+        };
+        let plugin_path = AbsolutePathBuf::try_from(PathBuf::from(plugin_path)).unwrap();
+        let plugin_path_json = plugin_path.as_path().display().to_string();
+
+        assert_eq!(
+            serde_json::to_value(PluginShareSaveParams {
+                plugin_path: plugin_path.clone(),
+                remote_plugin_id: None,
+            })
+            .unwrap(),
+            json!({
+                "pluginPath": plugin_path_json,
+                "remotePluginId": null,
+            }),
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginShareSaveParams {
+                plugin_path,
+                remote_plugin_id: Some(
+                    "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                ),
+            })
+            .unwrap(),
+            json!({
+                "pluginPath": plugin_path_json,
+                "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+            }),
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginShareSaveResponse {
+                remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                share_url: String::new(),
+            })
+            .unwrap(),
+            json!({
+                "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+                "shareUrl": "",
+            }),
+        );
+
+        assert_eq!(
+            serde_json::from_value::<PluginShareListParams>(json!({})).unwrap(),
+            PluginShareListParams {},
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginShareDeleteParams {
+                remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+            })
+            .unwrap(),
+            json!({
+                "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+            }),
+        );
+    }
+
+    #[test]
+    fn plugin_share_list_response_serializes_plugin_summaries() {
+        assert_eq!(
+            serde_json::to_value(PluginShareListResponse {
+                data: vec![PluginSummary {
+                    id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                    name: "gmail".to_string(),
+                    source: PluginSource::Remote,
+                    installed: false,
+                    enabled: false,
+                    install_policy: PluginInstallPolicy::Available,
+                    auth_policy: PluginAuthPolicy::OnUse,
+                    interface: None,
+                }],
+            })
+            .unwrap(),
+            json!({
+                "data": [{
+                    "id": "plugins~Plugin_00000000000000000000000000000000",
+                    "name": "gmail",
+                    "source": { "type": "remote" },
+                    "installed": false,
+                    "enabled": false,
+                    "installPolicy": "AVAILABLE",
+                    "authPolicy": "ON_USE",
+                    "interface": null,
+                }],
+            }),
+        );
+    }
+
+    #[test]
     fn plugin_uninstall_params_serialization_omits_force_remote_sync() {
         assert_eq!(
             serde_json::to_value(PluginUninstallParams {
@@ -10604,6 +11061,9 @@ mod tests {
         assert_eq!(start.permission_profile, None);
         assert_eq!(resume.permission_profile, None);
         assert_eq!(fork.permission_profile, None);
+        assert_eq!(start.active_permission_profile, None);
+        assert_eq!(resume.active_permission_profile, None);
+        assert_eq!(fork.active_permission_profile, None);
     }
 
     #[test]
@@ -10631,7 +11091,7 @@ mod tests {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
+            permissions: None,
             model: None,
             service_tier: None,
             effort: None,

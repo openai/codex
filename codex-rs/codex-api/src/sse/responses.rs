@@ -28,6 +28,7 @@ use tracing::trace;
 
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
 const OPENAI_MODEL_HEADER: &str = "openai-model";
+const REQUEST_ID_HEADER: &str = "x-request-id";
 const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
 
 /// Streams SSE events from an on-disk fixture for tests.
@@ -53,7 +54,10 @@ pub fn stream_from_fixture(
         idle_timeout,
         /*telemetry*/ None,
     ));
-    Ok(ResponseStream { rx_event })
+    Ok(ResponseStream {
+        rx_event,
+        upstream_request_id: None,
+    })
 }
 
 pub fn spawn_response_stream(
@@ -77,6 +81,11 @@ pub fn spawn_response_stream(
         .headers
         .get(X_REASONING_INCLUDED_HEADER)
         .is_some();
+    let upstream_request_id = stream_response
+        .headers
+        .get(REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
     if let Some(turn_state) = turn_state.as_ref()
         && let Some(header_value) = stream_response
             .headers
@@ -104,7 +113,10 @@ pub fn spawn_response_stream(
         process_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
     });
 
-    ResponseStream { rx_event }
+    ResponseStream {
+        rx_event,
+        upstream_request_id,
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1058,8 +1070,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_response_stream_emits_server_model_header() {
+    async fn spawn_response_stream_emits_header_events() {
         let mut headers = HeaderMap::new();
+        headers.insert(REQUEST_ID_HEADER, HeaderValue::from_static("req-1"));
         headers.insert(
             OPENAI_MODEL_HEADER,
             HeaderValue::from_static(CYBER_RESTRICTED_MODEL_FOR_TESTS),
@@ -1077,13 +1090,13 @@ mod tests {
             /*telemetry*/ None,
             /*turn_state*/ None,
         );
+        assert_eq!(stream.upstream_request_id.as_deref(), Some("req-1"));
         let event = stream
             .rx_event
             .recv()
             .await
             .expect("expected server model event")
             .expect("expected ok event");
-
         match event {
             ResponseEvent::ServerModel(model) => {
                 assert_eq!(model, CYBER_RESTRICTED_MODEL_FOR_TESTS);

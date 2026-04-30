@@ -31,11 +31,11 @@ use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
 pub(crate) use bottom_pane_view::BottomPaneView;
 use bottom_pane_view::ViewCompletion;
+use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_core_skills::model::SkillMetadata;
 use codex_features::Features;
 use codex_file_search::FileMatch;
 use codex_plugin::PluginCapabilitySummary;
-use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -112,6 +112,7 @@ pub(crate) use list_selection_view::popup_content_width;
 pub(crate) use list_selection_view::side_by_side_layout_widths;
 pub(crate) use memories_settings_view::MemoriesSettingsView;
 mod feedback_view;
+mod hooks_browser_view;
 pub(crate) use feedback_view::FeedbackAudience;
 pub(crate) use feedback_view::feedback_classification;
 pub(crate) use feedback_view::feedback_disabled_params;
@@ -138,6 +139,7 @@ mod selection_tabs;
 mod textarea;
 mod unified_exec_footer;
 pub(crate) use feedback_view::FeedbackNoteView;
+pub(crate) use hooks_browser_view::HooksBrowserView;
 pub(crate) use selection_tabs::SelectionTab;
 
 /// How long the "press again to quit" hint stays visible.
@@ -776,6 +778,11 @@ impl BottomPane {
         self.composer.current_text_with_pending()
     }
 
+    /// Returns whether the composer currently accepts interactive draft edits.
+    pub(crate) fn composer_input_enabled(&self) -> bool {
+        self.composer.input_enabled()
+    }
+
     pub(crate) fn composer_pending_pastes(&self) -> Vec<(String, String)> {
         self.composer.pending_pastes()
     }
@@ -788,6 +795,18 @@ impl BottomPane {
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.composer.set_footer_hint_override(items);
         self.request_redraw();
+    }
+
+    /// Applies the externally decided Plan-mode nudge visibility to the footer presentation.
+    pub(crate) fn set_plan_mode_nudge_visible(&mut self, visible: bool) {
+        if self.composer.set_plan_mode_nudge_visible(visible) {
+            self.request_redraw();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn plan_mode_nudge_visible(&self) -> bool {
+        self.composer.plan_mode_nudge_visible()
     }
 
     pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
@@ -1190,7 +1209,7 @@ impl BottomPane {
     }
 
     /// Called when the agent requests user input.
-    pub fn push_user_input_request(&mut self, request: RequestUserInputEvent) {
+    pub fn push_user_input_request(&mut self, request: ToolRequestUserInputParams) {
         let request = if let Some(view) = self.view_stack.last_mut() {
             match view.try_consume_user_input_request(request) {
                 Some(request) => request,
@@ -1552,14 +1571,13 @@ impl Renderable for BottomPane {
 mod tests {
     use super::*;
     use crate::app::app_server_requests::ResolvedAppServerRequest;
+    use crate::app_command::AppCommand as Op;
     use crate::app_event::AppEvent;
     use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
     use crate::status_indicator_widget::StatusDetailsCapitalization;
     use crate::test_support::PathBufExt;
     use crate::test_support::test_path_buf;
-    use codex_protocol::protocol::Op;
-    use codex_protocol::protocol::ReviewDecision;
-    use codex_protocol::protocol::SkillScope;
+    use codex_app_server_protocol::CommandExecutionApprovalDecision;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyEventKind;
@@ -1619,8 +1637,8 @@ mod tests {
             command: vec!["echo".into(), "ok".into()],
             reason: None,
             available_decisions: vec![
-                codex_protocol::protocol::ReviewDecision::Approved,
-                codex_protocol::protocol::ReviewDecision::Abort,
+                CommandExecutionApprovalDecision::Accept,
+                CommandExecutionApprovalDecision::Cancel,
             ],
             network_approval_context: None,
             additional_permissions: None,
@@ -1882,7 +1900,10 @@ mod tests {
                 approval_decision = Some(decision);
             }
         }
-        assert_eq!(approval_decision, Some(ReviewDecision::Approved));
+        assert_eq!(
+            approval_decision,
+            Some(CommandExecutionApprovalDecision::Accept)
+        );
     }
 
     #[test]
@@ -2339,7 +2360,7 @@ mod tests {
                 dependencies: None,
                 policy: None,
                 path_to_skills_md: test_path_buf("/tmp/test-skill/SKILL.md").abs(),
-                scope: SkillScope::User,
+                scope: crate::test_support::skill_scope_user(),
             }]),
         });
 

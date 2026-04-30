@@ -23,7 +23,6 @@ use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
 use codex_config::loader::load_config_layers_state;
 use codex_exec_server::LOCAL_FS;
-use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::review_prompts::resolve_review_request;
@@ -162,6 +161,7 @@ pub(super) async fn user_input_or_turn_inner(
                     approvals_reviewer,
                     sandbox_policy: Some(sandbox_policy),
                     permission_profile,
+                    active_permission_profile: None,
                     windows_sandbox_level: None,
                     collaboration_mode,
                     reasoning_summary: summary,
@@ -181,6 +181,7 @@ pub(super) async fn user_input_or_turn_inner(
             approvals_reviewer,
             sandbox_policy,
             permission_profile,
+            active_permission_profile,
             windows_sandbox_level,
             model,
             effort,
@@ -212,6 +213,7 @@ pub(super) async fn user_input_or_turn_inner(
                     approvals_reviewer,
                     sandbox_policy,
                     permission_profile,
+                    active_permission_profile,
                     windows_sandbox_level,
                     collaboration_mode,
                     reasoning_summary: summary,
@@ -619,10 +621,7 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
             }
         };
         let effective_skill_roots = plugins_manager
-            .effective_skill_roots_for_layer_stack(
-                &config_layer_stack,
-                config.features.enabled(Feature::Plugins),
-            )
+            .effective_skill_roots_for_layer_stack(&config_layer_stack, &config)
             .await;
         let skills_input = crate::SkillsLoadInput::new(
             cwd_abs.clone(),
@@ -883,6 +882,11 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         .unified_exec_manager
         .terminate_all_processes()
         .await;
+    let mcp_shutdown = {
+        let mut manager = sess.services.mcp_connection_manager.write().await;
+        manager.begin_shutdown()
+    };
+    mcp_shutdown.await;
     sess.guardian_review_session.shutdown().await;
     info!("Shutting down Codex instance");
     let history = sess.clone_history().await;
@@ -1166,8 +1170,19 @@ pub(super) async fn submission_loop(
             break;
         }
     }
-    // Also drain cached guardian state if the submission loop exits because
-    // the channel closed without receiving an explicit shutdown op.
+    // If the submission loop exits because the channel closed without an
+    // explicit shutdown op, still run process teardown for child processes
+    // owned by this session.
+    sess.services
+        .unified_exec_manager
+        .terminate_all_processes()
+        .await;
+    let mcp_shutdown = {
+        let mut manager = sess.services.mcp_connection_manager.write().await;
+        manager.begin_shutdown()
+    };
+    mcp_shutdown.await;
+    // Also drain cached guardian state on this implicit shutdown path.
     sess.guardian_review_session.shutdown().await;
     debug!("Agent loop exited");
 }

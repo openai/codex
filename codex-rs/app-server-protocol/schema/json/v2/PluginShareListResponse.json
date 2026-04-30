@@ -1,0 +1,291 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "AbsolutePathBuf": {
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "type": "string"
+    },
+    "PluginAuthPolicy": {
+      "enum": [
+        "ON_INSTALL",
+        "ON_USE"
+      ],
+      "type": "string"
+    },
+    "PluginInstallPolicy": {
+      "enum": [
+        "NOT_AVAILABLE",
+        "AVAILABLE",
+        "INSTALLED_BY_DEFAULT"
+      ],
+      "type": "string"
+    },
+    "PluginInterface": {
+      "properties": {
+        "brandColor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "composerIcon": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Local composer icon path, resolved from the installed plugin package."
+        },
+        "composerIconUrl": {
+          "description": "Remote composer icon URL from the plugin catalog.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "defaultPrompt": {
+          "description": "Starter prompts for the plugin. Capped at 3 entries with a maximum of 128 characters per entry.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "developerName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "displayName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "logo": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Local logo path, resolved from the installed plugin package."
+        },
+        "logoUrl": {
+          "description": "Remote logo URL from the plugin catalog.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "longDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "privacyPolicyUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "screenshotUrls": {
+          "description": "Remote screenshot URLs from the plugin catalog.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "screenshots": {
+          "description": "Local screenshot paths, resolved from the installed plugin package.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        },
+        "shortDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "termsOfServiceUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "websiteUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "capabilities",
+        "screenshotUrls",
+        "screenshots"
+      ],
+      "type": "object"
+    },
+    "PluginSource": {
+      "oneOf": [
+        {
+          "properties": {
+            "path": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "local"
+              ],
+              "title": "LocalPluginSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "LocalPluginSource",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "refName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sha": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "git"
+              ],
+              "title": "GitPluginSourceType",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "title": "GitPluginSource",
+          "type": "object"
+        },
+        {
+          "description": "The plugin is available in the remote catalog. Download metadata is kept server-side and is not exposed through the app-server API.",
+          "properties": {
+            "type": {
+              "enum": [
+                "remote"
+              ],
+              "title": "RemotePluginSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RemotePluginSource",
+          "type": "object"
+        }
+      ]
+    },
+    "PluginSummary": {
+      "properties": {
+        "authPolicy": {
+          "$ref": "#/definitions/PluginAuthPolicy"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "installPolicy": {
+          "$ref": "#/definitions/PluginInstallPolicy"
+        },
+        "installed": {
+          "type": "boolean"
+        },
+        "interface": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PluginInterface"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/definitions/PluginSource"
+        }
+      },
+      "required": [
+        "authPolicy",
+        "enabled",
+        "id",
+        "installPolicy",
+        "installed",
+        "name",
+        "source"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "data": {
+      "items": {
+        "$ref": "#/definitions/PluginSummary"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "data"
+  ],
+  "title": "PluginShareListResponse",
+  "type": "object"
+}

@@ -1,6 +1,7 @@
 use crate::config::OtelExporter;
 use crate::config::OtelHttpProtocol;
 use crate::config::OtelSettings;
+use crate::config::StatsigMetricsSettings;
 use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
 use crate::targets::is_log_export_target;
@@ -86,6 +87,11 @@ impl OtelProvider {
 
         if let Some(metrics) = metrics.as_ref() {
             crate::metrics::install_global(metrics.clone());
+            if matches!(settings.metrics_exporter, OtelExporter::Statsig) {
+                crate::metrics::install_global_statsig_settings(StatsigMetricsSettings {
+                    environment: settings.environment.clone(),
+                });
+            }
         }
 
         if !log_enabled && !trace_enabled && metrics.is_none() {

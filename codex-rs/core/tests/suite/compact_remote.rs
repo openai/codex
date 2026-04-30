@@ -171,7 +171,7 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
-            session_id: None,
+            realtime_session_id: None,
             transport: None,
             voice: None,
         }))
@@ -187,7 +187,11 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
 
     wait_for_event_match(codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+            payload:
+                RealtimeEvent::SessionUpdated {
+                    realtime_session_id: session_id,
+                    ..
+                },
         }) => Some(session_id.clone()),
         _ => None,
     })
@@ -441,6 +445,7 @@ async fn remote_compact_filters_deferred_dynamic_tools() -> Result<()> {
         .thread_manager
         .start_thread_with_tools(
             test.config.clone(),
+            codex_core::thread_store_from_config(&test.config),
             dynamic_tools,
             /*persist_extended_history*/ false,
         )

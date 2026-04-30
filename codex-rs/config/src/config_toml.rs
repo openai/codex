@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::HookEventsToml;
+use crate::HooksToml;
 use crate::permissions_toml::PermissionsToml;
 use crate::profile_toml::ConfigProfile;
 use crate::types::AnalyticsConfigToml;
@@ -114,7 +114,8 @@ pub struct ConfigToml {
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
-    /// Default named permissions profile to apply from the `[permissions]`
+    /// Default permissions profile to apply. Names starting with `:` refer to
+    /// built-in profiles; other names are resolved from the `[permissions]`
     /// table.
     pub default_permissions: Option<String>,
 
@@ -342,8 +343,8 @@ pub struct ConfigToml {
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
 
-    /// Lifecycle hooks configured inline in TOML.
-    pub hooks: Option<HookEventsToml>,
+    /// Lifecycle hooks configured inline in TOML plus user-level overrides.
+    pub hooks: Option<HooksToml>,
 
     /// User-level plugin config entries keyed by plugin name.
     #[serde(default)]

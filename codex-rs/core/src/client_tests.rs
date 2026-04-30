@@ -282,7 +282,12 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
     let item = output_message("msg-1", "partial answer");
     let api_stream = futures::stream::iter([Ok(ResponseEvent::OutputItemDone(item))])
         .chain(futures::stream::pending());
-    let (mut stream, _) = super::map_response_stream(api_stream, test_session_telemetry(), attempt);
+    let (mut stream, _) = super::map_response_events(
+        /*upstream_request_id*/ None,
+        api_stream,
+        test_session_telemetry(),
+        attempt,
+    );
 
     let observed = stream
         .next()
@@ -332,7 +337,12 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
         notify: Arc::clone(&backpressured_item_yielded),
     };
 
-    let (stream, _) = super::map_response_stream(api_stream, test_session_telemetry(), attempt);
+    let (stream, _) = super::map_response_events(
+        /*upstream_request_id*/ None,
+        api_stream,
+        test_session_telemetry(),
+        attempt,
+    );
 
     // Fill the mapper channel with non-terminal events, then yield one output
     // item. The mapper has observed that item and is blocked trying to send it

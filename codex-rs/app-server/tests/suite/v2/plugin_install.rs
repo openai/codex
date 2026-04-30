@@ -177,7 +177,6 @@ async fn plugin_install_rejects_remote_marketplace_when_remote_plugin_is_disable
             .message
             .contains("remote plugin install is not enabled")
     );
-    assert!(err.error.message.contains("chatgpt-global"));
     Ok(())
 }
 
@@ -405,11 +404,6 @@ async fn plugin_install_rejects_invalid_remote_plugin_name() -> Result<()> {
 
     assert_eq!(err.error.code, -32600);
     assert!(err.error.message.contains("invalid remote plugin id"));
-    assert!(
-        err.error
-            .message
-            .contains("only ASCII letters, digits, `_`, `-`, and `~` are allowed")
-    );
     Ok(())
 }
 
@@ -448,7 +442,8 @@ async fn plugin_install_rejects_when_workspace_codex_plugins_disabled() -> Resul
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_string(r#"{"beta_settings":{"plugins":false}}"#),
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"beta_settings":{"enable_plugins":false}}"#),
         )
         .mount(&server)
         .await;
@@ -1313,7 +1308,7 @@ async fn send_remote_plugin_install_request(
 ) -> Result<i64> {
     mcp.send_plugin_install_request(PluginInstallParams {
         marketplace_path: None,
-        remote_marketplace_name: Some("chatgpt-global".to_string()),
+        remote_marketplace_name: Some("caller-marketplace-is-ignored".to_string()),
         plugin_name: remote_plugin_id.to_string(),
     })
     .await

@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 
+use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
@@ -40,6 +41,8 @@ use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::RemoteControlStatusChangedNotification;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
 use codex_config::ConfigLoadError;
@@ -67,6 +70,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
+mod analytics_utils;
 mod app_server_tracing;
 mod bespoke_event_handling;
 mod codex_message_processor;
@@ -75,6 +79,7 @@ mod config;
 mod config_api;
 mod config_manager;
 mod config_manager_service;
+mod connection_rpc_gate;
 mod device_key_api;
 mod dynamic_tools;
 mod error_code;
@@ -87,6 +92,7 @@ pub mod in_process;
 mod message_processor;
 mod models;
 mod outgoing_message;
+mod request_serialization;
 mod server_request_error;
 mod thread_state;
 mod thread_status;
@@ -414,12 +420,15 @@ pub async fn run_main_with_transport_options(
     auth: AppServerWebsocketAuthSettings,
     runtime_options: AppServerRuntimeOptions,
 ) -> IoResult<()> {
-    let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::from_env(
-        ExecServerRuntimePaths::from_optional_paths(
-            arg0_paths.codex_self_exe.clone(),
-            arg0_paths.codex_linux_sandbox_exe.clone(),
-        )?,
-    )));
+    let environment_manager = Arc::new(
+        EnvironmentManager::new(EnvironmentManagerArgs::new(
+            ExecServerRuntimePaths::from_optional_paths(
+                arg0_paths.codex_self_exe.clone(),
+                arg0_paths.codex_linux_sandbox_exe.clone(),
+            )?,
+        ))
+        .await,
+    );
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);
@@ -562,12 +571,13 @@ pub async fn run_main_with_transport_options(
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-    let state_db = codex_state::StateRuntime::init(
+    let state_db_result = codex_state::StateRuntime::init(
         config.sqlite_home.clone(),
         config.model_provider_id.clone(),
     )
-    .await
-    .ok();
+    .await;
+    let state_db_init_error = state_db_result.as_ref().err().map(ToString::to_string);
+    let state_db = state_db_result.ok();
     let log_db = state_db.clone().map(log_db::start);
     let log_db_layer = log_db
         .clone()
@@ -587,6 +597,9 @@ pub async fn run_main_with_transport_options(
             Some(details) => error!("{} {}", warning.summary, details),
             None => error!("{}", warning.summary),
         }
+    }
+    if let Some(err) = &state_db_init_error {
+        error!("failed to initialize sqlite state db: {err}");
     }
 
     let transport_shutdown_token = CancellationToken::new();
@@ -633,11 +646,19 @@ pub async fn run_main_with_transport_options(
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
-    let remote_control_enabled = config.features.enabled(Feature::RemoteControl);
+    let remote_control_config_enabled = config.features.enabled(Feature::RemoteControl);
+    let remote_control_enabled = remote_control_config_enabled && state_db.is_some();
+    if remote_control_config_enabled && state_db.is_none() {
+        error!("remote control disabled because sqlite state db is unavailable");
+    }
     if transport_accept_handles.is_empty() && !remote_control_enabled {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
-            "no transport configured; use --listen or enable remote control",
+            if remote_control_config_enabled && state_db.is_none() {
+                "no transport configured; remote control disabled because sqlite state db is unavailable"
+            } else {
+                "no transport configured; use --listen or enable remote control"
+            },
         ));
     }
 
@@ -709,12 +730,19 @@ pub async fn run_main_with_transport_options(
     });
 
     let processor_handle = tokio::spawn({
-        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
-        let outbound_control_tx = outbound_control_tx;
         let auth_manager =
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+        let analytics_events_client =
+            analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
+        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
+            outgoing_tx,
+            analytics_events_client.clone(),
+        ));
+        let initialize_notification_sender = outgoing_message_sender.clone();
+        let outbound_control_tx = outbound_control_tx;
         let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
+            analytics_events_client,
             arg0_paths,
             config: Arc::new(config),
             config_manager,
@@ -725,12 +753,14 @@ pub async fn run_main_with_transport_options(
             session_source,
             auth_manager,
             rpc_transport: analytics_rpc_transport(&transport),
-            remote_control_handle: Some(remote_control_handle),
+            remote_control_handle: Some(remote_control_handle.clone()),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,
         }));
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
+        let mut remote_control_status_rx = remote_control_handle.status_receiver();
+        let mut remote_control_status = remote_control_status_rx.borrow().clone();
         let transport_shutdown_token = transport_shutdown_token.clone();
         async move {
             let mut listen_for_threads = true;
@@ -809,9 +839,9 @@ pub async fn run_main_with_transport_options(
                                 );
                             }
                             TransportEvent::ConnectionClosed { connection_id } => {
-                                if connections.remove(&connection_id).is_none() {
+                                let Some(connection_state) = connections.remove(&connection_id) else {
                                     continue;
-                                }
+                                };
                                 if outbound_control_tx
                                     .send(OutboundControlEvent::Closed { connection_id })
                                     .await
@@ -819,7 +849,7 @@ pub async fn run_main_with_transport_options(
                                 {
                                     break;
                                 }
-                                processor.connection_closed(connection_id).await;
+                                processor.connection_closed(connection_id, &connection_state.session).await;
                                 if shutdown_when_no_connections && connections.is_empty() {
                                     break;
                                 }
@@ -870,6 +900,14 @@ pub async fn run_main_with_transport_options(
                                                     connection_id,
                                                 )
                                                 .await;
+                                            initialize_notification_sender
+                                                .send_server_notification_to_connections(
+                                                    &[connection_id],
+                                                    ServerNotification::RemoteControlStatusChanged(
+                                                        remote_control_status.clone(),
+                                                    ),
+                                                )
+                                                .await;
                                             processor.connection_initialized(connection_id).await;
                                             connection_state
                                                 .outbound_initialized
@@ -900,6 +938,24 @@ pub async fn run_main_with_transport_options(
                                 }
                             }
                         }
+                    }
+                    changed = remote_control_status_rx.changed() => {
+                        if changed.is_err() {
+                            continue;
+                        }
+                        let status = remote_control_status_rx.borrow().clone();
+                        if remote_control_status == status {
+                            continue;
+                        }
+                        remote_control_status = status.clone();
+                        initialize_notification_sender
+                            .send_server_notification(ServerNotification::RemoteControlStatusChanged(
+                                RemoteControlStatusChangedNotification {
+                                    status: status.status,
+                                    environment_id: status.environment_id,
+                                },
+                            ))
+                            .await;
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
@@ -933,6 +989,12 @@ pub async fn run_main_with_transport_options(
             }
 
             if !shutdown_state.forced() {
+                futures::future::join_all(
+                    connections
+                        .values()
+                        .map(|connection_state| connection_state.session.rpc_gate.shutdown()),
+                )
+                .await;
                 processor.drain_background_tasks().await;
                 processor.shutdown_threads().await;
             }

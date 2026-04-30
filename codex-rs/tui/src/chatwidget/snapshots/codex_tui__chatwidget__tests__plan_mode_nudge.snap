@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/plan_mode.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+› make a plan
+
+  Create a plan?  shift + tab use Plan mode   esc dismiss

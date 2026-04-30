@@ -125,7 +125,8 @@ async fn experimental_feature_list_marks_apps_and_plugins_disabled_by_workspace_
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_string(r#"{"beta_settings":{"plugins":false}}"#),
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"beta_settings":{"enable_plugins":false}}"#),
         )
         .mount(&server)
         .await;
@@ -307,6 +308,24 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
 }
 
 #[tokio::test]
+async fn experimental_feature_enablement_set_allows_remote_control() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let remote_control_enabled = false;
+    let enablement = BTreeMap::from([("remote_control".to_string(), remote_control_enabled)]);
+
+    let actual = set_experimental_feature_enablement(&mut mcp, enablement.clone()).await?;
+
+    assert_eq!(
+        actual,
+        ExperimentalFeatureEnablementSetResponse { enablement }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn experimental_feature_enablement_set_empty_map_is_no_op() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -363,7 +382,7 @@ async fn experimental_feature_enablement_set_rejects_non_allowlisted_feature() -
     );
     assert!(
         error.message.contains(
-            "apps, memories, plugins, tool_search, tool_suggest, tool_call_mcp_elicitation"
+            "apps, memories, plugins, remote_control, tool_search, tool_suggest, tool_call_mcp_elicitation"
         ),
         "{}",
         error.message

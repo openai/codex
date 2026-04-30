@@ -20,6 +20,7 @@ use codex_tools::AdditionalProperties;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
 use codex_tools::JsonSchema;
+use codex_tools::LoadableToolSpec;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ShellCommandBackendConfig;
@@ -40,6 +41,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::*;
+use crate::tools::tool_search_entry::build_tool_search_entries_for_config;
 
 fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> rmcp::model::Tool {
     rmcp::model::Tool {
@@ -294,31 +296,6 @@ fn build_specs_with_unavailable_tools(
         /*discoverable_tools*/ None,
         dynamic_tools,
     )
-}
-
-#[tokio::test]
-async fn model_provided_unified_exec_is_blocked_for_windows_sandboxed_policies() {
-    let mut model_info = model_info_from_models_json("gpt-5.4").await;
-    model_info.shell_type = ConfigShellToolType::UnifiedExec;
-    let features = Features::with_defaults();
-    let available_models = Vec::new();
-    let config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        image_generation_tool_auth_allowed: true,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        permission_profile: &PermissionProfile::workspace_write(),
-        windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
-    });
-
-    let expected_shell_type = if cfg!(target_os = "windows") {
-        ConfigShellToolType::ShellCommand
-    } else {
-        ConfigShellToolType::UnifiedExec
-    };
-    assert_eq!(config.shell_type, expected_shell_type);
 }
 
 #[tokio::test]
@@ -785,6 +762,35 @@ async fn spawn_agent_description_uses_configured_usage_hint_text() {
 }
 
 #[tokio::test]
+async fn multi_agent_v2_wait_agent_schema_uses_configured_min_timeout() {
+    let wait_agent_min_timeout_ms = Some(60_000);
+    let tools_config = multi_agent_v2_tools_config()
+        .await
+        .with_wait_agent_min_timeout_ms(wait_agent_min_timeout_ms);
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    )
+    .build();
+    let wait_agent = find_tool(&tools, "wait_agent");
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &wait_agent.spec else {
+        panic!("wait_agent should be a function tool");
+    };
+    let timeout_description = parameters
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.get("timeout_ms"))
+        .and_then(|schema| schema.description.as_deref());
+
+    assert_eq!(
+        timeout_description,
+        Some("Optional timeout in milliseconds. Defaults to 60000, min 60000, max 3600000.")
+    );
+}
+
+#[tokio::test]
 async fn tool_suggest_requires_apps_and_plugins_features() {
     let model_info = search_capable_model_info().await;
     let discoverable_tools = Some(vec![discoverable_connector(
@@ -999,6 +1005,62 @@ async fn search_tool_registers_namespaced_mcp_tool_aliases() {
     assert!(registry.has_handler(&ToolName::plain(TOOL_SEARCH_TOOL_NAME)));
     assert!(registry.has_handler(&app_alias));
     assert!(registry.has_handler(&mcp_alias));
+}
+
+#[tokio::test]
+async fn tool_search_entries_skip_namespace_outputs_when_namespace_tools_are_disabled() {
+    let model_info = search_capable_model_info().await;
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ToolSearch);
+    let available_models = Vec::new();
+    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    tools_config.namespace_tools = false;
+    let mcp_tools = HashMap::from([(
+        "mcp__test_server__echo".to_string(),
+        mcp_tool_info(mcp_tool(
+            "echo",
+            "Echo",
+            serde_json::json!({"type": "object"}),
+        )),
+    )]);
+    let dynamic_tools = vec![
+        DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
+            name: "automation_update".to_string(),
+            description: "Create or update automations.".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            defer_loading: true,
+        },
+        DynamicToolSpec {
+            namespace: None,
+            name: "plain_dynamic".to_string(),
+            description: "Plain dynamic tool.".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            defer_loading: true,
+        },
+    ];
+
+    let entries =
+        build_tool_search_entries_for_config(&tools_config, Some(&mcp_tools), &dynamic_tools);
+    let outputs = entries
+        .into_iter()
+        .map(|entry| entry.output)
+        .collect::<Vec<_>>();
+
+    assert_eq!(outputs.len(), 1);
+    match &outputs[0] {
+        LoadableToolSpec::Function(tool) => assert_eq!(tool.name, "plain_dynamic"),
+        LoadableToolSpec::Namespace(_) => panic!("namespace tool_search output should be hidden"),
+    }
 }
 
 #[tokio::test]

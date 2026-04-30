@@ -5,6 +5,7 @@ use codex_core::NewThread;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ThreadManager;
+use codex_core::thread_store_from_config;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -13,7 +14,6 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -1090,27 +1090,26 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
 
-    let auth_manager =
-        match CodexAuth::from_auth_storage(codex_home.path(), AuthCredentialsStoreMode::File).await
-        {
-            Ok(Some(auth)) => codex_core::test_support::auth_manager_from_auth(auth),
-            Ok(None) => panic!("No CodexAuth found in codex_home"),
-            Err(e) => panic!("Failed to load CodexAuth: {e}"),
-        };
+    let auth_manager = match CodexAuth::from_auth_storage(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    {
+        Ok(Some(auth)) => codex_core::test_support::auth_manager_from_auth(auth),
+        Ok(None) => panic!("No CodexAuth found in codex_home"),
+        Err(e) => panic!("Failed to load CodexAuth: {e}"),
+    };
     let thread_manager = ThreadManager::new(
         &config,
         auth_manager,
         SessionSource::Exec,
-        CollaborationModesConfig {
-            default_mode_request_user_input: config
-                .features
-                .enabled(Feature::DefaultModeRequestUserInput),
-        },
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     );
     let NewThread { thread: codex, .. } = thread_manager
-        .start_thread(config)
+        .start_thread(config.clone(), thread_store_from_config(&config))
         .await
         .expect("create new conversation");
 

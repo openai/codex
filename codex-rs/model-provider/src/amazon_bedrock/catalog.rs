@@ -15,7 +15,7 @@ use codex_protocol::openai_models::WebSearchToolType;
 const GPT_OSS_CONTEXT_WINDOW: i64 = 128_000;
 const GPT_5_4_CONTEXT_WINDOW: i64 = 272_000;
 const GPT_5_4_MAX_CONTEXT_WINDOW: i64 = 1_000_000;
-const GPT_5_4_CMB_MODEL_ID: &str = "openai.gpt-5.4-cmb";
+const GPT_5_4_CMB_MODEL_ID: &str = "openai.gpt-5.4";
 
 pub(crate) fn static_model_catalog() -> ModelsResponse {
     ModelsResponse {

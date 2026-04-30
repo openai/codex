@@ -9,6 +9,7 @@ use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
 use crate::config_manager::ConfigManager;
+use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::device_key_api::DeviceKeyApi;
 use crate::error_code::invalid_request;
 use crate::external_agent_config_api::ExternalAgentConfigApi;
@@ -18,6 +19,9 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
+use crate::request_serialization::QueuedInitializedRequest;
+use crate::request_serialization::RequestSerializationQueueKey;
+use crate::request_serialization::RequestSerializationQueues;
 use crate::transport::AppServerTransport;
 use crate::transport::ConnectionOrigin;
 use crate::transport::RemoteControlHandle;
@@ -33,6 +37,7 @@ use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
@@ -44,6 +49,7 @@ use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
+use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCError;
@@ -51,6 +57,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::ModelProviderCapabilitiesReadResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
@@ -71,7 +78,7 @@ use codex_login::default_client::USER_AGENT_SUFFIX;
 use codex_login::default_client::get_codex_user_agent;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::default_client::set_default_originator;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_model_provider::create_model_provider;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
@@ -167,11 +174,13 @@ pub(crate) struct MessageProcessor {
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
     rpc_transport: AppServerRpcTransport,
     remote_control_handle: Option<RemoteControlHandle>,
+    request_serialization_queues: RequestSerializationQueues,
 }
 
 #[derive(Debug)]
 pub(crate) struct ConnectionSessionState {
     origin: ConnectionOrigin,
+    pub(crate) rpc_gate: Arc<ConnectionRpcGate>,
     initialized: OnceLock<InitializedConnectionSessionState>,
 }
 
@@ -193,6 +202,7 @@ impl ConnectionSessionState {
     pub(crate) fn new(origin: ConnectionOrigin) -> Self {
         Self {
             origin,
+            rpc_gate: Arc::new(ConnectionRpcGate::new()),
             initialized: OnceLock::new(),
         }
     }
@@ -237,6 +247,7 @@ impl ConnectionSessionState {
 
 pub(crate) struct MessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
+    pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
     pub(crate) config_manager: ConfigManager,
@@ -257,6 +268,7 @@ impl MessageProcessor {
     pub(crate) fn new(args: MessageProcessorArgs) -> Self {
         let MessageProcessorArgs {
             outgoing,
+            analytics_events_client,
             arg0_paths,
             config,
             config_manager,
@@ -273,20 +285,10 @@ impl MessageProcessor {
         auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));
-        let analytics_events_client = AnalyticsEventsClient::new(
-            Arc::clone(&auth_manager),
-            config.chatgpt_base_url.trim_end_matches('/').to_string(),
-            config.analytics_enabled,
-        );
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
             session_source,
-            CollaborationModesConfig {
-                default_mode_request_user_input: config
-                    .features
-                    .enabled(Feature::DefaultModeRequestUserInput),
-            },
             environment_manager,
             Some(analytics_events_client.clone()),
         ));
@@ -307,10 +309,15 @@ impl MessageProcessor {
         });
         if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
             // Keep plugin startup warmups aligned at app-server startup.
-            // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
+            let on_effective_plugins_changed =
+                codex_message_processor.effective_plugins_changed_callback((*config).clone());
             thread_manager
                 .plugins_manager()
-                .maybe_start_plugin_startup_tasks_for_config(&config, auth_manager.clone());
+                .maybe_start_plugin_startup_tasks_for_config(
+                    &config,
+                    auth_manager.clone(),
+                    Some(on_effective_plugins_changed),
+                );
         }
         let config_api = ConfigApi::new(
             config_manager,
@@ -344,6 +351,7 @@ impl MessageProcessor {
             config_warnings: Arc::new(config_warnings),
             rpc_transport,
             remote_control_handle,
+            request_serialization_queues: RequestSerializationQueues::default(),
         }
     }
 
@@ -540,7 +548,12 @@ impl MessageProcessor {
         self.codex_message_processor.shutdown_threads().await;
     }
 
-    pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_closed(
+        &self,
+        connection_id: ConnectionId,
+        session_state: &ConnectionSessionState,
+    ) {
+        session_state.rpc_gate.shutdown().await;
         self.outgoing.connection_closed(connection_id).await;
         self.fs_watch_manager.connection_closed(connection_id).await;
         self.codex_message_processor
@@ -714,29 +727,52 @@ impl MessageProcessor {
             return Err(invalid_request(experimental_required_message(reason)));
         }
         let connection_id = connection_request_id.connection_id;
-        if let ClientRequest::TurnStart { request_id, .. }
-        | ClientRequest::TurnSteer { request_id, .. } = &codex_request
-        {
-            self.analytics_events_client.track_request(
-                connection_id.0,
-                request_id.clone(),
-                codex_request.clone(),
-            );
-        }
+        self.analytics_events_client.track_request(
+            connection_id.0,
+            connection_request_id.request_id.clone(),
+            &codex_request,
+        );
 
+        let serialization_scope = codex_request.serialization_scope();
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
         let device_key_requests_allowed = session.allows_device_key_requests();
-        Arc::clone(self)
-            .handle_initialized_client_request(
-                connection_request_id,
-                codex_request,
-                request_context,
-                app_server_client_name,
-                client_version,
-                device_key_requests_allowed,
-            )
-            .await
+        let error_request_id = connection_request_id.clone();
+        let rpc_gate = Arc::clone(&session.rpc_gate);
+        let processor = Arc::clone(self);
+        let span = request_context.span();
+        let request = QueuedInitializedRequest::new(
+            rpc_gate,
+            async move {
+                let processor_for_request = Arc::clone(&processor);
+                let result = processor_for_request
+                    .handle_initialized_client_request(
+                        connection_request_id,
+                        codex_request,
+                        request_context,
+                        app_server_client_name,
+                        client_version,
+                        device_key_requests_allowed,
+                    )
+                    .await;
+                if let Err(error) = result {
+                    processor.outgoing.send_error(error_request_id, error).await;
+                }
+            }
+            .instrument(span),
+        );
+
+        if let Some(scope) = serialization_scope {
+            let key = RequestSerializationQueueKey::from_scope(connection_id, scope);
+            self.request_serialization_queues
+                .enqueue(key, request)
+                .await;
+        } else {
+            tokio::spawn(async move {
+                request.run().await;
+            });
+        }
+        Ok(())
     }
 
     async fn handle_initialized_client_request(
@@ -897,6 +933,13 @@ impl MessageProcessor {
                     )
                     .await;
             }
+            ClientRequest::ModelProviderCapabilitiesRead {
+                request_id,
+                params: _,
+            } => {
+                self.handle_model_provider_capabilities_read(request_id_for_connection(request_id))
+                    .await;
+            }
             other => {
                 // Box the delegated future so this wrapper's async state machine does not
                 // inline the full `CodexMessageProcessor::process_request` future, which
@@ -916,13 +959,36 @@ impl MessageProcessor {
         Ok(())
     }
 
+    async fn handle_model_provider_capabilities_read(&self, request_id: ConnectionRequestId) {
+        let result = async {
+            let config = self
+                .config_api
+                .load_latest_config(/*fallback_cwd*/ None)
+                .await?;
+            let provider = create_model_provider(config.model_provider, /*auth_manager*/ None);
+            let capabilities = provider.capabilities();
+            Ok::<_, JSONRPCErrorError>(ModelProviderCapabilitiesReadResponse {
+                namespace_tools: capabilities.namespace_tools,
+                image_generation: capabilities.image_generation,
+                web_search: capabilities.web_search,
+            })
+        }
+        .await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
     async fn handle_config_value_write(
         &self,
         request_id: ConnectionRequestId,
         params: ConfigValueWriteParams,
     ) {
         let result = self.config_api.write_value(params).await;
-        self.handle_config_mutation_result(request_id, result).await
+        self.handle_config_mutation_result(
+            request_id,
+            result,
+            ClientResponsePayload::ConfigValueWrite,
+        )
+        .await
     }
 
     async fn handle_config_batch_write(
@@ -931,7 +997,12 @@ impl MessageProcessor {
         params: ConfigBatchWriteParams,
     ) {
         let result = self.config_api.batch_write(params).await;
-        self.handle_config_mutation_result(request_id, result).await;
+        self.handle_config_mutation_result(
+            request_id,
+            result,
+            ClientResponsePayload::ConfigBatchWrite,
+        )
+        .await;
     }
 
     async fn handle_experimental_feature_enablement_set(
@@ -945,7 +1016,12 @@ impl MessageProcessor {
             .set_experimental_feature_enablement(params)
             .await;
         let is_ok = result.is_ok();
-        self.handle_config_mutation_result(request_id, result).await;
+        self.handle_config_mutation_result(
+            request_id,
+            result,
+            ClientResponsePayload::ExperimentalFeatureEnablementSet,
+        )
+        .await;
         if should_refresh_apps_list && is_ok {
             self.refresh_apps_list_after_experimental_feature_enablement_set()
                 .await;
@@ -1021,15 +1097,18 @@ impl MessageProcessor {
         });
     }
 
-    async fn handle_config_mutation_result<T: serde::Serialize>(
+    async fn handle_config_mutation_result<T>(
         &self,
         request_id: ConnectionRequestId,
         result: std::result::Result<T, JSONRPCErrorError>,
+        wrap_success: impl FnOnce(T) -> ClientResponsePayload,
     ) {
         match result {
             Ok(response) => {
                 self.handle_config_mutation().await;
-                self.outgoing.send_response(request_id, response).await;
+                self.outgoing
+                    .send_response_as(request_id, wrap_success(response))
+                    .await;
             }
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
@@ -1107,7 +1186,7 @@ impl MessageProcessor {
         device_key_requests_allowed: bool,
         run_request: F,
     ) where
-        R: serde::Serialize + Send + 'static,
+        R: Into<ClientResponsePayload> + Send + 'static,
         F: FnOnce(DeviceKeyApi) -> Fut + Send + 'static,
         Fut: Future<Output = Result<R, JSONRPCErrorError>> + Send + 'static,
     {
@@ -1132,26 +1211,32 @@ impl MessageProcessor {
         request_id: ConnectionRequestId,
         params: ExternalAgentConfigImportParams,
     ) -> Result<(), JSONRPCErrorError> {
+        let needs_runtime_refresh = migration_items_need_runtime_refresh(&params.migration_items);
+        let has_migration_items = !params.migration_items.is_empty();
         let has_plugin_imports = params.migration_items.iter().any(|item| {
             matches!(
                 item.item_type,
                 ExternalAgentConfigMigrationItemType::Plugins
             )
         });
-
+        let pending_session_imports = self
+            .external_agent_config_api
+            .validate_pending_session_imports(&params)?;
         let pending_plugin_imports = self.external_agent_config_api.import(params).await?;
-        if has_plugin_imports {
+        if needs_runtime_refresh {
             self.handle_config_mutation().await;
         }
         self.outgoing
             .send_response(request_id, ExternalAgentConfigImportResponse {})
             .await;
 
-        if !has_plugin_imports {
+        if !has_migration_items {
             return Ok(());
         }
 
-        if pending_plugin_imports.is_empty() {
+        let has_background_imports =
+            !pending_plugin_imports.is_empty() || !pending_session_imports.is_empty();
+        if !has_background_imports {
             self.outgoing
                 .send_server_notification(ServerNotification::ExternalAgentConfigImportCompleted(
                     ExternalAgentConfigImportCompletedNotification {},
@@ -1161,25 +1246,64 @@ impl MessageProcessor {
         }
 
         let external_agent_config_api = self.external_agent_config_api.clone();
+        let session_import_permits = external_agent_config_api.session_import_permits();
+        let codex_message_processor = self.codex_message_processor.clone();
         let outgoing = Arc::clone(&self.outgoing);
         let thread_manager = Arc::clone(&self.thread_manager);
         tokio::spawn(async move {
-            for pending_plugin_import in pending_plugin_imports {
-                match external_agent_config_api
-                    .complete_pending_plugin_import(pending_plugin_import)
-                    .await
-                {
-                    Ok(()) => {}
-                    Err(error) => {
-                        tracing::warn!(
-                            error = %error.message,
-                            "external agent config plugin import failed"
-                        );
+            let session_external_agent_config_api = external_agent_config_api.clone();
+            let plugin_external_agent_config_api = external_agent_config_api;
+            let session_imports = async move {
+                if !pending_session_imports.is_empty() {
+                    let Ok(_session_import_permit) = session_import_permits.acquire_owned().await
+                    else {
+                        return;
+                    };
+                    let pending_session_imports = session_external_agent_config_api
+                        .prepare_validated_session_imports(pending_session_imports);
+                    for pending_session_import in pending_session_imports {
+                        match codex_message_processor
+                            .import_external_agent_session(pending_session_import.session)
+                            .await
+                        {
+                            Ok(imported_thread_id) => {
+                                session_external_agent_config_api.record_imported_session(
+                                    &pending_session_import.source_path,
+                                    imported_thread_id,
+                                );
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    error = %error.message,
+                                    path = %pending_session_import.source_path.display(),
+                                    "external agent session import failed"
+                                );
+                            }
+                        }
                     }
                 }
+            };
+            let plugin_imports = async move {
+                for pending_plugin_import in pending_plugin_imports {
+                    match plugin_external_agent_config_api
+                        .complete_pending_plugin_import(pending_plugin_import)
+                        .await
+                    {
+                        Ok(()) => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                error = %error.message,
+                                "external agent config plugin import failed"
+                            );
+                        }
+                    }
+                }
+            };
+            tokio::join!(session_imports, plugin_imports);
+            if has_plugin_imports {
+                thread_manager.plugins_manager().clear_cache();
+                thread_manager.skills_manager().clear_cache();
             }
-            thread_manager.plugins_manager().clear_cache();
-            thread_manager.skills_manager().clear_cache();
             outgoing
                 .send_server_notification(ServerNotification::ExternalAgentConfigImportCompleted(
                     ExternalAgentConfigImportCompletedNotification {},
@@ -1191,5 +1315,60 @@ impl MessageProcessor {
     }
 }
 
+fn migration_items_need_runtime_refresh(items: &[ExternalAgentConfigMigrationItem]) -> bool {
+    items.iter().any(|item| {
+        matches!(
+            item.item_type,
+            ExternalAgentConfigMigrationItemType::Config
+                | ExternalAgentConfigMigrationItemType::Skills
+                | ExternalAgentConfigMigrationItemType::McpServerConfig
+                | ExternalAgentConfigMigrationItemType::Hooks
+                | ExternalAgentConfigMigrationItemType::Commands
+                | ExternalAgentConfigMigrationItemType::Plugins
+        )
+    })
+}
+
 #[cfg(test)]
 mod tracing_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn migration_item(
+        item_type: ExternalAgentConfigMigrationItemType,
+    ) -> ExternalAgentConfigMigrationItem {
+        ExternalAgentConfigMigrationItem {
+            item_type,
+            description: String::new(),
+            cwd: None,
+            details: None,
+        }
+    }
+
+    #[test]
+    fn migration_items_that_update_runtime_sources_trigger_refresh() {
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::Config,
+        )]));
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::Skills,
+        )]));
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::McpServerConfig,
+        )]));
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::Hooks,
+        )]));
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::Commands,
+        )]));
+        assert!(migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::Plugins,
+        )]));
+        assert!(!migration_items_need_runtime_refresh(&[migration_item(
+            ExternalAgentConfigMigrationItemType::Sessions,
+        )]));
+    }
+}
