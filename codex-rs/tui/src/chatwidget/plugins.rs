@@ -1859,14 +1859,14 @@ fn plugins_popup_hint_line(
 ) -> Line<'static> {
     match (can_remove_marketplace, can_upgrade_marketplace) {
         (true, true) => Line::from(
-            "space enable/disable · ←/→ select marketplace · enter view details · ctrl + u upgrade marketplace · ctrl + r remove marketplace · esc close",
+            "ctrl + u upgrade · ctrl + r remove · space toggle · ←/→ tabs · enter details · esc close",
         ),
-        (true, false) => Line::from(
-            "space enable/disable · ←/→ select marketplace · enter view details · ctrl + r remove marketplace · esc close",
-        ),
-        (false, true) => Line::from(
-            "space enable/disable · ←/→ select marketplace · enter view details · ctrl + u upgrade marketplace · esc close",
-        ),
+        (true, false) => {
+            Line::from("ctrl + r remove · space toggle · ←/→ tabs · enter details · esc close")
+        }
+        (false, true) => {
+            Line::from("ctrl + u upgrade · space toggle · ←/→ tabs · enter details · esc close")
+        }
         (false, false) => Line::from(
             "space enable/disable · ←/→ select marketplace · enter view details · esc close",
         ),

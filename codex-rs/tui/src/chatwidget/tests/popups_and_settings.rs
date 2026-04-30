@@ -370,7 +370,8 @@ async fn plugins_popup_upgrades_user_configured_git_marketplace_from_marketplace
     let popup = render_bottom_popup(&chat, /*width*/ 100);
     assert!(
         popup.contains("Repo Marketplace.")
-            && popup.contains("ctrl + u upgrade marketplace")
+            && popup.contains("ctrl + u upgrade")
+            && popup.contains("ctrl + r remove")
             && popup.contains("Debug Plugin"),
         "expected upgradeable user-configured marketplace tab, got:\n{popup}"
     );
@@ -465,6 +466,8 @@ async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
     assert_chatwidget_snapshot!("plugins_popup_newly_installed_marketplace", popup);
     assert!(
         popup.contains("Debug Marketplace installed successfully.")
+            && popup.contains("ctrl + u upgrade")
+            && popup.contains("ctrl + r remove")
             && popup.contains("Debug Plugin"),
         "expected marketplace add refresh to switch to the new marketplace tab, got:\n{popup}"
     );
@@ -521,7 +524,8 @@ async fn plugins_popup_removes_user_configured_marketplace_flow() {
     let repo_tab = render_bottom_popup(&chat, /*width*/ 100);
     assert!(
         repo_tab.contains("Repo Marketplace.")
-            && repo_tab.contains("ctrl + r remove marketplace")
+            && repo_tab.contains("ctrl + u upgrade")
+            && repo_tab.contains("ctrl + r remove")
             && repo_tab.contains("Debug Plugin"),
         "expected removable user-configured marketplace tab, got:\n{repo_tab}"
     );
@@ -589,7 +593,7 @@ async fn plugins_popup_removes_user_configured_marketplace_flow() {
         refreshed.contains("Browse plugins from available marketplaces.")
             && !refreshed.contains("Repo Marketplace")
             && !refreshed.contains("Debug Plugin")
-            && !refreshed.contains("ctrl + r remove marketplace"),
+            && !refreshed.contains("ctrl + r remove"),
         "expected refreshed plugin list without removed marketplace, got:\n{refreshed}"
     );
 }
