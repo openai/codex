@@ -656,6 +656,57 @@ async fn evaluates_bash_lc_inner_commands() {
     .await;
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn evaluates_powershell_inner_commands_against_prompt_rules() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: Some(r#"prefix_rule(pattern=["echo"], decision="prompt")"#.to_string()),
+            command: vec![
+                "powershell.exe".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "echo blocked".to_string(),
+            ],
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            file_system_sandbox_policy: unrestricted_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::Forbidden {
+            reason: PROMPT_CONFLICT_REASON.to_string(),
+        },
+    )
+    .await;
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn evaluates_powershell_inner_commands_against_allow_rules() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: Some(r#"prefix_rule(pattern=["echo"], decision="allow")"#.to_string()),
+            command: vec![
+                "powershell.exe".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "echo blocked".to_string(),
+            ],
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        },
+    )
+    .await;
+}
+
 #[test]
 fn commands_for_exec_policy_falls_back_for_empty_shell_script() {
     let command = vec!["bash".to_string(), "-lc".to_string(), "".to_string()];
