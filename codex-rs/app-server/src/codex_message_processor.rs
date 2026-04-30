@@ -544,14 +544,6 @@ pub(crate) struct CodexMessageProcessor {
     log_db: Option<LogDbLayer>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum ApiVersion {
-    #[allow(dead_code)]
-    V1,
-    #[default]
-    V2,
-}
-
 #[derive(Clone)]
 struct ListenerTaskContext {
     thread_manager: Arc<ThreadManager>,
@@ -2832,7 +2824,6 @@ impl CodexMessageProcessor {
                     thread_id,
                     request_id.connection_id,
                     experimental_raw_events,
-                    ApiVersion::V2,
                 )
                 .instrument(tracing::info_span!(
                     "app_server.thread_start.attach_listener",
@@ -4204,7 +4195,6 @@ impl CodexMessageProcessor {
                     thread_id,
                     connection_id,
                     /*raw_events_enabled*/ false,
-                    ApiVersion::V2,
                 )
                 .await,
                 thread_id,
@@ -4365,7 +4355,6 @@ impl CodexMessageProcessor {
                         thread_id,
                         request_id.connection_id,
                         /*raw_events_enabled*/ false,
-                        ApiVersion::V2,
                     )
                     .await,
                     thread_id,
@@ -4544,7 +4533,6 @@ impl CodexMessageProcessor {
                 existing_thread_id,
                 existing_thread.clone(),
                 thread_state.clone(),
-                ApiVersion::V2,
             )
             .await?;
 
@@ -4941,7 +4929,6 @@ impl CodexMessageProcessor {
                     thread_id,
                     request_id.connection_id,
                     /*raw_events_enabled*/ false,
-                    ApiVersion::V2,
                 )
                 .await,
                 thread_id,
@@ -6904,7 +6891,6 @@ impl CodexMessageProcessor {
                 thread_id,
                 request_id.connection_id,
                 /*raw_events_enabled*/ false,
-                ApiVersion::V2,
             )
             .await
         {
@@ -7190,7 +7176,6 @@ impl CodexMessageProcessor {
                 thread_id,
                 request_id.connection_id,
                 /*raw_events_enabled*/ false,
-                ApiVersion::V2,
             )
             .await,
             thread_id,
@@ -7317,9 +7302,7 @@ impl CodexMessageProcessor {
                     {
                         return Err(invalid_request("no active turn to interrupt"));
                     }
-                    thread_state
-                        .pending_interrupts
-                        .push((request_id.clone(), ApiVersion::V2));
+                    thread_state.pending_interrupts.push(request_id.clone());
                 }
 
                 self.outgoing
@@ -7342,7 +7325,7 @@ impl CodexMessageProcessor {
                         let mut thread_state = thread_state.lock().await;
                         thread_state
                             .pending_interrupts
-                            .retain(|(pending_request_id, _)| pending_request_id != &request_id);
+                            .retain(|pending_request_id| pending_request_id != &request_id);
                     }
                     let interrupt_target = if is_startup_interrupt {
                         "startup"
@@ -7364,7 +7347,6 @@ impl CodexMessageProcessor {
         conversation_id: ThreadId,
         connection_id: ConnectionId,
         raw_events_enabled: bool,
-        api_version: ApiVersion,
     ) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
         Self::ensure_conversation_listener_task(
             ListenerTaskContext {
@@ -7381,7 +7363,6 @@ impl CodexMessageProcessor {
             conversation_id,
             connection_id,
             raw_events_enabled,
-            api_version,
         )
         .await
     }
@@ -7395,7 +7376,6 @@ impl CodexMessageProcessor {
         conversation_id: ThreadId,
         connection_id: ConnectionId,
         raw_events_enabled: bool,
-        api_version: ApiVersion,
     ) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
         let conversation = match listener_task_context
             .thread_manager
@@ -7440,7 +7420,6 @@ impl CodexMessageProcessor {
             conversation_id,
             conversation,
             thread_state,
-            api_version,
         )
         .await
         {
@@ -7482,7 +7461,6 @@ impl CodexMessageProcessor {
         conversation_id: ThreadId,
         conversation: Arc<CodexThread>,
         thread_state: Arc<Mutex<ThreadState>>,
-        api_version: ApiVersion,
     ) -> Result<(), JSONRPCErrorError> {
         Self::ensure_listener_task_running_task(
             ListenerTaskContext {
@@ -7499,7 +7477,6 @@ impl CodexMessageProcessor {
             conversation_id,
             conversation,
             thread_state,
-            api_version,
         )
         .await
     }
@@ -7509,7 +7486,6 @@ impl CodexMessageProcessor {
         conversation_id: ThreadId,
         conversation: Arc<CodexThread>,
         thread_state: Arc<Mutex<ThreadState>>,
-        api_version: ApiVersion,
     ) -> Result<(), JSONRPCErrorError> {
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
         let Some(mut unloading_state) = UnloadingState::new(
@@ -7601,7 +7577,6 @@ impl CodexMessageProcessor {
                             && !raw_events_enabled
                         {
                             maybe_emit_hook_prompt_item_completed(
-                                api_version,
                                 conversation_id,
                                 &event.id,
                                 &raw_response_item_event.item,
@@ -7621,7 +7596,6 @@ impl CodexMessageProcessor {
                             thread_state.clone(),
                             thread_watch_manager.clone(),
                             thread_list_state_permit.clone(),
-                            api_version,
                             fallback_model_provider.clone(),
                             codex_home.as_path(),
                         )
