@@ -11757,6 +11757,13 @@
         ],
         "type": "string"
       },
+      "PluginAvailabilityStatus": {
+        "enum": [
+          "ENABLED",
+          "DISABLED_BY_ADMIN"
+        ],
+        "type": "string"
+      },
       "PluginDetail": {
         "properties": {
           "apps": {
@@ -12235,6 +12242,16 @@
           },
           "source": {
             "$ref": "#/definitions/v2/PluginSource"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PluginAvailabilityStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [

@@ -4654,6 +4654,17 @@ pub enum PluginAuthPolicy {
     OnUse,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub enum PluginAvailabilityStatus {
+    #[serde(rename = "ENABLED")]
+    #[ts(rename = "ENABLED")]
+    Enabled,
+    #[serde(rename = "DISABLED_BY_ADMIN")]
+    #[ts(rename = "DISABLED_BY_ADMIN")]
+    DisabledByAdmin,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -4665,6 +4676,9 @@ pub struct PluginSummary {
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
     pub auth_policy: PluginAuthPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub status: Option<PluginAvailabilityStatus>,
     pub interface: Option<PluginInterface>,
 }
 
