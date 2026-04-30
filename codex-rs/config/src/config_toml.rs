@@ -123,6 +123,13 @@ pub struct ConfigToml {
     #[serde(default)]
     pub permissions: Option<PermissionsToml>,
 
+    /// Canonical runtime permission profile.
+    ///
+    /// This is primarily intended for generated config snapshots. User-authored
+    /// config should generally prefer `default_permissions` and `[permissions]`
+    /// profiles.
+    pub permission_profile: Option<PermissionProfile>,
+
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
@@ -243,6 +250,9 @@ pub struct ConfigToml {
     /// Directory where Codex writes log files, for example `codex-tui.log`.
     /// Defaults to `$CODEX_HOME/log`.
     pub log_dir: Option<AbsolutePathBuf>,
+
+    /// Directory where Codex writes effective session config snapshots.
+    pub config_snapshot_export_dir: Option<AbsolutePathBuf>,
 
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.

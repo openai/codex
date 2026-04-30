@@ -947,6 +947,50 @@ async fn permission_profile_override_populates_runtime_permissions() -> std::io:
 }
 
 #[tokio::test]
+async fn config_toml_permission_profile_populates_runtime_permissions() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let permission_profile = PermissionProfile::Disabled;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            permission_profile: Some(permission_profile.clone()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.permissions.permission_profile(), permission_profile);
+    assert_eq!(config.permissions.active_permission_profile(), None);
+    assert_eq!(
+        &config.legacy_sandbox_policy(),
+        &SandboxPolicy::DangerFullAccess
+    );
+    Ok(())
+}
+
+#[test]
+fn config_toml_permission_profile_round_trips_through_toml() -> std::io::Result<()> {
+    let config_toml = ConfigToml {
+        permission_profile: Some(PermissionProfile::read_only()),
+        ..Default::default()
+    };
+
+    let toml = toml::to_string(&config_toml)
+        .map_err(|err| std::io::Error::other(format!("serialize config TOML: {err}")))?;
+    let reparsed: ConfigToml = toml::from_str(&toml)
+        .map_err(|err| std::io::Error::other(format!("deserialize config TOML: {err}")))?;
+
+    assert_eq!(reparsed.permission_profile, config_toml.permission_profile);
+    Ok(())
+}
+
+#[tokio::test]
 async fn permission_profile_override_preserves_managed_unrestricted_filesystem()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
@@ -6309,6 +6353,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             codex_home: fixture.codex_home(),
             sqlite_home: fixture.codex_home().to_path_buf(),
             log_dir: fixture.codex_home().join("log").to_path_buf(),
+            config_snapshot_export_dir: None,
             config_layer_stack: Default::default(),
             startup_warnings: Vec::new(),
             history: History::default(),
@@ -6505,6 +6550,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
+        config_snapshot_export_dir: None,
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
@@ -6655,6 +6701,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
+        config_snapshot_export_dir: None,
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
@@ -6790,6 +6837,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
+        config_snapshot_export_dir: None,
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
         history: History::default(),

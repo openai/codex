@@ -759,6 +759,179 @@
       ],
       "type": "string"
     },
+    "FileSystemPath": {
+      "oneOf": [
+        {
+          "properties": {
+            "path": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "path"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A git-style glob pattern. Pattern entries currently support FileSystemAccessMode::None only.",
+          "properties": {
+            "pattern": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "glob_pattern"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "pattern",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "special"
+              ],
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/definitions/FileSystemSpecialPath"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FileSystemSandboxEntry": {
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/FileSystemAccessMode"
+        },
+        "path": {
+          "$ref": "#/definitions/FileSystemPath"
+        }
+      },
+      "required": [
+        "access",
+        "path"
+      ],
+      "type": "object"
+    },
+    "FileSystemSpecialPath": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "root"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "minimal"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "project_roots"
+              ],
+              "type": "string"
+            },
+            "subpath": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "tmpdir"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "slash_tmp"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "WARNING: `:special_path` tokens are part of config compatibility. Do not make older runtimes reject newly introduced tokens. New parser support should be additive, while unknown values must stay representable so config from a newer Codex degrades to warn-and-ignore instead of failing to load. Codex 0.112.0 rejected unknown values here, which broke forward compatibility for newer config. Preserves future special-path tokens so older runtimes can ignore them without rejecting config authored by a newer release.",
+          "properties": {
+            "kind": {
+              "enum": [
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "subpath": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "FilesystemPermissionToml": {
       "anyOf": [
         {
@@ -1022,6 +1195,53 @@
         }
       ],
       "description": "One action binding value in config.\n\nThis accepts either:\n\n1. A single key spec string (`\"ctrl-a\"`). 2. A list of key spec strings (`[\"ctrl-a\", \"alt-a\"]`).\n\nAn empty list explicitly unbinds the action in that scope. Because an explicit empty list is still a configured value, runtime resolution must not fall through to global or built-in defaults for that action."
+    },
+    "ManagedFileSystemPermissions": {
+      "description": "Filesystem permissions for profiles where Codex owns sandbox construction.",
+      "oneOf": [
+        {
+          "description": "Apply a managed filesystem sandbox from the listed entries.",
+          "properties": {
+            "entries": {
+              "items": {
+                "$ref": "#/definitions/FileSystemSandboxEntry"
+              },
+              "type": "array"
+            },
+            "glob_scan_max_depth": {
+              "format": "uint",
+              "minimum": 1.0,
+              "type": "integer"
+            },
+            "type": {
+              "enum": [
+                "restricted"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "entries",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Apply a managed sandbox that allows all filesystem access.",
+          "properties": {
+            "type": {
+              "enum": [
+                "unrestricted"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "MarketplaceConfig": {
       "additionalProperties": false,
@@ -1416,6 +1636,13 @@
       ],
       "type": "string"
     },
+    "NetworkSandboxPolicy": {
+      "enum": [
+        "restricted",
+        "enabled"
+      ],
+      "type": "string"
+    },
     "NetworkToml": {
       "additionalProperties": false,
       "properties": {
@@ -1744,6 +1971,68 @@
         }
       },
       "type": "object"
+    },
+    "PermissionProfile": {
+      "description": "Canonical active runtime permissions for a conversation, turn, or command.",
+      "oneOf": [
+        {
+          "description": "Codex owns sandbox construction for this profile.",
+          "properties": {
+            "file_system": {
+              "$ref": "#/definitions/ManagedFileSystemPermissions"
+            },
+            "network": {
+              "$ref": "#/definitions/NetworkSandboxPolicy"
+            },
+            "type": {
+              "enum": [
+                "managed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "file_system",
+            "network",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Do not apply an outer sandbox.",
+          "properties": {
+            "type": {
+              "enum": [
+                "disabled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Filesystem isolation is enforced by an external caller.",
+          "properties": {
+            "network": {
+              "$ref": "#/definitions/NetworkSandboxPolicy"
+            },
+            "type": {
+              "enum": [
+                "external"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "network",
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "PermissionProfileToml": {
       "additionalProperties": false,
@@ -3312,6 +3601,14 @@
       "description": "Compact prompt used for history compaction.",
       "type": "string"
     },
+    "config_snapshot_export_dir": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Directory where Codex writes effective session config snapshots."
+    },
     "default_permissions": {
       "description": "Default permissions profile to apply. Names starting with `:` refer to built-in profiles; other names are resolved from the `[permissions]` table.",
       "type": "string"
@@ -3830,6 +4127,14 @@
         }
       ],
       "description": "OTEL configuration."
+    },
+    "permission_profile": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/PermissionProfile"
+        }
+      ],
+      "description": "Canonical runtime permission profile.\n\nThis is primarily intended for generated config snapshots. User-authored config should generally prefer `default_permissions` and `[permissions]` profiles."
     },
     "permissions": {
       "allOf": [

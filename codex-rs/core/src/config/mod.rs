@@ -99,6 +99,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -617,6 +618,9 @@ pub struct Config {
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
 
+    /// Directory where Codex writes effective session config snapshots.
+    pub config_snapshot_export_dir: Option<AbsolutePathBuf>,
+
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
 
@@ -786,7 +790,7 @@ pub struct Config {
     pub otel: codex_config::types::OtelConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MultiAgentV2Config {
     pub max_concurrent_threads_per_session: usize,
     pub min_wait_timeout_ms: i64,
@@ -2143,7 +2147,9 @@ impl Config {
             permission_profile,
             file_system_sandbox_policy,
             mut active_permission_profile,
-        ) = if let Some(mut permission_profile) = permission_profile {
+        ) = if let Some(mut permission_profile) =
+            permission_profile.or_else(|| cfg.permission_profile.clone())
+        {
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
             let configured_network_proxy_config =
@@ -2610,7 +2616,9 @@ impl Config {
             "model instructions file",
         )
         .await?;
-        let base_instructions = base_instructions.or(file_base_instructions);
+        let base_instructions = base_instructions
+            .or(file_base_instructions)
+            .or(cfg.instructions.clone());
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
         let include_permissions_instructions = config_profile
             .include_permissions_instructions
@@ -2882,6 +2890,7 @@ impl Config {
             codex_home,
             sqlite_home,
             log_dir,
+            config_snapshot_export_dir: cfg.config_snapshot_export_dir,
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
