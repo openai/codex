@@ -549,6 +549,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_thread_uses_live_writer_rollout_path_for_external_resume() {
+        let home = TempDir::new().expect("temp dir");
+        let external_home = TempDir::new().expect("external temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let uuid = uuid::Uuid::from_u128(406);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path = write_session_file(external_home.path(), "2025-01-04T11-00-00", uuid)
+            .expect("external session file");
+
+        store
+            .resume_thread(ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(rollout_path.clone()),
+                history: None,
+                include_archived: true,
+                metadata_defaults: ThreadMetadataDefaults {
+                    model_provider: "test-provider".to_string(),
+                },
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            })
+            .await
+            .expect("resume live thread");
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: true,
+            })
+            .await
+            .expect("read external live thread");
+
+        assert_eq!(thread.rollout_path, Some(rollout_path));
+        assert!(thread.history.expect("history").items.iter().any(|item| {
+            matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::UserMessage(event)) if event.message == "Hello from user"
+            )
+        }));
+    }
+
+    #[tokio::test]
     async fn load_history_uses_live_writer_rollout_path_for_archived_source() {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()));

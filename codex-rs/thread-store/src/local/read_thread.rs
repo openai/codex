@@ -18,6 +18,7 @@ use super::helpers::distinct_thread_metadata_title;
 use super::helpers::git_info_from_parts;
 use super::helpers::set_thread_name_from_title;
 use super::helpers::stored_thread_from_rollout_item;
+use super::live_writer;
 use crate::ReadThreadParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
@@ -153,6 +154,10 @@ async fn resolve_rollout_path(
     thread_id: codex_protocol::ThreadId,
     include_archived: bool,
 ) -> ThreadStoreResult<Option<std::path::PathBuf>> {
+    if let Ok(path) = live_writer::rollout_path(store, thread_id).await {
+        return Ok(Some(path));
+    }
+
     if include_archived {
         match find_thread_path_by_id_str(store.config.codex_home.as_path(), &thread_id.to_string())
             .await

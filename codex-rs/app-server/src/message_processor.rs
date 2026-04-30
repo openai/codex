@@ -286,6 +286,9 @@ impl MessageProcessor {
         auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));
+        // The thread store is intentionally process-scoped. Config reloads can
+        // affect per-thread behavior, but they must not move newly started,
+        // resumed, or forked threads to a different persistence backend/root.
         let thread_store = thread_store_from_config(config.as_ref());
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
