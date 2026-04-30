@@ -54,12 +54,7 @@ impl IdeContextError {
                 error.as_str(),
                 "no-client-found" | "client-disconnected" | "request-timeout"
             ),
-            IdeContextError::Read(error) => {
-                matches!(
-                    error.kind(),
-                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                )
-            }
+            IdeContextError::Read(error) => error.kind() == std::io::ErrorKind::WouldBlock,
             IdeContextError::Connect(_)
             | IdeContextError::Send(_)
             | IdeContextError::InvalidResponse(_)
@@ -428,11 +423,11 @@ mod tests {
                 .is_retryable_after_recent_toggle()
         );
         assert!(
-            IdeContextError::Read(std::io::Error::from(std::io::ErrorKind::TimedOut))
+            IdeContextError::Read(std::io::Error::from(std::io::ErrorKind::WouldBlock))
                 .is_retryable_after_recent_toggle()
         );
         assert!(
-            IdeContextError::Read(std::io::Error::from(std::io::ErrorKind::WouldBlock))
+            !IdeContextError::Read(std::io::Error::from(std::io::ErrorKind::TimedOut))
                 .is_retryable_after_recent_toggle()
         );
         assert!(
