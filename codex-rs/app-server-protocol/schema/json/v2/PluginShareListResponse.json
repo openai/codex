@@ -12,6 +12,13 @@
       ],
       "type": "string"
     },
+    "PluginAvailabilityStatus": {
+      "enum": [
+        "AVAILABLE",
+        "DISABLED_BY_ADMIN"
+      ],
+      "type": "string"
+    },
     "PluginInstallPolicy": {
       "enum": [
         "NOT_AVAILABLE",
@@ -261,6 +268,17 @@
         },
         "source": {
           "$ref": "#/definitions/PluginSource"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PluginAvailabilityStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Remote-only availability status. Local plugins leave this unset."
         }
       },
       "required": [

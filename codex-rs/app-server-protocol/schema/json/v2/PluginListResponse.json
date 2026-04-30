@@ -40,7 +40,7 @@
     },
     "PluginAvailabilityStatus": {
       "enum": [
-        "ENABLED",
+        "AVAILABLE",
         "DISABLED_BY_ADMIN"
       ],
       "type": "string"
@@ -342,7 +342,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Remote-only availability status. Local plugins leave this unset."
         }
       },
       "required": [

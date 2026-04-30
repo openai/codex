@@ -1269,7 +1269,7 @@ async fn mount_remote_plugin_detail(
         remote_plugin_id,
         release_version,
         bundle_download_url,
-        PluginAvailabilityStatus::Enabled,
+        PluginAvailabilityStatus::Available,
     )
     .await;
 }
@@ -1282,7 +1282,7 @@ async fn mount_remote_plugin_detail_with_status(
     status: PluginAvailabilityStatus,
 ) {
     let status = match status {
-        PluginAvailabilityStatus::Enabled => "ENABLED",
+        PluginAvailabilityStatus::Available => "AVAILABLE",
         PluginAvailabilityStatus::DisabledByAdmin => "DISABLED_BY_ADMIN",
     };
     let bundle_download_url_field = bundle_download_url

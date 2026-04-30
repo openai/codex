@@ -664,7 +664,7 @@ fn build_remote_plugin_summary(
 }
 
 fn default_plugin_availability_status() -> PluginAvailabilityStatus {
-    PluginAvailabilityStatus::Enabled
+    PluginAvailabilityStatus::Available
 }
 
 fn remote_installed_plugin_to_info(

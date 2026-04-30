@@ -4828,9 +4828,9 @@ pub enum PluginAuthPolicy {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[ts(export_to = "v2/")]
 pub enum PluginAvailabilityStatus {
-    #[serde(rename = "ENABLED")]
-    #[ts(rename = "ENABLED")]
-    Enabled,
+    #[serde(rename = "AVAILABLE", alias = "ENABLED")]
+    #[ts(rename = "AVAILABLE")]
+    Available,
     #[serde(rename = "DISABLED_BY_ADMIN")]
     #[ts(rename = "DISABLED_BY_ADMIN")]
     DisabledByAdmin,
@@ -4847,6 +4847,7 @@ pub struct PluginSummary {
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
     pub auth_policy: PluginAuthPolicy,
+    /// Remote-only availability status. Local plugins leave this unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub status: Option<PluginAvailabilityStatus>,
@@ -10737,6 +10738,7 @@ mod tests {
                     enabled: false,
                     install_policy: PluginInstallPolicy::Available,
                     auth_policy: PluginAuthPolicy::OnUse,
+                    status: Some(PluginAvailabilityStatus::Available),
                     interface: None,
                 }],
             })
@@ -10750,6 +10752,7 @@ mod tests {
                     "enabled": false,
                     "installPolicy": "AVAILABLE",
                     "authPolicy": "ON_USE",
+                    "status": "AVAILABLE",
                     "interface": null,
                 }],
             }),

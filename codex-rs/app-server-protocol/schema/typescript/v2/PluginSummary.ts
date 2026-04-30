@@ -7,4 +7,8 @@ import type { PluginInstallPolicy } from "./PluginInstallPolicy";
 import type { PluginInterface } from "./PluginInterface";
 import type { PluginSource } from "./PluginSource";
 
-export type PluginSummary = { id: string, name: string, source: PluginSource, installed: boolean, enabled: boolean, installPolicy: PluginInstallPolicy, authPolicy: PluginAuthPolicy, status?: PluginAvailabilityStatus, interface: PluginInterface | null, };
+export type PluginSummary = { id: string, name: string, source: PluginSource, installed: boolean, enabled: boolean, installPolicy: PluginInstallPolicy, authPolicy: PluginAuthPolicy,
+/**
+ * Remote-only availability status. Local plugins leave this unset.
+ */
+status?: PluginAvailabilityStatus, interface: PluginInterface | null, };

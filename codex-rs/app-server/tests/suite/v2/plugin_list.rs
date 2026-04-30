@@ -1288,7 +1288,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     assert_eq!(remote_marketplace.plugins[0].enabled, true);
     assert_eq!(
         remote_marketplace.plugins[0].status,
-        Some(codex_app_server_protocol::PluginAvailabilityStatus::Enabled)
+        Some(codex_app_server_protocol::PluginAvailabilityStatus::Available)
     );
     assert_eq!(
         remote_marketplace.plugins[0]
