@@ -684,6 +684,7 @@ mod tests {
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
+            allow_managed_hooks_only: None,
             guardian_policy_config: Some("Use the managed guardian policy.".to_string()),
             feature_requirements: Some(FeatureRequirementsToml {
                 entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
@@ -893,6 +894,7 @@ approval_policy = "never"
             allowed_sandbox_modes: None,
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(Vec::new()),
+            allow_managed_hooks_only: None,
             guardian_policy_config: None,
             feature_requirements: None,
             hooks: None,
