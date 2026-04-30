@@ -664,9 +664,8 @@ impl TextArea {
     }
 
     fn handle_vim_normal(&mut self, event: KeyEvent) {
-        if let Some(op) = self.vim_operator.take()
-            && self.handle_vim_operator(op, event)
-        {
+        if let Some(op) = self.vim_operator.take() {
+            self.handle_vim_operator(op, event);
             return;
         }
 
@@ -2330,6 +2329,23 @@ mod tests {
 
         assert_eq!(t.text(), "world");
         assert_eq!(t.kill_buffer, "hello ");
+    }
+
+    #[test]
+    fn vim_operator_invalid_motion_is_consumed() {
+        let mut t = ta_with("hello");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        assert!(t.is_vim_operator_pending());
+
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "hello");
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
+        assert_eq!(t.cursor(), 0);
+        assert!(!t.is_vim_operator_pending());
     }
 
     #[test]

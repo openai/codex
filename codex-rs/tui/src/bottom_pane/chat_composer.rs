@@ -3087,6 +3087,9 @@ impl ChatComposer {
         if self.should_handle_vim_insert_escape(key_event) {
             return self.handle_input_basic(key_event);
         }
+        if self.textarea.is_vim_normal_mode() && self.textarea.is_vim_operator_pending() {
+            return self.handle_input_basic(key_event);
+        }
         if self.textarea.is_vim_normal_mode()
             && self.is_empty()
             && matches!(
@@ -8883,6 +8886,35 @@ mod tests {
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
         assert!(composer.textarea.is_empty());
         assert_eq!(composer.current_text(), "");
+    }
+
+    #[test]
+    fn vim_normal_operator_pending_consumes_submit_key() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_text_content("hello".to_string(), Vec::new(), Vec::new());
+        composer.set_vim_enabled(/*enabled*/ true);
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        assert!(composer.textarea.is_vim_operator_pending());
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert_eq!(composer.textarea.text(), "hello");
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Normal".magenta())
+        );
+        assert!(!composer.textarea.is_vim_operator_pending());
     }
 
     #[test]
