@@ -1467,6 +1467,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::PatchApplyEnd(_)
         | EventMsg::ImageGenerationBegin(_)
         | EventMsg::ImageGenerationEnd(_)
+        | EventMsg::ViewImageToolCall(_)
         | EventMsg::ExecApprovalRequest(_)
         | EventMsg::RequestPermissions(_)
         | EventMsg::RequestUserInput(_)

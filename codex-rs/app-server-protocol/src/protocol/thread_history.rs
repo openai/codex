@@ -50,6 +50,7 @@ use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_protocol::protocol::ViewImageToolCallEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
 use std::collections::HashMap;
@@ -188,6 +189,7 @@ impl ThreadHistoryBuilder {
             }
             EventMsg::McpToolCallBegin(payload) => self.handle_mcp_tool_call_begin(payload),
             EventMsg::McpToolCallEnd(payload) => self.handle_mcp_tool_call_end(payload),
+            EventMsg::ViewImageToolCall(payload) => self.handle_view_image_tool_call(payload),
             EventMsg::ImageGenerationBegin(payload) => self.handle_image_generation_begin(payload),
             EventMsg::ImageGenerationEnd(payload) => self.handle_image_generation_end(payload),
             EventMsg::CollabAgentSpawnBegin(payload) => {
@@ -350,17 +352,12 @@ impl ThreadHistoryBuilder {
                     ThreadItem::from(payload.item.clone()),
                 );
             }
-            codex_protocol::items::TurnItem::ImageView(_) => {
-                self.upsert_item_in_turn_id(
-                    &payload.turn_id,
-                    ThreadItem::from(payload.item.clone()),
-                );
-            }
             codex_protocol::items::TurnItem::UserMessage(_)
             | codex_protocol::items::TurnItem::HookPrompt(_)
             | codex_protocol::items::TurnItem::AgentMessage(_)
             | codex_protocol::items::TurnItem::Reasoning(_)
             | codex_protocol::items::TurnItem::WebSearch(_)
+            | codex_protocol::items::TurnItem::ImageView(_)
             | codex_protocol::items::TurnItem::ImageGeneration(_)
             | codex_protocol::items::TurnItem::ContextCompaction(_) => {}
         }
@@ -377,17 +374,12 @@ impl ThreadHistoryBuilder {
                     ThreadItem::from(payload.item.clone()),
                 );
             }
-            codex_protocol::items::TurnItem::ImageView(_) => {
-                self.upsert_item_in_turn_id(
-                    &payload.turn_id,
-                    ThreadItem::from(payload.item.clone()),
-                );
-            }
             codex_protocol::items::TurnItem::UserMessage(_)
             | codex_protocol::items::TurnItem::HookPrompt(_)
             | codex_protocol::items::TurnItem::AgentMessage(_)
             | codex_protocol::items::TurnItem::Reasoning(_)
             | codex_protocol::items::TurnItem::WebSearch(_)
+            | codex_protocol::items::TurnItem::ImageView(_)
             | codex_protocol::items::TurnItem::ImageGeneration(_)
             | codex_protocol::items::TurnItem::ContextCompaction(_) => {}
         }
@@ -573,6 +565,14 @@ impl ThreadHistoryBuilder {
             result,
             error,
             duration_ms,
+        };
+        self.upsert_item_in_current_turn(item);
+    }
+
+    fn handle_view_image_tool_call(&mut self, payload: &ViewImageToolCallEvent) {
+        let item = ThreadItem::ImageView {
+            id: payload.call_id.clone(),
+            path: payload.path.clone(),
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -1193,7 +1193,6 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
     use codex_protocol::items::HookPromptFragment as CoreHookPromptFragment;
-    use codex_protocol::items::ImageViewItem as CoreImageViewItem;
     use codex_protocol::items::TurnItem as CoreTurnItem;
     use codex_protocol::items::UserMessageItem as CoreUserMessageItem;
     use codex_protocol::items::build_hook_prompt_message;
@@ -1210,7 +1209,6 @@ mod tests {
     use codex_protocol::protocol::DynamicToolCallResponseEvent;
     use codex_protocol::protocol::ExecCommandEndEvent;
     use codex_protocol::protocol::ExecCommandSource;
-    use codex_protocol::protocol::ItemCompletedEvent;
     use codex_protocol::protocol::ItemStartedEvent;
     use codex_protocol::protocol::McpInvocation;
     use codex_protocol::protocol::McpToolCallEndEvent;
@@ -1379,55 +1377,6 @@ mod tests {
                 content: vec![UserInput::Text {
                     text: "hello".into(),
                     text_elements: Vec::new(),
-                }],
-            }
-        );
-    }
-
-    #[test]
-    fn replays_image_view_item_lifecycle_into_turn_history() {
-        let turn_id = "turn-image-view";
-        let thread_id = ThreadId::new();
-        let image_path = test_path_buf("/tmp/view-image.png").abs();
-        let items = vec![
-            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
-                turn_id: turn_id.to_string(),
-                started_at: None,
-                model_context_window: None,
-                collaboration_mode_kind: Default::default(),
-            })),
-            RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
-                thread_id,
-                turn_id: turn_id.to_string(),
-                item: CoreTurnItem::ImageView(CoreImageViewItem {
-                    id: "view-image-1".to_string(),
-                    path: image_path.clone(),
-                }),
-            })),
-            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
-                turn_id: turn_id.to_string(),
-                last_agent_message: None,
-                completed_at: None,
-                duration_ms: None,
-                time_to_first_token_ms: None,
-            })),
-        ];
-
-        let turns = build_turns_from_rollout_items(&items);
-
-        assert_eq!(turns.len(), 1);
-        assert_eq!(
-            turns[0],
-            Turn {
-                id: turn_id.to_string(),
-                status: TurnStatus::Completed,
-                error: None,
-                started_at: None,
-                completed_at: None,
-                duration_ms: None,
-                items: vec![ThreadItem::ImageView {
-                    id: "view-image-1".to_string(),
-                    path: image_path,
                 }],
             }
         );

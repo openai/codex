@@ -301,6 +301,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
 
     let mut item_started = None;
     let mut item_completed = None;
+    let mut legacy_event = None;
     wait_for_event_with_timeout(
         codex,
         |event| match event {
@@ -314,6 +315,10 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
                 if matches!(&event.item, codex_protocol::items::TurnItem::ImageView(_)) {
                     item_completed = Some(event.item.clone());
                 }
+                false
+            }
+            EventMsg::ViewImageToolCall(event) => {
+                legacy_event = Some(event.clone());
                 false
             }
             EventMsg::TurnComplete(_) => true,
@@ -339,6 +344,9 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         }
         other => panic!("expected ImageView item, got {other:?}"),
     }
+    let legacy_event = legacy_event.expect("legacy view image event emitted");
+    assert_eq!(legacy_event.call_id, call_id);
+    assert_eq!(legacy_event.path, abs_path);
 
     let req = mock.single_request();
     let body = req.body_json();

@@ -370,6 +370,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::ShutdownComplete
                     | EventMsg::ImageGenerationBegin(_)
                     | EventMsg::ImageGenerationEnd(_)
+                    | EventMsg::ViewImageToolCall(_)
                     | EventMsg::RawResponseItem(_)
                     | EventMsg::EnteredReviewMode(_)
                     | EventMsg::ItemStarted(_)

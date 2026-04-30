@@ -984,6 +984,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 }))
                 .await;
         }
+        EventMsg::ViewImageToolCall(_) => {}
         EventMsg::EnteredReviewMode(review_request) => {
             let review = review_request
                 .user_facing_hint

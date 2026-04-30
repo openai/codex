@@ -10,6 +10,7 @@ use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::ImageGenerationEndEvent;
 use crate::protocol::UserMessageEvent;
+use crate::protocol::ViewImageToolCallEvent;
 use crate::protocol::WebSearchEndEvent;
 use crate::user_input::ByteRange;
 use crate::user_input::TextElement;
@@ -410,7 +411,12 @@ impl TurnItem {
             TurnItem::AgentMessage(item) => item.as_legacy_events(),
             TurnItem::Plan(_) => Vec::new(),
             TurnItem::WebSearch(item) => vec![item.as_legacy_event()],
-            TurnItem::ImageView(_) => Vec::new(),
+            TurnItem::ImageView(item) => {
+                vec![EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
+                    call_id: item.id.clone(),
+                    path: item.path.clone(),
+                })]
+            }
             TurnItem::ImageGeneration(item) => vec![item.as_legacy_event()],
             TurnItem::Reasoning(item) => item.as_legacy_events(show_raw_agent_reasoning),
             TurnItem::ContextCompaction(item) => vec![item.as_legacy_event()],
