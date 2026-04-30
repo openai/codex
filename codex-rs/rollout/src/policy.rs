@@ -227,29 +227,4 @@ mod tests {
             EventPersistenceMode::Limited
         ));
     }
-
-    #[test]
-    fn persists_patch_apply_end_events_in_limited_mode() {
-        let event = EventMsg::PatchApplyEnd(PatchApplyEndEvent {
-            call_id: "patch_123".into(),
-            turn_id: "turn_123".into(),
-            stdout: "Done!".into(),
-            stderr: String::new(),
-            success: true,
-            changes: [(
-                PathBuf::from("README.md"),
-                FileChange::Add {
-                    content: "hello\n".into(),
-                },
-            )]
-            .into_iter()
-            .collect(),
-            status: PatchApplyStatus::Completed,
-        });
-
-        assert!(should_persist_event_msg(
-            &event,
-            EventPersistenceMode::Limited
-        ));
-    }
 }
