@@ -686,8 +686,9 @@ mod tests {
                         }
                     })
                     .collect::<String>();
-                let normalized =
-                    rendered.replace(&test_path_display("/tmp/hooks.json"), "/tmp/hooks.json");
+                let normalized = rendered
+                    .replace(&test_path_display("/tmp/hooks.json"), "/tmp/hooks.json")
+                    .replace(&test_path_display("/tmp/h.json"), "/tmp/h.json");
                 format!("{normalized:width$}", width = area.width as usize)
             })
             .collect::<Vec<_>>()
@@ -876,17 +877,19 @@ mod tests {
     #[test]
     fn renders_command_details_with_three_line_cap() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let mut capped_command_hook = hook(
+            "path:long-command",
+            HookEventName::PreToolUse,
+            HookSource::User,
+            /*plugin_id*/ None,
+            "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty",
+            /*enabled*/ true,
+            /*is_managed*/ false,
+            /*display_order*/ 0,
+        );
+        capped_command_hook.source_path = test_path_buf("/tmp/h.json").abs();
         let mut view = HooksBrowserView::new(
-            vec![hook(
-                "path:long-command",
-                HookEventName::PreToolUse,
-                HookSource::User,
-                /*plugin_id*/ None,
-                "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty",
-                /*enabled*/ true,
-                /*is_managed*/ false,
-                /*display_order*/ 0,
-            )],
+            vec![capped_command_hook],
             Vec::new(),
             Vec::new(),
             AppEventSender::new(tx_raw),
