@@ -23,7 +23,9 @@ use crate::OptionalStringPatch;
 use crate::SortDirection;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
+use crate::ThreadCreationMetadata;
 use crate::ThreadEventPersistenceMode;
+use crate::ThreadMetadataDefaults;
 use crate::ThreadMetadataPatch;
 use crate::ThreadSortKey;
 use crate::ThreadStoreError;
@@ -184,6 +186,18 @@ pub(super) fn dynamic_tools_json(
     dynamic_tools: &[DynamicToolSpec],
 ) -> ThreadStoreResult<Vec<String>> {
     serialize_json_vec(dynamic_tools, "dynamic_tool")
+}
+
+pub(super) fn thread_creation_metadata_json(
+    metadata: &ThreadCreationMetadata,
+) -> ThreadStoreResult<String> {
+    serialize_json(metadata, "thread_creation_metadata")
+}
+
+pub(super) fn thread_metadata_defaults_json(
+    metadata_defaults: &ThreadMetadataDefaults,
+) -> ThreadStoreResult<String> {
+    serialize_json(metadata_defaults, "thread_metadata_defaults")
 }
 
 pub(super) fn rollout_items_json(items: &[RolloutItem]) -> ThreadStoreResult<Vec<String>> {
