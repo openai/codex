@@ -33,6 +33,45 @@ use tokio::time::timeout;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[tokio::test]
+async fn external_agent_config_import_sends_completion_notification_for_sync_only_import()
+-> Result<()> {
+    let codex_home = TempDir::new()?;
+    let home_dir = codex_home.path().display().to_string();
+    let mut mcp =
+        McpProcess::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))]).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/import",
+            Some(serde_json::json!({
+                "migrationItems": [{
+                    "itemType": "CONFIG",
+                    "description": "Import config",
+                    "cwd": null
+                }]
+            })),
+        )
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ExternalAgentConfigImportResponse = to_response(response)?;
+    assert_eq!(response, ExternalAgentConfigImportResponse {});
+    let notification = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
+    )
+    .await??;
+    assert_eq!(notification.method, "externalAgentConfig/import/completed");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn external_agent_config_import_sends_completion_notification_for_local_plugins() -> Result<()>
 {
     let codex_home = TempDir::new()?;
