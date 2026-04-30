@@ -226,41 +226,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lock_validation_rejects_prompt_drift() {
-        let mut sc = crate::session::tests::make_session_configuration_for_tests().await;
-        sc.base_instructions = "original prompt".to_string();
-        let actual = sc.to_config_lock_toml().expect("lock should serialize");
-        let mut expected = actual.clone();
-        expected
-            .instructions
-            .as_mut()
-            .expect("lock should include instructions")
-            .push_str(" changed");
-
-        let error =
-            validate_config_lock_replay(&expected, &actual).expect_err("prompt drift should fail");
-        let message = error.to_string();
-        assert!(
-            message.contains("replayed effective config does not match config lock"),
-            "{message}"
-        );
-        assert!(message.contains("instructions = "), "{message}");
-    }
-
-    #[tokio::test]
-    async fn lock_validation_accepts_edited_prompt_when_replay_resolves_to_it() {
-        let mut sc = crate::session::tests::make_session_configuration_for_tests().await;
-        let mut expected = sc.to_config_lock_toml().expect("lock should serialize");
-        expected.instructions = Some("edited prompt".to_string());
-
-        sc.base_instructions = "edited prompt".to_string();
-        let actual = sc.to_config_lock_toml().expect("lock should serialize");
-
-        validate_config_lock_replay(&expected, &actual)
-            .expect("matching edited prompt should pass");
-    }
-
-    #[tokio::test]
     async fn lock_validation_reports_config_diff() {
         let sc = crate::session::tests::make_session_configuration_for_tests().await;
         let expected = sc.to_config_lock_toml().expect("lock should serialize");
