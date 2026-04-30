@@ -19,8 +19,6 @@ pub(crate) struct IdeContext {
     pub(crate) active_file: Option<ActiveFile>,
     #[serde(default)]
     pub(crate) open_tabs: Vec<FileDescriptor>,
-    #[serde(default)]
-    pub(crate) process_env: Option<IdeProcessEnv>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -40,12 +38,6 @@ pub(crate) struct ActiveFile {
 pub(crate) struct FileDescriptor {
     pub(crate) label: String,
     pub(crate) path: String,
-    #[serde(rename = "fsPath")]
-    pub(crate) fs_path: String,
-    #[serde(default)]
-    pub(crate) start_line: Option<u32>,
-    #[serde(default)]
-    pub(crate) end_line: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -58,11 +50,6 @@ pub(crate) struct Range {
 pub(crate) struct Position {
     pub(crate) line: u32,
     pub(crate) character: u32,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub(crate) struct IdeProcessEnv {
-    pub(crate) path: String,
 }
 
 #[cfg(test)]
@@ -89,19 +76,43 @@ mod tests {
                 {
                     "label": "main.rs",
                     "path": "src/main.rs",
-                    "fsPath": "/repo/src/main.rs"
+                    "fsPath": "/repo/src/main.rs",
+                    "startLine": 2,
+                    "endLine": 10
                 }
-            ]
+            ],
+            "processEnv": {
+                "path": "/usr/bin"
+            }
         });
 
         let context: IdeContext = serde_json::from_value(value).expect("deserialize ide context");
         assert_eq!(
-            context
-                .active_file
-                .as_ref()
-                .map(|file| file.descriptor.path.as_str()),
-            Some("src/lib.rs")
+            context,
+            IdeContext {
+                active_file: Some(ActiveFile {
+                    descriptor: FileDescriptor {
+                        label: "lib.rs".to_string(),
+                        path: "src/lib.rs".to_string(),
+                    },
+                    selection: Range {
+                        start: Position {
+                            line: 1,
+                            character: 2,
+                        },
+                        end: Position {
+                            line: 3,
+                            character: 4,
+                        },
+                    },
+                    active_selection_content: "selected".to_string(),
+                    selections: Vec::new(),
+                }),
+                open_tabs: vec![FileDescriptor {
+                    label: "main.rs".to_string(),
+                    path: "src/main.rs".to_string(),
+                }],
+            }
         );
-        assert_eq!(context.open_tabs.len(), 1);
     }
 }

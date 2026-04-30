@@ -163,9 +163,6 @@ mod tests {
         FileDescriptor {
             label: label.to_string(),
             path: path.to_string(),
-            fs_path: format!("/repo/{path}"),
-            start_line: None,
-            end_line: None,
         }
     }
 
@@ -191,7 +188,6 @@ mod tests {
                 descriptor("lib.rs", "src/lib.rs"),
                 descriptor("main.rs", "src/main.rs"),
             ],
-            process_env: None,
         };
 
         assert_eq!(
@@ -208,7 +204,6 @@ mod tests {
         let context = IdeContext {
             active_file: None,
             open_tabs: Vec::new(),
-            process_env: None,
         };
 
         assert_eq!(render_prompt_context(&context), None);
@@ -233,7 +228,6 @@ mod tests {
                 selections: Vec::new(),
             }),
             open_tabs: Vec::new(),
-            process_env: None,
         };
         let text = "Ask $figma".to_string();
         let mut items = vec![
@@ -308,7 +302,6 @@ mod tests {
                 selections: vec![first_range, second_range],
             }),
             open_tabs: Vec::new(),
-            process_env: None,
         };
 
         assert_eq!(
@@ -339,7 +332,6 @@ mod tests {
                 selections: Vec::new(),
             }),
             open_tabs: Vec::new(),
-            process_env: None,
         };
 
         let rendered = render_prompt_context(&context).expect("rendered IDE context");
