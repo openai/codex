@@ -166,15 +166,6 @@ pub enum RemotePluginCatalogError {
     UnknownMarketplace { marketplace_name: String },
 
     #[error(
-        "remote plugin `{plugin_id}` belongs to marketplace `{actual_marketplace_name}`, not `{expected_marketplace_name}`"
-    )]
-    MarketplaceMismatch {
-        plugin_id: String,
-        expected_marketplace_name: String,
-        actual_marketplace_name: String,
-    },
-
-    #[error(
         "remote plugin mutation returned unexpected plugin id: expected `{expected}`, got `{actual}`"
     )]
     UnexpectedPluginId { expected: String, actual: String },
@@ -568,35 +559,19 @@ pub async fn fetch_remote_plugin_skill_detail(
 async fn fetch_remote_plugin_detail_with_download_url_option(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
-    marketplace_name: &str,
+    _marketplace_name: &str,
     plugin_id: &str,
     include_download_urls: bool,
 ) -> Result<RemotePluginDetail, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
-    let scope = RemotePluginScope::from_marketplace_name(marketplace_name).ok_or_else(|| {
-        RemotePluginCatalogError::UnknownMarketplace {
-            marketplace_name: marketplace_name.to_string(),
-        }
-    })?;
     let plugin = fetch_plugin_detail(config, auth, plugin_id, include_download_urls).await?;
-    let actual_marketplace_name = plugin.scope.marketplace_name();
-    if actual_marketplace_name != marketplace_name {
-        return Err(RemotePluginCatalogError::MarketplaceMismatch {
-            plugin_id: plugin_id.to_string(),
-            expected_marketplace_name: marketplace_name.to_string(),
-            actual_marketplace_name: actual_marketplace_name.to_string(),
-        });
-    }
+    let scope = plugin.scope;
+    let marketplace_name = scope.marketplace_name().to_string();
+    // Remote plugin IDs uniquely identify remote plugins, so the caller-provided
+    // marketplace name is not validated here. The backend detail response is the
+    // source of truth for the plugin's actual scope/marketplace.
 
-    build_remote_plugin_detail(
-        config,
-        auth,
-        scope,
-        marketplace_name.to_string(),
-        plugin_id,
-        plugin,
-    )
-    .await
+    build_remote_plugin_detail(config, auth, scope, marketplace_name, plugin_id, plugin).await
 }
 
 async fn build_remote_plugin_detail(
@@ -652,15 +627,12 @@ async fn build_remote_plugin_detail(
 pub async fn install_remote_plugin(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
-    marketplace_name: &str,
+    _marketplace_name: &str,
     plugin_id: &str,
 ) -> Result<(), RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
-    if RemotePluginScope::from_marketplace_name(marketplace_name).is_none() {
-        return Err(RemotePluginCatalogError::UnknownMarketplace {
-            marketplace_name: marketplace_name.to_string(),
-        });
-    }
+    // Remote plugin IDs uniquely identify remote plugins, so the caller-provided
+    // marketplace name is not validated before sending the install mutation.
 
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/{plugin_id}/install");

@@ -761,7 +761,7 @@ impl CodexMessageProcessor {
             && !is_valid_remote_uninstall_plugin_id(&plugin_id)
         {
             return Err(invalid_request(
-                "invalid plugin id: expected a local plugin id in the form `plugin@marketplace` or a remote plugin id starting with `plugins~`, `app_`, `asdk_app_`, or `connector_`",
+                "invalid plugin id: expected a local plugin id in the form `plugin@marketplace` or a remote plugin id starting with `plugins~`, `plugins_`, `app_`, `asdk_app_`, or `connector_`",
             ));
         }
         if is_valid_remote_uninstall_plugin_id(&plugin_id) {
@@ -894,6 +894,7 @@ impl CodexMessageProcessor {
 fn is_valid_remote_uninstall_plugin_id(plugin_name: &str) -> bool {
     is_valid_remote_plugin_id(plugin_name)
         && (plugin_name.starts_with("plugins~")
+            || plugin_name.starts_with("plugins_")
             || plugin_name.starts_with("app_")
             || plugin_name.starts_with("asdk_app_")
             || plugin_name.starts_with("connector_"))
@@ -975,8 +976,7 @@ fn remote_plugin_catalog_error_to_jsonrpc(
         }
         RemotePluginCatalogError::InvalidPluginPath { .. }
         | RemotePluginCatalogError::ArchiveTooLarge { .. }
-        | RemotePluginCatalogError::UnknownMarketplace { .. }
-        | RemotePluginCatalogError::MarketplaceMismatch { .. } => JSONRPCErrorError {
+        | RemotePluginCatalogError::UnknownMarketplace { .. } => JSONRPCErrorError {
             code: INVALID_REQUEST_ERROR_CODE,
             message: format!("{context}: {err}"),
             data: None,
