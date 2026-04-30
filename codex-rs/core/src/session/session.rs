@@ -558,6 +558,24 @@ impl Session {
                     }),
                 });
             }
+            if config
+                .notify
+                .as_ref()
+                .is_some_and(|argv| !argv.is_empty() && !argv[0].is_empty())
+            {
+                post_session_configured_events.push(Event {
+                    id: INITIAL_SUBMIT_ID.to_owned(),
+                    msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
+                        summary:
+                            "`notify` is deprecated and will be removed in a future release."
+                                .to_string(),
+                        details: Some(
+                            "Use lifecycle hooks for new automation instead of adding new `notify` configurations."
+                                .to_string(),
+                        ),
+                    }),
+                });
+            }
             for message in &config.startup_warnings {
                 post_session_configured_events.push(Event {
                     id: "".to_owned(),

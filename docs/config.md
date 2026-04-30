@@ -60,7 +60,9 @@ disabled_tools = [
 
 ## Notify
 
-Codex can run a notification hook when the agent finishes a turn. See the configuration reference for the latest notification settings:
+`notify` is deprecated and will be removed in a future release. Existing configurations still work for compatibility, but new automation should use lifecycle hooks instead.
+
+Codex can run a legacy notification command when the agent finishes a turn. See the configuration reference for the latest notification settings:
 
 - https://developers.openai.com/codex/config-reference
 
