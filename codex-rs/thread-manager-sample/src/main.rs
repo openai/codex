@@ -53,13 +53,14 @@ use codex_core_api::WebSearchMode;
 use codex_core_api::arg0_dispatch_or_else;
 use codex_core_api::built_in_model_providers;
 use codex_core_api::find_codex_home;
+use codex_core_api::item_event_to_server_notification;
 use codex_core_api::set_default_originator;
 use codex_core_api::thread_store_from_config;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "codex-thread-manager-sample",
-    about = "Run one Codex turn through ThreadManager and print each event as newline-delimited JSON."
+    about = "Run one Codex turn through ThreadManager and print mapped notifications as newline-delimited JSON."
 )]
 struct Args {
     /// Override the model for this run.
@@ -125,7 +126,8 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         .await
         .context("start Codex thread")?;
 
-    let turn_output = run_turn(&thread, prompt).await;
+    let thread_id_string = thread_id.to_string();
+    let turn_output = run_turn(&thread, &thread_id_string, prompt).await;
     let shutdown_result = thread.shutdown_and_wait().await;
     let _ = thread_manager.remove_thread(&thread_id).await;
 
@@ -257,7 +259,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
     })
 }
 
-async fn run_turn(thread: &CodexThread, prompt: String) -> anyhow::Result<()> {
+async fn run_turn(thread: &CodexThread, thread_id: &str, prompt: String) -> anyhow::Result<()> {
     thread
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -271,12 +273,58 @@ async fn run_turn(thread: &CodexThread, prompt: String) -> anyhow::Result<()> {
         .await
         .context("submit user input")?;
 
+    let mut current_turn_id: Option<String> = None;
     let mut stdout = std::io::stdout().lock();
     loop {
         let event = thread.next_event().await.context("read Codex event")?;
-        serde_json::to_writer(&mut stdout, &event).context("serialize Codex event")?;
-        stdout.write_all(b"\n").context("write event newline")?;
-        stdout.flush().context("flush event output")?;
+        let notification = match &event.msg {
+            EventMsg::TurnStarted(event) => {
+                current_turn_id = Some(event.turn_id.clone());
+                None
+            }
+            EventMsg::DynamicToolCallResponse(_)
+            | EventMsg::McpToolCallBegin(_)
+            | EventMsg::McpToolCallEnd(_)
+            | EventMsg::CollabAgentSpawnBegin(_)
+            | EventMsg::CollabAgentSpawnEnd(_)
+            | EventMsg::CollabAgentInteractionBegin(_)
+            | EventMsg::CollabAgentInteractionEnd(_)
+            | EventMsg::CollabWaitingBegin(_)
+            | EventMsg::CollabWaitingEnd(_)
+            | EventMsg::CollabCloseBegin(_)
+            | EventMsg::CollabCloseEnd(_)
+            | EventMsg::CollabResumeBegin(_)
+            | EventMsg::CollabResumeEnd(_)
+            | EventMsg::AgentMessageContentDelta(_)
+            | EventMsg::PlanDelta(_)
+            | EventMsg::ReasoningContentDelta(_)
+            | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::AgentReasoningSectionBreak(_)
+            | EventMsg::ItemStarted(_)
+            | EventMsg::ItemCompleted(_)
+            | EventMsg::PatchApplyBegin(_)
+            | EventMsg::PatchApplyUpdated(_)
+            | EventMsg::TerminalInteraction(_)
+            | EventMsg::ExecCommandBegin(_)
+            | EventMsg::ExecCommandOutputDelta(_)
+            | EventMsg::ExecCommandEnd(_) => Some(item_event_to_server_notification(
+                event.msg.clone(),
+                thread_id,
+                current_turn_id
+                    .as_deref()
+                    .context("mapped notification arrived before turn started")?,
+                false,
+            )),
+            _ => None,
+        };
+        if let Some(notification) = notification {
+            serde_json::to_writer(&mut stdout, &notification)
+                .context("serialize mapped notification")?;
+            stdout
+                .write_all(b"\n")
+                .context("write notification newline")?;
+            stdout.flush().context("flush notification output")?;
+        }
 
         match event.msg {
             EventMsg::TurnComplete(_) => {
