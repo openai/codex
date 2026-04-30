@@ -86,9 +86,10 @@ fn rebase_text_elements_for_prompt_request(
     prompt_request_offset: usize,
     prompt_request_len: usize,
 ) -> Vec<TextElement> {
-    // Prompt context is folded into the raw user message for the agent, but the transcript shows
-    // only the user's request. Keep elements inside that visible request and shift their byte
-    // ranges so mentions/images still line up with the rendered text.
+    // Prompt context uses the same delimiter and stripping behavior as the desktop app and IDE
+    // extension. The raw user message goes to the agent, but every surface renders only the request
+    // after that delimiter, so keep elements inside the visible request and shift their byte ranges
+    // to match.
     let prompt_request_end = prompt_request_offset + prompt_request_len;
     text_elements
         .iter()
@@ -136,6 +137,15 @@ impl ChatWidget {
             event.local_images.clone(),
             event.images.clone().unwrap_or_default(),
         )
+    }
+
+    pub(super) fn rendered_user_message_event_has_visible_content(
+        rendered: &RenderedUserMessageEvent,
+    ) -> bool {
+        !rendered.message.trim().is_empty()
+            || !rendered.text_elements.is_empty()
+            || !rendered.local_images.is_empty()
+            || !rendered.remote_image_urls.is_empty()
     }
 
     /// Build the compare key for a submitted pending steer without invoking the

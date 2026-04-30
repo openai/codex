@@ -1222,6 +1222,92 @@ async fn committed_user_message_hides_prompt_context_in_history_cell() {
 }
 
 #[tokio::test]
+async fn committed_user_message_with_hidden_prompt_context_renders_local_images() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let local_image = PathBuf::from("/tmp/context-image.png");
+    let raw_message =
+        "# Context from my IDE setup:\n\n## Active file: src/lib.rs\n\n## My request for Codex:\n";
+
+    complete_user_message_for_inputs(
+        &mut chat,
+        "user-1",
+        vec![
+            UserInput::Text {
+                text: raw_message.to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::LocalImage {
+                path: local_image.clone(),
+            },
+        ],
+    );
+
+    let mut user_cell = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_cell = Some((cell.message.clone(), cell.local_image_paths.clone()));
+            break;
+        }
+    }
+
+    let (message, local_images) = user_cell.expect("expected user history cell");
+    assert_eq!(message, "");
+    assert_eq!(local_images, vec![local_image]);
+}
+
+#[tokio::test]
+async fn submitted_user_message_uses_same_prompt_request_rendering_for_dedupe() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: ThreadId::new(),
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::read_only(),
+        cwd: test_path_buf("/home/user/project").abs(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: None,
+    };
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+    let raw_message = "Before\n## My request for Codex:\nAfter";
+
+    chat.bottom_pane
+        .set_composer_text(raw_message.to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { .. } => {}
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
+    complete_user_message(&mut chat, "user-1", raw_message);
+
+    let mut user_messages = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_messages.push(cell.message.clone());
+        }
+    }
+
+    assert_eq!(user_messages, vec!["After".to_string()]);
+}
+
+#[tokio::test]
 async fn interrupt_restores_queued_messages_into_composer() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

@@ -170,8 +170,9 @@ impl OverlappedOperation {
                 return Err(error);
             }
 
-            match unsafe { WaitForSingleObject(self.event.raw(), remaining_timeout_ms(deadline)?) }
-            {
+            // Use a zero wait after the deadline so pending overlapped I/O still flows through
+            // cancel_and_timeout instead of returning while the OS operation owns this OVERLAPPED.
+            match unsafe { WaitForSingleObject(self.event.raw(), remaining_timeout_ms(deadline)) } {
                 WAIT_OBJECT_0 => {}
                 WAIT_TIMEOUT => return Err(self.cancel_and_timeout(handle)),
                 WAIT_FAILED => return Err(io::Error::last_os_error()),
@@ -312,14 +313,14 @@ fn token_user(token: HANDLE) -> io::Result<TokenUserBuffer> {
     Ok(TokenUserBuffer { buffer })
 }
 
-fn remaining_timeout_ms(deadline: Instant) -> io::Result<u32> {
+fn remaining_timeout_ms(deadline: Instant) -> u32 {
     let now = Instant::now();
     if now >= deadline {
-        return Err(timeout_io_error());
+        return 0;
     }
 
     let millis = deadline.duration_since(now).as_millis().max(1);
-    Ok(u32::try_from(millis).unwrap_or(u32::MAX))
+    u32::try_from(millis).unwrap_or(u32::MAX)
 }
 
 fn timeout_io_error() -> io::Error {

@@ -6300,9 +6300,8 @@ impl ChatWidget {
             self.refresh_pending_input_preview();
         }
 
-        // Show replayable user content in conversation history.
-        let display_user_message = render_in_history.then(|| {
-            user_message_for_restore(
+        if render_in_history {
+            let event = user_message_event_for_display(
                 UserMessage {
                     text,
                     local_images,
@@ -6311,48 +6310,15 @@ impl ChatWidget {
                     mention_bindings,
                 },
                 &history_record,
-            )
-        });
-        if let Some(display_user_message) = display_user_message {
-            let UserMessage {
-                text,
-                local_images,
-                remote_image_urls,
-                text_elements,
-                mention_bindings: _,
-            } = display_user_message;
-            if !text.is_empty() {
-                let local_image_paths = local_images
-                    .into_iter()
-                    .map(|img| img.path)
-                    .collect::<Vec<_>>();
-                self.last_rendered_user_message_event =
-                    Some(Self::rendered_user_message_event_from_parts(
-                        text.clone(),
-                        text_elements.clone(),
-                        local_image_paths.clone(),
-                        remote_image_urls.clone(),
-                    ));
+            );
+            let rendered = Self::rendered_user_message_event_from_event(&event);
+            self.last_rendered_user_message_event = Some(rendered.clone());
+            if Self::rendered_user_message_event_has_visible_content(&rendered) {
                 self.add_to_history(history_cell::new_user_prompt(
-                    text,
-                    text_elements,
-                    local_image_paths,
-                    remote_image_urls,
-                ));
-                self.record_visible_user_turn_for_copy();
-            } else if !remote_image_urls.is_empty() {
-                self.last_rendered_user_message_event =
-                    Some(Self::rendered_user_message_event_from_parts(
-                        String::new(),
-                        Vec::new(),
-                        Vec::new(),
-                        remote_image_urls.clone(),
-                    ));
-                self.add_to_history(history_cell::new_user_prompt(
-                    String::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    remote_image_urls,
+                    rendered.message,
+                    rendered.text_elements,
+                    rendered.local_images,
+                    rendered.remote_image_urls,
                 ));
                 self.record_visible_user_turn_for_copy();
             }
@@ -7779,10 +7745,7 @@ impl ChatWidget {
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
         let rendered = Self::rendered_user_message_event_from_event(&event);
         self.last_rendered_user_message_event = Some(rendered.clone());
-        if !rendered.message.trim().is_empty()
-            || !rendered.text_elements.is_empty()
-            || !rendered.remote_image_urls.is_empty()
-        {
+        if Self::rendered_user_message_event_has_visible_content(&rendered) {
             self.record_visible_user_turn_for_copy();
             self.add_to_history(history_cell::new_user_prompt(
                 rendered.message,

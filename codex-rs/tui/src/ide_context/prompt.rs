@@ -7,6 +7,10 @@ use codex_protocol::user_input::UserInput;
 use super::IdeContext;
 
 const MAX_ACTIVE_SELECTION_CHARS: usize = 200_000;
+// Match the desktop app and IDE extension delimiter exactly. IDE context is serialized into the
+// raw prompt before this marker, then transcript rendering strips back to the request after the last
+// marker. Keeping the same marker and stripping semantics lets threads created with IDE context in
+// one surface replay cleanly in the others.
 const PROMPT_REQUEST_BEGIN: &str = "## My request for Codex:";
 
 pub(crate) fn apply_ide_context_to_user_input(
