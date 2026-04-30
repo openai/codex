@@ -287,7 +287,8 @@ pub(super) fn split_server_envelope_for_transport(
         return Ok(Vec::new());
     }
 
-    let minimal_segment_count = message_size_bytes.max(1);
+    let minimal_segment_count =
+        usize::min(message_size_bytes.max(1), REMOTE_CONTROL_SEGMENT_COUNT_MAX);
     let minimal_chunk = &raw[..usize::min(raw.len(), 1)];
     if serialized_chunk_len(
         &envelope,
