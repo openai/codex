@@ -521,7 +521,7 @@ pub struct Config {
     /// When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.
     pub tui_status_line: Option<Vec<String>>,
 
-    /// Whether to color status line items with muted colors from the active syntax theme.
+    /// Whether to color status line items with colors from the active syntax theme.
     pub tui_status_line_use_theme_colors: bool,
 
     /// Ordered list of terminal title item identifiers for the TUI.

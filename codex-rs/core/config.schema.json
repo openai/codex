@@ -2488,7 +2488,7 @@
         },
         "status_line_use_theme_colors": {
           "default": true,
-          "description": "Color status line items with muted colors derived from the active syntax theme. Defaults to `true`.",
+          "description": "Color status line items with colors derived from the active syntax theme. Defaults to `true`.",
           "type": "boolean"
         },
         "terminal_resize_reflow_max_rows": {

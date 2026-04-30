@@ -627,7 +627,7 @@ pub struct Tui {
     #[serde(default)]
     pub status_line: Option<Vec<String>>,
 
-    /// Color status line items with muted colors derived from the active syntax theme.
+    /// Color status line items with colors derived from the active syntax theme.
     /// Defaults to `true`.
     #[serde(default = "default_true")]
     pub status_line_use_theme_colors: bool,
