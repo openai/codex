@@ -16,6 +16,7 @@ use codex_state::ThreadMetadata;
 use super::LocalThreadStore;
 use super::helpers::distinct_thread_metadata_title;
 use super::helpers::git_info_from_parts;
+use super::helpers::rollout_path_is_archived;
 use super::helpers::set_thread_name_from_title;
 use super::helpers::stored_thread_from_rollout_item;
 use super::live_writer;
@@ -45,6 +46,7 @@ pub(super) async fn read_thread(
             && let Some(rollout_path) = thread.rollout_path.clone()
             && let Ok(mut rollout_thread) = read_thread_from_rollout_path(store, rollout_path).await
             && rollout_thread.thread_id == thread_id
+            && (params.include_archived || rollout_thread.archived_at.is_none())
             && !rollout_thread.preview.is_empty()
         {
             if thread.name.is_some() {
@@ -160,6 +162,7 @@ async fn resolve_rollout_path(
                 message: format!("failed to check rollout path for thread id {thread_id}: {err}"),
             }
         })?
+        && (include_archived || !rollout_path_is_archived(store.config.codex_home.as_path(), &path))
     {
         return Ok(Some(path));
     }
@@ -196,12 +199,7 @@ async fn read_thread_from_rollout_path(
     let Some(item) = read_thread_item_from_rollout(path.clone()).await else {
         return stored_thread_from_session_meta(store, path).await;
     };
-    let archived = path.starts_with(
-        store
-            .config
-            .codex_home
-            .join(codex_rollout::ARCHIVED_SESSIONS_SUBDIR),
-    );
+    let archived = rollout_path_is_archived(store.config.codex_home.as_path(), path.as_path());
     let mut thread = stored_thread_from_rollout_item(
         item,
         archived,
@@ -314,12 +312,7 @@ async fn stored_thread_from_session_meta(
         .map_err(|err| ThreadStoreError::Internal {
             message: format!("failed to read thread {}: {err}", path.display()),
         })?;
-    let archived = path.starts_with(
-        store
-            .config
-            .codex_home
-            .join(codex_rollout::ARCHIVED_SESSIONS_SUBDIR),
-    );
+    let archived = rollout_path_is_archived(store.config.codex_home.as_path(), path.as_path());
     Ok(stored_thread_from_meta_line(
         store, meta_line, path, archived,
     ))

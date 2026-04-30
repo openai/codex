@@ -203,6 +203,16 @@ impl ThreadStore for LocalThreadStore {
         params: LoadThreadHistoryParams,
     ) -> ThreadStoreResult<StoredThreadHistory> {
         if let Ok(rollout_path) = live_writer::rollout_path(self, params.thread_id).await {
+            if !params.include_archived
+                && helpers::rollout_path_is_archived(
+                    self.config.codex_home.as_path(),
+                    rollout_path.as_path(),
+                )
+            {
+                return Err(ThreadStoreError::InvalidRequest {
+                    message: format!("thread {} is archived", params.thread_id),
+                });
+            }
             return read_thread::read_thread_by_rollout_path(
                 self,
                 rollout_path,
@@ -655,10 +665,30 @@ mod tests {
             .await
             .expect("flush live thread");
 
-        let history = store
+        let err = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect_err("active-only read should reject archived live thread");
+        assert!(matches!(err, ThreadStoreError::InvalidRequest { .. }));
+
+        let err = store
             .load_history(LoadThreadHistoryParams {
                 thread_id,
                 include_archived: false,
+            })
+            .await
+            .expect_err("active-only history should reject archived live thread");
+        assert!(matches!(err, ThreadStoreError::InvalidRequest { .. }));
+        assert!(err.to_string().contains("archived"));
+
+        let history = store
+            .load_history(LoadThreadHistoryParams {
+                thread_id,
+                include_archived: true,
             })
             .await
             .expect("load archived live history");
