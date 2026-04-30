@@ -21,29 +21,28 @@ impl Session {
     pub(crate) fn mcp_runtime_environment_for_configuration(
         &self,
         session_configuration: &SessionConfiguration,
-    ) -> McpRuntimeEnvironment {
-        if let Some(selected_environment) = session_configuration.environments.first() {
-            if let Some(environment) = self
+    ) -> CodexResult<McpRuntimeEnvironment> {
+        if let Some(turn_environment) = session_configuration.environments.first() {
+            let environment = self
                 .services
                 .environment_manager
-                .get_environment(&selected_environment.environment_id)
-            {
-                return McpRuntimeEnvironment::new(
-                    environment,
-                    selected_environment.cwd.to_path_buf(),
-                );
-            }
-
-            warn!(
-                "unknown stored MCP environment id `{}`; falling back to local environment",
-                selected_environment.environment_id
-            );
+                .get_environment(&turn_environment.environment_id)
+                .ok_or_else(|| {
+                    CodexErr::InvalidRequest(format!(
+                        "unknown stored MCP environment id `{}`",
+                        turn_environment.environment_id
+                    ))
+                })?;
+            return Ok(McpRuntimeEnvironment::new(
+                environment,
+                turn_environment.cwd.to_path_buf(),
+            ));
         }
 
-        McpRuntimeEnvironment::new(
+        Ok(McpRuntimeEnvironment::new(
             self.services.environment_manager.local_environment(),
             session_configuration.cwd.to_path_buf(),
-        )
+        ))
     }
 
     #[expect(

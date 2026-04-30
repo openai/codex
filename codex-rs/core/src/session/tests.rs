@@ -3340,6 +3340,92 @@ async fn relative_cwd_update_without_environments_resolves_under_session_cwd() {
 }
 
 #[tokio::test]
+async fn relative_cwd_update_with_turn_environment_resolves_under_turn_environment_cwd() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let (stored_cwd, turn_environment_cwd, expected_cwd) = {
+        let mut state = session.state.lock().await;
+        let stored_cwd = state.session_configuration.cwd.clone();
+        let stored_environment_cwd = stored_cwd.join("stored-environment");
+        let turn_environment_cwd = stored_cwd.join("turn-environment");
+        state.session_configuration.environments = vec![TurnEnvironmentSelection {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            cwd: stored_environment_cwd,
+        }];
+        let expected_cwd = turn_environment_cwd.join("project");
+        (stored_cwd, turn_environment_cwd, expected_cwd)
+    };
+    std::fs::create_dir_all(expected_cwd.as_path()).expect("create project dir");
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate {
+                cwd: Some(PathBuf::from("project")),
+                environments: Some(vec![TurnEnvironmentSelection {
+                    environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                    cwd: turn_environment_cwd.clone(),
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("turn should start");
+
+    let state = session.state.lock().await;
+    assert_eq!(state.session_configuration.cwd, expected_cwd);
+    assert_eq!(
+        state.session_configuration.environments[0].cwd,
+        stored_cwd.join("stored-environment")
+    );
+    assert_eq!(turn_context.cwd, expected_cwd);
+    assert_eq!(
+        turn_context
+            .primary_environment()
+            .expect("primary environment")
+            .cwd,
+        expected_cwd
+    );
+}
+
+#[tokio::test]
+async fn relative_cwd_update_with_empty_turn_environments_resolves_under_session_cwd() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let (stored_cwd, expected_cwd) = {
+        let mut state = session.state.lock().await;
+        let stored_cwd = state.session_configuration.cwd.clone();
+        state.session_configuration.environments = vec![TurnEnvironmentSelection {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            cwd: stored_cwd.join("stored-environment"),
+        }];
+        let expected_cwd = stored_cwd.join("project");
+        (stored_cwd, expected_cwd)
+    };
+    std::fs::create_dir_all(expected_cwd.as_path()).expect("create project dir");
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate {
+                cwd: Some(PathBuf::from("project")),
+                environments: Some(Vec::new()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("turn should start");
+
+    let state = session.state.lock().await;
+    assert_eq!(state.session_configuration.cwd, expected_cwd);
+    assert_eq!(
+        state.session_configuration.environments[0].cwd,
+        stored_cwd.join("stored-environment")
+    );
+    assert_eq!(turn_context.cwd, expected_cwd);
+    assert!(turn_context.primary_environment().is_none());
+    assert!(turn_context.environments.is_empty());
+}
+
+#[tokio::test]
 async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
@@ -4356,11 +4442,11 @@ async fn turn_environments_set_primary_environment() {
 
     let turn_environments = &turn_context.environments;
     assert_eq!(turn_environments.len(), 1);
-    let primary_environment = turn_context
+    let turn_environment = turn_context
         .primary_environment()
         .expect("primary environment should be set");
     assert!(std::sync::Arc::ptr_eq(
-        &primary_environment.environment,
+        &turn_environment.environment,
         &turn_environments[0].environment
     ));
     assert!(!turn_context.environments.is_empty());
@@ -4387,11 +4473,11 @@ async fn default_turn_uses_stored_thread_environments() {
 
     let turn_environments = &turn_context.environments;
     assert_eq!(turn_environments.len(), 1);
-    let primary_environment = turn_context
+    let turn_environment = turn_context
         .primary_environment()
         .expect("primary environment should be set");
     assert!(std::sync::Arc::ptr_eq(
-        &primary_environment.environment,
+        &turn_environment.environment,
         &turn_environments[0].environment
     ));
     assert_eq!(turn_context.cwd, selected_cwd);
@@ -4464,9 +4550,9 @@ async fn empty_turn_environments_clear_primary_environment() {
         .expect("turn should start");
 
     assert!(turn_context.primary_environment().is_none());
+    assert!(turn_context.environments.is_empty());
     assert_eq!(turn_context.cwd, session.get_config().await.cwd);
     assert_eq!(turn_context.config.cwd, session.get_config().await.cwd);
-    assert_eq!(turn_context.environments.len(), 0);
 }
 
 #[tokio::test]
@@ -4565,9 +4651,10 @@ async fn mcp_runtime_environment_uses_primary_selected_environment() {
         let state = session.state.lock().await;
         state.session_configuration.clone()
     };
-    let runtime_environment =
-        session.mcp_runtime_environment_for_configuration(&session_configuration);
-    let selected_environment = session
+    let runtime_environment = session
+        .mcp_runtime_environment_for_configuration(&session_configuration)
+        .expect("runtime environment");
+    let turn_environment = session
         .services
         .environment_manager
         .get_environment(codex_exec_server::LOCAL_ENVIRONMENT_ID)
@@ -4575,7 +4662,7 @@ async fn mcp_runtime_environment_uses_primary_selected_environment() {
 
     assert!(Arc::ptr_eq(
         &runtime_environment.environment(),
-        &selected_environment
+        &turn_environment
     ));
     assert_eq!(
         runtime_environment.fallback_cwd(),
@@ -4595,13 +4682,13 @@ async fn mcp_runtime_environment_for_turn_context_uses_turn_environment() {
     }
 
     let runtime_environment = session.mcp_runtime_environment_for_turn_context(&turn_context);
-    let primary_environment = turn_context
+    let turn_environment = turn_context
         .primary_environment()
         .expect("primary turn environment");
 
     assert!(Arc::ptr_eq(
         &runtime_environment.environment(),
-        &primary_environment.environment
+        &turn_environment.environment
     ));
     assert_eq!(
         runtime_environment.fallback_cwd(),
@@ -4621,8 +4708,9 @@ async fn mcp_runtime_environment_without_selection_uses_local_fallback() {
         let state = session.state.lock().await;
         state.session_configuration.clone()
     };
-    let runtime_environment =
-        session.mcp_runtime_environment_for_configuration(&session_configuration);
+    let runtime_environment = session
+        .mcp_runtime_environment_for_configuration(&session_configuration)
+        .expect("runtime environment");
     let local_environment = session.services.environment_manager.local_environment();
 
     assert!(Arc::ptr_eq(
@@ -4632,6 +4720,34 @@ async fn mcp_runtime_environment_without_selection_uses_local_fallback() {
     assert_eq!(
         runtime_environment.fallback_cwd(),
         session_configuration.cwd.to_path_buf()
+    );
+}
+
+#[tokio::test]
+async fn mcp_runtime_environment_for_configuration_errors_on_unknown_environment() {
+    let (session, _turn_context) = make_session_and_context().await;
+    {
+        let mut state = session.state.lock().await;
+        let cwd = state.session_configuration.cwd.clone();
+        state.session_configuration.environments = vec![TurnEnvironmentSelection {
+            environment_id: "missing-environment".to_string(),
+            cwd,
+        }];
+    }
+
+    let session_configuration = {
+        let state = session.state.lock().await;
+        state.session_configuration.clone()
+    };
+    let err = match session.mcp_runtime_environment_for_configuration(&session_configuration) {
+        Ok(_) => panic!("unknown stored environment should fail"),
+        Err(err) => err,
+    };
+
+    assert!(matches!(err, CodexErr::InvalidRequest(_)));
+    assert!(
+        err.to_string()
+            .contains("unknown stored MCP environment id `missing-environment`")
     );
 }
 

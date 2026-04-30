@@ -564,10 +564,16 @@ impl Session {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
-                    let effective_environments = updates
+                    let mut effective_environments = updates
                         .environments
                         .clone()
                         .unwrap_or_else(|| next.environments.clone());
+                    if updates.environments.is_some()
+                        && updates.cwd.is_some()
+                        && let Some(turn_environment) = effective_environments.first_mut()
+                    {
+                        turn_environment.cwd = next.cwd.clone();
+                    }
                     let turn_environments =
                         self.resolve_turn_environments(&effective_environments)?;
                     let previous_cwd = state.session_configuration.cwd.clone();
