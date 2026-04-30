@@ -24,7 +24,7 @@ pub(crate) fn default_thread_environment_selections(
         .collect()
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct ResolvedTurnEnvironments {
     pub(crate) turn_environments: Vec<TurnEnvironment>,
 }

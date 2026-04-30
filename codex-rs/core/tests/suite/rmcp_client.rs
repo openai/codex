@@ -46,6 +46,7 @@ use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::PathBufExt;
 use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::assert_regex_match;
 use core_test_support::remote_env_env_var;
@@ -621,6 +622,8 @@ async fn refreshed_stdio_server_uses_stored_environment_cwd() -> anyhow::Result<
             experimental_environment: remote_aware_experimental_environment(),
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
+            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             default_tools_approval_mode: None,
