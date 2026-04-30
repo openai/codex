@@ -2,6 +2,7 @@ use super::*;
 use crate::goals::GoalRuntimeState;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent

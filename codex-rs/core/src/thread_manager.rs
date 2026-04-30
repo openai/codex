@@ -5,7 +5,6 @@ use crate::config::Config;
 use crate::config::ThreadStoreConfig;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::resolve_environment_selections;
-use crate::environment_selection::validate_environment_selections;
 use crate::file_watcher::FileWatcher;
 use crate::mcp::McpManager;
 use crate::rollout::RolloutRecorder;
@@ -433,7 +432,8 @@ impl ThreadManager {
         &self,
         environments: &[TurnEnvironmentSelection],
     ) -> CodexResult<()> {
-        validate_environment_selections(self.state.environment_manager.as_ref(), environments)
+        resolve_environment_selections(self.state.environment_manager.as_ref(), environments)
+            .map(|_| ())
     }
 
     pub fn get_models_manager(&self) -> SharedModelsManager {

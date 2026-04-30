@@ -90,13 +90,6 @@ pub(crate) fn resolve_environment_selections(
     Ok(ResolvedTurnEnvironments { turn_environments })
 }
 
-pub(crate) fn validate_environment_selections(
-    environment_manager: &EnvironmentManager,
-    environments: &[TurnEnvironmentSelection],
-) -> CodexResult<()> {
-    resolve_environment_selections(environment_manager, environments).map(|_| ())
-}
-
 #[cfg(test)]
 mod tests {
     use codex_exec_server::ExecServerRuntimePaths;
@@ -145,11 +138,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn validate_environment_selections_rejects_duplicate_ids() {
+    async fn resolve_environment_selections_rejects_duplicate_ids() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let manager = EnvironmentManager::default_for_tests();
 
-        let err = validate_environment_selections(
+        let err = resolve_environment_selections(
             &manager,
             &[
                 TurnEnvironmentSelection {
