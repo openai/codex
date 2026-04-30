@@ -318,11 +318,6 @@ impl MessageProcessor {
                     auth_manager.clone(),
                     Some(on_effective_plugins_changed),
                 );
-            codex_message_processor
-                .maybe_start_remote_installed_plugin_bundle_sync_with_auth_manager(
-                    (*config).clone(),
-                    auth_manager.clone(),
-                );
         }
         let config_api = ConfigApi::new(
             config_manager,
