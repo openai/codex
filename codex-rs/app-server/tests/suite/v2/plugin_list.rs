@@ -302,7 +302,8 @@ async fn plugin_list_returns_empty_when_workspace_codex_plugins_disabled() -> Re
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_string(r#"{"beta_settings":{"plugins":false}}"#),
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"beta_settings":{"enable_plugins":false}}"#),
         )
         .mount(&server)
         .await;
@@ -391,7 +392,8 @@ async fn plugin_list_reuses_cached_workspace_codex_plugins_setting() -> Result<(
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_string(r#"{"beta_settings":{"plugins":true}}"#),
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"beta_settings":{"enable_plugins":true}}"#),
         )
         .mount(&server)
         .await;
