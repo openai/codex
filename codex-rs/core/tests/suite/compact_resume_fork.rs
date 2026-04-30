@@ -149,6 +149,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         "compact+resume test expects base path {base_path:?} to exist",
     );
 
+    shutdown_conversation(&base).await;
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
     let resumed_path = fetch_conversation_path(&resumed);
@@ -304,6 +305,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         "second compact test expects base path {base_path:?} to exist",
     );
 
+    shutdown_conversation(&base).await;
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
     let resumed_path = fetch_conversation_path(&resumed);
@@ -323,6 +325,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         "second compact test expects forked path {forked_path:?} to exist",
     );
 
+    shutdown_conversation(&forked).await;
     let resumed_again = resume_conversation(&manager, &config, forked_path).await;
     user_turn(&resumed_again, AFTER_SECOND_RESUME).await;
 
@@ -813,6 +816,13 @@ async fn compact_conversation(conversation: &Arc<CodexThread>) {
 
 fn fetch_conversation_path(conversation: &Arc<CodexThread>) -> std::path::PathBuf {
     conversation.rollout_path().expect("rollout path")
+}
+
+async fn shutdown_conversation(conversation: &Arc<CodexThread>) {
+    conversation
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown conversation");
 }
 
 async fn resume_conversation(

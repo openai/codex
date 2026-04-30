@@ -55,8 +55,11 @@ use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
+use codex_thread_store::ReadThreadParams;
 use codex_thread_store::RemoteThreadStore;
+use codex_thread_store::StoredThread;
 use codex_thread_store::ThreadStore;
+use codex_thread_store::ThreadStoreError;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -221,9 +224,9 @@ pub struct StartThreadOptions {
     pub environments: Vec<TurnEnvironmentSelection>,
 }
 
-pub(crate) struct ResumeThreadFromRolloutOptions {
+pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) config: Config,
-    pub(crate) rollout_path: PathBuf,
+    pub(crate) initial_history: InitialHistory,
     pub(crate) agent_control: AgentControl,
     pub(crate) session_source: SessionSource,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -854,6 +857,31 @@ impl ThreadManagerState {
         }
     }
 
+    pub(crate) async fn read_stored_thread(
+        &self,
+        params: ReadThreadParams,
+    ) -> CodexResult<StoredThread> {
+        let thread_id = params.thread_id;
+        self.thread_store
+            .read_thread(params)
+            .await
+            .map_err(|err| match err {
+                ThreadStoreError::ThreadNotFound { thread_id } => {
+                    CodexErr::ThreadNotFound(thread_id)
+                }
+                ThreadStoreError::InvalidRequest { message } => {
+                    if message.starts_with("no rollout found for thread id ") {
+                        CodexErr::ThreadNotFound(thread_id)
+                    } else {
+                        CodexErr::Fatal(format!(
+                            "failed to read stored thread {thread_id}: invalid thread-store request: {message}"
+                        ))
+                    }
+                }
+                err => CodexErr::Fatal(format!("failed to read stored thread {thread_id}: {err}")),
+            })
+    }
+
     /// Send an operation to a thread by ID.
     pub(crate) async fn send_op(&self, thread_id: ThreadId, op: Op) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
@@ -933,19 +961,18 @@ impl ThreadManagerState {
         .await
     }
 
-    pub(crate) async fn resume_thread_from_rollout_with_source(
+    pub(crate) async fn resume_thread_with_history_with_source(
         &self,
-        options: ResumeThreadFromRolloutOptions,
+        options: ResumeThreadWithHistoryOptions,
     ) -> CodexResult<NewThread> {
-        let ResumeThreadFromRolloutOptions {
+        let ResumeThreadWithHistoryOptions {
             config,
-            rollout_path,
+            initial_history,
             agent_control,
             session_source,
             inherited_shell_snapshot,
             inherited_exec_policy,
         } = options;
-        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
         let environments =
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd);
         Box::pin(self.spawn_thread_with_source(

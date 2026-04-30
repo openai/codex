@@ -4487,7 +4487,8 @@ impl CodexMessageProcessor {
         request_id: &ConnectionRequestId,
         params: &ThreadResumeParams,
     ) -> Result<bool, JSONRPCErrorError> {
-        if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
+        let running_thread = if let Ok(existing_thread_id) =
+            ThreadId::from_string(&params.thread_id)
             && let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await
         {
             if params.history.is_some() {
@@ -4521,6 +4522,31 @@ impl CodexMessageProcessor {
                     source_thread.thread_id
                 )));
             }
+            Some((existing_thread_id, existing_thread, source_thread))
+        } else if params.path.is_some() {
+            let source_thread = self
+                .read_stored_thread_for_resume(
+                    &params.thread_id,
+                    params.path.as_ref(),
+                    /*include_history*/ true,
+                )
+                .await?;
+            let existing_thread_id = source_thread.thread_id;
+            if let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await {
+                if params.history.is_some() {
+                    return Err(invalid_request(format!(
+                        "cannot resume thread {existing_thread_id} with history while it is already running"
+                    )));
+                }
+                Some((existing_thread_id, existing_thread, source_thread))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some((existing_thread_id, existing_thread, source_thread)) = running_thread {
             let history_items = source_thread
                 .history
                 .as_ref()
