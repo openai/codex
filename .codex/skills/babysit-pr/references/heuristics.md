@@ -25,9 +25,10 @@ If uncertain, inspect failed logs once before choosing rerun.
 1. If PR is merged/closed: stop.
 2. If there are failed checks:
    - Diagnose first.
+   - If checks are still pending but an individual job has already failed: fetch that job's logs and diagnose now.
    - If branch-related: fix locally, commit, push.
    - If likely flaky/unrelated and all checks for the current SHA are terminal: rerun failed jobs.
-   - If checks are still pending: wait.
+   - If checks are still pending and no failed job is available yet: wait.
 3. If flaky reruns for the same SHA reach the configured limit (default 3): stop and report persistent failure.
 4. Independently, process any new human review comments.
 
