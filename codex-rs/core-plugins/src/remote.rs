@@ -16,15 +16,15 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-mod installed_bundle_sync;
+mod remote_installed_plugin_sync;
 mod share;
 
-pub use installed_bundle_sync::RemoteInstalledPluginBundleSyncError;
-pub use installed_bundle_sync::RemoteInstalledPluginBundleSyncOutcome;
-pub use installed_bundle_sync::RemotePluginCacheMutationGuard;
-pub use installed_bundle_sync::mark_remote_plugin_cache_mutation_in_flight;
-pub use installed_bundle_sync::maybe_start_remote_installed_plugin_bundle_sync;
-pub use installed_bundle_sync::sync_remote_installed_plugin_bundles_once;
+pub use remote_installed_plugin_sync::RemoteInstalledPluginBundleSyncError;
+pub use remote_installed_plugin_sync::RemoteInstalledPluginBundleSyncOutcome;
+pub use remote_installed_plugin_sync::RemotePluginCacheMutationGuard;
+pub use remote_installed_plugin_sync::mark_remote_plugin_cache_mutation_in_flight;
+pub use remote_installed_plugin_sync::maybe_start_remote_installed_plugin_bundle_sync;
+pub use remote_installed_plugin_sync::sync_remote_installed_plugin_bundles_once;
 pub use share::RemotePluginShareSaveResult;
 pub use share::delete_remote_plugin_share;
 pub use share::list_remote_plugin_shares;

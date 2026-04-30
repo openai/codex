@@ -403,7 +403,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn installed_bundle_sync_in_flight_dedupes_by_cache_root() {
+    fn remote_installed_plugin_sync_in_flight_dedupes_by_cache_root() {
         let codex_home = tempfile::tempdir().expect("create codex home");
         let key = RemoteInstalledPluginBundleSyncKey {
             plugin_cache_root: remote_plugin_cache_root(codex_home.path()),
