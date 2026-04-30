@@ -16,23 +16,23 @@ const MAX_LOCK_DIFFS: usize = 5;
 const MAX_DIFF_VALUE_CHARS: usize = 120;
 
 pub(crate) async fn read_config_lock_from_path(path: &AbsolutePathBuf) -> io::Result<ConfigToml> {
-    let contents = tokio::fs::read_to_string(path)
-        .await
-        .with_context_io(|| format!("failed to read config lock file {}", path.display()))?;
+    let contents = tokio::fs::read_to_string(path).await.map_err(|err| {
+        config_lock_error(format!(
+            "failed to read config lock file {}: {err}",
+            path.display()
+        ))
+    })?;
     let lock_config: ConfigToml = toml::from_str(&contents).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("failed to parse config lock file {}: {err}", path.display()),
-        )
+        config_lock_error(format!(
+            "failed to parse config lock file {}: {err}",
+            path.display()
+        ))
     })?;
     let Some(lock) = lock_config.config_lock.as_ref() else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "config lock file {} is missing [config_lock] metadata",
-                path.display()
-            ),
-        ));
+        return Err(config_lock_error(format!(
+            "config lock file {} is missing [config_lock] metadata",
+            path.display()
+        )));
     };
     validate_config_lock_metadata_shape(lock)?;
     Ok(lock_config)
@@ -134,10 +134,7 @@ fn compact_diff<T: Serialize>(root: &str, expected: &T, actual: &T) -> io::Resul
 }
 
 fn diff_serialize_error(err: serde_json::Error) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidData,
-        format!("failed to serialize config lock diff value: {err}"),
-    )
+    config_lock_error(format!("failed to serialize config lock diff value: {err}"))
 }
 
 fn collect_value_diffs(
@@ -252,12 +249,8 @@ fn summarize_string(value: &str) -> String {
 }
 
 fn toml_value<T: Serialize>(value: &T, label: &str) -> io::Result<toml::Value> {
-    toml::Value::try_from(value).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("failed to serialize {label}: {err}"),
-        )
-    })
+    toml::Value::try_from(value)
+        .map_err(|err| config_lock_error(format!("failed to serialize {label}: {err}")))
 }
 
 pub(crate) fn toml_round_trip<T>(value: &impl Serialize, label: &'static str) -> io::Result<T>
@@ -266,27 +259,13 @@ where
 {
     let value = toml_value(value, label)?;
     let toml = value.clone().try_into().map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("failed to convert {label} to TOML shape: {err}"),
-        )
+        config_lock_error(format!("failed to convert {label} to TOML shape: {err}"))
     })?;
     let represented_value = toml_value(&toml, label)?;
     if represented_value != value {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("resolved {label} cannot be fully represented as TOML"),
-        ));
+        return Err(config_lock_error(format!(
+            "resolved {label} cannot be fully represented as TOML"
+        )));
     }
     Ok(toml)
-}
-
-trait IoContext<T> {
-    fn with_context_io(self, context: impl FnOnce() -> String) -> io::Result<T>;
-}
-
-impl<T> IoContext<T> for io::Result<T> {
-    fn with_context_io(self, context: impl FnOnce() -> String) -> io::Result<T> {
-        self.map_err(|err| io::Error::new(err.kind(), format!("{}: {err}", context())))
-    }
 }

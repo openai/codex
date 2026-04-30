@@ -33,8 +33,6 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
-use serde::Deserialize;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -43,30 +41,20 @@ use tokio::sync::watch;
 
 use codex_rollout::state_db::StateDbHandle;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
     pub model: String,
     pub model_provider_id: String,
     pub service_tier: Option<ServiceTier>,
-    pub model_reasoning_summary: Option<ReasoningSummary>,
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
     pub permission_profile: PermissionProfile,
     pub active_permission_profile: Option<ActivePermissionProfile>,
-    pub windows_sandbox_level: WindowsSandboxLevel,
     pub cwd: AbsolutePathBuf,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub personality: Option<Personality>,
-    pub base_instructions: String,
-    pub developer_instructions: Option<String>,
-    pub user_instructions: Option<String>,
-    pub compact_prompt: Option<String>,
     pub session_source: SessionSource,
-    pub environments: Vec<codex_protocol::protocol::TurnEnvironmentSelection>,
-    pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
-    pub persist_extended_history: bool,
 }
 
 impl ThreadConfigSnapshot {

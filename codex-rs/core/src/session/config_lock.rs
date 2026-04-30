@@ -18,7 +18,7 @@ pub(crate) async fn validate_config_lock_if_configured(
 ) -> anyhow::Result<()> {
     let Some(expected) = session_configuration
         .original_config_do_not_use
-        .config_lock
+        .config_lock_toml
         .as_ref()
     else {
         return Ok(());
@@ -88,7 +88,6 @@ fn session_configuration_to_lock_config_toml(
     lock_config.permission_profile = Some(sc.permission_profile.get().clone());
     lock_config.web_search = Some(config.web_search_mode.value());
     lock_config.model_provider = Some(config.model_provider_id.clone());
-    lock_config.model_reasoning_effort = config.model_reasoning_effort;
     lock_config.plan_mode_reasoning_effort = config.plan_mode_reasoning_effort;
     lock_config.model_verbosity = config.model_verbosity;
     lock_config.include_permissions_instructions = Some(config.include_permissions_instructions);
@@ -291,6 +290,19 @@ mod tests {
             "{message}"
         );
         assert!(message.contains("config.instructions"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn lock_validation_accepts_edited_prompt_when_replay_resolves_to_it() {
+        let mut sc = crate::session::tests::make_session_configuration_for_tests().await;
+        let mut expected = sc.to_config_lock_toml().expect("lock should serialize");
+        expected.instructions = Some("edited prompt".to_string());
+
+        sc.base_instructions = "edited prompt".to_string();
+        let actual = sc.to_config_lock_toml().expect("lock should serialize");
+
+        validate_config_lock_replay(&expected, &actual)
+            .expect("matching edited prompt should pass");
     }
 
     #[tokio::test]

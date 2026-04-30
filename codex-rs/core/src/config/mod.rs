@@ -625,7 +625,7 @@ pub struct Config {
     pub config_snapshot_export_dir: Option<AbsolutePathBuf>,
 
     /// Effective config lock used for strict replay validation.
-    pub(crate) config_lock: Option<Arc<ConfigToml>>,
+    pub config_lock_toml: Option<Arc<ConfigToml>>,
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
@@ -968,8 +968,7 @@ impl ConfigBuilder {
         if let Some(config_lock_file) = config_toml.config_lock_file.as_ref() {
             let lock_config_toml = read_config_lock_from_path(config_lock_file).await?;
             let Some(lock_metadata) = lock_config_toml.config_lock.clone() else {
-                return Err(std::io::Error::new(
-                    ErrorKind::InvalidData,
+                return Err(std::io::Error::other(
                     "config lock file is missing [config_lock] metadata",
                 ));
             };
@@ -990,7 +989,7 @@ impl ConfigBuilder {
                 lock_config_layer_stack,
             )
             .await?;
-            config.config_lock = Some(Arc::new(expected_lock_config));
+            config.config_lock_toml = Some(Arc::new(expected_lock_config));
             return Ok(config);
         }
         Config::load_config_with_layer_stack(
@@ -2925,7 +2924,7 @@ impl Config {
             sqlite_home,
             log_dir,
             config_snapshot_export_dir: cfg.config_snapshot_export_dir,
-            config_lock: None,
+            config_lock_toml: None,
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
