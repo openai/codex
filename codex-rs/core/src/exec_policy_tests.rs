@@ -674,6 +674,22 @@ fn commands_for_exec_policy_falls_back_for_whitespace_shell_script() {
     assert_eq!(commands_for_exec_policy(&command), (vec![command], false));
 }
 
+#[cfg(windows)]
+#[test]
+fn commands_for_exec_policy_parses_powershell_shell_wrapper() {
+    let command = vec![
+        "powershell.exe".to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        "echo blocked".to_string(),
+    ];
+
+    assert_eq!(
+        commands_for_exec_policy(&command),
+        (vec![vec!["echo".to_string(), "blocked".to_string()]], false)
+    );
+}
+
 #[tokio::test]
 async fn ignore_user_config_keeps_user_policy_files() -> std::io::Result<()> {
     let temp = tempdir()?;
