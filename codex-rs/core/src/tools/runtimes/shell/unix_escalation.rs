@@ -681,6 +681,7 @@ fn evaluate_intercepted_exec_policy(
             cmd,
             sandbox_permissions,
             used_complex_parsing,
+            crate::exec_policy::ExecPolicyCommandOrigin::Direct,
         )
     };
 

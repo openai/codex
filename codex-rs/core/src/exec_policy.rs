@@ -25,7 +25,9 @@ use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_shell_command::is_dangerous_command::command_might_be_dangerous;
+use codex_shell_command::is_dangerous_command::is_dangerous_powershell_words;
 use codex_shell_command::is_safe_command::is_known_safe_command;
+use codex_shell_command::is_safe_command::is_safe_powershell_words;
 use thiserror::Error;
 use tokio::fs;
 use tokio::sync::Semaphore;
@@ -99,6 +101,12 @@ static BANNED_PREFIX_SUGGESTIONS: &[&[&str]] = &[
     &["lua", "-e"],
     &["osascript"],
 ];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ExecPolicyCommandOrigin {
+    Direct,
+    PowerShell,
+}
 
 pub(crate) fn child_uses_parent_exec_policy(parent_config: &Config, child_config: &Config) -> bool {
     fn exec_policy_config_folders(config: &Config) -> Vec<AbsolutePathBuf> {
@@ -248,7 +256,7 @@ impl ExecPolicyManager {
             prefix_rule,
         } = req;
         let exec_policy = self.current();
-        let (commands, used_complex_parsing) = commands_for_exec_policy(command);
+        let (commands, used_complex_parsing, command_origin) = commands_for_exec_policy(command);
         // Keep heredoc prefix parsing for rule evaluation so existing
         // allow/prompt/forbidden rules still apply, but avoid auto-derived
         // amendments when only the heredoc fallback parser matched.
@@ -262,6 +270,7 @@ impl ExecPolicyManager {
                 cmd,
                 sandbox_permissions,
                 used_complex_parsing,
+                command_origin,
             )
         };
         let match_options = MatchOptions {
@@ -583,7 +592,7 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
 }
 
 /// If a command is not matched by any execpolicy rule, derive a [`Decision`].
-pub fn render_decision_for_unmatched_command(
+pub(crate) fn render_decision_for_unmatched_command(
     approval_policy: AskForApproval,
     permission_profile: &PermissionProfile,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
@@ -591,8 +600,13 @@ pub fn render_decision_for_unmatched_command(
     command: &[String],
     sandbox_permissions: SandboxPermissions,
     used_complex_parsing: bool,
+    command_origin: ExecPolicyCommandOrigin,
 ) -> Decision {
-    if is_known_safe_command(command) && !used_complex_parsing {
+    let is_known_safe = match command_origin {
+        ExecPolicyCommandOrigin::Direct => is_known_safe_command(command),
+        ExecPolicyCommandOrigin::PowerShell => is_safe_powershell_words(command),
+    };
+    if is_known_safe && !used_complex_parsing {
         return Decision::Allow;
     }
 
@@ -611,7 +625,11 @@ pub fn render_decision_for_unmatched_command(
     // We prefer to prompt the user rather than outright forbid the command,
     // but if the user has explicitly disabled prompts, we must
     // forbid the command.
-    if command_might_be_dangerous(command) || environment_lacks_sandbox_protections {
+    let command_is_dangerous = match command_origin {
+        ExecPolicyCommandOrigin::Direct => command_might_be_dangerous(command),
+        ExecPolicyCommandOrigin::PowerShell => is_dangerous_powershell_words(command),
+    };
+    if command_is_dangerous || environment_lacks_sandbox_protections {
         return match approval_policy {
             AskForApproval::Never => {
                 let sandbox_is_explicitly_disabled = matches!(
@@ -639,7 +657,7 @@ pub fn render_decision_for_unmatched_command(
             Decision::Allow
         }
         AskForApproval::UnlessTrusted => {
-            // We already checked `is_known_safe_command(command)` and it
+            // We already checked the unmatched-command safelist and it
             // returned false, so we must prompt.
             Decision::Prompt
         }
@@ -700,25 +718,31 @@ fn default_policy_path(codex_home: &Path) -> PathBuf {
     codex_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
 }
 
-fn commands_for_exec_policy(command: &[String]) -> (Vec<Vec<String>>, bool) {
+fn commands_for_exec_policy(
+    command: &[String],
+) -> (Vec<Vec<String>>, bool, ExecPolicyCommandOrigin) {
     if let Some(commands) = parse_shell_lc_plain_commands(command)
         && !commands.is_empty()
     {
-        return (commands, false);
+        return (commands, false, ExecPolicyCommandOrigin::Direct);
     }
 
     #[cfg(windows)]
     if let Some(commands) = parse_powershell_command_plain_commands(command)
         && !commands.is_empty()
     {
-        return (commands, false);
+        return (commands, false, ExecPolicyCommandOrigin::PowerShell);
     }
 
     if let Some(single_command) = parse_shell_lc_single_command_prefix(command) {
-        return (vec![single_command], true);
+        return (vec![single_command], true, ExecPolicyCommandOrigin::Direct);
     }
 
-    (vec![command.to_vec()], false)
+    (
+        vec![command.to_vec()],
+        false,
+        ExecPolicyCommandOrigin::Direct,
+    )
 }
 
 /// Derive a proposed execpolicy amendment when a command requires user approval

@@ -711,7 +711,10 @@ async fn evaluates_powershell_inner_commands_against_allow_rules() {
 fn commands_for_exec_policy_falls_back_for_empty_shell_script() {
     let command = vec!["bash".to_string(), "-lc".to_string(), "".to_string()];
 
-    assert_eq!(commands_for_exec_policy(&command), (vec![command], false));
+    assert_eq!(
+        commands_for_exec_policy(&command),
+        (vec![command], false, ExecPolicyCommandOrigin::Direct)
+    );
 }
 
 #[test]
@@ -722,7 +725,10 @@ fn commands_for_exec_policy_falls_back_for_whitespace_shell_script() {
         "  \n\t  ".to_string(),
     ];
 
-    assert_eq!(commands_for_exec_policy(&command), (vec![command], false));
+    assert_eq!(
+        commands_for_exec_policy(&command),
+        (vec![command], false, ExecPolicyCommandOrigin::Direct)
+    );
 }
 
 #[cfg(windows)]
@@ -737,8 +743,64 @@ fn commands_for_exec_policy_parses_powershell_shell_wrapper() {
 
     assert_eq!(
         commands_for_exec_policy(&command),
-        (vec![vec!["echo".to_string(), "blocked".to_string()]], false)
+        (
+            vec![vec!["echo".to_string(), "blocked".to_string()]],
+            false,
+            ExecPolicyCommandOrigin::PowerShell,
+        )
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn unmatched_safe_powershell_words_are_allowed() {
+    let command = vec!["Get-Content".to_string(), "Cargo.toml".to_string()];
+
+    assert_eq!(
+        Decision::Allow,
+        render_decision_for_unmatched_command(
+            AskForApproval::UnlessTrusted,
+            &permission_profile_from_sandbox_policy(&SandboxPolicy::new_read_only_policy()),
+            &read_only_file_system_sandbox_policy(),
+            Path::new("/tmp"),
+            &command,
+            SandboxPermissions::UseDefault,
+            /*used_complex_parsing*/ false,
+            ExecPolicyCommandOrigin::PowerShell,
+        )
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn unmatched_dangerous_powershell_inner_commands_require_approval() {
+    let inner_command = vec![
+        "Remove-Item".to_string(),
+        "test".to_string(),
+        "-Force".to_string(),
+    ];
+
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: None,
+            command: vec![
+                "powershell.exe".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Remove-Item test -Force".to_string(),
+            ],
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            file_system_sandbox_policy: unrestricted_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(inner_command)),
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -1041,6 +1103,7 @@ fn unmatched_granular_policy_still_prompts_for_restricted_sandbox_escalation() {
             &command,
             SandboxPermissions::RequireEscalated,
             /*used_complex_parsing*/ false,
+            ExecPolicyCommandOrigin::Direct,
         )
     );
 }
@@ -1060,6 +1123,7 @@ fn unmatched_on_request_uses_split_filesystem_policy_for_escalation_prompts() {
             &command,
             SandboxPermissions::RequireEscalated,
             /*used_complex_parsing*/ false,
+            ExecPolicyCommandOrigin::Direct,
         )
     );
 }
