@@ -59,7 +59,7 @@ pub(super) async fn resume_thread(
     let config = RolloutConfig {
         codex_home: store.config.codex_home.clone(),
         sqlite_home: store.config.sqlite_home.clone(),
-        cwd: store.config.cwd.clone(),
+        cwd: store.config.codex_home.clone(),
         model_provider_id: params.metadata_defaults.model_provider.clone(),
         generate_memories: true,
     };

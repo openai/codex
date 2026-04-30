@@ -12,11 +12,12 @@ mod test_support;
 
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
-use codex_rollout::RolloutConfig;
+use codex_rollout::RolloutConfigView;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::StateDbHandle;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -41,9 +42,52 @@ use crate::UpdateThreadMetadataParams;
 /// Local filesystem/SQLite-backed implementation of [`ThreadStore`].
 #[derive(Clone)]
 pub struct LocalThreadStore {
-    pub(super) config: RolloutConfig,
+    pub(super) config: LocalThreadStoreConfig,
     live_recorders: Arc<Mutex<HashMap<ThreadId, RolloutRecorder>>>,
     state_db: Arc<OnceCell<StateDbHandle>>,
+}
+
+/// Process-scoped configuration for local thread storage.
+///
+/// This describes where local storage lives. New-thread rollout metadata such
+/// as cwd and memory mode is supplied when a thread is created.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalThreadStoreConfig {
+    pub codex_home: PathBuf,
+    pub sqlite_home: PathBuf,
+    pub default_model_provider_id: String,
+}
+
+impl LocalThreadStoreConfig {
+    pub fn from_config(config: &impl RolloutConfigView) -> Self {
+        Self {
+            codex_home: config.codex_home().to_path_buf(),
+            sqlite_home: config.sqlite_home().to_path_buf(),
+            default_model_provider_id: config.model_provider_id().to_string(),
+        }
+    }
+}
+
+impl RolloutConfigView for LocalThreadStoreConfig {
+    fn codex_home(&self) -> &Path {
+        self.codex_home.as_path()
+    }
+
+    fn sqlite_home(&self) -> &Path {
+        self.sqlite_home.as_path()
+    }
+
+    fn cwd(&self) -> &Path {
+        self.codex_home.as_path()
+    }
+
+    fn model_provider_id(&self) -> &str {
+        self.default_model_provider_id.as_str()
+    }
+
+    fn generate_memories(&self) -> bool {
+        false
+    }
 }
 
 impl std::fmt::Debug for LocalThreadStore {
@@ -55,8 +99,8 @@ impl std::fmt::Debug for LocalThreadStore {
 }
 
 impl LocalThreadStore {
-    /// Create a local store from the rollout configuration used by existing local persistence.
-    pub fn new(config: RolloutConfig) -> Self {
+    /// Create a local store from process-scoped local storage configuration.
+    pub fn new(config: LocalThreadStoreConfig) -> Self {
         Self {
             config,
             live_recorders: Arc::new(Mutex::new(HashMap::new())),

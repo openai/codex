@@ -26,6 +26,7 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_thread_store::ArchiveThreadParams;
 use codex_thread_store::LocalThreadStore;
+use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::ThreadStore;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -1694,7 +1695,7 @@ async fn resume_agent_from_rollout_reads_archived_rollout_path() {
         .shutdown_live_agent(child_thread_id)
         .await
         .expect("child shutdown should succeed");
-    let store = LocalThreadStore::new(codex_rollout::RolloutConfig::from_view(&harness.config));
+    let store = LocalThreadStore::new(LocalThreadStoreConfig::from_config(&harness.config));
     store
         .archive_thread(ArchiveThreadParams {
             thread_id: child_thread_id,

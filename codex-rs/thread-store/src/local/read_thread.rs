@@ -191,11 +191,14 @@ async fn read_thread_from_rollout_path(
             .codex_home
             .join(codex_rollout::ARCHIVED_SESSIONS_SUBDIR),
     );
-    let mut thread =
-        stored_thread_from_rollout_item(item, archived, store.config.model_provider_id.as_str())
-            .ok_or_else(|| ThreadStoreError::Internal {
-                message: format!("failed to read thread id from {}", path.display()),
-            })?;
+    let mut thread = stored_thread_from_rollout_item(
+        item,
+        archived,
+        store.config.default_model_provider_id.as_str(),
+    )
+    .ok_or_else(|| ThreadStoreError::Internal {
+        message: format!("failed to read thread id from {}", path.display()),
+    })?;
     thread.forked_from_id = read_session_meta_line(path.as_path())
         .await
         .ok()
@@ -225,7 +228,7 @@ async fn read_sqlite_metadata(
 ) -> Option<ThreadMetadata> {
     let runtime = StateRuntime::init(
         store.config.sqlite_home.clone(),
-        store.config.model_provider_id.clone(),
+        store.config.default_model_provider_id.clone(),
     )
     .await
     .ok()?;
@@ -254,7 +257,7 @@ async fn stored_thread_from_sqlite_metadata(
         preview: metadata.first_user_message.clone().unwrap_or_default(),
         name,
         model_provider: if metadata.model_provider.is_empty() {
-            store.config.model_provider_id.clone()
+            store.config.default_model_provider_id.clone()
         } else {
             metadata.model_provider
         },
@@ -327,7 +330,7 @@ fn stored_thread_from_meta_line(
             .meta
             .model_provider
             .filter(|provider| !provider.is_empty())
-            .unwrap_or_else(|| store.config.model_provider_id.clone()),
+            .unwrap_or_else(|| store.config.default_model_provider_id.clone()),
         model: None,
         reasoning_effort: None,
         created_at,
@@ -459,7 +462,7 @@ mod tests {
             write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
         let runtime = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
@@ -469,10 +472,10 @@ mod tests {
             Utc::now(),
             SessionSource::Cli,
         );
-        builder.model_provider = Some(config.model_provider_id.clone());
+        builder.model_provider = Some(config.default_model_provider_id.clone());
         builder.git_branch = Some("sqlite-branch".to_string());
         runtime
-            .upsert_thread(&builder.build(config.model_provider_id.as_str()))
+            .upsert_thread(&builder.build(config.default_model_provider_id.as_str()))
             .await
             .expect("state db upsert should succeed");
 
@@ -606,16 +609,16 @@ mod tests {
             write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
         let runtime = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
         let mut builder =
             ThreadMetadataBuilder::new(thread_id, rollout_path, Utc::now(), SessionSource::Cli);
-        builder.model_provider = Some(config.model_provider_id.clone());
+        builder.model_provider = Some(config.default_model_provider_id.clone());
         builder.cwd = home.path().to_path_buf();
         builder.cli_version = Some("test_version".to_string());
-        let mut metadata = builder.build(config.model_provider_id.as_str());
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.title = "Saved title".to_string();
         metadata.first_user_message = Some("Hello from user".to_string());
         runtime
@@ -761,7 +764,7 @@ mod tests {
 
         let runtime = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
@@ -774,7 +777,7 @@ mod tests {
         builder.model_provider = Some("sqlite-provider".to_string());
         builder.cwd = home.path().join("workspace");
         builder.cli_version = Some("sqlite-cli".to_string());
-        let mut metadata = builder.build(config.model_provider_id.as_str());
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.title = "Command-only thread".to_string();
         runtime
             .upsert_thread(&metadata)
@@ -815,7 +818,7 @@ mod tests {
         let stale_path = external.path().join("missing-rollout.jsonl");
         let runtime = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
@@ -826,7 +829,7 @@ mod tests {
             SessionSource::Cli,
         );
         builder.model_provider = Some("stale-sqlite-provider".to_string());
-        let mut metadata = builder.build(config.model_provider_id.as_str());
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.first_user_message = Some("stale sqlite preview".to_string());
         runtime
             .upsert_thread(&metadata)
@@ -845,7 +848,7 @@ mod tests {
         assert_eq!(thread.thread_id, thread_id);
         assert_eq!(thread.rollout_path, Some(rollout_path));
         assert_eq!(thread.preview, "Hello from user");
-        assert_eq!(thread.model_provider, config.model_provider_id);
+        assert_eq!(thread.model_provider, config.default_model_provider_id);
         let history = thread.history.expect("history should load");
         assert_eq!(history.thread_id, thread_id);
         assert_eq!(history.items.len(), 2);
@@ -866,14 +869,14 @@ mod tests {
             .expect("other session file");
         let runtime = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
         let mut builder =
             ThreadMetadataBuilder::new(thread_id, stale_path, Utc::now(), SessionSource::Cli);
         builder.model_provider = Some("wrong-sqlite-provider".to_string());
-        let mut metadata = builder.build(config.model_provider_id.as_str());
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.first_user_message = Some("wrong sqlite preview".to_string());
         runtime
             .upsert_thread(&metadata)
@@ -892,7 +895,7 @@ mod tests {
         assert_eq!(thread.thread_id, thread_id);
         assert_eq!(thread.rollout_path, Some(rollout_path));
         assert_eq!(thread.preview, "Hello from user");
-        assert_eq!(thread.model_provider, config.model_provider_id);
+        assert_eq!(thread.model_provider, config.default_model_provider_id);
         let history = thread.history.expect("history should load");
         assert_eq!(history.thread_id, thread_id);
         assert_eq!(history.items.len(), 2);
@@ -964,7 +967,7 @@ mod tests {
             .join(format!("rollout-2025-01-03T12-00-00-{uuid}.jsonl"));
         let runtime = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
@@ -977,7 +980,7 @@ mod tests {
         builder.model_provider = Some("sqlite-provider".to_string());
         builder.cwd = external.path().join("workspace");
         builder.cli_version = Some("sqlite-cli".to_string());
-        let mut metadata = builder.build(config.model_provider_id.as_str());
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.title = "SQLite title".to_string();
         metadata.first_user_message = Some("SQLite preview".to_string());
         metadata.model = Some("sqlite-model".to_string());
@@ -1022,14 +1025,14 @@ mod tests {
             .join(format!("rollout-2025-01-03T12-00-00-{uuid}.jsonl"));
         let runtime = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
         let mut builder =
             ThreadMetadataBuilder::new(thread_id, rollout_path, Utc::now(), SessionSource::Cli);
         builder.archived_at = Some(Utc::now());
-        let mut metadata = builder.build(config.model_provider_id.as_str());
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.first_user_message = Some("Archived SQLite preview".to_string());
         runtime
             .upsert_thread(&metadata)
@@ -1077,7 +1080,7 @@ mod tests {
             .expect("archived session file");
         let runtime = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
@@ -1088,7 +1091,7 @@ mod tests {
             SessionSource::Cli,
         );
         builder.archived_at = Some(Utc::now());
-        let mut metadata = builder.build(config.model_provider_id.as_str());
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.first_user_message = Some("Archived SQLite preview".to_string());
         runtime
             .upsert_thread(&metadata)

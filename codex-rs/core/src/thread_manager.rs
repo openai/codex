@@ -51,10 +51,10 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
-use codex_rollout::RolloutConfig;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
+use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::RemoteThreadStore;
 use codex_thread_store::ThreadStore;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -263,9 +263,9 @@ pub fn build_models_manager(
 
 pub fn thread_store_from_config(config: &Config) -> Arc<dyn ThreadStore> {
     match &config.experimental_thread_store {
-        ThreadStoreConfig::Local => {
-            Arc::new(LocalThreadStore::new(RolloutConfig::from_view(config)))
-        }
+        ThreadStoreConfig::Local => Arc::new(LocalThreadStore::new(
+            LocalThreadStoreConfig::from_config(config),
+        )),
         ThreadStoreConfig::Remote { endpoint } => Arc::new(RemoteThreadStore::new(endpoint)),
         ThreadStoreConfig::InMemory { id } => InMemoryThreadStore::for_id(id),
     }
@@ -367,13 +367,12 @@ impl ThreadManager {
         let skills_watcher = build_skills_watcher(Arc::clone(&skills_manager));
         // This test constructor has no Config input. Tests that need a non-local
         // process store should construct ThreadManager::new with an explicit store.
-        let thread_store: Arc<dyn ThreadStore> = Arc::new(LocalThreadStore::new(RolloutConfig {
-            codex_home: codex_home.clone(),
-            sqlite_home: codex_home.clone(),
-            cwd: codex_home.clone(),
-            model_provider_id: OPENAI_PROVIDER_ID.to_string(),
-            generate_memories: false,
-        }));
+        let thread_store: Arc<dyn ThreadStore> =
+            Arc::new(LocalThreadStore::new(LocalThreadStoreConfig {
+                codex_home: codex_home.clone(),
+                sqlite_home: codex_home.clone(),
+                default_model_provider_id: OPENAI_PROVIDER_ID.to_string(),
+            }));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),

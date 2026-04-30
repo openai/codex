@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use codex_protocol::ThreadId;
-use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::find_thread_names_by_ids;
 use codex_rollout::parse_cursor;
 
 use super::LocalThreadStore;
+use super::LocalThreadStoreConfig;
 use super::helpers::distinct_thread_metadata_title;
 use super::helpers::set_thread_name_from_title;
 use super::helpers::stored_thread_from_rollout_item;
@@ -60,7 +60,7 @@ pub(super) async fn list_threads(
             stored_thread_from_rollout_item(
                 item,
                 params.archived,
-                store.config.model_provider_id.as_str(),
+                store.config.default_model_provider_id.as_str(),
             )
         })
         .collect::<Vec<_>>();
@@ -98,7 +98,7 @@ pub(super) async fn list_threads(
 }
 
 async fn list_rollout_threads(
-    config: &RolloutConfig,
+    config: &LocalThreadStoreConfig,
     params: &ListThreadsParams,
     cursor: Option<&codex_rollout::Cursor>,
     sort_key: codex_rollout::ThreadSortKey,
@@ -114,7 +114,7 @@ async fn list_rollout_threads(
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             params.cwd_filters.as_deref(),
-            config.model_provider_id.as_str(),
+            config.default_model_provider_id.as_str(),
             params.search_term.as_deref(),
         )
         .await
@@ -128,7 +128,7 @@ async fn list_rollout_threads(
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             params.cwd_filters.as_deref(),
-            config.model_provider_id.as_str(),
+            config.default_model_provider_id.as_str(),
             params.search_term.as_deref(),
         )
         .await
@@ -142,7 +142,7 @@ async fn list_rollout_threads(
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             params.cwd_filters.as_deref(),
-            config.model_provider_id.as_str(),
+            config.default_model_provider_id.as_str(),
             params.search_term.as_deref(),
         )
         .await
@@ -156,7 +156,7 @@ async fn list_rollout_threads(
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             params.cwd_filters.as_deref(),
-            config.model_provider_id.as_str(),
+            config.default_model_provider_id.as_str(),
             params.search_term.as_deref(),
         )
         .await
@@ -230,7 +230,7 @@ mod tests {
 
         let runtime = codex_state::StateRuntime::init(
             home.path().to_path_buf(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
@@ -245,10 +245,10 @@ mod tests {
             created_at,
             SessionSource::Cli,
         );
-        builder.model_provider = Some(config.model_provider_id.clone());
+        builder.model_provider = Some(config.default_model_provider_id.clone());
         builder.cwd = home.path().to_path_buf();
         builder.cli_version = Some("test_version".to_string());
-        let mut metadata = builder.build(config.model_provider_id.as_str());
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.title = "needle title".to_string();
         metadata.first_user_message = Some("plain preview".to_string());
         runtime

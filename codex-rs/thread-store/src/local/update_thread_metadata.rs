@@ -58,7 +58,7 @@ pub(super) async fn update_thread_metadata(
     codex_rollout::state_db::reconcile_rollout(
         state_db_ctx.as_deref(),
         resolved_rollout_path.path.as_path(),
-        store.config.model_provider_id.as_str(),
+        store.config.default_model_provider_id.as_str(),
         /*builder*/ None,
         &[],
         /*archived_only*/ resolved_rollout_path.archived.then_some(true),
@@ -255,7 +255,7 @@ mod tests {
             write_session_file(home.path(), "2025-01-03T14-30-00", uuid).expect("session file");
         let runtime = codex_state::StateRuntime::init(
             home.path().to_path_buf(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
@@ -404,7 +404,7 @@ mod tests {
             .expect("archived session file");
         let runtime = codex_state::StateRuntime::init(
             home.path().to_path_buf(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
@@ -415,7 +415,7 @@ mod tests {
         codex_rollout::state_db::reconcile_rollout(
             Some(runtime.as_ref()),
             archived_path.as_path(),
-            config.model_provider_id.as_str(),
+            config.default_model_provider_id.as_str(),
             /*builder*/ None,
             &[],
             /*archived_only*/ Some(true),
@@ -467,7 +467,7 @@ mod tests {
             .expect("archived session file");
         let runtime = codex_state::StateRuntime::init(
             home.path().to_path_buf(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
@@ -478,7 +478,7 @@ mod tests {
         codex_rollout::state_db::reconcile_rollout(
             Some(runtime.as_ref()),
             archived_path.as_path(),
-            config.model_provider_id.as_str(),
+            config.default_model_provider_id.as_str(),
             /*builder*/ None,
             &[],
             /*archived_only*/ Some(true),
