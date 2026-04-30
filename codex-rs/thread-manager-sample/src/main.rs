@@ -161,7 +161,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         personality: None,
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::Never),
-            permission_profile: Constrained::allow_any(PermissionProfile::default()),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
