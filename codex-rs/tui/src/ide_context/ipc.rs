@@ -24,6 +24,8 @@ const IDE_CONTEXT_PROBE_TIMEOUT: Duration = Duration::from_secs(6);
 const IDE_CONTEXT_PROMPT_TIMEOUT: Duration = Duration::from_millis(500);
 #[cfg(any(unix, windows))]
 const IDE_CONTEXT_IDLE_READ_TIMEOUT: Duration = Duration::from_millis(50);
+#[cfg(any(unix, windows))]
+const IDE_CONTEXT_IDLE_FRAME_TIMEOUT: Duration = Duration::from_secs(1);
 // Prompt rendering applies its own smaller cap to selected text before injection.
 #[cfg(any(unix, windows))]
 const MAX_IPC_FRAME_BYTES: usize = 256 * 1024 * 1024;
@@ -585,7 +587,16 @@ fn run_ide_context_reader(
             let _ = pending.response_tx.send(Err(timeout_error()));
         }
 
-        let read_deadline = next_reader_deadline(pending_request.as_ref());
+        let read_deadline = match next_reader_deadline(&mut stream, pending_request.as_ref()) {
+            Ok(Some(read_deadline)) => read_deadline,
+            Ok(None) => continue,
+            Err(err) => {
+                if let Some(pending) = pending_request.take() {
+                    let _ = pending.response_tx.send(Err(err));
+                }
+                break;
+            }
+        };
         stream.set_deadline(read_deadline);
         match read_frame(&mut stream, read_deadline) {
             Ok(message) => {
@@ -597,7 +608,6 @@ fn run_ide_context_reader(
                     break;
                 }
             }
-            Err(IdeContextError::Read(err)) if err.kind() == std::io::ErrorKind::TimedOut => {}
             Err(err) => {
                 if let Some(pending) = pending_request.take() {
                     let _ = pending.response_tx.send(Err(err));
@@ -663,11 +673,39 @@ fn drain_ide_context_reader_commands(
 }
 
 #[cfg(any(unix, windows))]
-fn next_reader_deadline(pending_request: Option<&PendingIdeContextRequest>) -> Instant {
+fn next_reader_deadline(
+    stream: &mut IdeContextStream,
+    pending_request: Option<&PendingIdeContextRequest>,
+) -> Result<Option<Instant>, IdeContextError> {
+    if let Some(pending) = pending_request {
+        return Ok(Some(pending.deadline));
+    }
+
+    wait_for_idle_reader_message(stream)
+}
+
+#[cfg(unix)]
+fn wait_for_idle_reader_message(
+    stream: &mut IdeContextStream,
+) -> Result<Option<Instant>, IdeContextError> {
     let idle_deadline = Instant::now() + IDE_CONTEXT_IDLE_READ_TIMEOUT;
-    pending_request
-        .map(|pending| pending.deadline.min(idle_deadline))
-        .unwrap_or(idle_deadline)
+    stream.set_deadline(idle_deadline);
+    match stream.wait_for_ready(libc::POLLIN) {
+        Ok(()) => Ok(Some(Instant::now() + IDE_CONTEXT_IDLE_FRAME_TIMEOUT)),
+        Err(err) if err.kind() == std::io::ErrorKind::TimedOut => Ok(None),
+        Err(err) => Err(IdeContextError::Read(err)),
+    }
+}
+
+#[cfg(windows)]
+fn wait_for_idle_reader_message(
+    stream: &mut IdeContextStream,
+) -> Result<Option<Instant>, IdeContextError> {
+    let idle_deadline = Instant::now() + IDE_CONTEXT_IDLE_READ_TIMEOUT;
+    stream
+        .wait_until_readable(idle_deadline)
+        .map(|readable| readable.then(|| Instant::now() + IDE_CONTEXT_IDLE_FRAME_TIMEOUT))
+        .map_err(IdeContextError::Read)
 }
 
 #[cfg(any(unix, windows))]
@@ -697,18 +735,12 @@ fn handle_reader_message(
                         "canHandle": false,
                     },
                 });
-                stream.set_deadline(Instant::now() + IDE_CONTEXT_IDLE_READ_TIMEOUT);
+                stream.set_deadline(Instant::now() + IDE_CONTEXT_IDLE_FRAME_TIMEOUT);
                 write_frame(stream, &response).map_err(IdeContextError::Send)?;
             }
             Ok(())
         }
-        Some("client-discovery-response") | Some("request") => Ok(()),
-        Some(other) => Err(IdeContextError::InvalidResponse(format!(
-            "unexpected IDE context message type: {other}"
-        ))),
-        None => Err(IdeContextError::InvalidResponse(
-            "IDE context message did not include a type".to_string(),
-        )),
+        Some("client-discovery-response") | Some("request") | Some(_) | None => Ok(()),
     }
 }
 
@@ -1009,6 +1041,27 @@ mod tests {
             }),
         )
         .expect("write ide-context response");
+    }
+
+    #[cfg(unix)]
+    fn write_frame_in_two_chunks(
+        stream: &mut impl std::io::Write,
+        message: &Value,
+        delay: Duration,
+    ) {
+        let payload = serde_json::to_vec(message).expect("serialize test IPC message");
+        let payload_len = u32::try_from(payload.len())
+            .expect("test IPC message length fits u32")
+            .to_le_bytes();
+        stream
+            .write_all(&payload_len)
+            .expect("write test IPC frame header");
+        stream.flush().expect("flush test IPC frame header");
+        std::thread::sleep(delay);
+        stream
+            .write_all(&payload)
+            .expect("write test IPC frame payload");
+        stream.flush().expect("flush test IPC frame payload");
     }
 
     #[cfg(any(unix, windows))]
@@ -1343,6 +1396,76 @@ mod tests {
                 .as_ref()
                 .map(|file| file.active_selection_content.as_str()),
             Some("fresh")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ide_context_idle_reader_preserves_split_frame() {
+        use std::os::unix::net::UnixListener;
+        use std::thread;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let socket_path = tempdir.path().join("codex-ipc.sock");
+        let listener = UnixListener::bind(&socket_path).expect("bind socket");
+        let (discovery_tx, discovery_rx) = std::sync::mpsc::channel();
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+
+            let initialize = read_frame(&mut stream, test_deadline()).expect("read initialize");
+            let initialize_request_id = initialize
+                .get("requestId")
+                .and_then(Value::as_str)
+                .expect("initialize request id");
+            write_initialize_response(&mut stream, initialize_request_id);
+
+            write_frame_in_two_chunks(
+                &mut stream,
+                &json!({
+                    "type": "client-discovery-request",
+                    "requestId": "split-discovery-request",
+                    "request": {
+                        "type": "request",
+                        "method": "ide-context"
+                    }
+                }),
+                IDE_CONTEXT_IDLE_READ_TIMEOUT * 2,
+            );
+            let discovery_response =
+                read_frame(&mut stream, test_deadline()).expect("read client discovery response");
+            assert_eq!(
+                discovery_response.get("requestId").and_then(Value::as_str),
+                Some("split-discovery-request")
+            );
+            discovery_tx
+                .send(())
+                .expect("notify split discovery response was received");
+
+            let ide_context = read_frame(&mut stream, test_deadline()).expect("read ide-context");
+            let ide_context_request_id = ide_context
+                .get("requestId")
+                .and_then(Value::as_str)
+                .expect("ide-context request id");
+            write_ide_context_response(&mut stream, ide_context_request_id, "after split frame");
+        });
+
+        let mut client = IdeContextClient::connect_to_socket(socket_path, Duration::from_secs(1))
+            .expect("connect IDE context client");
+        discovery_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("idle client should preserve and answer split frames");
+        let context = client
+            .fetch_ide_context_for_prompt(Path::new("/repo"))
+            .expect("fetch IDE context after split idle frame");
+
+        server.join().expect("server joins");
+        assert_eq!(
+            context
+                .active_file
+                .as_ref()
+                .map(|file| file.active_selection_content.as_str()),
+            Some("after split frame")
         );
     }
 
