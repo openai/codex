@@ -1103,7 +1103,7 @@ impl ThreadManagerState {
         let effective_cwd = environment_selections.primary_cwd_or_fallback(&config.cwd);
         let mut load_config = config.clone();
         load_config.cwd = effective_cwd;
-        let watch_registration = match environment_selections.primary_environment() {
+        let watch_registration = match environment_selections.primary_turn_environment() {
             Some(turn_environment) if !turn_environment.environment.is_remote() => {
                 self.skills_watcher
                     .register_config(

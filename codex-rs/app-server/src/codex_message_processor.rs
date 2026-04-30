@@ -225,6 +225,7 @@ use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
 use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
@@ -2528,28 +2529,13 @@ impl CodexMessageProcessor {
                 .await;
             return;
         }
-        let environments = environments.map(|environments| {
-            environments
-                .into_iter()
-                .map(|environment| TurnEnvironmentSelection {
-                    environment_id: environment.environment_id,
-                    cwd: environment.cwd,
-                })
-                .collect::<Vec<_>>()
-        });
-        if let Some(environments) = environments.as_ref()
-            && let Err(err) = self
-                .thread_manager
-                .validate_environment_selections(environments)
-        {
-            self.outgoing
-                .send_error(
-                    request_id,
-                    invalid_request(environment_selection_error_message(err)),
-                )
-                .await;
-            return;
-        }
+        let environment_selections = match self.parse_environment_selections(environments) {
+            Ok(environment_selections) => environment_selections,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -2588,7 +2574,7 @@ impl CodexMessageProcessor {
                 typesafe_overrides,
                 dynamic_tools,
                 session_start_source,
-                environments,
+                environment_selections,
                 persist_extended_history,
                 service_name,
                 experimental_raw_events,
@@ -3011,6 +2997,27 @@ impl CodexMessageProcessor {
         };
         apply_permission_profile_selection_to_config_overrides(&mut overrides, permissions);
         overrides
+    }
+
+    fn parse_environment_selections(
+        &self,
+        environments: Option<Vec<TurnEnvironmentParams>>,
+    ) -> Result<Option<Vec<TurnEnvironmentSelection>>, JSONRPCErrorError> {
+        let environment_selections = environments.map(|environments| {
+            environments
+                .into_iter()
+                .map(|environment| TurnEnvironmentSelection {
+                    environment_id: environment.environment_id,
+                    cwd: environment.cwd,
+                })
+                .collect::<Vec<_>>()
+        });
+        if let Some(environment_selections) = environment_selections.as_ref() {
+            self.thread_manager
+                .validate_environment_selections(environment_selections)
+                .map_err(|err| invalid_request(environment_selection_error_message(err)))?;
+        }
+        Ok(environment_selections)
     }
 
     async fn thread_archive(&self, request_id: ConnectionRequestId, params: ThreadArchiveParams) {
@@ -6666,24 +6673,14 @@ impl CodexMessageProcessor {
                 self.track_error_response(&request_id, error, /*error_type*/ None);
             })?;
 
-            let collaboration_mode = params
-                .collaboration_mode
-                .map(|mode| self.normalize_turn_start_collaboration_mode(mode));
-            let environments: Option<Vec<TurnEnvironmentSelection>> =
-                params.environments.map(|environments| {
-                    environments
-                        .into_iter()
-                        .map(|environment| TurnEnvironmentSelection {
-                            environment_id: environment.environment_id,
-                            cwd: environment.cwd,
-                        })
-                        .collect()
-                });
-            if let Some(environments) = environments.as_ref() {
-                self.thread_manager
-                    .validate_environment_selections(environments)
-                    .map_err(|err| invalid_request(environment_selection_error_message(err)))?;
-            }
+            let collaboration_modes_config = CollaborationModesConfig {
+                default_mode_request_user_input: thread
+                    .enabled(Feature::DefaultModeRequestUserInput),
+            };
+            let collaboration_mode = params.collaboration_mode.map(|mode| {
+                self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
+            });
+            let environment_selections = self.parse_environment_selections(params.environments)?;
 
             // Map v2 input items to core input items.
             let mapped_items: Vec<CoreInputItem> = params
@@ -6792,7 +6789,7 @@ impl CodexMessageProcessor {
             let turn_op = if has_any_overrides {
                 Op::UserInputWithTurnContext {
                     items: mapped_items,
-                    environments,
+                    environments: environment_selections,
                     final_output_json_schema: params.output_schema,
                     responsesapi_client_metadata: params.responsesapi_client_metadata,
                     cwd,
@@ -6812,7 +6809,7 @@ impl CodexMessageProcessor {
             } else {
                 Op::UserInput {
                     items: mapped_items,
-                    environments,
+                    environments: environment_selections,
                     final_output_json_schema: params.output_schema,
                     responsesapi_client_metadata: params.responsesapi_client_metadata,
                 }

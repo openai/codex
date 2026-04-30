@@ -211,6 +211,7 @@ impl SessionConfiguration {
         next_configuration.cwd = absolute_cwd.clone();
         if updates.environments.is_none()
             && cwd_changed
+            && next_configuration.environments.len() == 1
             && let Some(turn_environment) = next_configuration.environments.first_mut()
         {
             turn_environment.cwd = absolute_cwd;

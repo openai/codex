@@ -30,7 +30,7 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
-use crate::environment_selection::ResolvedEnvironmentSelections;
+use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
@@ -408,7 +408,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) parent_rollout_thread_trace: ThreadTraceContext,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
-    pub(crate) environment_selections: ResolvedEnvironmentSelections,
+    pub(crate) environment_selections: ResolvedTurnEnvironments,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
 }
@@ -496,7 +496,7 @@ impl Codex {
             let _ = config.features.disable(Feature::Collab);
         }
 
-        let primary_environment = environment_selections.primary_environment_backend();
+        let primary_environment = environment_selections.primary_environment();
         let user_instructions = AgentsMdManager::new(&load_config)
             .user_instructions(primary_environment.as_deref())
             .await;
@@ -610,11 +610,7 @@ impl Codex {
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
-            environments: environment_selections
-                .turn_environments
-                .iter()
-                .map(|environment| environment.selection())
-                .collect(),
+            environments: environment_selections.to_selections(),
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
             app_server_client_name: None,

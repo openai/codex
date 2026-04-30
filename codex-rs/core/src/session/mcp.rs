@@ -5,7 +5,7 @@ impl Session {
         &self,
         session_configuration: &SessionConfiguration,
     ) -> CodexResult<McpRuntimeEnvironment> {
-        let resolved_environments = crate::environment_selection::resolve_environment_selections(
+        let turn_environment = crate::environment_selection::resolve_environment_selections(
             self.services.environment_manager.as_ref(),
             &session_configuration.environments,
         )
@@ -14,17 +14,29 @@ impl Session {
                 "unknown turn environment id",
                 "unknown stored MCP environment id",
             ))
-        })?;
+        })?
+        .primary_turn_environment()
+        .cloned();
 
-        if let Some(turn_environment) = resolved_environments.primary_environment() {
+        if let Some(turn_environment) = turn_environment {
             return Ok(McpRuntimeEnvironment::new(
                 Arc::clone(&turn_environment.environment),
                 turn_environment.cwd.to_path_buf(),
             ));
         }
 
+        let default_environment = self
+            .services
+            .environment_manager
+            .default_environment()
+            .ok_or_else(|| {
+                CodexErr::InvalidRequest(
+                    "MCP runtime environment requires a default environment".to_string(),
+                )
+            })?;
+
         Ok(McpRuntimeEnvironment::new(
-            self.services.environment_manager.local_environment(),
+            default_environment,
             session_configuration.cwd.to_path_buf(),
         ))
     }

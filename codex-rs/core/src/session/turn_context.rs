@@ -568,11 +568,8 @@ impl Session {
                         .environments
                         .clone()
                         .unwrap_or_else(|| next.environments.clone());
-                    let primary_cwd_override = (updates.environments.is_some()
-                        && updates.cwd.is_some())
-                    .then_some(&next.cwd);
-                    let turn_environments = self
-                        .resolve_turn_environments(&effective_environments, primary_cwd_override)?;
+                    let turn_environments =
+                        self.resolve_turn_environments(&effective_environments)?;
                     let previous_cwd = state.session_configuration.cwd.clone();
                     let previous_permission_profile =
                         state.session_configuration.permission_profile();
@@ -643,12 +640,10 @@ impl Session {
     fn resolve_turn_environments(
         &self,
         environments: &[TurnEnvironmentSelection],
-        primary_cwd_override: Option<&AbsolutePathBuf>,
     ) -> CodexResult<Vec<TurnEnvironment>> {
-        crate::environment_selection::resolve_environment_selections_with_primary_cwd(
+        crate::environment_selection::resolve_environment_selections(
             self.services.environment_manager.as_ref(),
             environments,
-            primary_cwd_override,
         )
         .map(|resolved| resolved.turn_environments)
     }
@@ -758,16 +753,14 @@ impl Session {
             let state = self.state.lock().await;
             state.session_configuration.clone()
         };
-        let turn_environments = match self.resolve_turn_environments(
-            &session_configuration.environments,
-            /*primary_cwd_override*/ None,
-        ) {
-            Ok(turn_environments) => turn_environments,
-            Err(err) => {
-                warn!("failed to resolve stored session environments: {err}");
-                Vec::new()
-            }
-        };
+        let turn_environments =
+            match self.resolve_turn_environments(&session_configuration.environments) {
+                Ok(turn_environments) => turn_environments,
+                Err(err) => {
+                    warn!("failed to resolve stored session environments: {err}");
+                    Vec::new()
+                }
+            };
 
         self.new_turn_from_configuration(
             sub_id,
