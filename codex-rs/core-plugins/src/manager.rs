@@ -822,9 +822,13 @@ impl PluginsManager {
         .await
         .map_err(PluginInstallError::join)??;
 
-        set_user_plugin_enabled(&self.codex_home, result.plugin_id.as_key(), true)
-            .await
-            .map_err(anyhow::Error::from)?;
+        set_user_plugin_enabled(
+            &self.codex_home,
+            result.plugin_id.as_key(),
+            /*enabled*/ true,
+        )
+        .await
+        .map_err(anyhow::Error::from)?;
 
         let analytics_events_client = match self.analytics_events_client.read() {
             Ok(client) => client.clone(),
