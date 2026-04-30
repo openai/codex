@@ -15,6 +15,8 @@ use super::protocol::ClientId;
 use super::protocol::RemoteControlTarget;
 use super::protocol::ServerEnvelope;
 use super::protocol::StreamId;
+use super::segment::ClientSegmentReassembler;
+use super::segment::split_server_envelope_for_transport;
 use axum::http::HeaderValue;
 use base64::Engine;
 use codex_core::util::backoff;
@@ -28,6 +30,7 @@ use futures::stream::SplitSink;
 use futures::stream::SplitStream;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::collections::hash_map::Entry;
 use std::io;
 use std::io::ErrorKind;
 use std::sync::Arc;
@@ -47,7 +50,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-pub(super) const REMOTE_CONTROL_PROTOCOL_VERSION: &str = "2";
+pub(super) const REMOTE_CONTROL_PROTOCOL_VERSION: &str = "3";
 pub(super) const REMOTE_CONTROL_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
 const REMOTE_CONTROL_SUBSCRIBE_CURSOR_HEADER: &str = "x-codex-subscribe-cursor";
 const REMOTE_CONTROL_WEBSOCKET_PING_INTERVAL: std::time::Duration =
@@ -83,17 +86,29 @@ impl BoundedOutboundBuffer {
         self.used_tx.send_modify(|used| *used += 1);
     }
 
-    fn ack(&mut self, client_id: &ClientId, stream_id: &StreamId, acked_seq_id: u64) {
+    fn ack(
+        &mut self,
+        client_id: &ClientId,
+        stream_id: &StreamId,
+        acked_seq_id: u64,
+        acked_segment_id: Option<usize>,
+    ) {
         let key = (client_id.clone(), stream_id.clone());
         let Some(buffer) = self.buffer_by_stream.get_mut(&key) else {
             return;
         };
-        while let Some(server_envelope) = buffer.front()
-            && server_envelope.seq_id <= acked_seq_id
-        {
-            buffer.pop_front();
-            self.used_tx.send_modify(|used| *used -= 1);
-        }
+        let acked_cursor = (acked_seq_id, acked_segment_id.unwrap_or_default());
+        buffer.retain(|server_envelope| {
+            let envelope_cursor = (
+                server_envelope.seq_id,
+                server_envelope.event.segment_id().unwrap_or_default(),
+            );
+            let is_acked = envelope_cursor <= acked_cursor;
+            if is_acked {
+                self.used_tx.send_modify(|used| *used -= 1);
+            }
+            !is_acked
+        });
         if buffer.is_empty() {
             self.buffer_by_stream.remove(&key);
         }
@@ -110,6 +125,34 @@ struct WebsocketState {
     outbound_buffer: BoundedOutboundBuffer,
     subscribe_cursor: Option<String>,
     next_seq_id_by_stream: HashMap<(ClientId, StreamId), u64>,
+    last_client_message_cursor_by_stream: HashMap<(ClientId, Option<StreamId>), (u64, usize)>,
+    client_segment_reassembler: ClientSegmentReassembler,
+}
+
+impl WebsocketState {
+    fn observe_client_message_cursor(&mut self, client_envelope: &ClientEnvelope) -> bool {
+        let (seq_id, segment_id) = match (&client_envelope.event, client_envelope.seq_id) {
+            (ClientEvent::ClientMessageChunk { segment_id, .. }, Some(seq_id)) => {
+                (seq_id, *segment_id)
+            }
+            _ => return true,
+        };
+        let cursor = (seq_id, segment_id);
+        match self.last_client_message_cursor_by_stream.entry((
+            client_envelope.client_id.clone(),
+            client_envelope.stream_id.clone(),
+        )) {
+            Entry::Vacant(entry) => {
+                entry.insert(cursor);
+                true
+            }
+            Entry::Occupied(mut entry) if *entry.get() < cursor => {
+                entry.insert(cursor);
+                true
+            }
+            Entry::Occupied(_) => false,
+        }
+    }
 }
 
 pub(crate) struct RemoteControlWebsocket {
@@ -165,6 +208,8 @@ impl RemoteControlWebsocket {
                 outbound_buffer,
                 subscribe_cursor: None,
                 next_seq_id_by_stream: HashMap::new(),
+                last_client_message_cursor_by_stream: HashMap::new(),
+                client_segment_reassembler: ClientSegmentReassembler::default(),
             })),
             server_event_rx: Arc::new(Mutex::new(server_event_rx)),
             used_rx,
@@ -462,7 +507,7 @@ impl RemoteControlWebsocket {
                     }
                 }
             };
-            let (payload, write_complete_tx) = {
+            let (payloads, write_complete_tx) = {
                 let mut state = state.lock().await;
                 let seq_key = (
                     queued_server_envelope.client_id.clone(),
@@ -479,29 +524,42 @@ impl RemoteControlWebsocket {
                     seq_id,
                     stream_id: queued_server_envelope.stream_id,
                 };
-                let payload = match serde_json::to_string(&server_envelope) {
-                    Ok(payload) => payload,
+                let server_envelopes = match split_server_envelope_for_transport(server_envelope) {
+                    Ok(server_envelopes) => server_envelopes,
                     Err(err) => {
-                        error!("failed to serialize remote-control server event: {err}");
+                        error!("failed to split remote-control server event: {err}");
                         continue;
                     }
                 };
+                let mut payloads = Vec::with_capacity(server_envelopes.len());
+                for server_envelope in server_envelopes {
+                    let payload = match serde_json::to_string(&server_envelope) {
+                        Ok(payload) => payload,
+                        Err(err) => {
+                            error!("failed to serialize remote-control server event: {err}");
+                            continue;
+                        }
+                    };
+                    state.outbound_buffer.insert(&server_envelope);
+                    payloads.push(payload);
+                }
                 state
                     .next_seq_id_by_stream
                     .insert(seq_key, seq_id.saturating_add(1));
-                state.outbound_buffer.insert(&server_envelope);
 
-                (payload, queued_server_envelope.write_complete_tx)
+                (payloads, queued_server_envelope.write_complete_tx)
             };
 
-            tokio::select! {
-                _ = shutdown_token.cancelled() => return Ok(()),
-                send_result = websocket_writer.send(tungstenite::Message::Text(payload.into())) => {
-                    if let Err(err) = send_result {
-                        return Err(io::Error::other(err));
+            for payload in payloads {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => return Ok(()),
+                    send_result = websocket_writer.send(tungstenite::Message::Text(payload.into())) => {
+                        if let Err(err) = send_result {
+                            return Err(io::Error::other(err));
+                        }
                     }
                 }
-            };
+            }
             if let Some(write_complete_tx) = write_complete_tx {
                 let _ = write_complete_tx.send(());
             }
@@ -563,11 +621,24 @@ impl RemoteControlWebsocket {
                     if client_tracker.close_client(&client_key).await.is_err() {
                         return Ok(());
                     }
+                    state
+                        .lock()
+                        .await
+                        .client_segment_reassembler
+                        .invalidate_stream(&client_key.0, &client_key.1);
                     continue;
                 }
                 _ = idle_sweep_interval.tick() => {
-                    if client_tracker.close_expired_clients().await.is_err() {
-                        return Ok(());
+                    match client_tracker.close_expired_clients().await {
+                        Ok(client_keys) => {
+                            let mut websocket_state = state.lock().await;
+                            for (client_id, stream_id) in client_keys {
+                                websocket_state
+                                    .client_segment_reassembler
+                                    .invalidate_stream(&client_id, &stream_id);
+                            }
+                        }
+                        Err(_) => return Ok(()),
                     }
                     continue;
                 }
@@ -613,12 +684,24 @@ impl RemoteControlWebsocket {
                 }
             };
 
+            let Some(client_envelope) = ({
+                let mut websocket_state = state.lock().await;
+                if !websocket_state.observe_client_message_cursor(&client_envelope) {
+                    continue;
+                }
+                websocket_state
+                    .client_segment_reassembler
+                    .observe(client_envelope)
+            }) else {
+                continue;
+            };
+
             {
                 let mut websocket_state = state.lock().await;
                 if let Some(cursor) = client_envelope.cursor.as_deref() {
                     websocket_state.subscribe_cursor = Some(cursor.to_string());
                 }
-                if let ClientEvent::Ack = &client_envelope.event
+                if let ClientEvent::Ack { segment_id } = &client_envelope.event
                     && let Some(acked_seq_id) = client_envelope.seq_id
                     && let Some(stream_id) = client_envelope.stream_id.as_ref()
                 {
@@ -626,16 +709,26 @@ impl RemoteControlWebsocket {
                         &client_envelope.client_id,
                         stream_id,
                         acked_seq_id,
+                        *segment_id,
                     );
                 }
             }
 
+            let closed_client_id = matches!(&client_envelope.event, ClientEvent::ClientClosed)
+                .then(|| client_envelope.client_id.clone());
             if client_tracker
                 .handle_message(client_envelope)
                 .await
                 .is_err()
             {
                 return Ok(());
+            }
+            if let Some(client_id) = closed_client_id {
+                state
+                    .lock()
+                    .await
+                    .client_segment_reassembler
+                    .invalidate_client(&client_id);
             }
         }
     }
@@ -1303,6 +1396,8 @@ mod tests {
             outbound_buffer,
             subscribe_cursor: None,
             next_seq_id_by_stream: HashMap::new(),
+            last_client_message_cursor_by_stream: HashMap::new(),
+            client_segment_reassembler: ClientSegmentReassembler::default(),
         }));
         let (_server_event_tx, server_event_rx) = mpsc::channel(super::super::CHANNEL_CAPACITY);
         let server_event_rx = Arc::new(Mutex::new(server_event_rx));
@@ -1339,6 +1434,8 @@ mod tests {
             outbound_buffer,
             subscribe_cursor: None,
             next_seq_id_by_stream: HashMap::new(),
+            last_client_message_cursor_by_stream: HashMap::new(),
+            client_segment_reassembler: ClientSegmentReassembler::default(),
         }));
         let (server_event_tx, server_event_rx) = mpsc::channel(super::super::CHANNEL_CAPACITY);
         let server_event_rx = Arc::new(Mutex::new(server_event_rx));
@@ -1416,6 +1513,8 @@ mod tests {
             outbound_buffer,
             subscribe_cursor: None,
             next_seq_id_by_stream: HashMap::new(),
+            last_client_message_cursor_by_stream: HashMap::new(),
+            client_segment_reassembler: ClientSegmentReassembler::default(),
         }));
         let (server_event_tx, _server_event_rx) = mpsc::channel(super::super::CHANNEL_CAPACITY);
         let (transport_event_tx, _transport_event_rx) =
@@ -1471,7 +1570,9 @@ mod tests {
             "first-client-new-stream",
         ));
 
-        outbound_buffer.ack(&client_1, &stream_1, /*acked_seq_id*/ 3);
+        outbound_buffer.ack(
+            &client_1, &stream_1, /*acked_seq_id*/ 3, /*acked_segment_id*/ None,
+        );
 
         let mut retained = outbound_buffer
             .server_envelopes()
@@ -1514,7 +1615,9 @@ mod tests {
             &client_2, "stream-1", /*seq_id*/ 3, "second",
         ));
 
-        outbound_buffer.ack(&client_1, &stream_1, /*acked_seq_id*/ 1);
+        outbound_buffer.ack(
+            &client_1, &stream_1, /*acked_seq_id*/ 1, /*acked_segment_id*/ None,
+        );
 
         let mut retained = outbound_buffer
             .server_envelopes()
@@ -1534,6 +1637,72 @@ mod tests {
         assert_eq!(*used_rx.borrow(), 2);
     }
 
+    #[test]
+    fn outbound_buffer_advances_segmented_acks_by_wire_cursor() {
+        let (mut outbound_buffer, used_rx) = BoundedOutboundBuffer::new();
+        let client_id = ClientId("client-1".to_string());
+        let stream_id = StreamId("stream-1".to_string());
+
+        outbound_buffer.insert(&server_chunk_envelope(
+            &client_id, "stream-1", /*seq_id*/ 4, /*segment_id*/ 0,
+        ));
+        outbound_buffer.insert(&server_chunk_envelope(
+            &client_id, "stream-1", /*seq_id*/ 4, /*segment_id*/ 1,
+        ));
+
+        outbound_buffer.ack(
+            &client_id,
+            &stream_id,
+            /*acked_seq_id*/ 4,
+            /*acked_segment_id*/ Some(1),
+        );
+
+        let retained = outbound_buffer
+            .server_envelopes()
+            .map(|server_envelope| server_envelope.event.segment_id())
+            .collect::<Vec<_>>();
+        assert_eq!(retained, Vec::<Option<usize>>::new());
+        assert_eq!(*used_rx.borrow(), 0);
+    }
+
+    #[test]
+    fn websocket_state_drops_duplicate_client_chunks_by_wire_cursor() {
+        let (outbound_buffer, _used_rx) = BoundedOutboundBuffer::new();
+        let mut state = WebsocketState {
+            outbound_buffer,
+            subscribe_cursor: None,
+            next_seq_id_by_stream: HashMap::new(),
+            last_client_message_cursor_by_stream: HashMap::new(),
+            client_segment_reassembler: ClientSegmentReassembler::default(),
+        };
+        let first_chunk = ClientEnvelope {
+            event: ClientEvent::ClientMessageChunk {
+                segment_id: 0,
+                segment_count: 2,
+                message_size_bytes: 2,
+                message_chunk_base64: String::new(),
+            },
+            client_id: ClientId("client-1".to_string()),
+            stream_id: Some(StreamId("stream-1".to_string())),
+            seq_id: Some(4),
+            cursor: None,
+        };
+        let second_chunk = ClientEnvelope {
+            event: ClientEvent::ClientMessageChunk {
+                segment_id: 1,
+                segment_count: 2,
+                message_size_bytes: 2,
+                message_chunk_base64: String::new(),
+            },
+            ..first_chunk.clone()
+        };
+
+        assert!(state.observe_client_message_cursor(&first_chunk));
+        assert!(!state.observe_client_message_cursor(&first_chunk));
+        assert!(state.observe_client_message_cursor(&second_chunk));
+        assert!(!state.observe_client_message_cursor(&first_chunk));
+    }
+
     fn server_envelope(
         client_id: &ClientId,
         stream_id: &str,
@@ -1550,6 +1719,25 @@ mod tests {
                         range: None,
                     }),
                 )),
+            },
+            client_id: client_id.clone(),
+            stream_id: StreamId(stream_id.to_string()),
+            seq_id,
+        }
+    }
+
+    fn server_chunk_envelope(
+        client_id: &ClientId,
+        stream_id: &str,
+        seq_id: u64,
+        segment_id: usize,
+    ) -> ServerEnvelope {
+        ServerEnvelope {
+            event: ServerEvent::ServerMessageChunk {
+                segment_id,
+                segment_count: 2,
+                message_size_bytes: 2,
+                message_chunk_base64: String::new(),
             },
             client_id: client_id.clone(),
             stream_id: StreamId(stream_id.to_string()),

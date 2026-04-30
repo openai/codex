@@ -47,10 +47,20 @@ pub enum ClientEvent {
     ClientMessage {
         message: JSONRPCMessage,
     },
+    ClientMessageChunk {
+        segment_id: usize,
+        segment_count: usize,
+        message_size_bytes: usize,
+        message_chunk_base64: String,
+    },
     /// Backend-generated acknowledgement for all server envelopes addressed to
     /// `client_id` and `stream_id` whose envelope `seq_id` is less than or equal
-    /// to this ack's `seq_id`. This cursor is stream-scoped.
-    Ack,
+    /// to this ack's `seq_id`. Chunk acknowledgements carry `segment_id` so the
+    /// sender can retain only the still-unacked wire chunks on reconnect.
+    Ack {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        segment_id: Option<usize>,
+    },
     Ping,
     ClientClosed,
 }
@@ -85,11 +95,26 @@ pub enum ServerEvent {
     ServerMessage {
         message: Box<OutgoingMessage>,
     },
+    ServerMessageChunk {
+        segment_id: usize,
+        segment_count: usize,
+        message_size_bytes: usize,
+        message_chunk_base64: String,
+    },
     #[allow(dead_code)]
     Ack,
     Pong {
         status: PongStatus,
     },
+}
+
+impl ServerEvent {
+    pub(crate) fn segment_id(&self) -> Option<usize> {
+        match self {
+            Self::ServerMessageChunk { segment_id, .. } => Some(*segment_id),
+            Self::ServerMessage { .. } | Self::Ack | Self::Pong { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
