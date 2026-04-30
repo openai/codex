@@ -289,10 +289,8 @@ struct UnixDeadlineStream {
 #[cfg(unix)]
 impl UnixDeadlineStream {
     fn connect(socket_path: PathBuf, deadline: Instant) -> std::io::Result<Self> {
-        validate_unix_socket_path(&socket_path)?;
-        let stream = std::os::unix::net::UnixStream::connect(socket_path)?;
+        let stream = connect_unix_stream_before_deadline(&socket_path, deadline)?;
         validate_unix_peer_owner(&stream)?;
-        stream.set_nonblocking(true)?;
         Ok(Self::new(stream, deadline))
     }
 
@@ -304,49 +302,221 @@ impl UnixDeadlineStream {
         self.deadline = deadline;
     }
 
-    fn remaining_timeout(&self) -> std::io::Result<Duration> {
-        self.deadline
-            .checked_duration_since(Instant::now())
-            .filter(|duration| !duration.is_zero())
-            .ok_or_else(deadline_timeout_io_error)
-    }
-
-    fn remaining_timeout_ms(&self) -> std::io::Result<libc::c_int> {
-        let millis = self.remaining_timeout()?.as_millis().max(1);
-        Ok(libc::c_int::try_from(millis).unwrap_or(libc::c_int::MAX))
-    }
-
     fn wait_for_ready(&self, events: libc::c_short) -> std::io::Result<()> {
         use std::os::fd::AsRawFd;
 
-        loop {
-            // Keep deadline handling in user space. Some macOS Unix socket environments reject
-            // SO_RCVTIMEO/SO_SNDTIMEO, but poll works consistently for our request-scoped timeout.
-            let mut poll_fd = libc::pollfd {
-                fd: self.stream.as_raw_fd(),
-                events,
-                revents: 0,
-            };
-            let result = unsafe { libc::poll(&mut poll_fd, 1, self.remaining_timeout_ms()?) };
-            if result == 0 {
-                return Err(deadline_timeout_io_error());
+        wait_for_fd_ready(self.stream.as_raw_fd(), events, self.deadline)
+    }
+}
+
+#[cfg(unix)]
+fn connect_unix_stream_before_deadline(
+    socket_path: &Path,
+    deadline: Instant,
+) -> std::io::Result<std::os::unix::net::UnixStream> {
+    use std::os::fd::AsRawFd;
+    use std::os::fd::FromRawFd;
+    use std::os::fd::IntoRawFd;
+    use std::os::fd::OwnedFd;
+
+    validate_unix_socket_path(socket_path)?;
+    let (addr, addr_len) = unix_socket_addr(socket_path)?;
+    let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    set_fd_close_on_exec(fd.as_raw_fd())?;
+    set_fd_nonblocking(fd.as_raw_fd())?;
+
+    let result = unsafe {
+        libc::connect(
+            fd.as_raw_fd(),
+            &addr as *const libc::sockaddr_un as *const libc::sockaddr,
+            addr_len,
+        )
+    };
+    if result != 0 {
+        let error = std::io::Error::last_os_error();
+        if !is_in_progress_connect_error(&error) {
+            return Err(error);
+        }
+
+        wait_for_fd_ready(fd.as_raw_fd(), libc::POLLOUT, deadline)?;
+        let socket_error = socket_error(fd.as_raw_fd())?;
+        if socket_error != 0 {
+            return Err(std::io::Error::from_raw_os_error(socket_error));
+        }
+    }
+
+    Ok(unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd.into_raw_fd()) })
+}
+
+#[cfg(unix)]
+fn unix_socket_addr(socket_path: &Path) -> std::io::Result<(libc::sockaddr_un, libc::socklen_t)> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let path_bytes = socket_path.as_os_str().as_bytes();
+    if path_bytes.contains(&0) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "IDE context Unix socket path contains a nul byte",
+        ));
+    }
+
+    let mut addr = unsafe { std::mem::zeroed::<libc::sockaddr_un>() };
+    if path_bytes.len() >= addr.sun_path.len() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "IDE context Unix socket path is too long",
+        ));
+    }
+
+    addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    for (slot, byte) in addr.sun_path.iter_mut().zip(path_bytes) {
+        *slot = *byte as libc::c_char;
+    }
+
+    let addr_len =
+        std::mem::size_of::<libc::sockaddr_un>() - addr.sun_path.len() + path_bytes.len() + 1;
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
+    {
+        addr.sun_len = u8::try_from(addr_len).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "IDE context Unix socket address is too long",
+            )
+        })?;
+    }
+
+    let addr_len = libc::socklen_t::try_from(addr_len).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "IDE context Unix socket address is too long",
+        )
+    })?;
+    Ok((addr, addr_len))
+}
+
+#[cfg(unix)]
+fn set_fd_close_on_exec(fd: libc::c_int) -> std::io::Result<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let result = unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) };
+    if result < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_fd_nonblocking(fd: libc::c_int) -> std::io::Result<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let result = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+    if result < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn is_in_progress_connect_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(code)
+            if code == libc::EINPROGRESS
+                || code == libc::EALREADY
+                || code == libc::EWOULDBLOCK
+                || code == libc::EINTR
+    )
+}
+
+#[cfg(unix)]
+fn socket_error(fd: libc::c_int) -> std::io::Result<libc::c_int> {
+    let mut socket_error = 0;
+    let mut socket_error_len = libc::socklen_t::try_from(std::mem::size_of::<libc::c_int>())
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid socket error length",
+            )
+        })?;
+    let result = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_ERROR,
+            &mut socket_error as *mut _ as *mut libc::c_void,
+            &mut socket_error_len,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    Ok(socket_error)
+}
+
+#[cfg(unix)]
+fn remaining_timeout(deadline: Instant) -> std::io::Result<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|duration| !duration.is_zero())
+        .ok_or_else(deadline_timeout_io_error)
+}
+
+#[cfg(unix)]
+fn remaining_timeout_ms(deadline: Instant) -> std::io::Result<libc::c_int> {
+    let millis = remaining_timeout(deadline)?.as_millis().max(1);
+    Ok(libc::c_int::try_from(millis).unwrap_or(libc::c_int::MAX))
+}
+
+#[cfg(unix)]
+fn wait_for_fd_ready(
+    fd: libc::c_int,
+    events: libc::c_short,
+    deadline: Instant,
+) -> std::io::Result<()> {
+    loop {
+        // Keep deadline handling in user space. Some macOS Unix socket environments reject
+        // SO_RCVTIMEO/SO_SNDTIMEO, but poll works consistently for our request-scoped timeout.
+        let mut poll_fd = libc::pollfd {
+            fd,
+            events,
+            revents: 0,
+        };
+        let result = unsafe { libc::poll(&mut poll_fd, 1, remaining_timeout_ms(deadline)?) };
+        if result == 0 {
+            return Err(deadline_timeout_io_error());
+        }
+        if result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
             }
-            if result < 0 {
-                let error = std::io::Error::last_os_error();
-                if error.kind() == std::io::ErrorKind::Interrupted {
-                    continue;
-                }
-                return Err(error);
-            }
-            if poll_fd.revents & libc::POLLNVAL != 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "invalid IDE context Unix socket",
-                ));
-            }
-            if poll_fd.revents & (events | libc::POLLERR | libc::POLLHUP) != 0 {
-                return Ok(());
-            }
+            return Err(error);
+        }
+        if poll_fd.revents & libc::POLLNVAL != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid IDE context Unix socket",
+            ));
+        }
+        if poll_fd.revents & (events | libc::POLLERR | libc::POLLHUP) != 0 {
+            return Ok(());
         }
     }
 }
