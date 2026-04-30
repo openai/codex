@@ -1032,23 +1032,40 @@ impl ChatComposer {
         self.sync_popups();
     }
 
+    /// Enable or disable Vim editing for the composer textarea.
+    ///
+    /// The composer clears any in-flight paste-burst state when the mode
+    /// changes because Vim normal mode treats rapid character sequences as
+    /// commands, not as candidate literal paste text. It also resets transient
+    /// footer mode so the visible hints match the new editing surface.
     pub(crate) fn set_vim_enabled(&mut self, enabled: bool) {
         self.textarea.set_vim_enabled(enabled);
         self.paste_burst.clear_after_explicit_paste();
         self.footer_mode = reset_mode_after_activity(self.footer_mode);
     }
 
+    /// Toggle Vim editing and return the new enabled state.
+    ///
+    /// This is the app-level command target for the configurable Vim toggle
+    /// keybinding; callers should use the returned value for status messages
+    /// instead of rereading state after additional composer mutations.
     pub(crate) fn toggle_vim_enabled(&mut self) -> bool {
         let enabled = !self.textarea.is_vim_enabled();
         self.set_vim_enabled(enabled);
         enabled
     }
 
+    /// Return whether Vim editing is enabled for tests that assert mode transitions.
     #[cfg(test)]
     pub(crate) fn is_vim_enabled(&self) -> bool {
         self.textarea.is_vim_enabled()
     }
 
+    /// Return whether Escape should be routed to the textarea before popups.
+    ///
+    /// Vim insert mode owns Escape as a transition back to normal mode. The app
+    /// event layer asks this before running generic Escape behavior so the same
+    /// key does not both leave insert mode and dismiss unrelated UI.
     pub(crate) fn should_handle_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
         self.textarea.should_handle_vim_insert_escape(key_event)
     }

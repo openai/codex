@@ -1,4 +1,15 @@
 //! Catalog and accessors for keymap actions shown by `/keymap`.
+//!
+//! The descriptor table is the single UI-facing inventory of configurable
+//! actions. Each descriptor ties together the config path segment, user-facing
+//! context label, stable action name, and short description used by the picker
+//! and action menu.
+//!
+//! The accessors below deliberately mirror the descriptor table for both the
+//! editable root config and the resolved runtime keymap. Keeping those matches
+//! in one module makes it easier to audit a new action: if it appears in the
+//! catalog, it must also be readable from runtime state and writable in
+//! `TuiKeymap`.
 
 use std::collections::BTreeSet;
 
@@ -10,9 +21,13 @@ use crate::keymap::RuntimeKeymap;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct KeymapActionDescriptor {
+    /// Config context segment, such as `composer` in `tui.keymap.composer.submit`.
     pub(super) context: &'static str,
+    /// Human-readable group label shown in the picker.
     pub(super) context_label: &'static str,
+    /// Config action segment, such as `submit` in `tui.keymap.composer.submit`.
     pub(super) action: &'static str,
+    /// Short user-facing explanation of what the action does.
     pub(super) description: &'static str,
 }
 
@@ -119,6 +134,11 @@ pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
     action("approval", "Approval", "cancel", "Cancel an elicitation request."),
 ];
 
+/// Convert a stable action identifier into a display label.
+///
+/// This is intentionally presentation-only: the returned string must never be
+/// parsed back into an action name, because underscores and casing are part of
+/// the stable config contract.
 pub(super) fn action_label(action: &str) -> String {
     action
         .split('_')
@@ -134,6 +154,12 @@ pub(super) fn action_label(action: &str) -> String {
 }
 
 #[rustfmt::skip]
+/// Return the mutable root-config binding slot for one catalog action.
+///
+/// The returned `Option<KeybindingsSpec>` distinguishes three states that the
+/// editor must preserve: absent means use fallback/default resolution, `Some`
+/// with one or more keys is a custom binding, and `Some(Many([]))` is an
+/// explicit unbind.
 pub(super) fn binding_slot<'a>(
     keymap: &'a mut TuiKeymap,
     context: &str,
@@ -230,6 +256,11 @@ pub(super) fn binding_slot<'a>(
 }
 
 #[rustfmt::skip]
+/// Return the resolved runtime bindings for one catalog action.
+///
+/// This reads from [`RuntimeKeymap`] rather than root config so UI labels show
+/// the actual active binding after defaults, global fallback, explicit
+/// unbinding, and duplicate-key validation have already been applied.
 pub(super) fn bindings_for_action<'a>(
     runtime_keymap: &'a RuntimeKeymap,
     context: &str,
@@ -325,6 +356,11 @@ pub(super) fn bindings_for_action<'a>(
     }
 }
 
+/// Format a resolved binding list for compact menu display.
+///
+/// Duplicate runtime variants that normalize to the same config spec are shown
+/// once so compatibility defaults, such as alternate SHIFT reporting forms, do
+/// not look like separate user choices.
 pub(super) fn format_binding_summary(bindings: &[KeyBinding]) -> String {
     let mut seen = BTreeSet::new();
     let specs = bindings

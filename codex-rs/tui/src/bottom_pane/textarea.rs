@@ -119,26 +119,39 @@ pub(crate) struct TextAreaState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VimMode {
+    /// Normal mode routes printable keys to movement, operators, and mode transitions.
     Normal,
+    /// Insert mode routes input through the regular editor keymap until Escape is pressed.
     Insert,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VimOperator {
+    /// Delete the range selected by the next motion or repeated operator key.
     Delete,
+    /// Copy the range selected by the next motion or repeated operator key.
     Yank,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VimMotion {
+    /// Move one atomic boundary to the left.
     Left,
+    /// Move one atomic boundary to the right.
     Right,
+    /// Move one visual row up, preserving preferred display column.
     Up,
+    /// Move one visual row down, preserving preferred display column.
     Down,
+    /// Move to the start of the next word-like run.
     WordForward,
+    /// Move to the start of the previous word-like run.
     WordBackward,
+    /// Move to the end of the current or next word-like run.
     WordEnd,
+    /// Move to the start of the current line.
     LineStart,
+    /// Move to the end of the current line.
     LineEnd,
 }
 
@@ -225,6 +238,12 @@ impl TextArea {
         self.preferred_col = None;
     }
 
+    /// Enable or disable modal Vim editing for the textarea.
+    ///
+    /// Enabling always enters normal mode and disabling always returns to
+    /// insert semantics. Pending operators are cleared in both directions so a
+    /// toggle cannot leave the next keypress interpreted as the second half of
+    /// an old `d` or `y` command.
     pub(crate) fn set_vim_enabled(&mut self, enabled: bool) {
         self.vim_enabled = enabled;
         self.vim_operator = None;
@@ -235,18 +254,33 @@ impl TextArea {
         };
     }
 
+    /// Return whether modal Vim editing is currently enabled.
     pub(crate) fn is_vim_enabled(&self) -> bool {
         self.vim_enabled
     }
 
+    /// Return whether Vim mode is enabled and currently waiting in normal mode.
+    ///
+    /// Composer-level handlers use this to decide whether Up/Down should be
+    /// offered to history navigation only after normal-mode movement reaches a
+    /// text boundary.
     pub(crate) fn is_vim_normal_mode(&self) -> bool {
         self.vim_enabled && self.vim_mode == VimMode::Normal
     }
 
+    /// Return whether a Vim operator is waiting for a motion.
+    ///
+    /// This is observable so the composer can avoid stealing the second key of
+    /// `d{motion}` or `y{motion}` for higher-level shortcuts.
     pub(crate) fn is_vim_operator_pending(&self) -> bool {
         self.vim_operator.is_some()
     }
 
+    /// Enter Vim insert mode if modal editing is enabled.
+    ///
+    /// Calling this while Vim is disabled is a no-op, which lets parent
+    /// workflows reset mode after submissions without first branching on the
+    /// current keymap state.
     pub(crate) fn enter_vim_insert_mode(&mut self) {
         if self.vim_enabled {
             self.vim_mode = VimMode::Insert;
@@ -254,6 +288,12 @@ impl TextArea {
         }
     }
 
+    /// Enter Vim normal mode if modal editing is enabled.
+    ///
+    /// This clears any pending operator and preferred vertical column. The
+    /// latter matches normal Vim navigation expectations after leaving insert
+    /// mode; preserving the old column would make the next `j` or `k` jump to a
+    /// stale visual target.
     pub(crate) fn enter_vim_normal_mode(&mut self) {
         if self.vim_enabled {
             self.vim_mode = VimMode::Normal;
@@ -262,14 +302,25 @@ impl TextArea {
         }
     }
 
+    /// Return whether rapid plain-key bursts should be treated as paste input.
+    ///
+    /// Paste burst detection is disabled in Vim normal mode so a fast sequence
+    /// like `dd` or `yw` remains command input instead of being converted into
+    /// literal text.
     pub(crate) fn allows_paste_burst(&self) -> bool {
         !self.vim_enabled || self.vim_mode == VimMode::Insert
     }
 
+    /// Return whether rendering should use the insert-mode cursor style.
     pub(crate) fn uses_vim_insert_cursor(&self) -> bool {
         self.vim_enabled && self.vim_mode == VimMode::Insert
     }
 
+    /// Return whether Escape should be intercepted before composer-level routing.
+    ///
+    /// In Vim insert mode, Escape is an editing transition rather than a popup
+    /// cancel/backtrack shortcut. Letting the composer handle it first would
+    /// close UI surfaces while leaving the textarea in insert mode.
     pub(crate) fn should_handle_vim_insert_escape(&self, event: KeyEvent) -> bool {
         self.vim_enabled
             && self.vim_mode == VimMode::Insert
@@ -278,6 +329,11 @@ impl TextArea {
             && matches!(event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
     }
 
+    /// Return the footer label for the active Vim mode.
+    ///
+    /// `None` means Vim editing is disabled, so callers should omit the mode
+    /// indicator rather than rendering an insert-mode label for normal
+    /// non-modal editing.
     pub(crate) fn vim_mode_label(&self) -> Option<&'static str> {
         if !self.vim_enabled {
             return None;
