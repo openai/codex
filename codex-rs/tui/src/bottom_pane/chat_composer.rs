@@ -1624,6 +1624,7 @@ impl ChatComposer {
             ActivePopup::Skill(_) => self.handle_key_event_with_skill_popup(key_event),
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
+        self.reset_vim_mode_after_successful_dispatch(&result.0);
         // Update (or hide/show) popup after processing the key.
         self.sync_popups();
         result
@@ -2622,7 +2623,21 @@ impl ChatComposer {
     /// Common logic for handling message submission/queuing.
     /// Returns the appropriate InputResult based on `should_queue`.
     fn handle_submission(&mut self, should_queue: bool) -> (InputResult, bool) {
-        self.handle_submission_with_time(should_queue, Instant::now())
+        let result = self.handle_submission_with_time(should_queue, Instant::now());
+        self.reset_vim_mode_after_successful_dispatch(&result.0);
+        result
+    }
+
+    fn reset_vim_mode_after_successful_dispatch(&mut self, result: &InputResult) {
+        if matches!(
+            result,
+            InputResult::Submitted { .. }
+                | InputResult::Queued { .. }
+                | InputResult::Command(_)
+                | InputResult::CommandWithArgs(_, _, _)
+        ) {
+            self.textarea.enter_vim_normal_mode();
+        }
     }
 
     fn handle_submission_with_time(
@@ -5397,9 +5412,48 @@ mod tests {
         assert!(composer.is_empty());
         assert_eq!(
             composer.vim_mode_indicator_span(),
-            Some("Vim: Insert".green())
+            Some("Vim: Normal".magenta())
         );
         assert!(matches!(result, InputResult::Command(SlashCommand::Diff)));
+    }
+
+    #[test]
+    fn inline_slash_command_dispatch_resets_vim_mode_to_normal() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ true,
+        );
+        composer.set_collaboration_modes_enabled(/*enabled*/ true);
+        composer.set_vim_enabled(/*enabled*/ true);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        composer.set_text_content("/plan investigate this".to_string(), Vec::new(), Vec::new());
+        composer.active_popup = ActivePopup::None;
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(needs_redraw);
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Normal".magenta())
+        );
+        match result {
+            InputResult::CommandWithArgs(cmd, args, text_elements) => {
+                assert_eq!(cmd, SlashCommand::Plan);
+                assert_eq!(args, "investigate this");
+                assert!(text_elements.is_empty());
+            }
+            _ => panic!("expected CommandWithArgs"),
+        }
     }
 
     #[test]
@@ -5575,7 +5629,7 @@ mod tests {
     }
 
     #[test]
-    fn vim_mode_stays_enabled_after_submission() {
+    fn vim_mode_resets_to_normal_after_submission() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -5600,18 +5654,84 @@ mod tests {
 
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         composer.set_text_content("h".to_string(), Vec::new(), Vec::new());
-        let (result, _) = composer.handle_submission(/*should_queue*/ false);
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert!(composer.textarea.is_vim_enabled());
         assert_eq!(
             composer.vim_mode_indicator_span(),
-            Some("Vim: Insert".green())
+            Some("Vim: Normal".magenta())
         );
         assert!(composer.is_empty());
         match result {
             InputResult::Submitted { text, .. } => assert_eq!(text, "h"),
             _ => panic!("expected Submitted"),
         }
+    }
+
+    #[test]
+    fn vim_mode_resets_to_normal_after_queued_submission() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_steer_enabled(/*enabled*/ true);
+        composer.set_task_running(/*running*/ true);
+        composer.set_vim_enabled(/*enabled*/ true);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        composer.set_text_content("queued".to_string(), Vec::new(), Vec::new());
+        let (result, _) = composer.handle_submission(/*should_queue*/ true);
+
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Normal".magenta())
+        );
+        assert!(composer.is_empty());
+        match result {
+            InputResult::Queued { text, .. } => assert_eq!(text, "queued"),
+            _ => panic!("expected Queued"),
+        }
+    }
+
+    #[test]
+    fn vim_mode_stays_insert_after_suppressed_submission() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_steer_enabled(/*enabled*/ true);
+        composer.set_vim_enabled(/*enabled*/ true);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        composer.set_text_content("/not-a-command".to_string(), Vec::new(), Vec::new());
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert_eq!(composer.textarea.text(), "/not-a-command");
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Insert".green())
+        );
     }
 
     #[test]

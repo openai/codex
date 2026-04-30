@@ -599,6 +599,7 @@ impl BottomPane {
                 && self.is_task_running
                 && !is_agent_command
                 && !self.composer.popup_active()
+                && !self.composer_should_handle_vim_insert_escape(key_event)
                 && let Some(status) = &self.status
             {
                 // Send Op::Interrupt

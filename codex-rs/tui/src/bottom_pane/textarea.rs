@@ -254,6 +254,14 @@ impl TextArea {
         }
     }
 
+    pub(crate) fn enter_vim_normal_mode(&mut self) {
+        if self.vim_enabled {
+            self.vim_mode = VimMode::Normal;
+            self.vim_operator = None;
+            self.preferred_col = None;
+        }
+    }
+
     pub(crate) fn allows_paste_burst(&self) -> bool {
         !self.vim_enabled || self.vim_mode == VimMode::Insert
     }
@@ -563,9 +571,7 @@ impl TextArea {
             if self.cursor_pos > 0 {
                 self.cursor_pos = self.prev_atomic_boundary(self.cursor_pos);
             }
-            self.vim_mode = VimMode::Normal;
-            self.vim_operator = None;
-            self.preferred_col = None;
+            self.enter_vim_normal_mode();
             return;
         }
         let keymap = self.editor_keymap.clone();
