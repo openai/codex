@@ -43,8 +43,13 @@ use crate::UpdateThreadMetadataParams;
 #[derive(Clone)]
 pub struct LocalThreadStore {
     pub(super) config: LocalThreadStoreConfig,
-    live_recorders: Arc<Mutex<HashMap<ThreadId, RolloutRecorder>>>,
+    live_recorders: Arc<Mutex<HashMap<ThreadId, LiveRecorderEntry>>>,
     state_db: Arc<OnceCell<StateDbHandle>>,
+}
+
+struct LiveRecorderEntry {
+    recorder: RolloutRecorder,
+    leases: usize,
 }
 
 /// Process-scoped configuration for local thread storage.
@@ -148,7 +153,7 @@ impl LocalThreadStore {
             .lock()
             .await
             .get(&thread_id)
-            .cloned()
+            .map(|entry| entry.recorder.clone())
             .ok_or(ThreadStoreError::ThreadNotFound { thread_id })
     }
 
@@ -164,6 +169,29 @@ impl LocalThreadStore {
         Ok(())
     }
 
+    pub(super) async fn lease_live_recorder(
+        &self,
+        thread_id: ThreadId,
+        rollout_path: Option<&Path>,
+    ) -> ThreadStoreResult<bool> {
+        let mut recorders = self.live_recorders.lock().await;
+        let Some(entry) = recorders.get_mut(&thread_id) else {
+            return Ok(false);
+        };
+        if let Some(rollout_path) = rollout_path
+            && entry.recorder.rollout_path() != rollout_path
+        {
+            return Err(ThreadStoreError::InvalidRequest {
+                message: format!(
+                    "thread {thread_id} already has a live local writer for `{}`",
+                    entry.recorder.rollout_path().display()
+                ),
+            });
+        }
+        entry.leases += 1;
+        Ok(true)
+    }
+
     pub(super) async fn insert_live_recorder(
         &self,
         thread_id: ThreadId,
@@ -174,7 +202,10 @@ impl LocalThreadStore {
                 message: format!("thread {} already has a live local writer", entry.key()),
             }),
             Entry::Vacant(entry) => {
-                entry.insert(recorder);
+                entry.insert(LiveRecorderEntry {
+                    recorder,
+                    leases: 1,
+                });
                 Ok(())
             }
         }
@@ -495,6 +526,66 @@ mod tests {
 
         assert!(matches!(err, ThreadStoreError::InvalidRequest { .. }));
         assert!(err.to_string().contains("already has a live local writer"));
+    }
+
+    #[tokio::test]
+    async fn resume_thread_reuses_duplicate_live_writer() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let thread_id = ThreadId::default();
+
+        store
+            .create_thread(create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+        let rollout_path = store
+            .live_rollout_path(thread_id)
+            .await
+            .expect("live rollout path");
+        store
+            .resume_thread(ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(rollout_path.clone()),
+                history: None,
+                include_archived: true,
+                metadata_defaults: ThreadMetadataDefaults {
+                    model_provider: "test-provider".to_string(),
+                },
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            })
+            .await
+            .expect("resume live thread");
+
+        store
+            .shutdown_thread(thread_id)
+            .await
+            .expect("release first live lease");
+        store
+            .append_items(AppendThreadItemsParams {
+                thread_id,
+                items: vec![user_message_item("after first shutdown")],
+            })
+            .await
+            .expect("remaining lease should keep writer live");
+        store
+            .flush_thread(thread_id)
+            .await
+            .expect("flush live thread");
+
+        assert_rollout_contains_message(rollout_path.as_path(), "after first shutdown").await;
+
+        store
+            .shutdown_thread(thread_id)
+            .await
+            .expect("release last live lease");
+        let err = store
+            .append_items(AppendThreadItemsParams {
+                thread_id,
+                items: vec![user_message_item("after last shutdown")],
+            })
+            .await
+            .expect_err("last shutdown should close writer");
+        assert!(matches!(err, ThreadStoreError::ThreadNotFound { .. }));
     }
 
     #[tokio::test]
