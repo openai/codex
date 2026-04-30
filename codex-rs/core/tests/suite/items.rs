@@ -303,6 +303,11 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
         })
         .await?;
 
+    let begin = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::WebSearchBegin(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
     let completed = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ItemCompleted(ItemCompletedEvent {
             item: TurnItem::WebSearch(item),
@@ -312,7 +317,8 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
     })
     .await;
 
-    assert_eq!(completed.id, "web-search-1");
+    assert_eq!(begin.call_id, "web-search-1");
+    assert_eq!(completed.id, begin.call_id);
     assert_eq!(
         completed.action,
         WebSearchAction::Search {
@@ -363,12 +369,18 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
         })
         .await?;
 
+    let begin = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ImageGenerationBegin(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
     let end = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ImageGenerationEnd(event) => Some(event.clone()),
         _ => None,
     })
     .await;
 
+    assert_eq!(begin.call_id, call_id);
     assert_eq!(end.call_id, call_id);
     assert_eq!(end.status, "completed");
     assert_eq!(end.revised_prompt, Some("A tiny blue square".to_string()));
@@ -421,12 +433,18 @@ async fn image_generation_call_event_is_emitted_when_image_save_fails() -> anyho
         })
         .await?;
 
+    let begin = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ImageGenerationBegin(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
     let end = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ImageGenerationEnd(event) => Some(event.clone()),
         _ => None,
     })
     .await;
 
+    assert_eq!(begin.call_id, "ig_invalid");
     assert_eq!(end.call_id, "ig_invalid");
     assert_eq!(end.status, "completed");
     assert_eq!(end.revised_prompt, Some("broken payload".to_string()));

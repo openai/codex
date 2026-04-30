@@ -1389,7 +1389,11 @@ pub enum EventMsg {
 
     McpToolCallEnd(McpToolCallEndEvent),
 
+    WebSearchBegin(WebSearchBeginEvent),
+
     WebSearchEnd(WebSearchEndEvent),
+
+    ImageGenerationBegin(ImageGenerationBeginEvent),
 
     ImageGenerationEnd(ImageGenerationEndEvent),
 
@@ -1828,7 +1832,17 @@ pub struct ItemStartedEvent {
 
 impl HasLegacyEvent for ItemStartedEvent {
     fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        Vec::new()
+        match &self.item {
+            TurnItem::WebSearch(item) => vec![EventMsg::WebSearchBegin(WebSearchBeginEvent {
+                call_id: item.id.clone(),
+            })],
+            TurnItem::ImageGeneration(item) => {
+                vec![EventMsg::ImageGenerationBegin(ImageGenerationBeginEvent {
+                    call_id: item.id.clone(),
+                })]
+            }
+            _ => Vec::new(),
+        }
     }
 }
 
@@ -2353,10 +2367,20 @@ impl McpToolCallEndEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct WebSearchBeginEvent {
+    pub call_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct WebSearchEndEvent {
     pub call_id: String,
     pub query: String,
     pub action: WebSearchAction,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ImageGenerationBeginEvent {
+    pub call_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -3906,6 +3930,7 @@ mod tests {
     use super::*;
     use crate::items::ImageGenerationItem;
     use crate::items::UserMessageItem;
+    use crate::items::WebSearchItem;
     use crate::permissions::FileSystemAccessMode;
     use crate::permissions::FileSystemPath;
     use crate::permissions::FileSystemSandboxEntry;
@@ -4546,7 +4571,30 @@ mod tests {
     }
 
     #[test]
-    fn item_started_event_emits_no_legacy_events() {
+    fn item_started_event_from_web_search_emits_begin_event() {
+        let event = ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            item: TurnItem::WebSearch(WebSearchItem {
+                id: "search-1".into(),
+                query: "find docs".into(),
+                action: WebSearchAction::Search {
+                    query: Some("find docs".into()),
+                    queries: None,
+                },
+            }),
+        };
+
+        let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
+        assert_eq!(legacy_events.len(), 1);
+        match &legacy_events[0] {
+            EventMsg::WebSearchBegin(event) => assert_eq!(event.call_id, "search-1"),
+            _ => panic!("expected WebSearchBegin event"),
+        }
+    }
+
+    #[test]
+    fn item_started_event_from_non_web_search_emits_no_legacy_events() {
         let event = ItemStartedEvent {
             thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
@@ -4558,6 +4606,28 @@ mod tests {
                 .as_legacy_events(/*show_raw_agent_reasoning*/ false)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn item_started_event_from_image_generation_emits_begin_event() {
+        let event = ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            item: TurnItem::ImageGeneration(ImageGenerationItem {
+                id: "ig-1".into(),
+                status: "in_progress".into(),
+                revised_prompt: None,
+                result: String::new(),
+                saved_path: None,
+            }),
+        };
+
+        let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
+        assert_eq!(legacy_events.len(), 1);
+        match &legacy_events[0] {
+            EventMsg::ImageGenerationBegin(event) => assert_eq!(event.call_id, "ig-1"),
+            _ => panic!("expected ImageGenerationBegin event"),
+        }
     }
 
     #[test]

@@ -353,6 +353,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::PatchApplyUpdated(_)
                     | EventMsg::PatchApplyEnd(_)
                     | EventMsg::TurnDiff(_)
+                    | EventMsg::WebSearchBegin(_)
                     | EventMsg::WebSearchEnd(_)
                     | EventMsg::GetHistoryEntryResponse(_)
                     | EventMsg::PlanUpdate(_)
@@ -360,6 +361,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::UserMessage(_)
                     | EventMsg::ShutdownComplete
                     | EventMsg::ViewImageToolCall(_)
+                    | EventMsg::ImageGenerationBegin(_)
                     | EventMsg::ImageGenerationEnd(_)
                     | EventMsg::RawResponseItem(_)
                     | EventMsg::EnteredReviewMode(_)
