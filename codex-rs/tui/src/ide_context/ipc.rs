@@ -131,17 +131,60 @@ pub(crate) fn fetch_ide_context_from_socket(
     workspace_root: &Path,
     timeout: Duration,
 ) -> Result<IdeContext, IdeContextError> {
-    use std::os::unix::net::UnixStream;
+    let deadline = Instant::now() + timeout;
+    let mut stream =
+        UnixDeadlineStream::connect(socket_path, deadline).map_err(IdeContextError::Connect)?;
 
-    let mut stream = UnixStream::connect(socket_path).map_err(IdeContextError::Connect)?;
-    stream
-        .set_read_timeout(Some(timeout))
-        .map_err(IdeContextError::Read)?;
-    stream
-        .set_write_timeout(Some(timeout))
-        .map_err(IdeContextError::Send)?;
+    fetch_ide_context_from_stream(&mut stream, workspace_root, deadline)
+}
 
-    fetch_ide_context_from_stream(&mut stream, workspace_root, Instant::now() + timeout)
+#[cfg(unix)]
+struct UnixDeadlineStream {
+    stream: std::os::unix::net::UnixStream,
+    deadline: Instant,
+}
+
+#[cfg(unix)]
+impl UnixDeadlineStream {
+    fn connect(socket_path: PathBuf, deadline: Instant) -> std::io::Result<Self> {
+        let stream = std::os::unix::net::UnixStream::connect(socket_path)?;
+        Ok(Self::new(stream, deadline))
+    }
+
+    fn new(stream: std::os::unix::net::UnixStream, deadline: Instant) -> Self {
+        Self { stream, deadline }
+    }
+
+    fn remaining_timeout(&self) -> std::io::Result<Duration> {
+        self.deadline
+            .checked_duration_since(Instant::now())
+            .filter(|duration| !duration.is_zero())
+            .ok_or_else(deadline_timeout_io_error)
+    }
+}
+
+#[cfg(unix)]
+impl std::io::Read for UnixDeadlineStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.stream
+            .set_read_timeout(Some(self.remaining_timeout()?))?;
+        self.stream.read(buf).map_err(normalize_timeout_io_error)
+    }
+}
+
+#[cfg(unix)]
+impl std::io::Write for UnixDeadlineStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.stream
+            .set_write_timeout(Some(self.remaining_timeout()?))?;
+        self.stream.write(buf).map_err(normalize_timeout_io_error)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream
+            .set_write_timeout(Some(self.remaining_timeout()?))?;
+        self.stream.flush().map_err(normalize_timeout_io_error)
+    }
 }
 
 #[cfg(windows)]
@@ -342,10 +385,25 @@ fn ensure_deadline_not_expired(deadline: Instant) -> Result<(), IdeContextError>
 
 #[cfg(any(unix, windows))]
 fn timeout_error() -> IdeContextError {
-    IdeContextError::Read(std::io::Error::new(
+    IdeContextError::Read(deadline_timeout_io_error())
+}
+
+#[cfg(any(unix, windows))]
+fn deadline_timeout_io_error() -> std::io::Error {
+    std::io::Error::new(
         std::io::ErrorKind::TimedOut,
         "timed out waiting for IDE context",
-    ))
+    )
+}
+
+#[cfg(unix)]
+fn normalize_timeout_io_error(error: std::io::Error) -> std::io::Error {
+    match error.kind() {
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
+            deadline_timeout_io_error()
+        }
+        _ => error,
+    }
 }
 
 #[cfg(any(unix, windows))]
@@ -512,6 +570,24 @@ mod tests {
             err,
             IdeContextError::Read(error) if error.kind() == std::io::ErrorKind::TimedOut
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_deadline_stream_uses_remaining_deadline_for_blocking_reads() {
+        use std::os::unix::net::UnixStream;
+
+        let (client, _server) = UnixStream::pair().expect("create unix stream pair");
+        let mut stream =
+            UnixDeadlineStream::new(client, Instant::now() + Duration::from_millis(50));
+        let start = Instant::now();
+        let mut buf = [0_u8; 1];
+
+        let err = std::io::Read::read(&mut stream, &mut buf)
+            .expect_err("read should time out at the request deadline");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        assert!(start.elapsed() < Duration::from_secs(2));
     }
 
     #[cfg(unix)]
