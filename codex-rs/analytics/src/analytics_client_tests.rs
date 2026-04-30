@@ -1497,9 +1497,9 @@ fn plugin_management_event_serializes_expected_shape() {
 }
 
 #[test]
-fn plugin_management_event_can_use_analytics_plugin_id_override() {
+fn plugin_management_event_can_use_remote_plugin_id_override() {
     let mut plugin = sample_plugin_metadata();
-    plugin.analytics_plugin_id = Some("plugins~Plugin_remote".to_string());
+    plugin.remote_plugin_id = Some("plugins~Plugin_remote".to_string());
     let event = TrackEventRequest::PluginInstalled(CodexPluginEventRequest {
         event_type: "codex_plugin_installed",
         event_params: codex_plugin_metadata(plugin),
@@ -2501,7 +2501,7 @@ async fn turn_completed_without_started_notification_emits_null_started_at() {
 fn sample_plugin_metadata() -> PluginTelemetryMetadata {
     PluginTelemetryMetadata {
         plugin_id: PluginId::parse("sample@test").expect("valid plugin id"),
-        analytics_plugin_id: None,
+        remote_plugin_id: None,
         capability_summary: Some(PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
             display_name: "sample".to_string(),

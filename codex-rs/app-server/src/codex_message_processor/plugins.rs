@@ -581,7 +581,7 @@ impl CodexMessageProcessor {
 
         let mut plugin_metadata =
             plugin_telemetry_metadata_from_root(&result.plugin_id, &result.installed_path).await;
-        plugin_metadata.analytics_plugin_id = Some(remote_plugin_id);
+        plugin_metadata.remote_plugin_id = Some(remote_plugin_id);
         self.analytics_events_client
             .track_plugin_installed(plugin_metadata);
 
