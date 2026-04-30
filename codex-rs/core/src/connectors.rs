@@ -29,7 +29,9 @@ use crate::mcp::McpManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
 use crate::session::INITIAL_SUBMIT_ID;
 use codex_config::AppsRequirementsToml;
+use codex_config::types::AppConfig;
 use codex_config::types::AppToolApproval;
+use codex_config::types::AppToolConfig;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginsManager;
@@ -668,20 +670,15 @@ fn app_tool_policy_from_apps_config(
         return AppToolPolicy::default();
     };
 
-    let app = connector_id.and_then(|connector_id| apps_config.apps.get(connector_id));
-    let tools = app.and_then(|app| app.tools.as_ref());
-    let tool_config = tools.and_then(|tools| {
-        tools
-            .tools
-            .get(tool_name)
-            .or_else(|| tool_title.and_then(|title| tools.tools.get(title)))
-    });
+    let (matched_connector_id, app, tool_config) =
+        find_app_tool_config(apps_config, connector_id, tool_name, tool_title);
+    let policy_connector_id = matched_connector_id.or(connector_id);
     let approval = tool_config
         .and_then(|tool| tool.approval_mode)
         .or_else(|| app.and_then(|app| app.default_tools_approval_mode))
         .unwrap_or(AppToolApproval::Auto);
 
-    if !app_is_enabled(apps_config, connector_id) {
+    if !app_is_enabled(apps_config, policy_connector_id) {
         return AppToolPolicy {
             enabled: false,
             approval,
@@ -721,6 +718,51 @@ fn app_tool_policy_from_apps_config(
         (destructive_enabled || !destructive_hint) && (open_world_enabled || !open_world_hint);
 
     AppToolPolicy { enabled, approval }
+}
+
+fn find_app_tool_config<'a>(
+    apps_config: &'a AppsConfigToml,
+    connector_id: Option<&'a str>,
+    tool_name: &str,
+    tool_title: Option<&str>,
+) -> (
+    Option<&'a str>,
+    Option<&'a AppConfig>,
+    Option<&'a AppToolConfig>,
+) {
+    if let Some(connector_id) = connector_id {
+        let app = apps_config.apps.get(connector_id);
+        return (
+            Some(connector_id),
+            app,
+            app.and_then(|app| matching_app_tool_config(app, tool_name, tool_title)),
+        );
+    }
+
+    let mut matches = apps_config.apps.iter().filter_map(|(connector_id, app)| {
+        matching_app_tool_config(app, tool_name, tool_title)
+            .map(|tool_config| (connector_id.as_str(), app, tool_config))
+    });
+    if let Some((connector_id, app, tool_config)) = matches.next()
+        && matches.next().is_none()
+    {
+        return (Some(connector_id), Some(app), Some(tool_config));
+    }
+
+    (None, None, None)
+}
+
+fn matching_app_tool_config<'a>(
+    app: &'a AppConfig,
+    tool_name: &str,
+    tool_title: Option<&str>,
+) -> Option<&'a AppToolConfig> {
+    app.tools.as_ref().and_then(|tools| {
+        tools
+            .tools
+            .get(tool_name)
+            .or_else(|| tool_title.and_then(|title| tools.tools.get(title)))
+    })
 }
 
 #[cfg(test)]
