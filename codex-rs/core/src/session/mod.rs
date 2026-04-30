@@ -30,9 +30,8 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
-use crate::environment_selection::primary_selected_cwd_or_fallback;
-use crate::environment_selection::selected_primary_environment;
-use crate::environment_selection::validate_environment_selections;
+use crate::environment_selection::ResolvedEnvironmentSelections;
+use crate::environment_selection::resolve_environment_selections;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
@@ -412,6 +411,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) environments: Vec<TurnEnvironmentSelection>,
+    pub(crate) resolved_environments: Option<ResolvedEnvironmentSelections>,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
 }
@@ -469,19 +469,19 @@ impl Codex {
             parent_rollout_thread_trace,
             parent_trace: _,
             environments,
+            resolved_environments,
             analytics_events_client,
             thread_store,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
-        validate_environment_selections(environment_manager.as_ref(), &environments)?;
-        let environment =
-            selected_primary_environment(environment_manager.as_ref(), &environments)?;
-        let mut load_config = config.clone();
-        load_config.cwd = primary_selected_cwd_or_fallback(&environments, &config.cwd);
-        let fs = environment
-            .as_ref()
-            .map(|environment| environment.get_filesystem());
+        let resolved_environments = match resolved_environments {
+            Some(resolved_environments) => resolved_environments,
+            None => resolve_environment_selections(environment_manager.as_ref(), &environments)?,
+        };
+        config.cwd = resolved_environments.primary_cwd_or_fallback(&config.cwd);
+        let load_config = config.clone();
+        let fs = resolved_environments.primary_filesystem();
         let plugins_input = load_config.plugins_config_input();
         let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
@@ -504,8 +504,9 @@ impl Codex {
             let _ = config.features.disable(Feature::Collab);
         }
 
+        let primary_environment = resolved_environments.primary_environment_backend();
         let user_instructions = AgentsMdManager::new(&load_config)
-            .user_instructions(environment.as_deref())
+            .user_instructions(primary_environment.as_deref())
             .await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {

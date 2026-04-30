@@ -1,40 +1,24 @@
 use super::*;
 
 impl Session {
-    pub(crate) fn mcp_runtime_environment_for_turn_context(
-        &self,
-        turn_context: &TurnContext,
-    ) -> McpRuntimeEnvironment {
-        if let Some(turn_environment) = turn_context.primary_environment() {
-            return McpRuntimeEnvironment::new(
-                Arc::clone(&turn_environment.environment),
-                turn_environment.cwd.to_path_buf(),
-            );
-        }
-
-        McpRuntimeEnvironment::new(
-            self.services.environment_manager.local_environment(),
-            turn_context.cwd.to_path_buf(),
-        )
-    }
-
     pub(crate) fn mcp_runtime_environment_for_configuration(
         &self,
         session_configuration: &SessionConfiguration,
     ) -> CodexResult<McpRuntimeEnvironment> {
-        if let Some(turn_environment) = session_configuration.environments.first() {
-            let environment = self
-                .services
-                .environment_manager
-                .get_environment(&turn_environment.environment_id)
-                .ok_or_else(|| {
-                    CodexErr::InvalidRequest(format!(
-                        "unknown stored MCP environment id `{}`",
-                        turn_environment.environment_id
-                    ))
-                })?;
+        let resolved_environments = crate::environment_selection::resolve_environment_selections(
+            self.services.environment_manager.as_ref(),
+            &session_configuration.environments,
+        )
+        .map_err(|err| {
+            CodexErr::InvalidRequest(err.to_string().replace(
+                "unknown turn environment id",
+                "unknown stored MCP environment id",
+            ))
+        })?;
+
+        if let Some(turn_environment) = resolved_environments.primary_environment() {
             return Ok(McpRuntimeEnvironment::new(
-                environment,
+                Arc::clone(&turn_environment.environment),
                 turn_environment.cwd.to_path_buf(),
             ));
         }
@@ -265,6 +249,18 @@ impl Session {
         let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
         let auth_statuses =
             compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
+        let session_configuration = {
+            let state = self.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let mcp_runtime_environment =
+            match self.mcp_runtime_environment_for_configuration(&session_configuration) {
+                Ok(runtime_environment) => runtime_environment,
+                Err(err) => {
+                    warn!("failed to resolve MCP runtime environment for refresh: {err}");
+                    return;
+                }
+            };
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             guard.cancel();
@@ -278,7 +274,7 @@ impl Session {
             turn_context.sub_id.clone(),
             self.get_tx_event(),
             turn_context.permission_profile(),
-            self.mcp_runtime_environment_for_turn_context(turn_context),
+            mcp_runtime_environment,
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
             tool_plugin_provenance,

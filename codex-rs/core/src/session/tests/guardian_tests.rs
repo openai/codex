@@ -755,6 +755,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         user_shell_override: None,
         parent_trace: None,
         environments: Vec::new(),
+        resolved_environments: None,
         analytics_events_client: None,
         thread_store,
     })

@@ -1,12 +1,14 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
+
+use crate::session::turn_context::TurnEnvironment;
 
 pub(crate) fn default_thread_environment_selections(
     environment_manager: &EnvironmentManager,
@@ -22,59 +24,87 @@ pub(crate) fn default_thread_environment_selections(
         .collect()
 }
 
-pub(crate) fn validate_environment_selections(
+#[derive(Clone)]
+pub(crate) struct ResolvedEnvironmentSelections {
+    pub(crate) turn_environments: Vec<TurnEnvironment>,
+}
+
+impl ResolvedEnvironmentSelections {
+    pub(crate) fn primary_environment(&self) -> Option<&TurnEnvironment> {
+        self.turn_environments.first()
+    }
+
+    pub(crate) fn primary_cwd_or_fallback(
+        &self,
+        fallback_cwd: &AbsolutePathBuf,
+    ) -> AbsolutePathBuf {
+        self.primary_environment()
+            .map(|environment| environment.cwd.clone())
+            .unwrap_or_else(|| fallback_cwd.clone())
+    }
+
+    pub(crate) fn primary_environment_backend(
+        &self,
+    ) -> Option<Arc<codex_exec_server::Environment>> {
+        self.primary_environment()
+            .map(|environment| Arc::clone(&environment.environment))
+    }
+
+    pub(crate) fn primary_filesystem(&self) -> Option<Arc<dyn ExecutorFileSystem>> {
+        self.primary_environment()
+            .map(|environment| environment.environment.get_filesystem())
+    }
+}
+
+pub(crate) fn resolve_environment_selections(
     environment_manager: &EnvironmentManager,
     environments: &[TurnEnvironmentSelection],
-) -> CodexResult<()> {
+) -> CodexResult<ResolvedEnvironmentSelections> {
+    resolve_environment_selections_with_primary_cwd(
+        environment_manager,
+        environments,
+        /*primary_cwd_override*/ None,
+    )
+}
+
+pub(crate) fn resolve_environment_selections_with_primary_cwd(
+    environment_manager: &EnvironmentManager,
+    environments: &[TurnEnvironmentSelection],
+    primary_cwd_override: Option<&AbsolutePathBuf>,
+) -> CodexResult<ResolvedEnvironmentSelections> {
     let mut seen_environment_ids = HashSet::with_capacity(environments.len());
-    for selected_environment in environments {
+    let mut turn_environments = Vec::with_capacity(environments.len());
+    for (index, selected_environment) in environments.iter().enumerate() {
         if !seen_environment_ids.insert(selected_environment.environment_id.as_str()) {
             return Err(CodexErr::InvalidRequest(format!(
                 "duplicate turn environment id `{}`",
                 selected_environment.environment_id
             )));
         }
-        if environment_manager
-            .get_environment(&selected_environment.environment_id)
-            .is_none()
-        {
-            return Err(CodexErr::InvalidRequest(format!(
-                "unknown turn environment id `{}`",
-                selected_environment.environment_id
-            )));
-        }
+        let environment_id = selected_environment.environment_id.clone();
+        let environment = environment_manager
+            .get_environment(&environment_id)
+            .ok_or_else(|| {
+                CodexErr::InvalidRequest(format!("unknown turn environment id `{environment_id}`"))
+            })?;
+        turn_environments.push(TurnEnvironment {
+            environment_id,
+            environment,
+            cwd: primary_cwd_override
+                .filter(|_| index == 0)
+                .cloned()
+                .unwrap_or_else(|| selected_environment.cwd.clone()),
+        });
     }
 
-    Ok(())
+    Ok(ResolvedEnvironmentSelections { turn_environments })
 }
 
-pub(crate) fn selected_primary_environment(
+pub(crate) fn validate_environment_selections(
     environment_manager: &EnvironmentManager,
     environments: &[TurnEnvironmentSelection],
-) -> CodexResult<Option<Arc<Environment>>> {
-    environments
-        .first()
-        .map(|selected_environment| {
-            environment_manager
-                .get_environment(&selected_environment.environment_id)
-                .ok_or_else(|| {
-                    CodexErr::InvalidRequest(format!(
-                        "unknown turn environment id `{}`",
-                        selected_environment.environment_id
-                    ))
-                })
-        })
-        .transpose()
-}
-
-pub(crate) fn primary_selected_cwd_or_fallback(
-    environments: &[TurnEnvironmentSelection],
-    fallback_cwd: &AbsolutePathBuf,
-) -> AbsolutePathBuf {
-    environments
-        .first()
-        .map(|selected_environment| selected_environment.cwd.clone())
-        .unwrap_or_else(|| fallback_cwd.clone())
+) -> CodexResult<()> {
+    resolve_environment_selections(environment_manager, environments).map(|_| ())
 }
 
 #[cfg(test)]
@@ -148,26 +178,58 @@ mod tests {
     }
 
     #[test]
-    fn primary_selected_cwd_or_fallback_uses_first_selection() {
+    fn resolved_environment_selections_use_first_selection_as_primary() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let selected_cwd = cwd.join("selected");
+        let manager = EnvironmentManager::default_for_tests();
 
+        let resolved = resolve_environment_selections(
+            &manager,
+            &[TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd: selected_cwd.clone(),
+            }],
+        )
+        .expect("environment selections should resolve");
+
+        assert_eq!(resolved.primary_cwd_or_fallback(&cwd), selected_cwd);
         assert_eq!(
-            primary_selected_cwd_or_fallback(
-                &[TurnEnvironmentSelection {
-                    environment_id: "local".to_string(),
-                    cwd: selected_cwd.clone(),
-                }],
-                &cwd,
-            ),
-            selected_cwd
+            resolved
+                .primary_environment()
+                .expect("primary environment")
+                .environment_id,
+            "local"
         );
     }
 
     #[test]
-    fn primary_selected_cwd_or_fallback_uses_fallback_without_selections() {
+    fn resolved_environment_selections_can_override_primary_cwd() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let selected_cwd = cwd.join("selected");
+        let override_cwd = cwd.join("override");
+        let manager = EnvironmentManager::default_for_tests();
 
-        assert_eq!(primary_selected_cwd_or_fallback(&[], &cwd), cwd);
+        let resolved = resolve_environment_selections_with_primary_cwd(
+            &manager,
+            &[TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd: selected_cwd,
+            }],
+            Some(&override_cwd),
+        )
+        .expect("environment selections should resolve");
+
+        assert_eq!(resolved.primary_cwd_or_fallback(&cwd), override_cwd);
+    }
+
+    #[test]
+    fn resolved_environment_selections_use_fallback_without_selections() {
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let manager = EnvironmentManager::default_for_tests();
+
+        let resolved =
+            resolve_environment_selections(&manager, &[]).expect("empty selections are valid");
+
+        assert_eq!(resolved.primary_cwd_or_fallback(&cwd), cwd);
     }
 }

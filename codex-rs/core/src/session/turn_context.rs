@@ -564,18 +564,15 @@ impl Session {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
-                    let mut effective_environments = updates
+                    let effective_environments = updates
                         .environments
                         .clone()
                         .unwrap_or_else(|| next.environments.clone());
-                    if updates.environments.is_some()
-                        && updates.cwd.is_some()
-                        && let Some(turn_environment) = effective_environments.first_mut()
-                    {
-                        turn_environment.cwd = next.cwd.clone();
-                    }
-                    let turn_environments =
-                        self.resolve_turn_environments(&effective_environments)?;
+                    let primary_cwd_override = (updates.environments.is_some()
+                        && updates.cwd.is_some())
+                    .then_some(&next.cwd);
+                    let turn_environments = self
+                        .resolve_turn_environments(&effective_environments, primary_cwd_override)?;
                     let previous_cwd = state.session_configuration.cwd.clone();
                     let previous_permission_profile =
                         state.session_configuration.permission_profile();
@@ -646,32 +643,14 @@ impl Session {
     fn resolve_turn_environments(
         &self,
         environments: &[TurnEnvironmentSelection],
+        primary_cwd_override: Option<&AbsolutePathBuf>,
     ) -> CodexResult<Vec<TurnEnvironment>> {
-        crate::environment_selection::validate_environment_selections(
+        crate::environment_selection::resolve_environment_selections_with_primary_cwd(
             self.services.environment_manager.as_ref(),
             environments,
-        )?;
-        let mut turn_environments = Vec::with_capacity(environments.len());
-        for selected_environment in environments {
-            let environment_id = selected_environment.environment_id.clone();
-            let environment = self
-                .services
-                .environment_manager
-                .get_environment(&environment_id)
-                .ok_or_else(|| {
-                    CodexErr::InvalidRequest(format!(
-                        "unknown turn environment id `{environment_id}`"
-                    ))
-                })?;
-            let cwd = selected_environment.cwd.clone();
-            turn_environments.push(TurnEnvironment {
-                environment_id,
-                environment,
-                cwd,
-            });
-        }
-
-        Ok(turn_environments)
+            primary_cwd_override,
+        )
+        .map(|resolved| resolved.turn_environments)
     }
 
     async fn new_turn_from_configuration(
@@ -779,14 +758,16 @@ impl Session {
             let state = self.state.lock().await;
             state.session_configuration.clone()
         };
-        let turn_environments =
-            match self.resolve_turn_environments(&session_configuration.environments) {
-                Ok(turn_environments) => turn_environments,
-                Err(err) => {
-                    warn!("failed to resolve stored session environments: {err}");
-                    Vec::new()
-                }
-            };
+        let turn_environments = match self.resolve_turn_environments(
+            &session_configuration.environments,
+            /*primary_cwd_override*/ None,
+        ) {
+            Ok(turn_environments) => turn_environments,
+            Err(err) => {
+                warn!("failed to resolve stored session environments: {err}");
+                Vec::new()
+            }
+        };
 
         self.new_turn_from_configuration(
             sub_id,

@@ -199,11 +199,11 @@ impl SessionConfiguration {
             .cwd
             .as_ref()
             .map(|cwd| {
-                crate::environment_selection::primary_selected_cwd_or_fallback(
-                    effective_environments,
-                    &self.cwd,
-                )
-                .join(normalize_for_native_workdir(cwd.as_path()))
+                let base_cwd = effective_environments
+                    .first()
+                    .map(|environment| &environment.cwd)
+                    .unwrap_or(&self.cwd);
+                base_cwd.join(normalize_for_native_workdir(cwd.as_path()))
             })
             .unwrap_or_else(|| self.cwd.clone());
 

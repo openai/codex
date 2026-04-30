@@ -99,6 +99,7 @@ pub(crate) async fn run_codex_thread_interactive(
             .iter()
             .map(TurnEnvironment::selection)
             .collect(),
+        resolved_environments: None,
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         thread_store: Arc::clone(&parent_session.services.thread_store),
     }))

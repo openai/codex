@@ -4,7 +4,7 @@ use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::config::ThreadStoreConfig;
 use crate::environment_selection::default_thread_environment_selections;
-use crate::environment_selection::selected_primary_environment;
+use crate::environment_selection::resolve_environment_selections;
 use crate::environment_selection::validate_environment_selections;
 use crate::file_watcher::FileWatcher;
 use crate::mcp::McpManager;
@@ -1098,23 +1098,19 @@ impl ThreadManagerState {
                 threads.remove(&resumed.conversation_id);
             }
         }
-        validate_environment_selections(self.environment_manager.as_ref(), &environments)?;
-        let environment =
-            selected_primary_environment(self.environment_manager.as_ref(), &environments)?;
-        let effective_cwd = environments
-            .first()
-            .map(|environment| environment.cwd.clone())
-            .unwrap_or_else(|| config.cwd.clone());
+        let resolved_environments =
+            resolve_environment_selections(self.environment_manager.as_ref(), &environments)?;
+        let effective_cwd = resolved_environments.primary_cwd_or_fallback(&config.cwd);
         let mut load_config = config.clone();
         load_config.cwd = effective_cwd;
-        let watch_registration = match environment.as_ref() {
-            Some(environment) if !environment.is_remote() => {
+        let watch_registration = match resolved_environments.primary_environment() {
+            Some(turn_environment) if !turn_environment.environment.is_remote() => {
                 self.skills_watcher
                     .register_config(
                         &load_config,
                         self.skills_manager.as_ref(),
                         self.plugins_manager.as_ref(),
-                        Some(environment.get_filesystem()),
+                        Some(turn_environment.environment.get_filesystem()),
                     )
                     .await
             }
@@ -1147,6 +1143,7 @@ impl ThreadManagerState {
             user_shell_override,
             parent_trace,
             environments,
+            resolved_environments: Some(resolved_environments),
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
         })
