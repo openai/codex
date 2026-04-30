@@ -168,10 +168,9 @@ pub(crate) fn fetch_ide_context_from_socket(
             let _ = tx.send(result);
         })
         .map_err(|err| {
-            IdeContextError::Read(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("failed to spawn IDE context worker: {err}"),
-            ))
+            IdeContextError::Read(std::io::Error::other(format!(
+                "failed to spawn IDE context worker: {err}"
+            )))
         })?;
 
     match rx.recv_timeout(timeout) {
@@ -415,6 +414,7 @@ fn ensure_success_response(response: &Value) -> Result<(), IdeContextError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use pretty_assertions::assert_eq;
 
     #[cfg(any(unix, windows))]
