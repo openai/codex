@@ -330,7 +330,6 @@ async fn returns_empty_when_all_layers_missing() {
             raw_toml: None,
             version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
             disabled_reason: None,
-            warnings: Vec::new(),
         },
         user_layer,
     );
@@ -1475,7 +1474,6 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
             raw_toml: None,
             version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
             disabled_reason: None,
-            warnings: Vec::new(),
         }],
         project_layers
     );
@@ -1580,7 +1578,6 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
             raw_toml: None,
             version: version_for_toml(&child_config),
             disabled_reason: None,
-            warnings: Vec::new(),
         }],
         project_layers
     );
@@ -1600,7 +1597,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     tokio::fs::create_dir_all(nested.join(".codex")).await?;
     tokio::fs::write(
         nested.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"child\"\n",
+        "foo = \"child\"\nprofile = \"ignored\"\n",
     )
     .await?;
 
@@ -1650,10 +1647,16 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         project_layers_untrusted[0].config.get("foo"),
         Some(&TomlValue::String("child".to_string()))
     );
+    assert!(
+        project_layers_untrusted[0].config.get("profile").is_none(),
+        "expected unsupported project config keys to be ignored even when the layer is disabled"
+    );
     assert_eq!(
         layers_untrusted.effective_config().get("foo"),
         Some(&TomlValue::String("user".to_string()))
     );
+    let empty_warnings: &[String] = &[];
+    assert_eq!(layers_untrusted.startup_warnings(), Some(empty_warnings));
 
     let codex_home_unknown = tmp.path().join("home_unknown");
     tokio::fs::create_dir_all(&codex_home_unknown).await?;
@@ -1690,10 +1693,15 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         project_layers_unknown[0].config.get("foo"),
         Some(&TomlValue::String("child".to_string()))
     );
+    assert!(
+        project_layers_unknown[0].config.get("profile").is_none(),
+        "expected unsupported project config keys to be ignored even when the layer is disabled"
+    );
     assert_eq!(
         layers_unknown.effective_config().get("foo"),
         Some(&TomlValue::String("user".to_string()))
     );
+    assert_eq!(layers_unknown.startup_warnings(), Some(empty_warnings));
 
     Ok(())
 }
@@ -1779,7 +1787,10 @@ wire_api = "responses"
         dot_codex.join(CONFIG_TOML_FILE).display(),
         ignored_project_config_keys.join(", ")
     )];
-    assert_eq!(layers.startup_warnings(), expected_startup_warnings);
+    assert_eq!(
+        layers.startup_warnings(),
+        Some(expected_startup_warnings.as_slice())
+    );
 
     let effective_config = layers.effective_config();
     assert_eq!(

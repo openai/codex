@@ -66,7 +66,6 @@ pub struct ConfigLayerEntry {
     pub raw_toml: Option<String>,
     pub version: String,
     pub disabled_reason: Option<String>,
-    pub warnings: Vec<String>,
 }
 
 impl ConfigLayerEntry {
@@ -78,7 +77,6 @@ impl ConfigLayerEntry {
             raw_toml: None,
             version,
             disabled_reason: None,
-            warnings: Vec::new(),
         }
     }
 
@@ -90,7 +88,6 @@ impl ConfigLayerEntry {
             raw_toml: Some(raw_toml),
             version,
             disabled_reason: None,
-            warnings: Vec::new(),
         }
     }
 
@@ -106,13 +103,7 @@ impl ConfigLayerEntry {
             raw_toml: None,
             version,
             disabled_reason: Some(disabled_reason.into()),
-            warnings: Vec::new(),
         }
-    }
-
-    pub(crate) fn with_warnings(mut self, warnings: Vec<String>) -> Self {
-        self.warnings = warnings;
-        self
     }
 
     pub fn is_disabled(&self) -> bool {
@@ -179,6 +170,12 @@ pub struct ConfigLayerStack {
 
     /// Whether execpolicy should skip `.rules` files from user and project config-layer folders.
     ignore_user_and_project_exec_policy_rules: bool,
+
+    /// Startup warnings discovered while building this stack.
+    ///
+    /// `None` means the loader did not check for stack-level warnings, while
+    /// `Some(vec![])` means it checked and found nothing to report.
+    startup_warnings: Option<Vec<String>>,
 }
 
 impl ConfigLayerStack {
@@ -194,6 +191,7 @@ impl ConfigLayerStack {
             requirements,
             requirements_toml,
             ignore_user_and_project_exec_policy_rules: false,
+            startup_warnings: None,
         })
     }
 
@@ -209,14 +207,13 @@ impl ConfigLayerStack {
         self.ignore_user_and_project_exec_policy_rules
     }
 
-    pub fn startup_warnings(&self) -> Vec<String> {
-        self.get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ false,
-        )
-        .into_iter()
-        .flat_map(|layer| layer.warnings.iter().cloned())
-        .collect()
+    pub(crate) fn with_startup_warnings(mut self, startup_warnings: Vec<String>) -> Self {
+        self.startup_warnings = Some(startup_warnings);
+        self
+    }
+
+    pub fn startup_warnings(&self) -> Option<&[String]> {
+        self.startup_warnings.as_deref()
     }
 
     /// Returns the raw user config layer, if any.
@@ -258,6 +255,7 @@ impl ConfigLayerStack {
                     requirements_toml: self.requirements_toml.clone(),
                     ignore_user_and_project_exec_policy_rules: self
                         .ignore_user_and_project_exec_policy_rules,
+                    startup_warnings: self.startup_warnings.clone(),
                 }
             }
             None => {
@@ -281,6 +279,7 @@ impl ConfigLayerStack {
                     requirements_toml: self.requirements_toml.clone(),
                     ignore_user_and_project_exec_policy_rules: self
                         .ignore_user_and_project_exec_policy_rules,
+                    startup_warnings: self.startup_warnings.clone(),
                 }
             }
         }

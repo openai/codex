@@ -212,6 +212,7 @@ pub async fn load_config_layers_state(
     };
     layers.push(user_layer);
 
+    let mut startup_warnings = None;
     if let Some(cwd) = cwd {
         let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
         for layer in &layers {
@@ -268,7 +269,8 @@ pub async fn load_config_layers_state(
             codex_home,
         )
         .await?;
-        layers.extend(project_layers);
+        layers.extend(project_layers.layers);
+        startup_warnings = Some(project_layers.startup_warnings);
     }
 
     // Add a layer for runtime overrides from the CLI or UI, if any exist.
@@ -324,12 +326,16 @@ pub async fn load_config_layers_state(
         ));
     }
 
-    Ok(ConfigLayerStack::new(
+    let config_layer_stack = ConfigLayerStack::new(
         layers,
         config_requirements_toml.clone().try_into()?,
         config_requirements_toml.into_toml(),
     )?
-    .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules))
+    .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules);
+    Ok(match startup_warnings {
+        Some(startup_warnings) => config_layer_stack.with_startup_warnings(startup_warnings),
+        None => config_layer_stack,
+    })
 }
 
 fn insert_layer_by_precedence(layers: &mut Vec<ConfigLayerEntry>, layer: ConfigLayerEntry) {
@@ -711,24 +717,21 @@ fn project_layer_entry(
     dot_codex_folder: &AbsolutePathBuf,
     config: TomlValue,
     disabled_reason: Option<String>,
-    warnings: Vec<String>,
 ) -> ConfigLayerEntry {
     let source = ConfigLayerSource::Project {
         dot_codex_folder: dot_codex_folder.clone(),
     };
 
-    let entry = if let Some(reason) = disabled_reason {
+    if let Some(reason) = disabled_reason {
         ConfigLayerEntry::new_disabled(source, config, reason)
     } else {
         ConfigLayerEntry::new(source, config)
-    };
-    entry.with_warnings(warnings)
+    }
 }
 
-fn sanitize_project_config(config: TomlValue) -> (TomlValue, Vec<String>) {
-    let mut config = config;
+fn sanitize_project_config(config: &mut TomlValue) -> Vec<String> {
     let Some(table) = config.as_table_mut() else {
-        return (config, Vec::new());
+        return Vec::new();
     };
 
     let mut ignored_keys = Vec::new();
@@ -738,7 +741,7 @@ fn sanitize_project_config(config: TomlValue) -> (TomlValue, Vec<String>) {
         }
     }
 
-    (config, ignored_keys)
+    ignored_keys
 }
 
 fn project_ignored_config_keys_warning(
@@ -749,12 +752,12 @@ fn project_ignored_config_keys_warning(
     let ignored_keys = ignored_keys.join(", ");
     format!(
         concat!(
-            "Ignored unsupported project-local config keys in {}: {}. ",
+            "Ignored unsupported project-local config keys in {config_path}: {ignored_keys}. ",
             "If you want these settings to apply, manually set them in your ",
             "user-level config.toml."
         ),
-        config_path.display(),
-        ignored_keys
+        config_path = config_path.display(),
+        ignored_keys = ignored_keys,
     )
 }
 
@@ -940,18 +943,24 @@ async fn find_project_root(
     Ok(cwd.clone())
 }
 
+struct LoadedProjectLayers {
+    layers: Vec<ConfigLayerEntry>,
+    startup_warnings: Vec<String>,
+}
+
 /// Return the appropriate list of layers (each with
 /// [ConfigLayerSource::Project] as the source) between `cwd` and
 /// `project_root`, inclusive. The list is ordered in _increasing_ precdence,
 /// starting from folders closest to `project_root` (which is the lowest
 /// precedence) to those closest to `cwd` (which is the highest precedence).
+/// Any warnings are stack-level startup messages, not additional config layers.
 async fn load_project_layers(
     fs: &dyn ExecutorFileSystem,
     cwd: &AbsolutePathBuf,
     project_root: &AbsolutePathBuf,
     trust_context: &ProjectTrustContext,
     codex_home: &Path,
-) -> io::Result<Vec<ConfigLayerEntry>> {
+) -> io::Result<LoadedProjectLayers> {
     let codex_home_abs = AbsolutePathBuf::from_absolute_path(codex_home)?;
     let codex_home_normalized =
         normalize_path(codex_home_abs.as_path()).unwrap_or_else(|_| codex_home_abs.to_path_buf());
@@ -971,6 +980,7 @@ async fn load_project_layers(
     dirs.reverse();
 
     let mut layers = Vec::new();
+    let mut startup_warnings = Vec::new();
     for dir in dirs {
         let dot_codex_abs = dir.join(".codex");
         if !fs
@@ -1008,24 +1018,21 @@ async fn load_project_layers(
                             &dot_codex_abs,
                             TomlValue::Table(toml::map::Map::new()),
                             disabled_reason.clone(),
-                            Vec::new(),
                         ));
                         continue;
                     }
                 };
-                let (config, ignored_project_config_keys) = sanitize_project_config(config);
+                let mut config = config;
+                let ignored_project_config_keys = sanitize_project_config(&mut config);
                 let config =
                     resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
-                let warnings = if ignored_project_config_keys.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![project_ignored_config_keys_warning(
+                if disabled_reason.is_none() && !ignored_project_config_keys.is_empty() {
+                    startup_warnings.push(project_ignored_config_keys_warning(
                         &dot_codex_abs,
                         &ignored_project_config_keys,
-                    )]
-                };
-                let entry =
-                    project_layer_entry(&dot_codex_abs, config, disabled_reason.clone(), warnings);
+                    ));
+                }
+                let entry = project_layer_entry(&dot_codex_abs, config, disabled_reason.clone());
                 layers.push(entry);
             }
             Err(err) => {
@@ -1037,7 +1044,6 @@ async fn load_project_layers(
                         &dot_codex_abs,
                         TomlValue::Table(toml::map::Map::new()),
                         disabled_reason,
-                        Vec::new(),
                     ));
                 } else {
                     let config_file_display = config_file.as_path().display();
@@ -1050,7 +1056,10 @@ async fn load_project_layers(
         }
     }
 
-    Ok(layers)
+    Ok(LoadedProjectLayers {
+        layers,
+        startup_warnings,
+    })
 }
 /// The legacy mechanism for specifying admin-enforced configuration is to read
 /// from a file like `/etc/codex/managed_config.toml` that has the same
