@@ -109,7 +109,8 @@ use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
-use codex_app_server_protocol::PermissionProfile as ApiPermissionProfile;
+use codex_app_server_protocol::PermissionProfileModificationParams;
+use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::PluginDetail;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
@@ -2438,7 +2439,7 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
-            permission_profile,
+            permissions,
             config,
             service_name,
             base_instructions,
@@ -2452,11 +2453,11 @@ impl CodexMessageProcessor {
             environments,
             persist_extended_history,
         } = params;
-        if sandbox.is_some() && permission_profile.is_some() {
+        if sandbox.is_some() && permissions.is_some() {
             self.outgoing
                 .send_error(
                     request_id,
-                    invalid_request("`permissionProfile` cannot be combined with `sandbox`"),
+                    invalid_request("`permissions` cannot be combined with `sandbox`"),
                 )
                 .await;
             return;
@@ -2491,7 +2492,7 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
-            permission_profile,
+            permissions,
             base_instructions,
             developer_instructions,
             personality,
@@ -2550,7 +2551,7 @@ impl CodexMessageProcessor {
             /*approval_policy*/ None,
             /*approvals_reviewer*/ None,
             /*sandbox*/ None,
-            /*permission_profile*/ None,
+            /*permissions*/ None,
             /*base_instructions*/ None,
             /*developer_instructions*/ None,
             /*personality*/ None,
@@ -2861,8 +2862,9 @@ impl CodexMessageProcessor {
                 &config_snapshot.permission_profile,
                 config_snapshot.cwd.as_path(),
             );
-            let permission_profile =
-                thread_response_permission_profile(config_snapshot.permission_profile);
+            let active_permission_profile = thread_response_active_permission_profile(
+                config_snapshot.active_permission_profile,
+            );
 
             let response = ThreadStartResponse {
                 thread: thread.clone(),
@@ -2874,7 +2876,8 @@ impl CodexMessageProcessor {
                 approval_policy: config_snapshot.approval_policy.into(),
                 approvals_reviewer: config_snapshot.approvals_reviewer.into(),
                 sandbox,
-                permission_profile,
+                permission_profile: Some(config_snapshot.permission_profile.into()),
+                active_permission_profile,
                 reasoning_effort: config_snapshot.reasoning_effort,
             };
             Ok::<_, JSONRPCErrorError>((response, thread_started_notification(thread)))
@@ -2920,12 +2923,12 @@ impl CodexMessageProcessor {
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
-        permission_profile: Option<ApiPermissionProfile>,
+        permissions: Option<PermissionProfileSelectionParams>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
         personality: Option<Personality>,
     ) -> ConfigOverrides {
-        ConfigOverrides {
+        let mut overrides = ConfigOverrides {
             model,
             model_provider,
             service_tier,
@@ -2935,14 +2938,15 @@ impl CodexMessageProcessor {
             approvals_reviewer: approvals_reviewer
                 .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
             sandbox_mode: sandbox.map(SandboxMode::to_core),
-            permission_profile: permission_profile.map(Into::into),
             codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
             base_instructions,
             developer_instructions,
             personality,
             ..Default::default()
-        }
+        };
+        apply_permission_profile_selection_to_config_overrides(&mut overrides, permissions);
+        overrides
     }
 
     async fn thread_archive(&self, request_id: ConnectionRequestId, params: ThreadArchiveParams) {
@@ -4223,11 +4227,11 @@ impl CodexMessageProcessor {
             return;
         }
 
-        if params.sandbox.is_some() && params.permission_profile.is_some() {
+        if params.sandbox.is_some() && params.permissions.is_some() {
             self.outgoing
                 .send_error(
                     request_id,
-                    invalid_request("`permissionProfile` cannot be combined with `sandbox`"),
+                    invalid_request("`permissions` cannot be combined with `sandbox`"),
                 )
                 .await;
             return;
@@ -4260,7 +4264,7 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
-            permission_profile,
+            permissions,
             config: mut request_overrides,
             base_instructions,
             developer_instructions,
@@ -4295,7 +4299,7 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
-            permission_profile,
+            permissions,
             base_instructions,
             developer_instructions,
             personality,
@@ -4401,8 +4405,9 @@ impl CodexMessageProcessor {
                     &config_snapshot.permission_profile,
                     config_snapshot.cwd.as_path(),
                 );
-                let permission_profile =
-                    thread_response_permission_profile(config_snapshot.permission_profile.clone());
+                let active_permission_profile = thread_response_active_permission_profile(
+                    config_snapshot.active_permission_profile,
+                );
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -4414,7 +4419,8 @@ impl CodexMessageProcessor {
                     approval_policy: session_configured.approval_policy.into(),
                     approvals_reviewer: session_configured.approvals_reviewer.into(),
                     sandbox,
-                    permission_profile,
+                    permission_profile: Some(config_snapshot.permission_profile.into()),
+                    active_permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
                 };
 
@@ -4813,7 +4819,7 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
-            permission_profile,
+            permissions,
             config: cli_overrides,
             base_instructions,
             developer_instructions,
@@ -4823,9 +4829,9 @@ impl CodexMessageProcessor {
         } = params;
         let include_turns = !exclude_turns;
         let result = async {
-            if sandbox.is_some() && permission_profile.is_some() {
+            if sandbox.is_some() && permissions.is_some() {
                 return Err(invalid_request(
-                    "`permissionProfile` cannot be combined with `sandbox`",
+                    "`permissions` cannot be combined with `sandbox`",
                 ));
             }
 
@@ -4878,7 +4884,7 @@ impl CodexMessageProcessor {
                 approval_policy,
                 approvals_reviewer,
                 sandbox,
-                permission_profile,
+                permissions,
                 base_instructions,
                 developer_instructions,
                 /*personality*/ None,
@@ -4993,8 +4999,9 @@ impl CodexMessageProcessor {
                 &config_snapshot.permission_profile,
                 config_snapshot.cwd.as_path(),
             );
-            let permission_profile =
-                thread_response_permission_profile(config_snapshot.permission_profile);
+            let active_permission_profile = thread_response_active_permission_profile(
+                config_snapshot.active_permission_profile,
+            );
 
             let response = ThreadForkResponse {
                 thread: thread.clone(),
@@ -5006,7 +5013,8 @@ impl CodexMessageProcessor {
                 approval_policy: session_configured.approval_policy.into(),
                 approvals_reviewer: session_configured.approvals_reviewer.into(),
                 sandbox,
-                permission_profile,
+                permission_profile: Some(config_snapshot.permission_profile.into()),
+                active_permission_profile,
                 reasoning_effort: session_configured.reasoning_effort,
             };
 
@@ -6581,7 +6589,7 @@ impl CodexMessageProcessor {
                 || params.approval_policy.is_some()
                 || params.approvals_reviewer.is_some()
                 || params.sandbox_policy.is_some()
-                || params.permission_profile.is_some()
+                || params.permissions.is_some()
                 || params.model.is_some()
                 || params.service_tier.is_some()
                 || params.effort.is_some()
@@ -6589,9 +6597,9 @@ impl CodexMessageProcessor {
                 || collaboration_mode.is_some()
                 || params.personality.is_some();
 
-            if params.sandbox_policy.is_some() && params.permission_profile.is_some() {
+            if params.sandbox_policy.is_some() && params.permissions.is_some() {
                 return Err(invalid_request(
-                    "`permissionProfile` cannot be combined with `sandboxPolicy`",
+                    "`permissions` cannot be combined with `sandboxPolicy`",
                 ));
             }
 
@@ -6601,7 +6609,45 @@ impl CodexMessageProcessor {
                 .approvals_reviewer
                 .map(codex_app_server_protocol::ApprovalsReviewer::to_core);
             let sandbox_policy = params.sandbox_policy.map(|p| p.to_core());
-            let permission_profile = params.permission_profile.map(Into::into);
+            let (permission_profile, active_permission_profile) =
+                if let Some(permissions) = params.permissions {
+                    let snapshot = thread.config_snapshot().await;
+                    let mut overrides = ConfigOverrides {
+                        cwd: cwd.clone(),
+                        codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
+                        main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
+                        ..Default::default()
+                    };
+                    apply_permission_profile_selection_to_config_overrides(
+                        &mut overrides,
+                        Some(permissions),
+                    );
+                    let config = self
+                        .config_manager
+                        .load_for_cwd(
+                            /*request_overrides*/ None,
+                            overrides,
+                            Some(snapshot.cwd.to_path_buf()),
+                        )
+                        .await
+                        .map_err(|err| config_load_error(&err))?;
+                    // Startup config is allowed to fall back when requirements
+                    // disallow a configured profile. An explicit turn request
+                    // is different: reject it before accepting user input.
+                    if let Some(warning) = config.startup_warnings.iter().find(|warning| {
+                        warning.contains("Configured value for `permission_profile` is disallowed")
+                    }) {
+                        return Err(invalid_request(format!(
+                            "invalid turn context override: {warning}"
+                        )));
+                    }
+                    (
+                        Some(config.permissions.permission_profile()),
+                        config.permissions.active_permission_profile(),
+                    )
+                } else {
+                    (None, None)
+                };
             let model = params.model;
             let effort = params.effort.map(Some);
             let summary = params.summary;
@@ -6619,6 +6665,7 @@ impl CodexMessageProcessor {
                         approvals_reviewer,
                         sandbox_policy: sandbox_policy.clone(),
                         permission_profile: permission_profile.clone(),
+                        active_permission_profile: active_permission_profile.clone(),
                         windows_sandbox_level: None,
                         model: model.clone(),
                         effort,
@@ -6645,6 +6692,7 @@ impl CodexMessageProcessor {
                     approvals_reviewer,
                     sandbox_policy,
                     permission_profile,
+                    active_permission_profile,
                     windows_sandbox_level: None,
                     model,
                     effort,
@@ -8314,13 +8362,15 @@ async fn handle_pending_thread_resume_request(
         approval_policy,
         approvals_reviewer,
         permission_profile,
+        active_permission_profile,
         cwd,
         reasoning_effort,
         ..
     } = pending.config_snapshot;
     let instruction_sources = pending.instruction_sources;
     let sandbox = thread_response_sandbox_policy(&permission_profile, cwd.as_path());
-    let permission_profile = thread_response_permission_profile(permission_profile);
+    let active_permission_profile =
+        thread_response_active_permission_profile(active_permission_profile);
 
     let response = ThreadResumeResponse {
         thread,
@@ -8332,7 +8382,8 @@ async fn handle_pending_thread_resume_request(
         approval_policy: approval_policy.into(),
         approvals_reviewer: approvals_reviewer.into(),
         sandbox,
-        permission_profile,
+        permission_profile: Some(permission_profile.into()),
+        active_permission_profile,
         reasoning_effort,
     };
     let token_usage_thread = pending.include_turns.then(|| response.thread.clone());
@@ -8559,15 +8610,11 @@ fn collect_resume_override_mismatches(
             ));
         }
     }
-    if let Some(requested_permission_profile) = request.permission_profile.as_ref() {
-        let requested_permission_profile =
-            codex_protocol::models::PermissionProfile::from(requested_permission_profile.clone());
-        if requested_permission_profile != config_snapshot.permission_profile {
-            mismatch_details.push(format!(
-                "permission_profile requested={requested_permission_profile:?} active={:?}",
-                config_snapshot.permission_profile
-            ));
-        }
+    if request.permissions.is_some() {
+        mismatch_details.push(format!(
+            "permissions override was provided and ignored while running; active={:?}",
+            config_snapshot.active_permission_profile
+        ));
     }
     if let Some(requested_personality) = request.personality.as_ref()
         && config_snapshot.personality.as_ref() != Some(requested_personality)
@@ -8681,6 +8728,7 @@ fn hooks_to_info(hooks: &[codex_hooks::HookListEntry]) -> Vec<HookMetadata> {
     hooks
         .iter()
         .map(|hook| HookMetadata {
+            key: hook.key.clone(),
             event_name: hook.event_name.into(),
             handler_type: hook.handler_type.into(),
             matcher: hook.matcher.clone(),
@@ -8691,6 +8739,8 @@ fn hooks_to_info(hooks: &[codex_hooks::HookListEntry]) -> Vec<HookMetadata> {
             source: hook.source.into(),
             plugin_id: hook.plugin_id.clone(),
             display_order: hook.display_order,
+            enabled: hook.enabled,
+            is_managed: hook.is_managed,
         })
         .collect()
 }
@@ -9474,10 +9524,29 @@ fn with_thread_spawn_agent_metadata(
     }
 }
 
-fn thread_response_permission_profile(
-    permission_profile: codex_protocol::models::PermissionProfile,
-) -> Option<codex_app_server_protocol::PermissionProfile> {
-    Some(permission_profile.into())
+fn thread_response_active_permission_profile(
+    active_permission_profile: Option<codex_protocol::models::ActivePermissionProfile>,
+) -> Option<codex_app_server_protocol::ActivePermissionProfile> {
+    active_permission_profile.map(Into::into)
+}
+
+fn apply_permission_profile_selection_to_config_overrides(
+    overrides: &mut ConfigOverrides,
+    permissions: Option<PermissionProfileSelectionParams>,
+) {
+    let Some(PermissionProfileSelectionParams::Profile { id, modifications }) = permissions else {
+        return;
+    };
+    overrides.default_permissions = Some(id);
+    overrides
+        .additional_writable_roots
+        .extend(modifications.unwrap_or_default().into_iter().map(
+            |modification| match modification {
+                PermissionProfileModificationParams::AdditionalWritableRoot { path } => {
+                    path.to_path_buf()
+                }
+            },
+        ));
 }
 
 fn thread_response_sandbox_policy(
@@ -9501,6 +9570,13 @@ fn requested_permissions_trust_project(overrides: &ConfigOverrides, cwd: &Path) 
             codex_protocol::config_types::SandboxMode::WorkspaceWrite
                 | codex_protocol::config_types::SandboxMode::DangerFullAccess
         )
+    ) {
+        return true;
+    }
+
+    if matches!(
+        overrides.default_permissions.as_deref(),
+        Some(":workspace" | ":danger-no-sandbox")
     ) {
         return true;
     }
@@ -10022,23 +10098,6 @@ mod tests {
     }
 
     #[test]
-    fn thread_response_permission_profile_preserves_enforcement() {
-        let full_access_profile = codex_protocol::models::PermissionProfile::Disabled;
-        let external_profile = codex_protocol::models::PermissionProfile::External {
-            network: codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
-        };
-
-        assert_eq!(
-            thread_response_permission_profile(external_profile.clone()),
-            Some(external_profile.into())
-        );
-        assert_eq!(
-            thread_response_permission_profile(full_access_profile.clone()),
-            Some(full_access_profile.into())
-        );
-    }
-
-    #[test]
     fn requested_permissions_trust_project_uses_permission_profile_intent() {
         let cwd = test_path_buf("/tmp/project").abs();
         let full_access_profile = codex_protocol::models::PermissionProfile::Disabled;
@@ -10082,9 +10141,30 @@ mod tests {
             },
             cwd.as_path()
         ));
+        assert!(requested_permissions_trust_project(
+            &ConfigOverrides {
+                default_permissions: Some(":workspace".to_string()),
+                ..Default::default()
+            },
+            cwd.as_path()
+        ));
+        assert!(requested_permissions_trust_project(
+            &ConfigOverrides {
+                default_permissions: Some(":danger-no-sandbox".to_string()),
+                ..Default::default()
+            },
+            cwd.as_path()
+        ));
         assert!(!requested_permissions_trust_project(
             &ConfigOverrides {
                 permission_profile: Some(read_only_profile),
+                ..Default::default()
+            },
+            cwd.as_path()
+        ));
+        assert!(!requested_permissions_trust_project(
+            &ConfigOverrides {
+                default_permissions: Some(":read-only".to_string()),
                 ..Default::default()
             },
             cwd.as_path()
@@ -10259,7 +10339,7 @@ mod tests {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox: None,
-            permission_profile: None,
+            permissions: None,
             config: None,
             base_instructions: None,
             developer_instructions: None,
@@ -10274,6 +10354,7 @@ mod tests {
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             permission_profile: codex_protocol::models::PermissionProfile::Disabled,
+            active_permission_profile: None,
             cwd,
             ephemeral: false,
             reasoning_effort: None,

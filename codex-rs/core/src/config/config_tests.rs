@@ -60,6 +60,8 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
@@ -907,6 +909,14 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
         config.permissions.network_sandbox_policy(),
         NetworkSandboxPolicy::Restricted
     );
+    assert_eq!(
+        config
+            .permissions
+            .active_permission_profile()
+            .as_ref()
+            .map(|active| active.id.as_str()),
+        Some("workspace")
+    );
     Ok(())
 }
 
@@ -928,6 +938,7 @@ async fn permission_profile_override_populates_runtime_permissions() -> std::io:
     .await?;
 
     assert_eq!(config.permissions.permission_profile(), permission_profile);
+    assert_eq!(config.permissions.active_permission_profile(), None);
     assert_eq!(
         &config.legacy_sandbox_policy(),
         &SandboxPolicy::DangerFullAccess
@@ -1267,6 +1278,14 @@ async fn default_permissions_can_select_builtin_profile_without_permissions_tabl
     .await?;
 
     let policy = config.permissions.file_system_sandbox_policy();
+    assert_eq!(
+        config
+            .permissions
+            .active_permission_profile()
+            .as_ref()
+            .map(|active| active.id.as_str()),
+        Some(":workspace")
+    );
     assert!(
         policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
         "expected :workspace to allow writing the project root, policy: {policy:?}"
@@ -1274,6 +1293,86 @@ async fn default_permissions_can_select_builtin_profile_without_permissions_tabl
     assert!(
         !policy.can_write_path_with_cwd(&cwd.path().join(".git"), cwd.path()),
         "expected :workspace to protect project metadata, policy: {policy:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_permissions_read_only_applies_additional_writable_roots_as_modifications()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let extra_root = TempDir::new()?;
+    let extra_root = extra_root.path().abs();
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":read-only".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            additional_writable_roots: vec![extra_root.to_path_buf()],
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    assert!(
+        policy.can_write_path_with_cwd(extra_root.as_path(), cwd.path()),
+        "expected additional writable root to modify :read-only, policy: {policy:?}"
+    );
+    assert_eq!(
+        config.permissions.active_permission_profile(),
+        Some(
+            ActivePermissionProfile::new(":read-only").with_modifications(vec![
+                ActivePermissionProfileModification::AdditionalWritableRoot { path: extra_root },
+            ])
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_builtin_workspace_profile_ignores_legacy_workspace_write_settings()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let extra_root = TempDir::new()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":workspace".to_string()),
+            sandbox_workspace_write: Some(SandboxWorkspaceWrite {
+                writable_roots: vec![extra_root.path().abs()],
+                network_access: true,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Restricted
+    );
+    assert!(
+        !policy.entries.iter().any(|entry| matches!(
+            &entry.path,
+            FileSystemPath::Path { path } if path.as_path() == extra_root.path()
+        )),
+        "explicit :workspace should not inherit sandbox_workspace_write roots as concrete grants, \
+         policy: {policy:?}"
     );
     Ok(())
 }
@@ -1303,6 +1402,18 @@ async fn empty_config_defaults_to_builtin_profile_for_trusted_project() -> std::
     .await?;
 
     let policy = config.permissions.file_system_sandbox_policy();
+    assert_eq!(
+        config
+            .permissions
+            .active_permission_profile()
+            .as_ref()
+            .map(|active| active.id.as_str()),
+        Some(if cfg!(target_os = "windows") {
+            ":read-only"
+        } else {
+            ":workspace"
+        })
+    );
     if cfg!(target_os = "windows") {
         assert!(
             !policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
@@ -1366,6 +1477,12 @@ async fn implicit_builtin_workspace_profile_preserves_sandbox_workspace_write_se
     assert_eq!(
         config.permissions.network_sandbox_policy(),
         NetworkSandboxPolicy::Enabled
+    );
+    assert_eq!(
+        config.permissions.active_permission_profile(),
+        None,
+        "implicit :workspace cannot be faithfully re-selected when it includes \
+         legacy sandbox_workspace_write settings"
     );
     match config.legacy_sandbox_policy() {
         SandboxPolicy::WorkspaceWrite {
@@ -1483,6 +1600,14 @@ async fn default_permissions_can_select_builtin_no_sandbox_profile() -> std::io:
     assert_eq!(
         config.permissions.permission_profile(),
         PermissionProfile::Disabled
+    );
+    assert_eq!(
+        config
+            .permissions
+            .active_permission_profile()
+            .as_ref()
+            .map(|active| active.id.as_str()),
+        Some(":danger-no-sandbox")
     );
     Ok(())
 }
@@ -6151,6 +6276,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             permissions: Permissions {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
                 permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
+                active_permission_profile: Some(ActivePermissionProfile::new(":read-only")),
                 network: None,
                 allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -6346,6 +6472,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
             permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
+            active_permission_profile: Some(ActivePermissionProfile::new(":read-only")),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -6495,6 +6622,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
+            active_permission_profile: Some(ActivePermissionProfile::new(":read-only")),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -6629,6 +6757,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
+            active_permission_profile: Some(ActivePermissionProfile::new(":read-only")),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -7514,6 +7643,41 @@ async fn permission_profile_override_falls_back_when_disallowed_by_requirements(
     assert_eq!(
         config.permissions.permission_profile(),
         PermissionProfile::read_only()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn active_profile_is_cleared_when_requirements_force_fallback() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let requirements = codex_config::ConfigRequirementsToml {
+        allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
+        ..Default::default()
+    };
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .harness_overrides(ConfigOverrides {
+            default_permissions: Some(":danger-no-sandbox".to_string()),
+            ..Default::default()
+        })
+        .cloud_requirements(CloudRequirementsLoader::new(async move {
+            Ok(Some(requirements))
+        }))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.permissions.permission_profile(),
+        PermissionProfile::read_only()
+    );
+    assert_eq!(config.permissions.active_permission_profile(), None);
+    assert!(
+        config.startup_warnings.iter().any(|warning| warning
+            .contains("Configured value for `permission_profile` is disallowed by requirements")),
+        "{:?}",
+        config.startup_warnings
     );
     Ok(())
 }

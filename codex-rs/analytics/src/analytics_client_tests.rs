@@ -65,7 +65,6 @@ use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::NonSteerableTurnKind;
-use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
@@ -158,13 +157,10 @@ fn sample_thread_start_response(
         approval_policy: AppServerAskForApproval::OnFailure,
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
-        permission_profile: Some(sample_permission_profile()),
+        permission_profile: None,
+        active_permission_profile: None,
         reasoning_effort: None,
     })
-}
-
-fn sample_permission_profile() -> AppServerPermissionProfile {
-    CorePermissionProfile::Disabled.into()
 }
 
 fn sample_app_server_client_metadata() -> CodexAppServerClientMetadata {
@@ -215,7 +211,8 @@ fn sample_thread_resume_response_with_source(
         approval_policy: AppServerAskForApproval::OnFailure,
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
-        permission_profile: Some(sample_permission_profile()),
+        permission_profile: None,
+        active_permission_profile: None,
         reasoning_effort: None,
     })
 }
@@ -1562,6 +1559,15 @@ fn hook_run_metadata_maps_sources_and_statuses() {
         },
     ))
     .expect("serialize project hook");
+    let cloud_requirements = serde_json::to_value(codex_hook_run_metadata(
+        &tracking,
+        HookRunFact {
+            event_name: HookEventName::Stop,
+            hook_source: HookSource::CloudRequirements,
+            status: HookRunStatus::Blocked,
+        },
+    ))
+    .expect("serialize cloud requirements hook");
     let unknown = serde_json::to_value(codex_hook_run_metadata(
         &tracking,
         HookRunFact {
@@ -1576,6 +1582,8 @@ fn hook_run_metadata_maps_sources_and_statuses() {
     assert_eq!(system["status"], "completed");
     assert_eq!(project["hook_source"], "project");
     assert_eq!(project["status"], "blocked");
+    assert_eq!(cloud_requirements["hook_source"], "cloud_requirements");
+    assert_eq!(cloud_requirements["status"], "blocked");
     assert_eq!(unknown["hook_source"], "unknown");
     assert_eq!(unknown["status"], "failed");
 }

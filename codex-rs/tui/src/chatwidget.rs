@@ -1645,6 +1645,7 @@ fn thread_session_state_to_legacy_event(
         approval_policy: session.approval_policy,
         approvals_reviewer: session.approvals_reviewer,
         permission_profile: session.permission_profile,
+        active_permission_profile: session.active_permission_profile,
         cwd: session.cwd,
         reasoning_effort: session.reasoning_effort,
         history_log_id: session.history_log_id,
@@ -2377,11 +2378,16 @@ impl ChatWidget {
         let permission_sync = self
             .config
             .permissions
-            .set_permission_profile(event.permission_profile.clone());
+            .set_permission_profile_with_active_profile(
+                event.permission_profile.clone(),
+                event.active_permission_profile.clone(),
+            );
         if let Err(err) = permission_sync {
             tracing::warn!(%err, "failed to sync permissions from SessionConfigured");
             self.config.permissions.permission_profile =
                 Constrained::allow_only(event.permission_profile.clone());
+            self.config.permissions.active_permission_profile =
+                event.active_permission_profile.clone();
         }
         self.config.approvals_reviewer = event.approvals_reviewer;
         self.status_line_project_root_name_cache = None;

@@ -163,17 +163,20 @@ print({hook_output:?})
     )
     .expect("write hooks.json");
 
-    session.services.hooks = Hooks::new(HooksConfig {
-        feature_enabled: true,
-        config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
-        shell_program: (!cfg!(windows)).then_some("/bin/sh".to_string()),
-        shell_args: if cfg!(windows) {
-            Vec::new()
-        } else {
-            vec!["-c".to_string()]
-        },
-        ..HooksConfig::default()
-    });
+    session
+        .services
+        .hooks
+        .store(Arc::new(Hooks::new(HooksConfig {
+            feature_enabled: true,
+            config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
+            shell_program: (!cfg!(windows)).then_some("/bin/sh".to_string()),
+            shell_args: if cfg!(windows) {
+                Vec::new()
+            } else {
+                vec!["-c".to_string()]
+            },
+            ..HooksConfig::default()
+        })));
 
     log_path.to_path_buf()
 }

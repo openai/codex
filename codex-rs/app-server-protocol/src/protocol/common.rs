@@ -2131,12 +2131,8 @@ mod tests {
                 approval_policy: v2::AskForApproval::OnFailure,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
-                permission_profile: Some(
-                    codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
-                        &codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-                    )
-                    .into(),
-                ),
+                permission_profile: None,
+                active_permission_profile: None,
                 reasoning_effort: None,
             },
         };
@@ -2179,9 +2175,8 @@ mod tests {
                     "sandbox": {
                         "type": "dangerFullAccess"
                     },
-                    "permissionProfile": {
-                        "type": "disabled"
-                    },
+                    "permissionProfile": null,
+                    "activePermissionProfile": null,
                     "reasoningEffort": null
                 }
             }),

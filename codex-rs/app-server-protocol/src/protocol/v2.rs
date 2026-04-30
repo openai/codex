@@ -38,6 +38,8 @@ use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
 use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
+use codex_protocol::models::ActivePermissionProfile as CoreActivePermissionProfile;
+use codex_protocol::models::ActivePermissionProfileModification as CoreActivePermissionProfileModification;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
 use codex_protocol::models::ManagedFileSystemPermissions as CoreManagedFileSystemPermissions;
@@ -470,6 +472,7 @@ v2_enum_from_core!(
         Mdm,
         SessionFlags,
         Plugin,
+        CloudRequirements,
         LegacyManagedConfigFile,
         LegacyManagedConfigMdm,
         Unknown,
@@ -1701,6 +1704,109 @@ impl From<PermissionProfile> for CorePermissionProfile {
             },
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ActivePermissionProfile {
+    /// Identifier from `default_permissions` or the implicit built-in default,
+    /// such as `:workspace` or a user-defined `[permissions.<id>]` profile.
+    pub id: String,
+    /// Parent profile identifier once permissions profiles support
+    /// inheritance. This is currently always `null`.
+    #[serde(default)]
+    pub extends: Option<String>,
+    /// Bounded user-requested modifications applied on top of the named
+    /// profile, if any.
+    #[serde(default)]
+    pub modifications: Vec<ActivePermissionProfileModification>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum ActivePermissionProfileModification {
+    /// Additional concrete directory that should be writable.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    AdditionalWritableRoot { path: AbsolutePathBuf },
+}
+
+impl From<CoreActivePermissionProfileModification> for ActivePermissionProfileModification {
+    fn from(value: CoreActivePermissionProfileModification) -> Self {
+        match value {
+            CoreActivePermissionProfileModification::AdditionalWritableRoot { path } => {
+                Self::AdditionalWritableRoot { path }
+            }
+        }
+    }
+}
+
+impl From<ActivePermissionProfileModification> for CoreActivePermissionProfileModification {
+    fn from(value: ActivePermissionProfileModification) -> Self {
+        match value {
+            ActivePermissionProfileModification::AdditionalWritableRoot { path } => {
+                Self::AdditionalWritableRoot { path }
+            }
+        }
+    }
+}
+
+impl From<CoreActivePermissionProfile> for ActivePermissionProfile {
+    fn from(value: CoreActivePermissionProfile) -> Self {
+        Self {
+            id: value.id,
+            extends: value.extends,
+            modifications: value
+                .modifications
+                .into_iter()
+                .map(ActivePermissionProfileModification::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<ActivePermissionProfile> for CoreActivePermissionProfile {
+    fn from(value: ActivePermissionProfile) -> Self {
+        Self {
+            id: value.id,
+            extends: value.extends,
+            modifications: value
+                .modifications
+                .into_iter()
+                .map(CoreActivePermissionProfileModification::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum PermissionProfileSelectionParams {
+    /// Select a named built-in or user-defined profile and optionally apply
+    /// bounded modifications that Codex knows how to validate.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Profile {
+        id: String,
+        #[ts(optional = nullable)]
+        modifications: Option<Vec<PermissionProfileModificationParams>>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum PermissionProfileModificationParams {
+    /// Additional concrete directory that should be writable.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    AdditionalWritableRoot { path: AbsolutePathBuf },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -3462,11 +3568,12 @@ pub struct ThreadStartParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
-    /// Full permissions override for this thread. Cannot be combined with
-    /// `sandbox`.
-    #[experimental("thread/start.permissionProfile")]
+    /// Named profile selection for this thread. Cannot be combined with
+    /// `sandbox`. Use bounded `modifications` for supported turn/thread
+    /// adjustments instead of replacing the full permissions profile.
+    #[experimental("thread/start.permissions")]
     #[ts(optional = nullable)]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permissions: Option<PermissionProfileSelectionParams>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
     #[ts(optional = nullable)]
@@ -3543,14 +3650,20 @@ pub struct ThreadStartResponse {
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
-    /// Legacy sandbox policy retained for compatibility. New clients should use
-    /// `permissionProfile` when present as the canonical active permissions
-    /// view.
+    /// Legacy sandbox policy retained for compatibility. Experimental clients
+    /// should prefer `permissionProfile` when they need exact runtime
+    /// permissions.
     pub sandbox: SandboxPolicy,
-    /// Canonical active permissions view for this thread.
+    /// Full active permissions for this thread. `activePermissionProfile`
+    /// carries display/provenance metadata for this runtime profile.
     #[experimental("thread/start.permissionProfile")]
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
+    /// Named or implicit built-in profile that produced the active
+    /// permissions, when known.
+    #[experimental("thread/start.activePermissionProfile")]
+    #[serde(default)]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -3608,11 +3721,12 @@ pub struct ThreadResumeParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
-    /// Full permissions override for the resumed thread. Cannot be combined
-    /// with `sandbox`.
-    #[experimental("thread/resume.permissionProfile")]
+    /// Named profile selection for the resumed thread. Cannot be combined
+    /// with `sandbox`. Use bounded `modifications` for supported thread
+    /// adjustments instead of replacing the full permissions profile.
+    #[experimental("thread/resume.permissions")]
     #[ts(optional = nullable)]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permissions: Option<PermissionProfileSelectionParams>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -3649,14 +3763,20 @@ pub struct ThreadResumeResponse {
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
-    /// Legacy sandbox policy retained for compatibility. New clients should use
-    /// `permissionProfile` when present as the canonical active permissions
-    /// view.
+    /// Legacy sandbox policy retained for compatibility. Experimental clients
+    /// should prefer `permissionProfile` when they need exact runtime
+    /// permissions.
     pub sandbox: SandboxPolicy,
-    /// Canonical active permissions view for this thread.
+    /// Full active permissions for this thread. `activePermissionProfile`
+    /// carries display/provenance metadata for this runtime profile.
     #[experimental("thread/resume.permissionProfile")]
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
+    /// Named or implicit built-in profile that produced the active
+    /// permissions, when known.
+    #[experimental("thread/resume.activePermissionProfile")]
+    #[serde(default)]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -3705,11 +3825,12 @@ pub struct ThreadForkParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
-    /// Full permissions override for the forked thread. Cannot be combined
-    /// with `sandbox`.
-    #[experimental("thread/fork.permissionProfile")]
+    /// Named profile selection for the forked thread. Cannot be combined with
+    /// `sandbox`. Use bounded `modifications` for supported thread
+    /// adjustments instead of replacing the full permissions profile.
+    #[experimental("thread/fork.permissions")]
     #[ts(optional = nullable)]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permissions: Option<PermissionProfileSelectionParams>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -3746,14 +3867,20 @@ pub struct ThreadForkResponse {
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
-    /// Legacy sandbox policy retained for compatibility. New clients should use
-    /// `permissionProfile` when present as the canonical active permissions
-    /// view.
+    /// Legacy sandbox policy retained for compatibility. Experimental clients
+    /// should prefer `permissionProfile` when they need exact runtime
+    /// permissions.
     pub sandbox: SandboxPolicy,
-    /// Canonical active permissions view for this thread.
+    /// Full active permissions for this thread. `activePermissionProfile`
+    /// carries display/provenance metadata for this runtime profile.
     #[experimental("thread/fork.permissionProfile")]
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
+    /// Named or implicit built-in profile that produced the active
+    /// permissions, when known.
+    #[experimental("thread/fork.activePermissionProfile")]
+    #[serde(default)]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -4590,6 +4717,7 @@ pub struct HooksListEntry {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct HookMetadata {
+    pub key: String,
     pub event_name: HookEventName,
     pub handler_type: HookHandlerType,
     pub matcher: Option<String>,
@@ -4600,6 +4728,8 @@ pub struct HookMetadata {
     pub source: HookSource,
     pub plugin_id: Option<String>,
     pub display_order: i64,
+    pub enabled: bool,
+    pub is_managed: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -5338,11 +5468,13 @@ pub struct TurnStartParams {
     /// Override the sandbox policy for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
-    /// Override the full permissions profile for this turn and subsequent
-    /// turns. Cannot be combined with `sandboxPolicy`.
-    #[experimental("turn/start.permissionProfile")]
+    /// Select a named permissions profile for this turn and subsequent turns.
+    /// Cannot be combined with `sandboxPolicy`. Use bounded `modifications`
+    /// for supported turn adjustments instead of replacing the full
+    /// permissions profile.
+    #[experimental("turn/start.permissions")]
     #[ts(optional = nullable)]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permissions: Option<PermissionProfileSelectionParams>,
     /// Override the model for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub model: Option<String>,
@@ -10790,6 +10922,9 @@ mod tests {
         assert_eq!(start.permission_profile, None);
         assert_eq!(resume.permission_profile, None);
         assert_eq!(fork.permission_profile, None);
+        assert_eq!(start.active_permission_profile, None);
+        assert_eq!(resume.active_permission_profile, None);
+        assert_eq!(fork.active_permission_profile, None);
     }
 
     #[test]
@@ -10817,7 +10952,7 @@ mod tests {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
+            permissions: None,
             model: None,
             service_tier: None,
             effort: None,

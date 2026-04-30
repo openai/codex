@@ -130,6 +130,59 @@
       "title": "AccountUpdatedNotification",
       "type": "object"
     },
+    "ActivePermissionProfile": {
+      "properties": {
+        "extends": {
+          "default": null,
+          "description": "Parent profile identifier once permissions profiles support inheritance. This is currently always `null`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Identifier from `default_permissions` or the implicit built-in default, such as `:workspace` or a user-defined `[permissions.<id>]` profile.",
+          "type": "string"
+        },
+        "modifications": {
+          "default": [],
+          "description": "Bounded user-requested modifications applied on top of the named profile, if any.",
+          "items": {
+            "$ref": "#/definitions/ActivePermissionProfileModification"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "ActivePermissionProfileModification": {
+      "oneOf": [
+        {
+          "description": "Additional concrete directory that should be writable.",
+          "properties": {
+            "path": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "additionalWritableRoot"
+              ],
+              "title": "AdditionalWritableRootActivePermissionProfileModificationType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "AdditionalWritableRootActivePermissionProfileModification",
+          "type": "object"
+        }
+      ]
+    },
     "AddCreditsNudgeCreditType": {
       "enum": [
         "credits",
@@ -6255,11 +6308,20 @@
           "format": "int64",
           "type": "integer"
         },
+        "enabled": {
+          "type": "boolean"
+        },
         "eventName": {
           "$ref": "#/definitions/HookEventName"
         },
         "handlerType": {
           "$ref": "#/definitions/HookHandlerType"
+        },
+        "isManaged": {
+          "type": "boolean"
+        },
+        "key": {
+          "type": "string"
         },
         "matcher": {
           "type": [
@@ -6293,8 +6355,11 @@
       },
       "required": [
         "displayOrder",
+        "enabled",
         "eventName",
         "handlerType",
+        "isManaged",
+        "key",
         "source",
         "sourcePath",
         "timeoutSec"
@@ -6457,6 +6522,7 @@
         "mdm",
         "sessionFlags",
         "plugin",
+        "cloudRequirements",
         "legacyManagedConfigFile",
         "legacyManagedConfigMdm",
         "unknown"
@@ -8342,6 +8408,31 @@
         }
       ]
     },
+    "PermissionProfileModificationParams": {
+      "oneOf": [
+        {
+          "description": "Additional concrete directory that should be writable.",
+          "properties": {
+            "path": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "additionalWritableRoot"
+              ],
+              "title": "AdditionalWritableRootPermissionProfileModificationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "AdditionalWritableRootPermissionProfileModificationParams",
+          "type": "object"
+        }
+      ]
+    },
     "PermissionProfileNetworkPermissions": {
       "properties": {
         "enabled": {
@@ -8352,6 +8443,40 @@
         "enabled"
       ],
       "type": "object"
+    },
+    "PermissionProfileSelectionParams": {
+      "oneOf": [
+        {
+          "description": "Select a named built-in or user-defined profile and optionally apply bounded modifications that Codex knows how to validate.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "modifications": {
+              "items": {
+                "$ref": "#/definitions/PermissionProfileModificationParams"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "profile"
+              ],
+              "title": "ProfilePermissionProfileSelectionParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "ProfilePermissionProfileSelectionParams",
+          "type": "object"
+        }
+      ]
     },
     "Personality": {
       "enum": [
@@ -12766,7 +12891,7 @@
               "$ref": "#/definitions/SandboxPolicy"
             }
           ],
-          "description": "Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
+          "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
         },
         "serviceTier": {
           "anyOf": [
@@ -14277,7 +14402,7 @@
               "$ref": "#/definitions/SandboxPolicy"
             }
           ],
-          "description": "Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
+          "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
         },
         "serviceTier": {
           "anyOf": [
@@ -14581,7 +14706,7 @@
               "$ref": "#/definitions/SandboxPolicy"
             }
           ],
-          "description": "Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
+          "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
         },
         "serviceTier": {
           "anyOf": [

@@ -43,6 +43,35 @@ async fn list_tool_suggest_discoverable_plugins_returns_uninstalled_curated_plug
 }
 
 #[tokio::test]
+async fn list_tool_suggest_discoverable_plugins_returns_microsoft_curated_plugins() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let curated_root = curated_plugins_repo_path(codex_home.path());
+    write_openai_curated_marketplace(
+        &curated_root,
+        &["teams", "sharepoint", "outlook-email", "outlook-calendar"],
+    );
+    write_plugins_feature_config(codex_home.path());
+
+    let config = load_plugins_config(codex_home.path()).await;
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        discoverable_plugins
+            .into_iter()
+            .map(|plugin| plugin.id)
+            .collect::<Vec<_>>(),
+        vec![
+            "outlook-calendar@openai-curated".to_string(),
+            "outlook-email@openai-curated".to_string(),
+            "sharepoint@openai-curated".to_string(),
+            "teams@openai-curated".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn list_tool_suggest_discoverable_plugins_deduplicates_allowlisted_configured_plugin() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let plugin_id = TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST

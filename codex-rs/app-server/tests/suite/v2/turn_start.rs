@@ -27,9 +27,6 @@ use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangePatchUpdatedNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
-use codex_app_server_protocol::FileSystemAccessMode;
-use codex_app_server_protocol::FileSystemPath;
-use codex_app_server_protocol::FileSystemSandboxEntry;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
@@ -38,9 +35,7 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
-use codex_app_server_protocol::PermissionProfile;
-use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
-use codex_app_server_protocol::PermissionProfileNetworkPermissions;
+use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
@@ -67,7 +62,6 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -675,9 +669,8 @@ async fn turn_start_rejects_combined_oversized_text_input() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_start_rejects_invalid_permission_profile_before_starting_turn() -> Result<()> {
+async fn turn_start_rejects_invalid_permission_selection_before_starting_turn() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let disallowed_write_root = TempDir::new()?;
     create_config_toml(
         codex_home.path(),
         "http://localhost/unused",
@@ -704,9 +697,6 @@ async fn turn_start_rejects_invalid_permission_profile_before_starting_turn() ->
     )
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
-    let disallowed_write_root = AbsolutePathBuf::from_absolute_path(disallowed_write_root.path())
-        .expect("tempdir path should be absolute");
-
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
@@ -714,17 +704,9 @@ async fn turn_start_rejects_invalid_permission_profile_before_starting_turn() ->
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            permission_profile: Some(PermissionProfile::Managed {
-                network: PermissionProfileNetworkPermissions { enabled: false },
-                file_system: PermissionProfileFileSystemPermissions::Restricted {
-                    entries: vec![FileSystemSandboxEntry {
-                        path: FileSystemPath::Path {
-                            path: disallowed_write_root,
-                        },
-                        access: FileSystemAccessMode::Write,
-                    }],
-                    glob_scan_max_depth: None,
-                },
+            permissions: Some(PermissionProfileSelectionParams::Profile {
+                id: ":danger-no-sandbox".to_string(),
+                modifications: None,
             }),
             ..Default::default()
         })
@@ -749,7 +731,7 @@ async fn turn_start_rejects_invalid_permission_profile_before_starting_turn() ->
     .await;
     assert!(
         turn_started.is_err(),
-        "did not expect a turn/started notification after rejected permissionProfile"
+        "did not expect a turn/started notification after rejected permissions selection"
     );
 
     Ok(())
@@ -1833,7 +1815,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             }),
-            permission_profile: None,
+            permissions: None,
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
@@ -1869,7 +1851,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
-            permission_profile: None,
+            permissions: None,
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),

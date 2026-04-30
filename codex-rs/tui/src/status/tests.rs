@@ -12,7 +12,10 @@ use chrono::Duration as ChronoDuration;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -212,7 +215,7 @@ async fn status_snapshot_includes_reasoning_details() {
 }
 
 #[tokio::test]
-async fn status_permissions_non_default_workspace_write_is_custom() {
+async fn status_permissions_non_default_workspace_write_uses_workspace_label() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
@@ -235,8 +238,290 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
 
     assert_eq!(
         permissions_text_for(&config).as_deref(),
-        Some("Custom (workspace-write with network access, on-request)")
+        Some("Custom (workspace with network access, on-request)")
     );
+}
+
+#[tokio::test]
+async fn status_permissions_named_read_only_profile_shows_builtin_label() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    config
+        .permissions
+        .set_permission_profile_with_active_profile(
+            PermissionProfile::read_only(),
+            Some(ActivePermissionProfile::new(":read-only")),
+        )
+        .expect("set permission profile");
+
+    assert_eq!(
+        permissions_text_for(&config).as_deref(),
+        Some("Read Only (on-request)")
+    );
+}
+
+#[tokio::test]
+async fn status_permissions_read_only_profile_shows_additional_writable_roots() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    let extra_root = test_path_buf("/workspace/extra").abs();
+    let file_system_policy = PermissionProfile::read_only()
+        .file_system_sandbox_policy()
+        .with_additional_writable_roots(config.cwd.as_path(), std::slice::from_ref(&extra_root));
+    config
+        .permissions
+        .set_permission_profile_with_active_profile(
+            PermissionProfile::from_runtime_permissions(
+                &file_system_policy,
+                NetworkSandboxPolicy::Restricted,
+            ),
+            Some(
+                ActivePermissionProfile::new(":read-only").with_modifications(vec![
+                    ActivePermissionProfileModification::AdditionalWritableRoot {
+                        path: extra_root,
+                    },
+                ]),
+            ),
+        )
+        .expect("set permission profile");
+
+    assert_eq!(
+        permissions_text_for(&config).as_deref(),
+        Some("Read Only + 1 writable root (on-request)")
+    );
+}
+
+#[tokio::test]
+async fn status_permissions_named_workspace_profile_shows_builtin_label() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    config
+        .permissions
+        .set_permission_profile_with_active_profile(
+            PermissionProfile::workspace_write(),
+            Some(ActivePermissionProfile::new(":workspace")),
+        )
+        .expect("set permission profile");
+
+    assert_eq!(
+        permissions_text_for(&config).as_deref(),
+        Some("Workspace (on-request)")
+    );
+}
+
+#[tokio::test]
+async fn status_permissions_workspace_auto_review_shows_reviewer_label() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    config
+        .permissions
+        .set_permission_profile_with_active_profile(
+            PermissionProfile::workspace_write(),
+            Some(ActivePermissionProfile::new(":workspace")),
+        )
+        .expect("set permission profile");
+
+    assert_eq!(
+        permissions_text_for(&config).as_deref(),
+        Some("Workspace (auto-review)")
+    );
+}
+
+#[tokio::test]
+async fn status_permissions_named_profile_shows_additional_writable_roots() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    let extra_root = test_path_buf("/workspace/extra").abs();
+    config
+        .permissions
+        .set_permission_profile_with_active_profile(
+            PermissionProfile::workspace_write_with(
+                std::slice::from_ref(&extra_root),
+                NetworkSandboxPolicy::Restricted,
+                /*exclude_tmpdir_env_var*/ false,
+                /*exclude_slash_tmp*/ false,
+            ),
+            Some(
+                ActivePermissionProfile::new(":workspace").with_modifications(vec![
+                    ActivePermissionProfileModification::AdditionalWritableRoot {
+                        path: extra_root,
+                    },
+                ]),
+            ),
+        )
+        .expect("set permission profile");
+
+    assert_eq!(
+        permissions_text_for(&config).as_deref(),
+        Some("Workspace + 1 writable root (on-request)")
+    );
+}
+
+#[tokio::test]
+async fn status_permissions_broadened_workspace_profile_shows_builtin_label() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    config
+        .permissions
+        .set_permission_profile_with_active_profile(
+            PermissionProfile::workspace_write_with(
+                &[],
+                NetworkSandboxPolicy::Enabled,
+                /*exclude_tmpdir_env_var*/ false,
+                /*exclude_slash_tmp*/ false,
+            ),
+            Some(ActivePermissionProfile::new(":workspace")),
+        )
+        .expect("set permission profile");
+
+    assert_eq!(
+        permissions_text_for(&config).as_deref(),
+        Some("Workspace with network access (on-request)")
+    );
+}
+
+#[tokio::test]
+async fn status_permissions_user_defined_profile_shows_name() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config
+        .permissions
+        .set_permission_profile_with_active_profile(
+            PermissionProfile::read_only(),
+            Some(ActivePermissionProfile::new("locked")),
+        )
+        .expect("set permission profile");
+
+    assert_eq!(
+        permissions_text_for(&config).as_deref(),
+        Some("Profile locked (read-only, on-request)")
+    );
+}
+
+#[tokio::test]
+async fn status_snapshot_shows_active_user_defined_profile() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.1-codex-max".to_string());
+    config.cwd = test_path_buf("/workspace/tests").abs();
+    config
+        .permissions
+        .set_permission_profile_with_active_profile(
+            PermissionProfile::read_only(),
+            Some(ActivePermissionProfile::new("locked")),
+        )
+        .expect("set permission profile");
+
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+        .single()
+        .expect("timestamp");
+    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let token_info = token_info_for(&model_slug, &config, &usage);
+
+    let composite = new_status_output(
+        &config,
+        test_status_account_display().as_ref(),
+        Some(&token_info),
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
+        None,
+        captured_at,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+    );
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    assert_snapshot!(sanitized);
+}
+
+#[tokio::test]
+async fn status_snapshot_shows_auto_review_permissions() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.1-codex-max".to_string());
+    config.cwd = test_path_buf("/workspace/tests").abs();
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    config
+        .permissions
+        .set_permission_profile_with_active_profile(
+            PermissionProfile::workspace_write(),
+            Some(ActivePermissionProfile::new(":workspace")),
+        )
+        .expect("set permission profile");
+
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+        .single()
+        .expect("timestamp");
+    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let token_info = token_info_for(&model_slug, &config, &usage);
+
+    let composite = new_status_output(
+        &config,
+        test_status_account_display().as_ref(),
+        Some(&token_info),
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
+        None,
+        captured_at,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+    );
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    assert_snapshot!(sanitized);
 }
 
 #[tokio::test]

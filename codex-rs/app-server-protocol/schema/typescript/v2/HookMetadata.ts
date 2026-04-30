@@ -6,4 +6,4 @@ import type { HookEventName } from "./HookEventName";
 import type { HookHandlerType } from "./HookHandlerType";
 import type { HookSource } from "./HookSource";
 
-export type HookMetadata = { eventName: HookEventName, handlerType: HookHandlerType, matcher: string | null, command: string | null, timeoutSec: bigint, statusMessage: string | null, sourcePath: AbsolutePathBuf, source: HookSource, pluginId: string | null, displayOrder: bigint, };
+export type HookMetadata = { key: string, eventName: HookEventName, handlerType: HookHandlerType, matcher: string | null, command: string | null, timeoutSec: bigint, statusMessage: string | null, sourcePath: AbsolutePathBuf, source: HookSource, pluginId: string | null, displayOrder: bigint, enabled: boolean, isManaged: boolean, };

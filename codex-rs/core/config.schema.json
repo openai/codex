@@ -884,53 +884,6 @@
         }
       ]
     },
-    "HookEventsToml": {
-      "properties": {
-        "PermissionRequest": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        },
-        "PostToolUse": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        },
-        "PreToolUse": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        },
-        "SessionStart": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        },
-        "Stop": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        },
-        "UserPromptSubmit": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
     "HookHandlerConfig": {
       "oneOf": [
         {
@@ -994,6 +947,67 @@
           "type": "object"
         }
       ]
+    },
+    "HookStateToml": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "HooksToml": {
+      "properties": {
+        "PermissionRequest": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "PostToolUse": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "PreToolUse": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "SessionStart": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "Stop": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "UserPromptSubmit": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "state": {
+          "additionalProperties": {
+            "$ref": "#/definitions/HookStateToml"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
     },
     "KeybindingsSpec": {
       "anyOf": [
@@ -3653,10 +3667,10 @@
     "hooks": {
       "allOf": [
         {
-          "$ref": "#/definitions/HookEventsToml"
+          "$ref": "#/definitions/HooksToml"
         }
       ],
-      "description": "Lifecycle hooks configured inline in TOML."
+      "description": "Lifecycle hooks configured inline in TOML plus user-level overrides."
     },
     "include_apps_instructions": {
       "description": "Whether to inject the `<apps_instructions>` developer block.",

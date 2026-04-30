@@ -1,3 +1,4 @@
+mod config_rules;
 mod engine;
 pub(crate) mod events;
 mod legacy_notify;

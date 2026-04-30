@@ -86,6 +86,8 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelsResponse;
@@ -105,6 +107,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::config::permissions::BUILT_IN_WORKSPACE_PROFILE;
 use crate::config::permissions::builtin_permission_profile;
 use crate::config::permissions::compile_permission_profile_selection;
 use crate::config::permissions::default_builtin_permission_profile_name;
@@ -229,6 +232,9 @@ pub struct Permissions {
     /// Canonical effective runtime permissions after config requirements and
     /// runtime readable-root additions have been applied.
     pub permission_profile: Constrained<PermissionProfile>,
+    /// Named or implicit built-in profile selected by config, rather than an
+    /// ad-hoc override.
+    pub active_permission_profile: Option<ActivePermissionProfile>,
     /// Effective network configuration applied to all spawned processes.
     pub network: Option<NetworkProxySpec>,
     /// Whether the model may request a login shell for shell-based tools.
@@ -254,6 +260,11 @@ impl Permissions {
     /// readable-root additions have been applied.
     pub fn permission_profile(&self) -> PermissionProfile {
         self.permission_profile.get().clone()
+    }
+
+    /// Named profile selected by config, if the current profile has one.
+    pub fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
+        self.active_permission_profile.clone()
     }
 
     /// Effective filesystem sandbox policy derived from the canonical profile.
@@ -314,6 +325,7 @@ impl Permissions {
         );
 
         self.permission_profile.set(permission_profile)?;
+        self.active_permission_profile = None;
         Ok(())
     }
 
@@ -322,9 +334,23 @@ impl Permissions {
         &mut self,
         permission_profile: PermissionProfile,
     ) -> ConstraintResult<()> {
+        self.set_permission_profile_with_active_profile(
+            permission_profile,
+            /*active_permission_profile*/ None,
+        )
+    }
+
+    /// Replace permissions from the canonical profile and record the named
+    /// source profile, if one is known.
+    pub fn set_permission_profile_with_active_profile(
+        &mut self,
+        permission_profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
+    ) -> ConstraintResult<()> {
         self.permission_profile.can_set(&permission_profile)?;
 
         self.permission_profile.set(permission_profile)?;
+        self.active_permission_profile = active_permission_profile;
         Ok(())
     }
 }
@@ -1254,7 +1280,7 @@ fn apply_requirement_constrained_value<T>(
     configured_value: T,
     constrained_value: &mut ConstrainedWithSource<T>,
     startup_warnings: &mut Vec<String>,
-) -> std::io::Result<()>
+) -> std::io::Result<bool>
 where
     T: Clone + std::fmt::Debug + Send + Sync,
 {
@@ -1279,9 +1305,10 @@ where
                 ),
             )
         })?;
+        return Ok(true);
     }
 
-    Ok(())
+    Ok(false)
 }
 
 fn mcp_server_matches_requirement(
@@ -1681,6 +1708,7 @@ pub struct ConfigOverrides {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
     pub permission_profile: Option<PermissionProfile>,
+    pub default_permissions: Option<String>,
     pub model_provider: Option<String>,
     pub service_tier: Option<Option<ServiceTier>>,
     pub config_profile: Option<String>,
@@ -1945,6 +1973,7 @@ impl Config {
             approvals_reviewer: approvals_reviewer_override,
             sandbox_mode,
             permission_profile,
+            default_permissions: default_permissions_override,
             model_provider,
             service_tier: service_tier_override,
             config_profile: config_profile_key,
@@ -1967,6 +1996,18 @@ impl Config {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "`sandbox_mode` and `permission_profile` overrides cannot both be set",
+            ));
+        }
+        if sandbox_mode.is_some() && default_permissions_override.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "`sandbox_mode` and `default_permissions` overrides cannot both be set",
+            ));
+        }
+        if permission_profile.is_some() && default_permissions_override.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "`permission_profile` and `default_permissions` overrides cannot both be set",
             ));
         }
 
@@ -2040,6 +2081,7 @@ impl Config {
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
             .collect();
+        let requested_additional_writable_roots = additional_writable_roots.clone();
         let repo_root = resolve_root_git_project_for_trust(fs, &resolved_cwd).await;
         let active_project = cfg
             .get_active_project(
@@ -2057,13 +2099,16 @@ impl Config {
             .permissions
             .as_ref()
             .is_some_and(|profiles| !profiles.is_empty());
+        let default_permissions = default_permissions_override
+            .as_deref()
+            .or(cfg.default_permissions.as_deref());
         validate_user_permission_profile_names(cfg.permissions.as_ref())?;
         if has_permission_profiles
             && !matches!(
                 permission_config_syntax,
                 Some(PermissionConfigSyntax::Legacy)
             )
-            && cfg.default_permissions.is_none()
+            && default_permissions.is_none()
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -2085,15 +2130,19 @@ impl Config {
             additional_writable_roots.push(memories_root);
         }
 
-        let profiles_are_active = matches!(
-            permission_config_syntax,
-            Some(PermissionConfigSyntax::Profiles)
-        ) || permission_config_syntax.is_none();
-        let using_implicit_builtin_profile = permission_config_syntax.is_none();
+        let profiles_are_active = default_permissions_override.is_some()
+            || matches!(
+                permission_config_syntax,
+                Some(PermissionConfigSyntax::Profiles)
+            )
+            || permission_config_syntax.is_none();
+        let using_implicit_builtin_profile =
+            permission_config_syntax.is_none() && default_permissions.is_none();
         let (
             configured_network_proxy_config,
             permission_profile,
             file_system_sandbox_policy,
+            mut active_permission_profile,
         ) = if let Some(mut permission_profile) = permission_profile {
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
@@ -2104,7 +2153,7 @@ impl Config {
                     // PermissionProfile carries the active network sandbox bit, not the configured
                     // proxy/allowlist policy. Keep that config so active profiles can round-trip
                     // without broadening network behavior.
-                    let default_permissions = cfg.default_permissions.as_deref().unwrap_or_else(|| {
+                    let default_permissions = default_permissions.unwrap_or_else(|| {
                         default_builtin_permission_profile_name(
                             &active_project,
                             windows_sandbox_level,
@@ -2139,11 +2188,17 @@ impl Config {
                 configured_network_proxy_config,
                 permission_profile,
                 file_system_sandbox_policy,
+                None,
             )
         } else if profiles_are_active {
-            let default_permissions = cfg.default_permissions.as_deref().unwrap_or_else(|| {
+            let default_permissions = default_permissions.unwrap_or_else(|| {
                 default_builtin_permission_profile_name(&active_project, windows_sandbox_level)
             });
+            let builtin_workspace_write_settings = if using_implicit_builtin_profile {
+                cfg.sandbox_workspace_write.as_ref()
+            } else {
+                None
+            };
             let configured_network_proxy_config = network_proxy_config_for_profile_selection(
                 cfg.permissions.as_ref(),
                 default_permissions,
@@ -2152,12 +2207,12 @@ impl Config {
                 compile_permission_profile_selection(
                     cfg.permissions.as_ref(),
                     default_permissions,
-                    cfg.sandbox_workspace_write.as_ref(),
+                    builtin_workspace_write_settings,
                     resolved_cwd.as_path(),
                     &mut startup_warnings,
                 )?;
             let mut permission_profile = if let Some(permission_profile) =
-                builtin_permission_profile(default_permissions, cfg.sandbox_workspace_write.as_ref())
+                builtin_permission_profile(default_permissions, builtin_workspace_write_settings)
             {
                 permission_profile
             } else {
@@ -2188,11 +2243,51 @@ impl Config {
                     &file_system_sandbox_policy,
                     network_sandbox_policy,
                 );
+            } else if matches!(permission_profile, PermissionProfile::Managed { .. })
+                && !requested_additional_writable_roots.is_empty()
+            {
+                file_system_sandbox_policy = file_system_sandbox_policy.with_additional_writable_roots(
+                    resolved_cwd.as_path(),
+                    &requested_additional_writable_roots,
+                );
+                permission_profile = PermissionProfile::from_runtime_permissions(
+                    &file_system_sandbox_policy,
+                    network_sandbox_policy,
+                );
             }
+            let active_permission_profile = if using_implicit_builtin_profile
+                && default_permissions == BUILT_IN_WORKSPACE_PROFILE
+                && cfg.sandbox_workspace_write.is_some()
+            {
+                // The implicit built-in profile preserves legacy
+                // `[sandbox_workspace_write]` customizations, but explicitly
+                // selecting `:workspace` intentionally ignores those legacy
+                // settings. Do not advertise a re-selectable active profile
+                // when doing so would lose roots, network, or tmp settings.
+                None
+            } else {
+                let active_permission_profile = if !requested_additional_writable_roots.is_empty()
+                    && matches!(permission_profile, PermissionProfile::Managed { .. })
+                {
+                    ActivePermissionProfile::new(default_permissions).with_modifications(
+                        requested_additional_writable_roots
+                            .iter()
+                            .cloned()
+                            .map(|path| {
+                                ActivePermissionProfileModification::AdditionalWritableRoot { path }
+                            })
+                            .collect(),
+                    )
+                } else {
+                    ActivePermissionProfile::new(default_permissions)
+                };
+                Some(active_permission_profile)
+            };
             (
                 configured_network_proxy_config,
                 permission_profile,
                 file_system_sandbox_policy,
+                active_permission_profile,
             )
         } else {
             let configured_network_proxy_config = NetworkProxyConfig::default();
@@ -2254,6 +2349,7 @@ impl Config {
                 configured_network_proxy_config,
                 permission_profile,
                 file_system_sandbox_policy,
+                None,
             )
         };
         let approval_policy_was_explicit = approval_policy_override.is_some()
@@ -2633,12 +2729,17 @@ impl Config {
             &mut constrained_approvals_reviewer,
             &mut startup_warnings,
         )?;
-        apply_requirement_constrained_value(
+        let permission_profile_was_constrained = apply_requirement_constrained_value(
             "permission_profile",
             permission_profile,
             &mut constrained_permission_profile,
             &mut startup_warnings,
         )?;
+        if permission_profile_was_constrained {
+            // The selected profile no longer describes the effective
+            // permissions after requirements forced a fallback.
+            active_permission_profile = None;
+        }
         apply_requirement_constrained_value(
             "web_search_mode",
             web_search_mode,
@@ -2721,6 +2822,7 @@ impl Config {
             permissions: Permissions {
                 approval_policy: constrained_approval_policy.value,
                 permission_profile: constrained_permission_profile.value,
+                active_permission_profile,
                 network,
                 allow_login_shell,
                 shell_environment_policy,

@@ -121,7 +121,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
 
     assert!(engine.warnings().is_empty());
     assert_eq!(engine.handlers.len(), 1);
-    assert!(engine.handlers[0].is_managed);
+    assert!(engine.handlers[0].source.is_managed());
     let cwd = cwd();
     let preview = engine.preview_pre_tool_use(&PreToolUseRequest {
         session_id: ThreadId::new(),
@@ -156,6 +156,177 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     assert!(!outcome.should_block);
     let log_contents = fs::read_to_string(log_path).expect("read managed hook log");
     assert!(log_contents.contains("\"hook_event_name\": \"PreToolUse\""));
+}
+
+#[test]
+fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
+    let temp = tempdir().expect("create temp dir");
+    let managed_dir =
+        AbsolutePathBuf::try_from(temp.path().join("managed-hooks")).expect("absolute path");
+    fs::create_dir_all(managed_dir.as_path()).expect("create managed hooks dir");
+    let managed_hooks = managed_hooks_for_current_platform(
+        managed_dir.clone(),
+        HookEventsToml {
+            pre_tool_use: vec![MatcherGroup {
+                matcher: Some("^Bash$".to_string()),
+                hooks: vec![HookHandlerConfig::Command {
+                    command: "python3 /tmp/managed.py".to_string(),
+                    timeout_sec: Some(10),
+                    r#async: false,
+                    status_message: Some("checking".to_string()),
+                }],
+            }],
+            ..Default::default()
+        },
+    );
+    let config_path =
+        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute path");
+    let managed_disabled_key = format!("{}:pre_tool_use:0:0", managed_dir.display());
+    let user_disabled_key = format!("{}:pre_tool_use:0:0", config_path.display());
+    let user_config = config_with_pre_tool_use_hook_and_states(
+        "python3 /tmp/user.py",
+        [&managed_disabled_key, &user_disabled_key],
+    );
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::User { file: config_path },
+            user_config,
+        )],
+        ConfigRequirements {
+            managed_hooks: Some(ConstrainedWithSource::new(
+                Constrained::allow_any(managed_hooks.clone()),
+                Some(RequirementSource::CloudRequirements),
+            )),
+            ..ConfigRequirements::default()
+        },
+        ConfigRequirementsToml {
+            hooks: Some(managed_hooks),
+            ..ConfigRequirementsToml::default()
+        },
+    )
+    .expect("config layer stack");
+
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+    );
+
+    assert_eq!(engine.handlers.len(), 1);
+    assert!(engine.handlers[0].source.is_managed());
+    let discovered =
+        super::discovery::discover_handlers(Some(&config_layer_stack), Vec::new(), Vec::new());
+    assert_eq!(discovered.hook_entries.len(), 2);
+    assert_eq!(discovered.hook_entries[0].key, managed_disabled_key);
+    assert_eq!(discovered.hook_entries[0].enabled, true);
+    assert!(discovered.hook_entries[0].is_managed);
+    assert_eq!(discovered.hook_entries[1].key, user_disabled_key);
+    assert_eq!(discovered.hook_entries[1].enabled, false);
+    assert!(!discovered.hook_entries[1].is_managed);
+}
+
+#[test]
+fn user_disablement_does_not_filter_managed_layer_hooks() {
+    let temp = tempdir().expect("create temp dir");
+    let managed_config_path =
+        AbsolutePathBuf::try_from(temp.path().join("managed_config.toml")).expect("absolute path");
+    let user_config_path =
+        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute path");
+    let managed_key = format!("{}:pre_tool_use:0:0", managed_config_path.display());
+
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![
+            ConfigLayerEntry::new(
+                ConfigLayerSource::User {
+                    file: user_config_path,
+                },
+                config_with_hook_state(&managed_key, /*enabled*/ false),
+            ),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::LegacyManagedConfigTomlFromFile {
+                    file: managed_config_path,
+                },
+                config_with_pre_tool_use_hook("python3 /tmp/managed-layer.py"),
+            ),
+        ],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config layer stack");
+
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+    );
+
+    assert_eq!(engine.handlers.len(), 1);
+    assert!(engine.handlers[0].source.is_managed());
+    let discovered =
+        super::discovery::discover_handlers(Some(&config_layer_stack), Vec::new(), Vec::new());
+    assert_eq!(discovered.hook_entries.len(), 1);
+    assert_eq!(discovered.hook_entries[0].key, managed_key);
+    assert_eq!(discovered.hook_entries[0].enabled, true);
+    assert!(discovered.hook_entries[0].is_managed);
+}
+
+fn config_with_hook_state(key: &str, enabled: bool) -> TomlValue {
+    serde_json::from_value(serde_json::json!({
+        "hooks": {
+            "state": {
+                (key): {
+                    "enabled": enabled,
+                },
+            },
+        },
+    }))
+    .expect("config TOML should deserialize")
+}
+
+fn config_with_pre_tool_use_hook_and_states<const N: usize>(
+    command: &str,
+    disabled_keys: [&str; N],
+) -> TomlValue {
+    let state = disabled_keys
+        .into_iter()
+        .map(|key| (key.to_string(), serde_json::json!({ "enabled": false })))
+        .collect::<serde_json::Map<_, _>>();
+    serde_json::from_value(serde_json::json!({
+        "hooks": {
+            "state": state,
+            "PreToolUse": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": command,
+                }],
+            }],
+        },
+    }))
+    .expect("config TOML should deserialize")
+}
+
+fn config_with_pre_tool_use_hook(command: &str) -> TomlValue {
+    serde_json::from_value(serde_json::json!({
+        "hooks": {
+            "PreToolUse": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": command,
+                }],
+            }],
+        },
+    }))
+    .expect("config TOML should deserialize")
 }
 
 #[test]
@@ -333,7 +504,12 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
         tool_input: serde_json::json!({ "command": "echo hello" }),
     });
     assert_eq!(preview.len(), 2);
-    assert!(engine.handlers.iter().all(|handler| !handler.is_managed));
+    assert!(
+        engine
+            .handlers
+            .iter()
+            .all(|handler| !handler.source.is_managed())
+    );
     assert_eq!(preview[0].source_path, hooks_json_path);
     assert_eq!(preview[1].source_path, config_path);
 }

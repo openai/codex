@@ -161,6 +161,7 @@
         "mdm",
         "sessionFlags",
         "plugin",
+        "cloudRequirements",
         "legacyManagedConfigFile",
         "legacyManagedConfigMdm",
         "unknown"

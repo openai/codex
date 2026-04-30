@@ -36,7 +36,6 @@ pub(crate) struct CommandShell {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfiguredHandler {
     pub event_name: codex_protocol::protocol::HookEventName,
-    pub is_managed: bool,
     pub matcher: Option<String>,
     pub command: String,
     pub timeout_sec: u64,
@@ -71,6 +70,7 @@ impl ConfiguredHandler {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookListEntry {
+    pub key: String,
     pub event_name: HookEventName,
     pub handler_type: HookHandlerType,
     pub matcher: Option<String>,
@@ -81,6 +81,8 @@ pub struct HookListEntry {
     pub source: HookSource,
     pub plugin_id: Option<String>,
     pub display_order: i64,
+    pub enabled: bool,
+    pub is_managed: bool,
 }
 
 #[derive(Clone)]

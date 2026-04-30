@@ -156,7 +156,6 @@ mod tests {
     ) -> ConfiguredHandler {
         ConfiguredHandler {
             event_name,
-            is_managed: false,
             matcher: matcher.map(str::to_owned),
             command: command.to_string(),
             timeout_sec: 5,

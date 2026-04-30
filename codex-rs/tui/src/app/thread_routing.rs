@@ -604,15 +604,24 @@ impl App {
                     }
                 }
                 if should_start_turn {
+                    let config = self.chat_widget.config_ref();
+                    let approvals_reviewer =
+                        approvals_reviewer.unwrap_or(config.approvals_reviewer);
+                    let active_permission_profile =
+                        if config.permissions.permission_profile() == permission_profile.clone() {
+                            config.permissions.active_permission_profile()
+                        } else {
+                            None
+                        };
                     app_server
                         .turn_start(
                             thread_id,
                             items.to_vec(),
                             cwd.clone(),
                             approval_policy,
-                            approvals_reviewer
-                                .unwrap_or(self.chat_widget.config_ref().approvals_reviewer),
+                            approvals_reviewer,
                             permission_profile.clone(),
+                            active_permission_profile,
                             model.to_string(),
                             effort,
                             *summary,
