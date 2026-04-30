@@ -35,6 +35,8 @@ use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewData;
 use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewItem;
 use crate::render::renderable::Renderable;
 
+const STATUS_LINE_USE_THEME_COLORS_ITEM_ID: &str = "status-line-use-theme-colors";
+
 /// Available items that can be displayed in the status line.
 ///
 /// Each variant represents a piece of information that can be shown at the
@@ -200,17 +202,25 @@ impl StatusLineSetupView {
     ///
     /// * `status_line_items` - Currently configured item IDs (in display order),
     ///   or `None` to start with all items disabled
+    /// * `use_theme_colors` - Whether the preview and saved status line use
+    ///   muted colors from the active theme
     /// * `app_event_tx` - Event sender for dispatching configuration changes
     ///
     /// Items from `status_line_items` are shown first (in order) and marked as
     /// enabled. Remaining items are appended and marked as disabled.
     pub(crate) fn new(
         status_line_items: Option<&[String]>,
+        use_theme_colors: bool,
         preview_data: StatusSurfacePreviewData,
         app_event_tx: AppEventSender,
     ) -> Self {
         let mut used_ids = HashSet::new();
-        let mut items = Vec::new();
+        let mut items = vec![MultiSelectItem {
+            id: STATUS_LINE_USE_THEME_COLORS_ITEM_ID.to_string(),
+            name: "Use theme colors".to_string(),
+            description: Some("Apply muted colors from the active /theme.".to_string()),
+            enabled: use_theme_colors,
+        }];
 
         if let Some(selected_items) = status_line_items.as_ref() {
             for id in *selected_items {
@@ -246,20 +256,31 @@ impl StatusLineSetupView {
             .items(items)
             .enable_ordering()
             .on_preview(move |items| {
+                let use_theme_colors = items
+                    .iter()
+                    .find(|item| item.id == STATUS_LINE_USE_THEME_COLORS_ITEM_ID)
+                    .map(|item| item.enabled)
+                    .unwrap_or(true);
                 preview_data.status_line_for_items(
                     items
                         .iter()
                         .filter(|item| item.enabled)
                         .filter_map(|item| item.id.parse::<StatusLineItem>().ok()),
+                    use_theme_colors,
                 )
             })
             .on_confirm(|ids, app_event| {
+                let use_theme_colors = ids
+                    .iter()
+                    .any(|id| id == STATUS_LINE_USE_THEME_COLORS_ITEM_ID);
                 let items = ids
                     .iter()
-                    .map(|id| id.parse::<StatusLineItem>())
-                    .collect::<Result<Vec<_>, _>>()
-                    .unwrap_or_default();
-                app_event.send(AppEvent::StatusLineSetup { items });
+                    .filter_map(|id| id.parse::<StatusLineItem>().ok())
+                    .collect::<Vec<_>>();
+                app_event.send(AppEvent::StatusLineSetup {
+                    items,
+                    use_theme_colors,
+                });
             })
             .on_cancel(|app_event| {
                 app_event.send(AppEvent::StatusLineSetupCancelled);
@@ -428,7 +449,8 @@ mod tests {
                 preview_data.status_line_for_items(
                     items
                         .iter()
-                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
+                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok()),
+                    /*use_theme_colors*/ true,
                 )
             ),
             Some("gpt-5 · /repo".to_string())
@@ -461,7 +483,8 @@ mod tests {
                 preview_data.status_line_for_items(
                     items
                         .iter()
-                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
+                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok()),
+                    /*use_theme_colors*/ true,
                 )
             ),
             Some("gpt-5 · feat/awesome-feature".to_string())
@@ -500,7 +523,8 @@ mod tests {
                 preview_data.status_line_for_items(
                     items
                         .iter()
-                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
+                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok()),
+                    /*use_theme_colors*/ true,
                 )
             ),
             Some("gpt-5 · Roadmap cleanup".to_string())
@@ -516,6 +540,7 @@ mod tests {
                 StatusLineItem::CurrentDir.to_string(),
                 StatusLineItem::GitBranch.to_string(),
             ]),
+            /*use_theme_colors*/ true,
             StatusSurfacePreviewData::from_iter([
                 (
                     StatusLineItem::ModelName.preview_item(),

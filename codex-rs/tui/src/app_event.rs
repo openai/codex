@@ -808,6 +808,7 @@ pub(crate) enum AppEvent {
     /// Apply a user-confirmed status-line item ordering/selection.
     StatusLineSetup {
         items: Vec<StatusLineItem>,
+        use_theme_colors: bool,
     },
     /// Dismiss the status-line setup UI without changing config.
     StatusLineSetupCancelled,

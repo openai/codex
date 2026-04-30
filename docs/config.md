@@ -66,6 +66,17 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
 
+## TUI status line colors
+
+The TUI status line uses muted colors from the active `/theme` by default. To keep the status line monochrome, disable theme colors:
+
+```toml
+[tui]
+status_line_use_theme_colors = false
+```
+
+You can also toggle this from the `/statusline` controls.
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.

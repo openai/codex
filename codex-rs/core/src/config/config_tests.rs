@@ -551,6 +551,7 @@ fn config_toml_deserializes_model_availability_nux() {
             show_tooltips: true,
             alternate_screen: AltScreenMode::default(),
             status_line: None,
+            status_line_use_theme_colors: true,
             terminal_title: None,
             theme: None,
             keymap: TuiKeymap::default(),
@@ -562,6 +563,37 @@ fn config_toml_deserializes_model_availability_nux() {
             },
             terminal_resize_reflow_max_rows: None,
         }
+    );
+}
+
+#[test]
+fn config_toml_status_line_theme_colors_default_to_enabled() {
+    let toml = r#"
+[tui]
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for TUI config");
+
+    assert!(
+        cfg.tui
+            .expect("tui config should deserialize")
+            .status_line_use_theme_colors
+    );
+}
+
+#[test]
+fn config_toml_deserializes_status_line_theme_colors_disabled() {
+    let toml = r#"
+[tui]
+status_line_use_theme_colors = false
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for TUI config");
+
+    assert!(
+        !cfg.tui
+            .expect("tui config should deserialize")
+            .status_line_use_theme_colors
     );
 }
 
@@ -2064,6 +2096,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             show_tooltips: true,
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
+            status_line_use_theme_colors: true,
             terminal_title: None,
             theme: None,
             keymap: TuiKeymap::default(),
@@ -6374,6 +6407,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tool_suggest: ToolSuggestConfig::default(),
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_status_line_use_theme_colors: true,
             tui_terminal_title: None,
             tui_theme: None,
             tui_keymap: TuiKeymap::default(),
@@ -6570,6 +6604,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_theme_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
         tui_keymap: TuiKeymap::default(),
@@ -6720,6 +6755,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_theme_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
         tui_keymap: TuiKeymap::default(),
@@ -6855,6 +6891,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_theme_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
         tui_keymap: TuiKeymap::default(),

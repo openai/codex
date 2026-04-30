@@ -157,7 +157,10 @@ impl ChatWidget {
             }
         }
 
-        self.set_status_line(status_line_from_segments(segments));
+        self.set_status_line(status_line_from_segments(
+            segments,
+            self.config.tui_status_line_use_theme_colors,
+        ));
     }
 
     /// Clears the terminal title Codex most recently wrote, if any.

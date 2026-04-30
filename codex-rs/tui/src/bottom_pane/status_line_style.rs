@@ -69,17 +69,21 @@ impl StatusLineAccent {
     }
 }
 
-pub(crate) fn status_line_from_segments<I>(segments: I) -> Option<Line<'static>>
+pub(crate) fn status_line_from_segments<I>(
+    segments: I,
+    use_theme_colors: bool,
+) -> Option<Line<'static>>
 where
     I: IntoIterator<Item = (StatusLineItem, String)>,
 {
-    status_line_from_segments_with_resolver(segments, |accent| {
+    status_line_from_segments_with_resolver(segments, use_theme_colors, |accent| {
         foreground_style_for_scopes(accent.scopes())
     })
 }
 
 fn status_line_from_segments_with_resolver<I, F>(
     segments: I,
+    use_theme_colors: bool,
     theme_style_for_accent: F,
 ) -> Option<Line<'static>>
 where
@@ -91,8 +95,14 @@ where
         if !spans.is_empty() {
             spans.push(STATUS_LINE_SEPARATOR.dim());
         }
-        let accent = StatusLineAccent::for_item(item);
-        let style = theme_style_for_accent(accent).unwrap_or_else(|| accent.fallback_style());
+        let style = if use_theme_colors {
+            let accent = StatusLineAccent::for_item(item);
+            theme_style_for_accent(accent)
+                .unwrap_or_else(|| accent.fallback_style())
+                .dim()
+        } else {
+            Style::default().dim()
+        };
         spans.push(Span::styled(text, style));
     }
 
@@ -121,14 +131,18 @@ mod tests {
                 (StatusLineItem::CurrentDir, "/repo".to_string()),
                 (StatusLineItem::GitBranch, "main".to_string()),
             ],
+            /*use_theme_colors*/ true,
             |_| None,
         )
         .expect("status line");
 
         assert_eq!(line_text(&line), "gpt-5 · /repo · main");
         assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
+        assert!(line.spans[0].style.add_modifier.contains(Modifier::DIM));
         assert_eq!(line.spans[2].style.fg, Some(Color::Green));
+        assert!(line.spans[2].style.add_modifier.contains(Modifier::DIM));
         assert_eq!(line.spans[4].style.fg, Some(Color::Magenta));
+        assert!(line.spans[4].style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]
@@ -138,6 +152,7 @@ mod tests {
                 (StatusLineItem::ModelName, "gpt-5".to_string()),
                 (StatusLineItem::ContextUsed, "Context 12% used".to_string()),
             ],
+            /*use_theme_colors*/ true,
             |accent| match accent {
                 StatusLineAccent::Model => Some(Style::default().red()),
                 _ => None,
@@ -146,16 +161,40 @@ mod tests {
         .expect("status line");
 
         assert_eq!(line.spans[0].style.fg, Some(Color::Red));
+        assert!(line.spans[0].style.add_modifier.contains(Modifier::DIM));
         assert!(line.spans[1].style.add_modifier.contains(Modifier::DIM));
         assert_eq!(line.spans[2].style.fg, Some(Color::Green));
+        assert!(line.spans[2].style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn status_line_segments_can_disable_theme_colors() {
+        let line = status_line_from_segments_with_resolver(
+            [
+                (StatusLineItem::ModelName, "gpt-5".to_string()),
+                (StatusLineItem::ContextUsed, "Context 12% used".to_string()),
+            ],
+            /*use_theme_colors*/ false,
+            |_| Some(Style::default().red()),
+        )
+        .expect("status line");
+
+        assert_eq!(line_text(&line), "gpt-5 · Context 12% used");
+        assert_eq!(line.spans[0].style.fg, None);
+        assert!(line.spans[0].style.add_modifier.contains(Modifier::DIM));
+        assert!(line.spans[1].style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(line.spans[2].style.fg, None);
+        assert!(line.spans[2].style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]
     fn status_line_segments_return_none_when_empty() {
         assert_eq!(
-            status_line_from_segments_with_resolver(Vec::<(StatusLineItem, String)>::new(), |_| {
-                None
-            }),
+            status_line_from_segments_with_resolver(
+                Vec::<(StatusLineItem, String)>::new(),
+                /*use_theme_colors*/ true,
+                |_| None,
+            ),
             None
         );
     }
