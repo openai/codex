@@ -16,6 +16,9 @@ use super::SessionConfiguration;
 pub(crate) async fn validate_config_lock_if_configured(
     session_configuration: &SessionConfiguration,
 ) -> anyhow::Result<()> {
+    if session_configuration.session_source.is_non_root_agent() {
+        return Ok(());
+    }
     let Some(expected) = session_configuration
         .original_config_do_not_use
         .config_lock_toml

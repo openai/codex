@@ -3000,6 +3000,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-memories-plugin"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "codex-memories-read"
 version = "0.0.0"
 dependencies = [

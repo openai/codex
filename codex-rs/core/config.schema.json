@@ -869,6 +869,7 @@
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`.",
       "properties": {
         "max_bytes": {
+          "default": null,
           "description": "If set, the maximum size of the history file in bytes. The oldest entries are dropped once the file exceeds this limit.",
           "format": "uint",
           "minimum": 0.0,
@@ -880,12 +881,10 @@
               "$ref": "#/definitions/HistoryPersistence"
             }
           ],
+          "default": "save-all",
           "description": "If true, history entries will not be written to disk."
         }
       },
-      "required": [
-        "persistence"
-      ],
       "type": "object"
     },
     "HistoryPersistence": {
@@ -3249,6 +3248,7 @@
       "description": "Agent-related settings (thread limits, etc.)."
     },
     "allow_login_shell": {
+      "default": true,
       "description": "Whether the model may request a login shell for shell-based tools. Default to `true`\n\nIf `true`, the model may request a login shell (`login = true`), and omitting `login` defaults to using a login shell. If `false`, the model can never use a login shell: `login = true` requests are rejected, and omitting `login` defaults to a non-login shell.",
       "type": "boolean"
     },
@@ -3699,6 +3699,7 @@
       "description": "Compatibility-only settings retained so legacy `ghost_snapshot` config still loads."
     },
     "hide_agent_reasoning": {
+      "default": false,
       "description": "When set to `true`, `AgentReasoning` events will be hidden from the UI/output. Defaults to `false`.",
       "type": "boolean"
     },
@@ -3708,7 +3709,10 @@
           "$ref": "#/definitions/History"
         }
       ],
-      "default": null,
+      "default": {
+        "max_bytes": null,
+        "persistence": "save-all"
+      },
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
     },
     "hooks": {
@@ -3919,6 +3923,7 @@
       "type": "object"
     },
     "project_doc_fallback_filenames": {
+      "default": [],
       "description": "Ordered list of fallback filenames to look for when AGENTS.md is missing.",
       "items": {
         "type": "string"
@@ -3926,6 +3931,7 @@
       "type": "array"
     },
     "project_doc_max_bytes": {
+      "default": 32768,
       "description": "Maximum number of bytes to include from an AGENTS.md project doc file.",
       "format": "uint",
       "minimum": 0.0,
