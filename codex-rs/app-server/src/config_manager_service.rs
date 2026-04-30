@@ -244,10 +244,6 @@ impl ConfigManager {
 
             apply_merge(&mut user_config, &segments, parsed_value.as_ref(), strategy).map_err(
                 |err| match err {
-                    MergeError::PathNotFound => ConfigManagerError::write(
-                        ConfigWriteErrorCode::ConfigPathNotFound,
-                        "Path not found",
-                    ),
                     MergeError::Validation(message) => ConfigManagerError::write(
                         ConfigWriteErrorCode::ConfigValidationError,
                         message,
@@ -413,7 +409,6 @@ fn parse_key_path(path: &str) -> Result<Vec<String>, String> {
 
 #[derive(Debug)]
 enum MergeError {
-    PathNotFound,
     Validation(String),
 }
 
@@ -485,14 +480,17 @@ fn clear_path(root: &mut TomlValue, segments: &[String]) -> Result<bool, MergeEr
     for segment in parents {
         match current {
             TomlValue::Table(table) => {
-                current = table.get_mut(segment).ok_or(MergeError::PathNotFound)?;
+                let Some(next) = table.get_mut(segment) else {
+                    return Ok(false);
+                };
+                current = next;
             }
-            _ => return Err(MergeError::PathNotFound),
+            _ => return Ok(false),
         }
     }
 
     let Some(parent) = current.as_table_mut() else {
-        return Err(MergeError::PathNotFound);
+        return Ok(false);
     };
 
     Ok(parent.remove(last).is_some())
