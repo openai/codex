@@ -4906,12 +4906,12 @@ async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails()
     let thread_id = ThreadId::new();
     app.active_thread_id = Some(thread_id);
 
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-    let control = app
-        .handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)
-        .await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
+    let control = Box::pin(app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)).await;
 
     assert_eq!(app.pending_shutdown_exit_thread_id, None);
     assert!(matches!(
@@ -4922,16 +4922,16 @@ async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails()
 
 #[tokio::test]
 async fn shutdown_first_exit_uses_app_server_shutdown_without_submitting_op() {
-    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    let (mut app, _app_event_rx, mut op_rx) = Box::pin(make_test_app_with_channels()).await;
     let thread_id = ThreadId::new();
     app.active_thread_id = Some(thread_id);
 
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-    let control = app
-        .handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)
-        .await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
+    let control = Box::pin(app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)).await;
 
     assert_eq!(app.pending_shutdown_exit_thread_id, None);
     assert!(matches!(
@@ -4947,9 +4947,11 @@ async fn shutdown_first_exit_uses_app_server_shutdown_without_submitting_op() {
 #[tokio::test]
 async fn interrupt_without_active_turn_is_treated_as_handled() {
     let mut app = make_test_app().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
     let started = app_server
         .start_thread(app.chat_widget.config_ref())
         .await
@@ -4960,10 +4962,10 @@ async fn interrupt_without_active_turn_is_treated_as_handled() {
         .expect("primary thread should be registered");
     let op = AppCommand::interrupt();
 
-    let handled = app
-        .try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op)
-        .await
-        .expect("interrupt submission should not fail");
+    let handled =
+        Box::pin(app.try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op))
+            .await
+            .expect("interrupt submission should not fail");
 
     assert_eq!(handled, true);
 }
