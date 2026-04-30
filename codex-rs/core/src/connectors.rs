@@ -403,7 +403,7 @@ fn write_cached_accessible_connectors(
 }
 
 async fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
-    let plugins_input = crate::plugins::plugins_config_input_from_config(config);
+    let plugins_input = config.plugins_config_input();
     let mut connector_ids = PluginsManager::new(config.codex_home.to_path_buf())
         .plugins_for_config(&plugins_input)
         .await

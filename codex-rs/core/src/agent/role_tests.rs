@@ -655,7 +655,7 @@ enabled = false
     let plugins_manager = Arc::new(PluginsManager::new(home.path().to_path_buf()));
     let skills_manager =
         SkillsManager::new(home.path().abs(), /*bundled_skills_enabled*/ true);
-    let plugins_input = crate::plugins::plugins_config_input_from_config(&config);
+    let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_input = skills_load_input_from_config(&config, effective_skill_roots);

@@ -16,9 +16,7 @@ pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_o
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status;
 pub use codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools;
 pub use codex_core::connectors::with_app_enabled_state;
-use codex_core_plugins::PluginsConfigInput;
 use codex_core_plugins::PluginsManager;
-use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::originator;
@@ -137,18 +135,8 @@ fn all_connectors_cache_key(config: &Config, auth: &CodexAuth) -> AllConnectorsC
     )
 }
 
-fn plugins_config_input_from_config(config: &Config) -> PluginsConfigInput {
-    PluginsConfigInput::new(
-        config.config_layer_stack.clone(),
-        config.features.enabled(Feature::Plugins),
-        config.features.enabled(Feature::RemotePlugin),
-        config.features.enabled(Feature::PluginHooks),
-        config.chatgpt_base_url.clone(),
-    )
-}
-
 async fn plugin_apps_for_config(config: &Config) -> Vec<AppConnectorId> {
-    let plugins_input = plugins_config_input_from_config(config);
+    let plugins_input = config.plugins_config_input();
     PluginsManager::new(config.codex_home.to_path_buf())
         .plugins_for_config(&plugins_input)
         .await

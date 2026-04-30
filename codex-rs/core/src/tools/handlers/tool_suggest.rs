@@ -316,7 +316,7 @@ fn verified_plugin_suggestion_completed(
     config: &crate::config::Config,
     plugins_manager: &codex_core_plugins::PluginsManager,
 ) -> bool {
-    let plugins_input = crate::plugins::plugins_config_input_from_config(config);
+    let plugins_input = config.plugins_config_input();
     plugins_manager
         .list_marketplaces_for_config(&plugins_input, &[])
         .ok()

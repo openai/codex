@@ -25,7 +25,7 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
     }
 
     let plugins_manager = PluginsManager::new(config.codex_home.to_path_buf());
-    let plugins_input = crate::plugins::plugins_config_input_from_config(config);
+    let plugins_input = config.plugins_config_input();
     let configured_plugin_ids = config
         .tool_suggest
         .discoverables

@@ -1,8 +1,3 @@
-use codex_core_plugins::PluginsConfigInput;
-use codex_features::Feature;
-
-use crate::config::Config;
-
 mod discoverable;
 mod injection;
 mod mentions;
@@ -15,16 +10,6 @@ pub(crate) use codex_plugin::PluginCapabilitySummary;
 pub(crate) use discoverable::list_tool_suggest_discoverable_plugins;
 pub(crate) use injection::build_plugin_injections;
 pub(crate) use render::render_explicit_plugin_instructions;
-
-pub(crate) fn plugins_config_input_from_config(config: &Config) -> PluginsConfigInput {
-    PluginsConfigInput::new(
-        config.config_layer_stack.clone(),
-        config.features.enabled(Feature::Plugins),
-        config.features.enabled(Feature::RemotePlugin),
-        config.features.enabled(Feature::PluginHooks),
-        config.chatgpt_base_url.clone(),
-    )
-}
 
 pub(crate) use mentions::build_connector_slug_counts;
 pub(crate) use mentions::build_skill_name_counts;

@@ -1,6 +1,6 @@
 pub mod installed_marketplaces;
 pub mod loader;
-pub mod manager;
+mod manager;
 pub mod manifest;
 pub mod marketplace;
 pub mod marketplace_add;

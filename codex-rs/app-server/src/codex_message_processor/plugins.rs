@@ -37,7 +37,7 @@ impl CodexMessageProcessor {
         {
             return Ok(empty_response());
         }
-        let plugins_input = crate::plugins_config_input_from_config(&config);
+        let plugins_input = config.plugins_config_input();
         plugins_manager.maybe_start_plugin_list_background_tasks_for_config(
             &plugins_input,
             auth.clone(),
@@ -202,7 +202,7 @@ impl CodexMessageProcessor {
         });
 
         let config = self.load_latest_config(config_cwd).await?;
-        let plugins_input = crate::plugins_config_input_from_config(&config);
+        let plugins_input = config.plugins_config_input();
 
         let plugin = match read_source {
             Ok(marketplace_path) => {
@@ -572,7 +572,7 @@ impl CodexMessageProcessor {
         self.thread_manager
             .plugins_manager()
             .maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
-                &crate::plugins_config_input_from_config(&config),
+                &config.plugins_config_input(),
                 auth.clone(),
                 Some(self.effective_plugins_changed_callback(config.clone())),
             );
@@ -800,7 +800,7 @@ impl CodexMessageProcessor {
                 self.on_effective_plugins_changed(config.clone());
             }
             plugins_manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
-                &crate::plugins_config_input_from_config(&config),
+                &config.plugins_config_input(),
                 auth.clone(),
                 Some(self.effective_plugins_changed_callback(config.clone())),
             );

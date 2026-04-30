@@ -6304,7 +6304,7 @@ impl CodexMessageProcessor {
                 .get(&cwd)
                 .map_or(&[][..], std::vec::Vec::as_slice);
             let effective_skill_roots = if workspace_codex_plugins_enabled {
-                let plugins_input = crate::plugins_config_input_from_config(&config);
+                let plugins_input = config.plugins_config_input();
                 plugins_manager
                     .effective_skill_roots_for_layer_stack(&config_layer_stack, &plugins_input)
                     .await
@@ -6388,7 +6388,7 @@ impl CodexMessageProcessor {
                 config.features.enabled(Feature::Plugins) && workspace_codex_plugins_enabled;
             let plugin_outcome = if plugins_enabled && config.features.enabled(Feature::PluginHooks)
             {
-                let plugins_input = crate::plugins_config_input_from_config(&config);
+                let plugins_input = config.plugins_config_input();
                 plugins_manager
                     .plugins_for_layer_stack(
                         &config.config_layer_stack,
@@ -6455,7 +6455,7 @@ impl CodexMessageProcessor {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let plugins_manager = self.thread_manager.plugins_manager();
         let MarketplaceUpgradeParams { marketplace_name } = params;
-        let plugins_input = crate::plugins_config_input_from_config(&config);
+        let plugins_input = config.plugins_config_input();
 
         let outcome = tokio::task::spawn_blocking(move || {
             plugins_manager.upgrade_configured_marketplaces_for_config(

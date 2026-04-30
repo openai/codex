@@ -1146,7 +1146,7 @@ fn configured_marketplace_plugins(
     config: &Config,
     plugins_manager: &PluginsManager,
 ) -> io::Result<BTreeMap<String, HashSet<String>>> {
-    let plugins_input = crate::plugins_config_input_from_config(config);
+    let plugins_input = config.plugins_config_input();
     let marketplaces = plugins_manager
         .list_marketplaces_for_config(&plugins_input, &[])
         .map_err(|err| {

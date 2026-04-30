@@ -5,13 +5,11 @@ use clap::Parser;
 use codex_core::config::Config;
 use codex_core::config::find_codex_home;
 use codex_core_plugins::PluginMarketplaceUpgradeOutcome;
-use codex_core_plugins::PluginsConfigInput;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
 use codex_core_plugins::marketplace_add::add_marketplace;
 use codex_core_plugins::marketplace_remove::MarketplaceRemoveRequest;
 use codex_core_plugins::marketplace_remove::remove_marketplace;
-use codex_features::Feature;
 use codex_utils_cli::CliConfigOverrides;
 
 #[derive(Debug, Parser)]
@@ -130,21 +128,11 @@ async fn run_upgrade(
         .context("failed to load configuration")?;
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let manager = PluginsManager::new(codex_home.to_path_buf());
-    let plugins_input = plugins_config_input_from_config(&config);
+    let plugins_input = config.plugins_config_input();
     let outcome = manager
         .upgrade_configured_marketplaces_for_config(&plugins_input, marketplace_name.as_deref())
         .map_err(anyhow::Error::msg)?;
     print_upgrade_outcome(&outcome, marketplace_name.as_deref())
-}
-
-fn plugins_config_input_from_config(config: &Config) -> PluginsConfigInput {
-    PluginsConfigInput::new(
-        config.config_layer_stack.clone(),
-        config.features.enabled(Feature::Plugins),
-        config.features.enabled(Feature::RemotePlugin),
-        config.features.enabled(Feature::PluginHooks),
-        config.chatgpt_base_url.clone(),
-    )
 }
 
 async fn run_remove(args: RemoveMarketplaceArgs) -> Result<()> {

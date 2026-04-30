@@ -756,9 +756,7 @@ async fn custom_mcp_tool_approval_mode(
 
     sess.services
         .plugins_manager
-        .plugins_for_config(&crate::plugins::plugins_config_input_from_config(
-            turn_context.config.as_ref(),
-        ))
+        .plugins_for_config(&turn_context.config.plugins_config_input())
         .await
         .plugins()
         .iter()
@@ -1807,7 +1805,7 @@ async fn persist_non_app_mcp_tool_approval(
     let plugin_config_name = sess
         .services
         .plugins_manager
-        .plugins_for_config(&crate::plugins::plugins_config_input_from_config(config))
+        .plugins_for_config(&config.plugins_config_input())
         .await
         .plugins()
         .iter()
