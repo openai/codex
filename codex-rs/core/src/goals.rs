@@ -13,10 +13,8 @@ use crate::tasks::RegularTask;
 use anyhow::Context;
 use codex_features::Feature;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadGoal;
@@ -31,8 +29,6 @@ use codex_utils_template::Template;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::sync::LazyLock;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Mutex;
@@ -92,7 +88,6 @@ pub(crate) enum GoalRuntimeEvent<'a> {
     TurnFinished {
         turn_context: &'a TurnContext,
         turn_completed: bool,
-        continuation_activity_count: u64,
     },
     MaybeContinueIfIdle,
     TaskAborted {
@@ -114,36 +109,11 @@ pub(crate) struct GoalRuntimeState {
     accounting: Mutex<GoalAccountingSnapshot>,
     continuation_turn_id: Mutex<Option<String>>,
     pub(crate) continuation_lock: Semaphore,
-    pub(crate) continuation_suppressed: AtomicBool,
 }
 
 struct GoalContinuationCandidate {
     goal_id: String,
     items: Vec<ResponseInputItem>,
-}
-
-pub(crate) fn turn_item_counts_as_goal_continuation_activity(item: &TurnItem) -> bool {
-    // Keep this match exhaustive so new built-in turn item kinds force a
-    // review of whether they should keep goal auto-continuation alive.
-    match item {
-        TurnItem::UserMessage(_) => false,
-        TurnItem::HookPrompt(_) => false,
-        TurnItem::AgentMessage(_) => false,
-        TurnItem::Plan(_) => false,
-        TurnItem::Reasoning(_) => false,
-        TurnItem::WebSearch(_) => true,
-        TurnItem::ImageGeneration(_) => true,
-        TurnItem::ContextCompaction(_) => false,
-    }
-}
-
-pub(crate) fn response_item_counts_as_goal_continuation_activity_without_turn_item(
-    item: &ResponseItem,
-) -> bool {
-    matches!(
-        item,
-        ResponseItem::ToolSearchCall { execution, .. } if execution != "client"
-    )
 }
 
 impl GoalRuntimeState {
@@ -155,7 +125,6 @@ impl GoalRuntimeState {
             accounting: Mutex::new(GoalAccountingSnapshot::new()),
             continuation_turn_id: Mutex::new(None),
             continuation_lock: Semaphore::new(/*permits*/ 1),
-            continuation_suppressed: AtomicBool::new(false),
         }
     }
 }
@@ -322,7 +291,6 @@ impl Session {
                 turn_context,
                 tool_name,
             } => Box::pin(async move {
-                self.reset_thread_goal_continuation_suppression();
                 if tool_name != codex_tools::UPDATE_GOAL_TOOL_NAME {
                     self.account_thread_goal_progress(turn_context, BudgetLimitSteering::Allowed)
                         .await?;
@@ -330,7 +298,6 @@ impl Session {
                 Ok(())
             }),
             GoalRuntimeEvent::ToolCompletedGoal { turn_context } => Box::pin(async move {
-                self.reset_thread_goal_continuation_suppression();
                 self.account_thread_goal_progress(turn_context, BudgetLimitSteering::Suppressed)
                     .await?;
                 Ok(())
@@ -338,14 +305,9 @@ impl Session {
             GoalRuntimeEvent::TurnFinished {
                 turn_context,
                 turn_completed,
-                continuation_activity_count,
             } => Box::pin(async move {
-                self.finish_thread_goal_turn(
-                    turn_context,
-                    turn_completed,
-                    continuation_activity_count,
-                )
-                .await;
+                self.finish_thread_goal_turn(turn_context, turn_completed)
+                    .await;
                 Ok(())
             }),
             GoalRuntimeEvent::MaybeContinueIfIdle => Box::pin(async move {
@@ -361,7 +323,6 @@ impl Session {
                 Ok(())
             }),
             GoalRuntimeEvent::ExternalMutationStarting => Box::pin(async move {
-                self.reset_thread_goal_continuation_suppression();
                 if let Err(err) = self.account_thread_goal_before_external_mutation().await {
                     tracing::warn!(
                         "failed to account thread goal progress before external mutation: {err}"
@@ -493,7 +454,6 @@ impl Session {
         let goal_status = goal.status;
         let goal_id = goal.goal_id.clone();
         let goal = protocol_goal_from_state(goal);
-        self.reset_thread_goal_continuation_suppression();
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
         let newly_active_goal = goal_status == codex_state::ThreadGoalStatus::Active
             && (replacing_goal
@@ -562,7 +522,6 @@ impl Session {
 
         let goal_id = goal.goal_id.clone();
         let goal = protocol_goal_from_state(goal);
-        self.reset_thread_goal_continuation_suppression();
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
 
         let current_token_usage = self.total_token_usage().await.unwrap_or_default();
@@ -591,7 +550,6 @@ impl Session {
     ) {
         match status {
             codex_state::ThreadGoalStatus::Active => {
-                self.reset_thread_goal_continuation_suppression();
                 match self.state_db_for_thread_goals().await {
                     Ok(Some(state_db)) => {
                         match state_db.get_thread_goal(self.conversation_id).await {
@@ -638,7 +596,6 @@ impl Session {
     }
 
     async fn clear_stopped_thread_goal_runtime_state(&self) {
-        self.reset_thread_goal_continuation_suppression();
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
         let mut accounting = self.goal_runtime.accounting.lock().await;
         if let Some(turn) = accounting.turn.as_mut() {
@@ -693,16 +650,6 @@ impl Session {
         turn_context: &TurnContext,
         token_usage: TokenUsage,
     ) {
-        if self
-            .goal_runtime
-            .continuation_turn_id
-            .lock()
-            .await
-            .as_ref()
-            .is_none_or(|turn_id| turn_id != &turn_context.sub_id)
-        {
-            self.reset_thread_goal_continuation_suppression();
-        }
         self.goal_runtime.accounting.lock().await.turn = Some(GoalTurnAccountingSnapshot::new(
             turn_context.sub_id.clone(),
             token_usage,
@@ -753,12 +700,6 @@ impl Session {
         }
     }
 
-    fn reset_thread_goal_continuation_suppression(&self) {
-        self.goal_runtime
-            .continuation_suppressed
-            .store(false, Ordering::SeqCst);
-    }
-
     async fn mark_thread_goal_continuation_turn_started(&self, turn_id: String) {
         *self.goal_runtime.continuation_turn_id.lock().await = Some(turn_id);
     }
@@ -787,7 +728,6 @@ impl Session {
         self: &Arc<Self>,
         turn_context: &TurnContext,
         turn_completed: bool,
-        turn_continuation_activity_count: u64,
     ) {
         if turn_completed
             && let Err(err) = self
@@ -797,15 +737,8 @@ impl Session {
             tracing::warn!("failed to account thread goal progress at turn end: {err}");
         }
 
-        if self
-            .take_thread_goal_continuation_turn(&turn_context.sub_id)
-            .await
-            && turn_continuation_activity_count == 0
-        {
-            self.goal_runtime
-                .continuation_suppressed
-                .store(true, Ordering::SeqCst);
-        }
+        self.take_thread_goal_continuation_turn(&turn_context.sub_id)
+            .await;
         if turn_completed {
             let mut accounting = self.goal_runtime.accounting.lock().await;
             if accounting
@@ -1156,7 +1089,6 @@ impl Session {
         };
         let goal_id = goal.goal_id.clone();
         let goal = protocol_goal_from_state(goal);
-        self.reset_thread_goal_continuation_suppression();
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
         let active_turn_id = self
             .active_turn_context()
@@ -1282,16 +1214,6 @@ impl Session {
         if self.has_trigger_turn_mailbox_items().await {
             tracing::debug!(
                 "skipping active goal continuation because trigger-turn mailbox input is pending"
-            );
-            return None;
-        }
-        if self
-            .goal_runtime
-            .continuation_suppressed
-            .load(Ordering::SeqCst)
-        {
-            tracing::debug!(
-                "skipping active goal continuation because the last continuation made no counted autonomous activity"
             );
             return None;
         }
@@ -1543,28 +1465,12 @@ mod tests {
     use super::continuation_prompt;
     use super::escape_xml_text;
     use super::goal_token_delta_for_usage;
-    use super::response_item_counts_as_goal_continuation_activity_without_turn_item;
     use super::should_ignore_goal_for_mode;
-    use super::turn_item_counts_as_goal_continuation_activity;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::ModeKind;
-    use codex_protocol::items::AgentMessageContent;
-    use codex_protocol::items::AgentMessageItem;
-    use codex_protocol::items::ContextCompactionItem;
-    use codex_protocol::items::HookPromptFragment;
-    use codex_protocol::items::HookPromptItem;
-    use codex_protocol::items::ImageGenerationItem;
-    use codex_protocol::items::PlanItem;
-    use codex_protocol::items::ReasoningItem;
-    use codex_protocol::items::TurnItem;
-    use codex_protocol::items::UserMessageItem;
-    use codex_protocol::items::WebSearchItem;
-    use codex_protocol::models::ResponseItem;
-    use codex_protocol::models::WebSearchAction;
     use codex_protocol::protocol::ThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::TokenUsage;
-    use codex_protocol::user_input::UserInput;
     use std::time::Duration;
     use std::time::Instant;
 
@@ -1587,125 +1493,6 @@ mod tests {
         };
 
         assert_eq!(580, goal_token_delta_for_usage(&usage));
-    }
-
-    #[test]
-    fn turn_item_goal_continuation_activity_matches_expected_variants() {
-        let cases = [
-            (
-                false,
-                TurnItem::UserMessage(UserMessageItem::new(&[UserInput::Text {
-                    text: "hello".to_string(),
-                    text_elements: Vec::new(),
-                }])),
-            ),
-            (
-                false,
-                TurnItem::HookPrompt(HookPromptItem::from_fragments(
-                    None,
-                    vec![HookPromptFragment::from_single_hook("hook text", "hook-1")],
-                )),
-            ),
-            (
-                false,
-                TurnItem::AgentMessage(AgentMessageItem::new(&[AgentMessageContent::Text {
-                    text: "hello".to_string(),
-                }])),
-            ),
-            (
-                false,
-                TurnItem::Plan(PlanItem {
-                    id: "plan-1".to_string(),
-                    text: "plan".to_string(),
-                }),
-            ),
-            (
-                false,
-                TurnItem::Reasoning(ReasoningItem {
-                    id: "reason-1".to_string(),
-                    summary_text: vec!["thinking".to_string()],
-                    raw_content: Vec::new(),
-                }),
-            ),
-            (
-                true,
-                TurnItem::WebSearch(WebSearchItem {
-                    id: "ws-1".to_string(),
-                    query: "benchmark note structure".to_string(),
-                    action: WebSearchAction::Search {
-                        query: Some("benchmark note structure".to_string()),
-                        queries: None,
-                    },
-                }),
-            ),
-            (
-                true,
-                TurnItem::ImageGeneration(ImageGenerationItem {
-                    id: "ig-1".to_string(),
-                    status: "completed".to_string(),
-                    revised_prompt: None,
-                    result: String::new(),
-                    saved_path: None,
-                }),
-            ),
-            (
-                false,
-                TurnItem::ContextCompaction(ContextCompactionItem::new()),
-            ),
-        ];
-
-        for (expected, item) in cases {
-            assert_eq!(
-                expected,
-                turn_item_counts_as_goal_continuation_activity(&item),
-                "unexpected continuation-activity classification for {item:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn raw_response_goal_continuation_activity_only_counts_server_tool_search() {
-        let cases = [
-            (
-                false,
-                ResponseItem::ToolSearchCall {
-                    id: None,
-                    call_id: Some("search-client".to_string()),
-                    status: Some("completed".to_string()),
-                    execution: "client".to_string(),
-                    arguments: serde_json::json!({ "query": "calendar" }),
-                },
-            ),
-            (
-                true,
-                ResponseItem::ToolSearchCall {
-                    id: None,
-                    call_id: Some("search-server".to_string()),
-                    status: Some("completed".to_string()),
-                    execution: "server".to_string(),
-                    arguments: serde_json::json!({ "query": "calendar" }),
-                },
-            ),
-            (
-                false,
-                ResponseItem::WebSearchCall {
-                    id: Some("ws-1".to_string()),
-                    status: Some("completed".to_string()),
-                    action: Some(WebSearchAction::Search {
-                        query: Some("calendar".to_string()),
-                        queries: None,
-                    }),
-                },
-            ),
-        ];
-
-        for (expected, item) in cases {
-            assert_eq!(
-                expected,
-                response_item_counts_as_goal_continuation_activity_without_turn_item(&item),
-                "unexpected raw continuation-activity classification for {item:?}"
-            );
-        }
     }
 
     #[test]
@@ -1743,7 +1530,7 @@ mod tests {
         assert!(prompt.contains("<untrusted_objective>\nfinish the stack\n</untrusted_objective>"));
         assert!(prompt.contains("Token budget: 10000"));
         assert!(prompt.contains("call update_goal with status \"complete\""));
-        assert!(prompt.contains(
+        assert!(!prompt.contains(
             "explain the blocker or next required input to the user and wait for new input"
         ));
         assert!(!prompt.contains("budgetLimited"));

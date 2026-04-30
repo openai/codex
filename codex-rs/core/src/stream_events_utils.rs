@@ -11,7 +11,6 @@ use tokio_util::sync::CancellationToken;
 use crate::context::ContextualUserFragment;
 use crate::context::ImageGenerationInstructions;
 use crate::function_tool::FunctionCallError;
-use crate::goals::response_item_counts_as_goal_continuation_activity_without_turn_item;
 use crate::parse_turn_item;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -263,16 +262,6 @@ pub(crate) async fn handle_output_item_done(
                 plan_mode,
             )
             .await;
-            // Some built-in activity (currently server-executed `tool_search`)
-            // bypasses turn-item normalization, so preserve goal continuation
-            // progress for those response items here.
-            let counts_as_raw_continuation_activity = turn_item.is_none()
-                && response_item_counts_as_goal_continuation_activity_without_turn_item(&item);
-            if counts_as_raw_continuation_activity {
-                ctx.sess
-                    .record_continuation_activity_for_turn(&ctx.turn_context.sub_id)
-                    .await;
-            }
             if let Some(turn_item) = turn_item {
                 if previously_active_item.is_none() {
                     let mut started_item = turn_item.clone();

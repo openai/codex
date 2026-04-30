@@ -33,7 +33,6 @@ use crate::default_skill_metadata_budget;
 use crate::environment_selection::selected_primary_environment;
 use crate::environment_selection::validate_environment_selections;
 use crate::exec_policy::ExecPolicyManager;
-use crate::goals::turn_item_counts_as_goal_continuation_activity;
 use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
@@ -1654,10 +1653,6 @@ impl Session {
         turn_context: &TurnContext,
         item: TurnItem,
     ) {
-        if turn_item_counts_as_goal_continuation_activity(&item) {
-            self.record_continuation_activity_for_turn(&turn_context.sub_id)
-                .await;
-        }
         record_turn_ttfm_metric(turn_context, &item).await;
         self.send_event(
             turn_context,
@@ -3088,14 +3083,6 @@ impl Session {
             return;
         };
         turn_state.lock().await.has_memory_citation = true;
-    }
-
-    pub(crate) async fn record_continuation_activity_for_turn(&self, sub_id: &str) {
-        let turn_state = self.turn_state_for_sub_id(sub_id).await;
-        let Some(turn_state) = turn_state else {
-            return;
-        };
-        turn_state.lock().await.record_continuation_activity();
     }
 
     async fn turn_state_for_sub_id(

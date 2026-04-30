@@ -567,7 +567,6 @@ impl Session {
         let mut token_usage_at_turn_start = None;
         let mut turn_had_memory_citation = false;
         let mut turn_tool_calls = 0_u64;
-        let mut turn_continuation_activity_count = 0_u64;
         let mut records_turn_token_usage_on_span = false;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
@@ -591,7 +590,6 @@ impl Session {
             pending_input = ts.take_pending_input();
             turn_had_memory_citation = ts.has_memory_citation;
             turn_tool_calls = ts.tool_calls;
-            turn_continuation_activity_count = ts.continuation_activity_count;
             token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
         }
         if !pending_input.is_empty() {
@@ -739,7 +737,6 @@ impl Session {
             .goal_runtime_apply(GoalRuntimeEvent::TurnFinished {
                 turn_context: turn_context.as_ref(),
                 turn_completed: should_clear_active_turn,
-                continuation_activity_count: turn_continuation_activity_count,
             })
             .await
         {
