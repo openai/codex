@@ -23,6 +23,7 @@ use codex_core_api::EnvironmentManager;
 use codex_core_api::EnvironmentManagerArgs;
 use codex_core_api::EventMsg;
 use codex_core_api::ExecServerRuntimePaths;
+use codex_core_api::Features;
 use codex_core_api::GhostSnapshotConfig;
 use codex_core_api::History;
 use codex_core_api::MemoriesConfig;
@@ -147,7 +148,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         .context("OpenAI model provider should be available")?
         .clone();
 
-    Ok(Config {
+    let mut config = Config {
         config_layer_stack: ConfigLayerStack::default(),
         startup_warnings: Vec::new(),
         model,
@@ -256,7 +257,12 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         feedback_enabled: false,
         tool_suggest: ToolSuggestConfig::default(),
         otel: OtelConfig::default(),
-    })
+    };
+    config
+        .features
+        .set(Features::with_defaults())
+        .context("configure default features")?;
+    Ok(config)
 }
 
 async fn run_turn(thread: &CodexThread, thread_id: &str, prompt: String) -> anyhow::Result<()> {

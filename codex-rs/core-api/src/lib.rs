@@ -44,6 +44,7 @@ pub use codex_exec_server::EnvironmentManager;
 pub use codex_exec_server::EnvironmentManagerArgs;
 pub use codex_exec_server::ExecServerRuntimePaths;
 pub use codex_features::Feature;
+pub use codex_features::Features;
 pub use codex_login::AuthManager;
 pub use codex_login::default_client::set_default_originator;
 pub use codex_model_provider_info::OPENAI_PROVIDER_ID;
