@@ -1499,16 +1499,16 @@ async fn open_agent_picker_prompts_to_enable_multi_agent_when_disabled() -> Resu
 
 #[tokio::test]
 async fn update_memory_settings_persists_and_updates_widget_config() -> Result<()> {
-    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
-    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
 
-    app.update_memory_settings_with_app_server(
+    Box::pin(app.update_memory_settings_with_app_server(
         &mut app_server,
         /*use_memories*/ false,
         /*generate_memories*/ false,
-    )
+    ))
     .await;
 
     assert!(!app.config.memories.use_memories);
@@ -1542,22 +1542,22 @@ async fn update_memory_settings_persists_and_updates_widget_config() -> Result<(
 
 #[tokio::test]
 async fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
-    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     // Seed the previous setting so this test exercises the thread-mode update path.
     app.config.memories.generate_memories = true;
 
-    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let started = app_server.start_thread(&app.config).await?;
     let thread_id = started.session.thread_id;
     app.active_thread_id = Some(thread_id);
 
-    app.update_memory_settings_with_app_server(
+    Box::pin(app.update_memory_settings_with_app_server(
         &mut app_server,
         /*use_memories*/ true,
         /*generate_memories*/ false,
-    )
+    ))
     .await;
 
     let state_db = codex_state::StateRuntime::init(
@@ -1578,7 +1578,7 @@ async fn update_memory_settings_updates_current_thread_memory_mode() -> Result<(
 
 #[tokio::test]
 async fn reset_memories_clears_local_memory_directories() -> Result<()> {
-    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     app.config.sqlite_home = codex_home.path().to_path_buf();
@@ -1594,9 +1594,9 @@ async fn reset_memories_clears_local_memory_directories() -> Result<()> {
     )?;
     std::fs::write(extensions_root.join("stale.txt"), "stale extension\n")?;
 
-    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
 
-    app.reset_memories_with_app_server(&mut app_server).await;
+    Box::pin(app.reset_memories_with_app_server(&mut app_server)).await;
 
     assert_eq!(std::fs::read_dir(&memory_root)?.count(), 0);
 
