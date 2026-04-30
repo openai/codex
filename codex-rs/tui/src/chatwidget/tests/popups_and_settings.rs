@@ -1,5 +1,8 @@
 use super::*;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::HookErrorInfo;
+use codex_app_server_protocol::HooksListEntry;
+use codex_app_server_protocol::HooksListResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_features::Stage;
 use pretty_assertions::assert_eq;
@@ -76,6 +79,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         status_account_display: None,
+        runtime_model_provider_base_url: None,
         initial_plan_type: None,
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
@@ -157,6 +161,29 @@ async fn marketplace_upgrade_failure_includes_backend_messages_snapshot() {
         rendered.trim(),
         @"■ Failed to upgrade 2 marketplaces: debug: git ls-remote marketplace source failed with status 128: authentication failed; tools: failed to validate upgraded marketplace root: marketplace root does not contain a supported manifest"
     );
+}
+
+async fn hooks_popup_shows_list_diagnostics() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.clone();
+
+    chat.on_hooks_loaded(
+        cwd.to_path_buf(),
+        Ok(HooksListResponse {
+            data: vec![HooksListEntry {
+                cwd: cwd.to_path_buf(),
+                hooks: Vec::new(),
+                warnings: vec!["skipped invalid matcher for PreToolUse".to_string()],
+                errors: vec![HookErrorInfo {
+                    path: test_path_buf("/tmp/hooks.json"),
+                    message: "failed to parse hooks config".to_string(),
+                }],
+            }],
+        }),
+    );
+
+    let popup = normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 112));
+    assert_chatwidget_snapshot!("hooks_popup_shows_list_diagnostics", popup);
 }
 
 #[tokio::test]

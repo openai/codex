@@ -291,10 +291,21 @@ pub(crate) enum AppEvent {
         cwd: PathBuf,
     },
 
+    /// Fetch lifecycle hook inventory for the provided working directory.
+    FetchHooksList {
+        cwd: PathBuf,
+    },
+
     /// Result of fetching plugin marketplace state.
     PluginsLoaded {
         cwd: PathBuf,
         result: Result<PluginListResponse, String>,
+    },
+
+    /// Result of fetching lifecycle hook inventory.
+    HooksLoaded {
+        cwd: PathBuf,
+        result: Result<codex_app_server_protocol::HooksListResponse, String>,
     },
 
     /// Open the prompt for adding a marketplace source.
@@ -730,6 +741,19 @@ pub(crate) enum AppEvent {
     SetAppEnabled {
         id: String,
         enabled: bool,
+    },
+
+    /// Enable or disable a hook by stable hook key.
+    SetHookEnabled {
+        key: String,
+        enabled: bool,
+    },
+
+    /// Result of persisting hook enabled state.
+    HookEnabledSet {
+        key: String,
+        enabled: bool,
+        result: Result<(), String>,
     },
 
     /// Notify that the manage skills popup was closed.

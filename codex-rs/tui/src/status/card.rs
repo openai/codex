@@ -167,6 +167,7 @@ pub(crate) fn new_status_output_with_rate_limits(
 ) -> CompositeHistoryCell {
     new_status_output_with_rate_limits_handle(
         config,
+        /*runtime_model_provider_base_url*/ None,
         account_display,
         token_info,
         total_usage,
@@ -188,6 +189,7 @@ pub(crate) fn new_status_output_with_rate_limits(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_output_with_rate_limits_handle(
     config: &Config,
+    runtime_model_provider_base_url: Option<&str>,
     account_display: Option<&StatusAccountDisplay>,
     token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
@@ -206,6 +208,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let (card, handle) = StatusHistoryCell::new(
         config,
+        runtime_model_provider_base_url,
         account_display,
         token_info,
         total_usage,
@@ -232,6 +235,7 @@ impl StatusHistoryCell {
     #[allow(clippy::too_many_arguments)]
     fn new(
         config: &Config,
+        runtime_model_provider_base_url: Option<&str>,
         account_display: Option<&StatusAccountDisplay>,
         token_info: Option<&TokenUsageInfo>,
         total_usage: &TokenUsage,
@@ -292,7 +296,7 @@ impl StatusHistoryCell {
             &sandbox,
             &approval,
         );
-        let model_provider = format_model_provider(config);
+        let model_provider = format_model_provider(config, runtime_model_provider_base_url);
         let account = compose_account_display(account_display);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let forked_from = forked_from.map(|id| id.to_string());
@@ -786,7 +790,7 @@ impl HistoryCell for StatusHistoryCell {
     }
 }
 
-fn format_model_provider(config: &Config) -> Option<String> {
+fn format_model_provider(config: &Config, runtime_base_url: Option<&str>) -> Option<String> {
     let provider = &config.model_provider;
     let name = provider.name.trim();
     let provider_name = if name.is_empty() {
@@ -794,7 +798,7 @@ fn format_model_provider(config: &Config) -> Option<String> {
     } else {
         name
     };
-    let base_url = provider.base_url.as_deref().and_then(sanitize_base_url);
+    let base_url = runtime_base_url.and_then(sanitize_base_url);
     let is_default_openai = provider.is_openai() && base_url.is_none();
     if is_default_openai {
         return None;
