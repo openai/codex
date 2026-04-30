@@ -23,12 +23,8 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
         proposed_network_policy_amendments: None,
         additional_permissions: None,
         available_decisions: None,
-        parsed_cmd: vec![],
     };
-    chat.handle_codex_event(Event {
-        id: "sub-short".into(),
-        msg: EventMsg::ExecApprovalRequest(ev),
-    });
+    handle_exec_approval_request(&mut chat, "sub-short", ev);
 
     let proposed_cells = drain_insert_history(&mut rx);
     assert!(
@@ -126,21 +122,23 @@ fn app_server_exec_approval_request_preserves_permissions_context() {
 
     assert_eq!(
         request.network_approval_context,
-        Some(codex_protocol::protocol::NetworkApprovalContext {
+        Some(codex_app_server_protocol::NetworkApprovalContext {
             host: "example.com".to_string(),
-            protocol: codex_protocol::protocol::NetworkApprovalProtocol::Socks5Tcp,
+            protocol: codex_app_server_protocol::NetworkApprovalProtocol::Socks5Tcp,
         })
     );
     assert_eq!(
         request.additional_permissions,
-        Some(codex_protocol::models::AdditionalPermissionProfile {
-            network: Some(NetworkPermissions {
+        Some(AppServerAdditionalPermissionProfile {
+            network: Some(AppServerAdditionalNetworkPermissions {
                 enabled: Some(true),
             }),
-            file_system: Some(FileSystemPermissions::from_read_write_roots(
-                Some(vec![read_path]),
-                Some(vec![write_path]),
-            )),
+            file_system: Some(AppServerAdditionalFileSystemPermissions {
+                read: Some(vec![read_path]),
+                write: Some(vec![write_path]),
+                glob_scan_max_depth: None,
+                entries: None,
+            }),
         })
     );
 }
@@ -192,9 +190,10 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
 async fn exec_approval_uses_approval_id_when_present() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.handle_codex_event(Event {
-        id: "sub-short".into(),
-        msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+    handle_exec_approval_request(
+        &mut chat,
+        "sub-short",
+        ExecApprovalRequestEvent {
             call_id: "call-parent".into(),
             approval_id: Some("approval-subcommand".into()),
             turn_id: "turn-short".into(),
@@ -208,21 +207,23 @@ async fn exec_approval_uses_approval_id_when_present() {
             proposed_network_policy_amendments: None,
             additional_permissions: None,
             available_decisions: None,
-            parsed_cmd: vec![],
-        }),
-    });
+        },
+    );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
 
     let mut found = false;
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::SubmitThreadOp {
-            op: AppCommand::ExecApproval { id, decision, .. },
+            op: Op::ExecApproval { id, decision, .. },
             ..
         } = app_ev
         {
             assert_eq!(id, "approval-subcommand");
-            assert_matches!(decision, codex_protocol::protocol::ReviewDecision::Approved);
+            assert_matches!(
+                decision,
+                codex_app_server_protocol::CommandExecutionApprovalDecision::Accept
+            );
             found = true;
             break;
         }
@@ -248,12 +249,8 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         proposed_network_policy_amendments: None,
         additional_permissions: None,
         available_decisions: None,
-        parsed_cmd: vec![],
     };
-    chat.handle_codex_event(Event {
-        id: "sub-multi".into(),
-        msg: EventMsg::ExecApprovalRequest(ev_multi),
-    });
+    handle_exec_approval_request(&mut chat, "sub-multi", ev_multi);
     let proposed_multi = drain_insert_history(&mut rx);
     assert!(
         proposed_multi.is_empty(),
@@ -301,12 +298,8 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         proposed_network_policy_amendments: None,
         additional_permissions: None,
         available_decisions: None,
-        parsed_cmd: vec![],
     };
-    chat.handle_codex_event(Event {
-        id: "sub-long".into(),
-        msg: EventMsg::ExecApprovalRequest(ev_long),
-    });
+    handle_exec_approval_request(&mut chat, "sub-long", ev_long);
     let proposed_long = drain_insert_history(&mut rx);
     assert!(
         proposed_long.is_empty(),

@@ -1055,7 +1055,7 @@ impl App {
                                 self.app_event_tx.send(AppEvent::CodexOp(
                                     AppCommand::override_turn_context(
                                         /*cwd*/ None,
-                                        Some(preset.approval),
+                                        Some(AskForApproval::from(preset.approval)),
                                         Some(self.config.approvals_reviewer),
                                         Some(preset.permission_profile.clone()),
                                         #[cfg(target_os = "windows")]
@@ -1068,8 +1068,9 @@ impl App {
                                         /*personality*/ None,
                                     ),
                                 ));
-                                self.app_event_tx
-                                    .send(AppEvent::UpdateAskForApprovalPolicy(preset.approval));
+                                self.app_event_tx.send(AppEvent::UpdateAskForApprovalPolicy(
+                                    AskForApproval::from(preset.approval),
+                                ));
                                 self.app_event_tx.send(AppEvent::UpdatePermissionProfile(
                                     preset.permission_profile.clone(),
                                 ));
@@ -1317,10 +1318,10 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 self.config = config;
-                self.runtime_approval_policy_override =
-                    Some(self.config.permissions.approval_policy.value());
-                self.chat_widget
-                    .set_approval_policy(self.config.permissions.approval_policy.value());
+                let approval_policy =
+                    AskForApproval::from(self.config.permissions.approval_policy.value());
+                self.runtime_approval_policy_override = Some(approval_policy);
+                self.chat_widget.set_approval_policy(approval_policy);
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
             }

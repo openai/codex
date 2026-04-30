@@ -9,6 +9,7 @@ use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveParams;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
+use codex_app_server_protocol::RequestId;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 impl App {
@@ -483,7 +484,7 @@ pub(super) async fn fetch_account_rate_limits(
         .await
         .wrap_err("account/rateLimits/read failed in TUI")?;
 
-    Ok(app_server_rate_limit_snapshots_to_core(response))
+    Ok(app_server_rate_limit_snapshots(response))
 }
 
 pub(super) async fn send_add_credits_nudge_email(
