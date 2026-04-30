@@ -7,7 +7,7 @@ expression: status_line_popup_snapshot(&mut chat)
 
   Type to search
   >
-› [x] Use theme colors      Apply colors from the active /theme.
+› [x] Use theme colors      Apply colors from the active /theme
   ───────────────────────
   [x] project-name          Project name (omitted when unavailable)
   [x] git-branch            Current Git branch (omitted when unavailable)

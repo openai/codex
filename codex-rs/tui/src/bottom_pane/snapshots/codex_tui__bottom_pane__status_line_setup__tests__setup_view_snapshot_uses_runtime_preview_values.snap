@@ -8,7 +8,7 @@ expression: "render_lines(&view, 72)"
                                                                         
   Type to search                                                        
   >                                                                     
-› [x] Use theme colors      Apply colors from the active /theme.        
+› [x] Use theme colors      Apply colors from the active /theme         
   ───────────────────────                                               
   [x] model                 Current model name                          
   [x] current-dir           Current working directory                   

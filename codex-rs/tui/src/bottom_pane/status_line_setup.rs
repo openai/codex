@@ -218,7 +218,7 @@ impl StatusLineSetupView {
         let mut items = vec![MultiSelectItem {
             id: STATUS_LINE_USE_THEME_COLORS_ITEM_ID.to_string(),
             name: "Use theme colors".to_string(),
-            description: Some("Apply colors from the active /theme.".to_string()),
+            description: Some("Apply colors from the active /theme".to_string()),
             enabled: use_theme_colors,
             orderable: false,
             section_break_after: true,
