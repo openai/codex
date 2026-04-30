@@ -157,37 +157,33 @@ async fn wait_for_sample_mcp_ready(codex: &codex_core::CodexThread) -> Result<()
     let startup_event = wait_for_event_with_timeout(
         codex,
         |ev| match ev {
-            EventMsg::McpStartupComplete(summary) => {
-                summary.ready.iter().any(|server| server == "sample")
-                    || summary
-                        .failed
-                        .iter()
-                        .any(|failure| failure.server == "sample")
-                    || summary.cancelled.iter().any(|server| server == "sample")
+            EventMsg::McpStartupUpdate(update) => {
+                update.server == "sample"
+                    && !matches!(
+                        update.status,
+                        codex_protocol::protocol::McpStartupStatus::Starting
+                    )
             }
             _ => false,
         },
         Duration::from_secs(70),
     )
     .await;
-    let EventMsg::McpStartupComplete(startup) = startup_event else {
-        unreachable!("event guard guarantees McpStartupComplete");
+    let EventMsg::McpStartupUpdate(update) = startup_event else {
+        unreachable!("event guard guarantees McpStartupUpdate");
     };
-    if let Some(failure) = startup
-        .failed
-        .iter()
-        .find(|failure| failure.server == "sample")
-    {
-        let error = &failure.error;
-        bail!("plugin MCP server failed to start: {error}");
+    match update.status {
+        codex_protocol::protocol::McpStartupStatus::Ready => {}
+        codex_protocol::protocol::McpStartupStatus::Failed { error } => {
+            bail!("plugin MCP server failed to start: {error}");
+        }
+        codex_protocol::protocol::McpStartupStatus::Cancelled => {
+            bail!("plugin MCP server startup was cancelled");
+        }
+        codex_protocol::protocol::McpStartupStatus::Starting => {
+            unreachable!("event guard excludes Starting");
+        }
     }
-    if startup.cancelled.iter().any(|server| server == "sample") {
-        bail!("plugin MCP server startup was cancelled");
-    }
-    assert!(
-        startup.ready.iter().any(|server| server == "sample"),
-        "expected plugin MCP server to be ready; startup summary: {startup:?}"
-    );
 
     Ok(())
 }

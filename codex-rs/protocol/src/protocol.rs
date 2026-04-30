@@ -777,12 +777,6 @@ pub enum Op {
     /// model.
     SetThreadMemoryMode { mode: ThreadMemoryMode },
 
-    /// Legacy request to undo a turn.
-    ///
-    /// The op is still accepted for compatibility, but ghost snapshots are no
-    /// longer produced so the request reports unavailable.
-    Undo,
-
     /// Request Codex to drop the last N user turns from in-memory context.
     ///
     /// This does not attempt to revert local filesystem changes. Clients are
@@ -911,7 +905,6 @@ impl Op {
             Self::Compact => "compact",
             Self::SetThreadName { .. } => "set_thread_name",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
-            Self::Undo => "undo",
             Self::ThreadRollback { .. } => "thread_rollback",
             Self::Review { .. } => "review",
             Self::ApproveGuardianDeniedAction { .. } => "approve_guardian_denied_action",
@@ -1368,20 +1361,12 @@ pub enum EventMsg {
     /// User/system input message (what was sent to the model)
     UserMessage(UserMessageEvent),
 
-    /// Agent text output delta message
-    AgentMessageDelta(AgentMessageDeltaEvent),
-
     /// Reasoning event from agent.
     AgentReasoning(AgentReasoningEvent),
-
-    /// Agent reasoning delta event from agent.
-    AgentReasoningDelta(AgentReasoningDeltaEvent),
 
     /// Raw chain-of-thought from agent.
     AgentReasoningRawContent(AgentReasoningRawContentEvent),
 
-    /// Agent reasoning content delta event from agent.
-    AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent),
     /// Signaled when the model begins a new reasoning summary section (e.g., a new titled block).
     AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent),
 
@@ -1397,18 +1382,11 @@ pub enum EventMsg {
     /// Incremental MCP startup progress updates.
     McpStartupUpdate(McpStartupUpdateEvent),
 
-    /// Aggregate MCP startup completion summary.
-    McpStartupComplete(McpStartupCompleteEvent),
-
     McpToolCallBegin(McpToolCallBeginEvent),
 
     McpToolCallEnd(McpToolCallEndEvent),
 
-    WebSearchBegin(WebSearchBeginEvent),
-
     WebSearchEnd(WebSearchEndEvent),
-
-    ImageGenerationBegin(ImageGenerationBeginEvent),
 
     ImageGenerationEnd(ImageGenerationEndEvent),
 
@@ -1446,12 +1424,6 @@ pub enum EventMsg {
     /// Notification advising the user that something they are using has been
     /// deprecated and should be phased out.
     DeprecationNotice(DeprecationNoticeEvent),
-
-    BackgroundEvent(BackgroundEventEvent),
-
-    UndoStarted(UndoStartedEvent),
-
-    UndoCompleted(UndoCompletedEvent),
 
     /// Notification that a model stream experienced an error or disconnect
     /// and the system is handling it (e.g., retrying with backoff).
@@ -1853,17 +1825,7 @@ pub struct ItemStartedEvent {
 
 impl HasLegacyEvent for ItemStartedEvent {
     fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        match &self.item {
-            TurnItem::WebSearch(item) => vec![EventMsg::WebSearchBegin(WebSearchBeginEvent {
-                call_id: item.id.clone(),
-            })],
-            TurnItem::ImageGeneration(item) => {
-                vec![EventMsg::ImageGenerationBegin(ImageGenerationBeginEvent {
-                    call_id: item.id.clone(),
-                })]
-            }
-            _ => Vec::new(),
-        }
+        Vec::new()
     }
 }
 
@@ -1894,9 +1856,7 @@ pub struct AgentMessageContentDeltaEvent {
 
 impl HasLegacyEvent for AgentMessageContentDeltaEvent {
     fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        vec![EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-            delta: self.delta.clone(),
-        })]
+        Vec::new()
     }
 }
 
@@ -1921,9 +1881,7 @@ pub struct ReasoningContentDeltaEvent {
 
 impl HasLegacyEvent for ReasoningContentDeltaEvent {
     fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        vec![EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: self.delta.clone(),
-        })]
+        Vec::new()
     }
 }
 
@@ -1940,11 +1898,7 @@ pub struct ReasoningRawContentDeltaEvent {
 
 impl HasLegacyEvent for ReasoningRawContentDeltaEvent {
     fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        vec![EventMsg::AgentReasoningRawContentDelta(
-            AgentReasoningRawContentDeltaEvent {
-                delta: self.delta.clone(),
-            },
-        )]
+        Vec::new()
     }
 }
 
@@ -2310,11 +2264,6 @@ pub struct UserMessageEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct AgentMessageDeltaEvent {
-    pub delta: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct AgentReasoningEvent {
     pub text: String,
 }
@@ -2325,22 +2274,12 @@ pub struct AgentReasoningRawContentEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct AgentReasoningRawContentDeltaEvent {
-    pub delta: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct AgentReasoningSectionBreakEvent {
     // load with default value so it's backward compatible with the old format.
     #[serde(default)]
     pub item_id: String,
     #[serde(default)]
     pub summary_index: i64,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct AgentReasoningDeltaEvent {
-    pub delta: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
@@ -2411,20 +2350,10 @@ impl McpToolCallEndEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct WebSearchBeginEvent {
-    pub call_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct WebSearchEndEvent {
     pub call_id: String,
     pub query: String,
     pub action: WebSearchAction,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ImageGenerationBeginEvent {
-    pub call_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -3189,30 +3118,12 @@ pub struct TerminalInteractionEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct BackgroundEventEvent {
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct DeprecationNoticeEvent {
     /// Concise summary of what is deprecated.
     pub summary: String,
     /// Optional extra guidance, such as migration steps or rationale.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct UndoStartedEvent {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct UndoCompletedEvent {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -3331,13 +3242,6 @@ pub enum McpStartupStatus {
     Ready,
     Failed { error: String },
     Cancelled,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, Default)]
-pub struct McpStartupCompleteEvent {
-    pub ready: Vec<String>,
-    pub failed: Vec<McpStartupFailure>,
-    pub cancelled: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -3992,7 +3896,6 @@ mod tests {
     use super::*;
     use crate::items::ImageGenerationItem;
     use crate::items::UserMessageItem;
-    use crate::items::WebSearchItem;
     use crate::permissions::FileSystemAccessMode;
     use crate::permissions::FileSystemPath;
     use crate::permissions::FileSystemSandboxEntry;
@@ -4633,30 +4536,7 @@ mod tests {
     }
 
     #[test]
-    fn item_started_event_from_web_search_emits_begin_event() {
-        let event = ItemStartedEvent {
-            thread_id: ThreadId::new(),
-            turn_id: "turn-1".into(),
-            item: TurnItem::WebSearch(WebSearchItem {
-                id: "search-1".into(),
-                query: "find docs".into(),
-                action: WebSearchAction::Search {
-                    query: Some("find docs".into()),
-                    queries: None,
-                },
-            }),
-        };
-
-        let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
-        assert_eq!(legacy_events.len(), 1);
-        match &legacy_events[0] {
-            EventMsg::WebSearchBegin(event) => assert_eq!(event.call_id, "search-1"),
-            _ => panic!("expected WebSearchBegin event"),
-        }
-    }
-
-    #[test]
-    fn item_started_event_from_non_web_search_emits_no_legacy_events() {
+    fn item_started_event_emits_no_legacy_events() {
         let event = ItemStartedEvent {
             thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
@@ -4668,28 +4548,6 @@ mod tests {
                 .as_legacy_events(/*show_raw_agent_reasoning*/ false)
                 .is_empty()
         );
-    }
-
-    #[test]
-    fn item_started_event_from_image_generation_emits_begin_event() {
-        let event = ItemStartedEvent {
-            thread_id: ThreadId::new(),
-            turn_id: "turn-1".into(),
-            item: TurnItem::ImageGeneration(ImageGenerationItem {
-                id: "ig-1".into(),
-                status: "in_progress".into(),
-                revised_prompt: None,
-                result: String::new(),
-                saved_path: None,
-            }),
-        };
-
-        let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
-        assert_eq!(legacy_events.len(), 1);
-        match &legacy_events[0] {
-            EventMsg::ImageGenerationBegin(event) => assert_eq!(event.call_id, "ig-1"),
-            _ => panic!("expected ImageGenerationBegin event"),
-        }
     }
 
     #[test]
@@ -5277,29 +5135,6 @@ mod tests {
         assert_eq!(value["msg"]["server"], "srv");
         assert_eq!(value["msg"]["status"]["state"], "failed");
         assert_eq!(value["msg"]["status"]["error"], "boom");
-        Ok(())
-    }
-
-    #[test]
-    fn serialize_mcp_startup_complete_event() -> Result<()> {
-        let event = Event {
-            id: "init".to_string(),
-            msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent {
-                ready: vec!["a".to_string()],
-                failed: vec![McpStartupFailure {
-                    server: "b".to_string(),
-                    error: "bad".to_string(),
-                }],
-                cancelled: vec!["c".to_string()],
-            }),
-        };
-
-        let value = serde_json::to_value(&event)?;
-        assert_eq!(value["msg"]["type"], "mcp_startup_complete");
-        assert_eq!(value["msg"]["ready"][0], "a");
-        assert_eq!(value["msg"]["failed"][0]["server"], "b");
-        assert_eq!(value["msg"]["failed"][0]["error"], "bad");
-        assert_eq!(value["msg"]["cancelled"][0], "c");
         Ok(())
     }
 

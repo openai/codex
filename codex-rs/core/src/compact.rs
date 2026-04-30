@@ -165,8 +165,6 @@ async fn run_compact_task_inner_impl(
         turn_context.truncation_policy,
     );
 
-    let mut truncated_count = 0usize;
-
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
     let mut client_session = sess.services.model_client.new_session();
@@ -198,15 +196,6 @@ async fn run_compact_task_inner_impl(
 
         match attempt_result {
             Ok(()) => {
-                if truncated_count > 0 {
-                    sess.notify_background_event(
-                        turn_context.as_ref(),
-                        format!(
-                            "Trimmed {truncated_count} older thread item(s) before compacting so the prompt fits the model context window."
-                        ),
-                    )
-                    .await;
-                }
                 break;
             }
             Err(CodexErr::Interrupted) => {
@@ -219,7 +208,6 @@ async fn run_compact_task_inner_impl(
                         "Context window exceeded while compacting; removing oldest history item. Error: {e}"
                     );
                     history.remove_first_item();
-                    truncated_count += 1;
                     retries = 0;
                     continue;
                 }
