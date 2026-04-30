@@ -328,6 +328,32 @@
       },
       "type": "object"
     },
+    "ConfigLockToml": {
+      "additionalProperties": false,
+      "properties": {
+        "codex_version": {
+          "type": "string"
+        },
+        "config_sha256": {
+          "type": "string"
+        },
+        "session_sha256": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "codex_version",
+        "config_sha256",
+        "session_sha256",
+        "version"
+      ],
+      "type": "object"
+    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -3600,6 +3626,15 @@
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
       "type": "string"
+    },
+    "config_lock": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ConfigLockToml"
+        }
+      ],
+      "default": null,
+      "description": "Metadata for generated config lock files."
     },
     "config_lock_file": {
       "allOf": [

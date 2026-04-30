@@ -23,6 +23,7 @@ use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
 use codex_config::ThreadConfigLoader;
+use codex_config::config_toml::ConfigLockToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
@@ -115,8 +116,9 @@ use crate::config::permissions::default_builtin_permission_profile_name;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
 use crate::config::permissions::network_proxy_config_for_profile_selection;
 use crate::config::permissions::validate_user_permission_profile_names;
-use crate::config_lock::ConfigLockFile;
+use crate::config_lock::config_without_lock_controls;
 use crate::config_lock::lock_layer_from_config;
+use crate::config_lock::read_config_lock_from_path;
 use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
@@ -624,7 +626,7 @@ pub struct Config {
     pub config_snapshot_export_dir: Option<AbsolutePathBuf>,
 
     /// Effective config lock used for strict replay validation.
-    pub(crate) config_lock: Option<Arc<ConfigLockFile>>,
+    pub(crate) config_lock: Option<Arc<ConfigLockToml>>,
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
@@ -965,25 +967,29 @@ impl ConfigBuilder {
             }
         };
         if let Some(config_lock_file) = config_toml.config_lock_file.as_ref() {
-            let lock = ConfigLockFile::read_from_path(config_lock_file).await?;
-            let lock_layer = lock_layer_from_config(config_lock_file, &lock)?;
-            let lock_config_toml = lock.replay_config.clone();
+            let lock_config_toml = read_config_lock_from_path(config_lock_file).await?;
+            let Some(lock_metadata) = lock_config_toml.config_lock.clone() else {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "config lock file is missing [config_lock] metadata",
+                ));
+            };
+            let lock_layer = lock_layer_from_config(config_lock_file, &lock_config_toml)?;
+            let lock_config_toml = config_without_lock_controls(&lock_config_toml);
             let lock_config_layer_stack = ConfigLayerStack::new(
                 vec![lock_layer],
                 config_layer_stack.requirements().clone(),
                 config_layer_stack.requirements_toml().clone(),
             )?;
-            let mut lock_overrides = harness_overrides;
-            lock_overrides.cwd = Some(lock.session.cwd.to_path_buf());
             let mut config = Config::load_config_with_layer_stack(
                 LOCAL_FS.as_ref(),
                 lock_config_toml,
-                lock_overrides,
+                harness_overrides,
                 codex_home,
                 lock_config_layer_stack,
             )
             .await?;
-            config.config_lock = Some(Arc::new(lock));
+            config.config_lock = Some(Arc::new(lock_metadata));
             return Ok(config);
         }
         Config::load_config_with_layer_stack(

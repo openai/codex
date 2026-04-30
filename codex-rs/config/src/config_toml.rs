@@ -431,6 +431,19 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+
+    /// Metadata for generated config lock files.
+    #[serde(default)]
+    pub config_lock: Option<ConfigLockToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ConfigLockToml {
+    pub version: u32,
+    pub codex_version: String,
+    pub config_sha256: String,
+    pub session_sha256: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
