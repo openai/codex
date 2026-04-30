@@ -25,7 +25,7 @@ const IDE_CONTEXT_PROBE_TIMEOUT: Duration = IDE_CONTEXT_PROMPT_TIMEOUT;
 #[cfg(any(unix, windows))]
 const IDE_CONTEXT_IDLE_READ_TIMEOUT: Duration = Duration::from_millis(50);
 #[cfg(any(unix, windows))]
-const IDE_CONTEXT_IDLE_FRAME_TIMEOUT: Duration = Duration::from_secs(1);
+const IDE_CONTEXT_IDLE_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 // Prompt rendering applies its own smaller cap to selected text before injection.
 #[cfg(any(unix, windows))]
 const MAX_IPC_FRAME_BYTES: usize = 256 * 1024 * 1024;
@@ -240,6 +240,97 @@ struct PendingIdeContextRequest {
 }
 
 #[cfg(any(unix, windows))]
+#[derive(Default)]
+struct IpcFrameBuffer {
+    buffer: Vec<u8>,
+    expected_len: Option<usize>,
+}
+
+#[cfg(any(unix, windows))]
+impl IpcFrameBuffer {
+    fn read_available_messages(
+        &mut self,
+        stream: &mut IdeContextStream,
+    ) -> Result<Vec<Value>, IdeContextError> {
+        let mut chunk = [0_u8; 8192];
+        loop {
+            match stream
+                .try_read_available(&mut chunk)
+                .map_err(IdeContextError::Read)?
+            {
+                Some(0) => {
+                    return Err(IdeContextError::Read(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "IDE context IPC stream closed",
+                    )));
+                }
+                Some(bytes_read) => self.buffer.extend_from_slice(&chunk[..bytes_read]),
+                None => break,
+            }
+        }
+
+        let mut messages = Vec::new();
+        while let Some(message) = self.pop_complete_message()? {
+            messages.push(message);
+        }
+        Ok(messages)
+    }
+
+    fn read_next_message(
+        &mut self,
+        stream: &mut IdeContextStream,
+        deadline: Instant,
+    ) -> Result<Value, IdeContextError> {
+        loop {
+            if let Some(message) = self.pop_complete_message()? {
+                return Ok(message);
+            }
+
+            ensure_deadline_not_expired(deadline)?;
+            stream.set_deadline(deadline);
+            let mut chunk = [0_u8; 8192];
+            match std::io::Read::read(stream, &mut chunk) {
+                Ok(0) => {
+                    return Err(IdeContextError::Read(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "IDE context IPC stream closed",
+                    )));
+                }
+                Ok(bytes_read) => self.buffer.extend_from_slice(&chunk[..bytes_read]),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(IdeContextError::Read(error)),
+            }
+        }
+    }
+
+    fn pop_complete_message(&mut self) -> Result<Option<Value>, IdeContextError> {
+        if self.expected_len.is_none() && self.buffer.len() >= 4 {
+            let mut len_bytes = [0_u8; 4];
+            len_bytes.copy_from_slice(&self.buffer[..4]);
+            self.buffer.drain(..4);
+            let len = u32::from_le_bytes(len_bytes) as usize;
+            if len > MAX_IPC_FRAME_BYTES {
+                return Err(IdeContextError::ResponseTooLarge);
+            }
+            self.expected_len = Some(len);
+        }
+
+        let Some(expected_len) = self.expected_len else {
+            return Ok(None);
+        };
+        if self.buffer.len() < expected_len {
+            return Ok(None);
+        }
+
+        let payload = self.buffer.drain(..expected_len).collect::<Vec<_>>();
+        self.expected_len = None;
+        serde_json::from_slice(&payload)
+            .map(Some)
+            .map_err(|err| IdeContextError::InvalidResponse(format!("invalid JSON payload: {err}")))
+    }
+}
+
+#[cfg(any(unix, windows))]
 impl IdeContextClient {
     pub(crate) fn connect() -> Result<Self, IdeContextError> {
         Self::connect_to_socket(default_ipc_socket_path(), IDE_CONTEXT_PROBE_TIMEOUT)
@@ -291,9 +382,19 @@ impl IdeContextClient {
             })
             .map_err(|_| IdeContextError::Send(ipc_reader_closed_io_error()))?;
 
-        response_rx
-            .recv_timeout(timeout + IDE_CONTEXT_IDLE_READ_TIMEOUT)
-            .unwrap_or_else(|_| Err(timeout_error()))
+        match response_rx.recv_timeout(timeout + IDE_CONTEXT_IDLE_READ_TIMEOUT) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                tracing::warn!("IDE context fetch timed out waiting for IPC reader response");
+                Err(timeout_error())
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                tracing::warn!(
+                    "IDE context fetch response channel closed before IPC reader responded"
+                );
+                Err(timeout_error())
+            }
+        }
     }
 
     fn spawn_reader(stream: IdeContextStream, client_id: String) -> Self {
@@ -453,33 +554,14 @@ impl UnixDeadlineStream {
         }
     }
 
-    fn is_readable_now(&self) -> std::io::Result<bool> {
-        use std::os::fd::AsRawFd;
-
+    fn try_read_available(&mut self, buf: &mut [u8]) -> std::io::Result<Option<usize>> {
         loop {
-            let mut poll_fd = libc::pollfd {
-                fd: self.stream.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            let result = unsafe { libc::poll(&mut poll_fd, 1, 0) };
-            if result == 0 {
-                return Ok(false);
+            match std::io::Read::read(&mut self.stream, buf) {
+                Ok(bytes_read) => return Ok(Some(bytes_read)),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(None),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
             }
-            if result < 0 {
-                let error = std::io::Error::last_os_error();
-                if error.kind() == std::io::ErrorKind::Interrupted {
-                    continue;
-                }
-                return Err(error);
-            }
-            if poll_fd.revents & libc::POLLNVAL != 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "invalid IDE context Unix socket",
-                ));
-            }
-            return Ok(poll_fd.revents & (libc::POLLIN | libc::POLLERR | libc::POLLHUP) != 0);
         }
     }
 }
@@ -654,19 +736,14 @@ fn run_ide_context_reader(
     commands_rx: Receiver<IdeContextClientCommand>,
 ) {
     let mut pending_request: Option<PendingIdeContextRequest> = None;
+    let mut frame_buffer = IpcFrameBuffer::default();
 
     loop {
-        if pending_request.is_none() {
-            match read_idle_reader_message_if_available(&mut stream, &mut pending_request) {
-                Ok(true) => continue,
-                Ok(false) => {}
-                Err(err) => {
-                    if let Some(pending) = pending_request.take() {
-                        let _ = pending.response_tx.send(Err(err));
-                    }
-                    break;
-                }
-            }
+        if let Err(err) =
+            drain_available_reader_messages(&mut stream, &mut frame_buffer, &mut pending_request)
+        {
+            fail_pending_request(pending_request.take(), err);
+            break;
         }
 
         if matches!(
@@ -681,39 +758,29 @@ fn run_ide_context_reader(
             break;
         }
 
-        if pending_request
-            .as_ref()
-            .is_some_and(|pending| Instant::now() >= pending.deadline)
-            && let Some(pending) = pending_request.take()
-        {
-            let _ = pending.response_tx.send(Err(timeout_error()));
-        }
-
-        let read_deadline = match next_reader_deadline(&mut stream, pending_request.as_ref()) {
-            Ok(Some(read_deadline)) => read_deadline,
-            Ok(None) => continue,
-            Err(err) => {
-                if let Some(pending) = pending_request.take() {
-                    let _ = pending.response_tx.send(Err(err));
-                }
+        let Some(pending) = pending_request.as_ref() else {
+            if let Err(err) = wait_for_idle_reader_message(&mut stream) {
+                fail_pending_request(pending_request.take(), err);
                 break;
             }
+            continue;
         };
-        stream.set_deadline(read_deadline);
-        match read_frame(&mut stream, read_deadline) {
+
+        if Instant::now() >= pending.deadline {
+            fail_pending_request(pending_request.take(), timeout_error());
+            continue;
+        }
+
+        match frame_buffer.read_next_message(&mut stream, pending.deadline) {
             Ok(message) => {
                 if let Err(err) = handle_reader_message(&mut stream, &mut pending_request, message)
                 {
-                    if let Some(pending) = pending_request.take() {
-                        let _ = pending.response_tx.send(Err(err));
-                    }
+                    fail_pending_request(pending_request.take(), err);
                     break;
                 }
             }
             Err(err) => {
-                if let Some(pending) = pending_request.take() {
-                    let _ = pending.response_tx.send(Err(err));
-                }
+                fail_pending_request(pending_request.take(), err);
                 break;
             }
         }
@@ -759,6 +826,7 @@ fn drain_ide_context_reader_commands(
                         });
                     }
                     Err(err) => {
+                        tracing::warn!(error = %err, "IDE context IPC reader failed to write ide-context request");
                         let _ = response_tx.send(Err(IdeContextError::Send(err)));
                         return IdeContextReaderCommandState::Shutdown;
                     }
@@ -774,72 +842,46 @@ fn drain_ide_context_reader_commands(
     }
 }
 
-#[cfg(any(unix, windows))]
-fn next_reader_deadline(
-    stream: &mut IdeContextStream,
-    pending_request: Option<&PendingIdeContextRequest>,
-) -> Result<Option<Instant>, IdeContextError> {
-    if let Some(pending) = pending_request {
-        return Ok(Some(pending.deadline));
-    }
-
-    wait_for_idle_reader_message(stream)
-}
-
 #[cfg(unix)]
-fn wait_for_idle_reader_message(
-    stream: &mut IdeContextStream,
-) -> Result<Option<Instant>, IdeContextError> {
+fn wait_for_idle_reader_message(stream: &mut IdeContextStream) -> Result<(), IdeContextError> {
     let idle_deadline = Instant::now() + IDE_CONTEXT_IDLE_READ_TIMEOUT;
     stream.set_deadline(idle_deadline);
     match stream.wait_for_ready(libc::POLLIN) {
-        Ok(()) => Ok(Some(Instant::now() + IDE_CONTEXT_IDLE_FRAME_TIMEOUT)),
-        Err(err) if err.kind() == std::io::ErrorKind::TimedOut => Ok(None),
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::TimedOut => Ok(()),
         Err(err) => Err(IdeContextError::Read(err)),
     }
 }
 
 #[cfg(windows)]
-fn wait_for_idle_reader_message(
-    stream: &mut IdeContextStream,
-) -> Result<Option<Instant>, IdeContextError> {
+fn wait_for_idle_reader_message(stream: &mut IdeContextStream) -> Result<(), IdeContextError> {
     let idle_deadline = Instant::now() + IDE_CONTEXT_IDLE_READ_TIMEOUT;
     stream
         .wait_until_readable(idle_deadline)
-        .map(|readable| readable.then(|| Instant::now() + IDE_CONTEXT_IDLE_FRAME_TIMEOUT))
+        .map(|_| ())
         .map_err(IdeContextError::Read)
 }
 
 #[cfg(any(unix, windows))]
-fn read_idle_reader_message_if_available(
+fn drain_available_reader_messages(
     stream: &mut IdeContextStream,
+    frame_buffer: &mut IpcFrameBuffer,
     pending_request: &mut Option<PendingIdeContextRequest>,
-) -> Result<bool, IdeContextError> {
-    if !is_idle_reader_message_available(stream)? {
-        return Ok(false);
+) -> Result<(), IdeContextError> {
+    let messages = frame_buffer.read_available_messages(stream)?;
+    for message in messages {
+        handle_reader_message(stream, pending_request, message)?;
     }
-
-    let deadline = Instant::now() + IDE_CONTEXT_IDLE_FRAME_TIMEOUT;
-    stream.set_deadline(deadline);
-    let message = read_frame(stream, deadline)?;
-    handle_reader_message(stream, pending_request, message)?;
-    Ok(true)
+    Ok(())
 }
 
-#[cfg(unix)]
-fn is_idle_reader_message_available(
-    stream: &mut IdeContextStream,
-) -> Result<bool, IdeContextError> {
-    stream.is_readable_now().map_err(IdeContextError::Read)
-}
-
-#[cfg(windows)]
-fn is_idle_reader_message_available(
-    stream: &mut IdeContextStream,
-) -> Result<bool, IdeContextError> {
-    stream
-        .wait_until_readable(Instant::now())
-        .map_err(IdeContextError::Read)
+#[cfg(any(unix, windows))]
+fn fail_pending_request(pending_request: Option<PendingIdeContextRequest>, err: IdeContextError) {
+    if let Some(pending) = pending_request {
+        let _ = pending.response_tx.send(Err(err));
+    } else {
+        tracing::warn!(error = %err, "IDE context IPC reader exiting without a pending request");
+    }
 }
 
 #[cfg(any(unix, windows))]
@@ -850,11 +892,11 @@ fn handle_reader_message(
 ) -> Result<(), IdeContextError> {
     match message.get("type").and_then(Value::as_str) {
         Some("response") => {
-            if pending_request.as_ref().is_some_and(|pending| {
+            let matches_pending = pending_request.as_ref().is_some_and(|pending| {
                 message.get("requestId").and_then(Value::as_str)
                     == Some(pending.request_id.as_str())
-            }) && let Some(pending) = pending_request.take()
-            {
+            });
+            if matches_pending && let Some(pending) = pending_request.take() {
                 let _ = pending.response_tx.send(extract_ide_context(message));
             }
             Ok(())
@@ -869,7 +911,7 @@ fn handle_reader_message(
                         "canHandle": false,
                     },
                 });
-                stream.set_deadline(Instant::now() + IDE_CONTEXT_IDLE_FRAME_TIMEOUT);
+                stream.set_deadline(Instant::now() + IDE_CONTEXT_IDLE_WRITE_TIMEOUT);
                 write_frame(stream, &response).map_err(IdeContextError::Send)?;
             }
             Ok(())
@@ -882,12 +924,12 @@ fn handle_reader_message(
                     "resultType": "error",
                     "error": "no-handler-for-request",
                 });
-                stream.set_deadline(Instant::now() + IDE_CONTEXT_IDLE_FRAME_TIMEOUT);
+                stream.set_deadline(Instant::now() + IDE_CONTEXT_IDLE_WRITE_TIMEOUT);
                 write_frame(stream, &response).map_err(IdeContextError::Send)?;
             }
             Ok(())
         }
-        Some("client-discovery-response") | Some(_) | None => Ok(()),
+        Some(_) | None => Ok(()),
     }
 }
 
@@ -1196,6 +1238,16 @@ mod tests {
         message: &Value,
         delay: Duration,
     ) {
+        let payload = write_frame_header(stream, message);
+        std::thread::sleep(delay);
+        stream
+            .write_all(&payload)
+            .expect("write test IPC frame payload");
+        stream.flush().expect("flush test IPC frame payload");
+    }
+
+    #[cfg(unix)]
+    fn write_frame_header(stream: &mut impl std::io::Write, message: &Value) -> Vec<u8> {
         let payload = serde_json::to_vec(message).expect("serialize test IPC message");
         let payload_len = u32::try_from(payload.len())
             .expect("test IPC message length fits u32")
@@ -1204,11 +1256,7 @@ mod tests {
             .write_all(&payload_len)
             .expect("write test IPC frame header");
         stream.flush().expect("flush test IPC frame header");
-        std::thread::sleep(delay);
-        stream
-            .write_all(&payload)
-            .expect("write test IPC frame payload");
-        stream.flush().expect("flush test IPC frame payload");
+        payload
     }
 
     #[cfg(any(unix, windows))]
@@ -1468,6 +1516,77 @@ mod tests {
                 .as_ref()
                 .map(|file| file.active_selection_content.as_str()),
             Some("after split frame")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ide_context_client_sends_request_while_idle_frame_is_incomplete() {
+        use std::io::Write;
+        use std::os::unix::net::UnixListener;
+        use std::thread;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let socket_path = tempdir.path().join("codex-ipc.sock");
+        let listener = UnixListener::bind(&socket_path).expect("bind socket");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+
+            let initialize = read_frame(&mut stream, test_deadline()).expect("read initialize");
+            let initialize_request_id = initialize
+                .get("requestId")
+                .and_then(Value::as_str)
+                .expect("initialize request id");
+            write_initialize_response(&mut stream, initialize_request_id);
+
+            let payload = write_frame_header(
+                &mut stream,
+                &json!({
+                    "type": "broadcast",
+                    "method": "client-status-changed",
+                    "sourceClientId": "vscode-client",
+                    "version": 0,
+                    "params": {
+                        "clientId": "vscode-client",
+                        "clientType": "vscode",
+                        "status": "connected"
+                    }
+                }),
+            );
+
+            let ide_context = read_frame(&mut stream, test_deadline())
+                .expect("client should write ide-context request before idle frame completes");
+            let ide_context_request_id = ide_context
+                .get("requestId")
+                .and_then(Value::as_str)
+                .expect("ide-context request id");
+
+            stream
+                .write_all(&payload)
+                .expect("write delayed idle frame payload");
+            stream.flush().expect("flush delayed idle frame payload");
+            write_ide_context_response(
+                &mut stream,
+                ide_context_request_id,
+                "after incomplete idle frame",
+            );
+        });
+
+        let mut client = IdeContextClient::connect_to_socket(socket_path, Duration::from_secs(1))
+            .expect("connect IDE context client");
+        std::thread::sleep(IDE_CONTEXT_IDLE_READ_TIMEOUT * 2);
+        let context = client
+            .fetch_ide_context_for_prompt(Path::new("/repo"))
+            .expect("fetch IDE context while idle frame is incomplete");
+
+        server.join().expect("server joins");
+        assert_eq!(
+            context
+                .active_file
+                .as_ref()
+                .map(|file| file.active_selection_content.as_str()),
+            Some("after incomplete idle frame")
         );
     }
 

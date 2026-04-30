@@ -120,6 +120,19 @@ impl WindowsPipeStream {
 
         Ok(bytes_available > 0)
     }
+
+    pub(super) fn try_read_available(&mut self, buf: &mut [u8]) -> io::Result<Option<usize>> {
+        if !self.has_bytes_available()? {
+            return Ok(None);
+        }
+
+        self.deadline = Instant::now() + Duration::from_millis(1);
+        match self.read(buf) {
+            Ok(bytes_read) => Ok(Some(bytes_read)),
+            Err(err) if err.kind() == io::ErrorKind::TimedOut => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
 }
 
 impl Read for WindowsPipeStream {
