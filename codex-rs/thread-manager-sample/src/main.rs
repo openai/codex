@@ -59,7 +59,7 @@ use codex_core_api::thread_store_from_config;
 #[derive(Debug, Parser)]
 #[command(
     name = "codex-thread-manager-sample",
-    about = "Run one Codex turn through ThreadManager and print the final assistant output."
+    about = "Run one Codex turn through ThreadManager and print each event as newline-delimited JSON."
 )]
 struct Args {
     /// Override the model for this run.
@@ -129,14 +129,8 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let shutdown_result = thread.shutdown_and_wait().await;
     let _ = thread_manager.remove_thread(&thread_id).await;
 
-    let output = turn_output?;
+    turn_output?;
     shutdown_result.context("shut down Codex thread")?;
-
-    let mut stdout = std::io::stdout().lock();
-    stdout.write_all(output.as_bytes())?;
-    if !output.ends_with('\n') {
-        stdout.write_all(b"\n")?;
-    }
 
     Ok(())
 }
@@ -263,7 +257,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
     })
 }
 
-async fn run_turn(thread: &CodexThread, prompt: String) -> anyhow::Result<String> {
+async fn run_turn(thread: &CodexThread, prompt: String) -> anyhow::Result<()> {
     thread
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -277,15 +271,16 @@ async fn run_turn(thread: &CodexThread, prompt: String) -> anyhow::Result<String
         .await
         .context("submit user input")?;
 
-    let mut last_agent_message = String::new();
+    let mut stdout = std::io::stdout().lock();
     loop {
         let event = thread.next_event().await.context("read Codex event")?;
+        serde_json::to_writer(&mut stdout, &event).context("serialize Codex event")?;
+        stdout.write_all(b"\n").context("write event newline")?;
+        stdout.flush().context("flush event output")?;
+
         match event.msg {
-            EventMsg::TurnComplete(event) => {
-                return Ok(event.last_agent_message.unwrap_or(last_agent_message));
-            }
-            EventMsg::AgentMessage(event) => {
-                last_agent_message = event.message;
+            EventMsg::TurnComplete(_) => {
+                return Ok(());
             }
             EventMsg::Error(event) => {
                 bail!(event.message);

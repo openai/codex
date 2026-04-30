@@ -3516,6 +3516,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-core-api",
+ "serde_json",
  "tracing",
 ]
 
