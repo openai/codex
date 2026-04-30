@@ -184,7 +184,7 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::exec_output::StreamOutput;
 
-mod config_snapshot;
+mod config_lock;
 mod handlers;
 mod mcp;
 mod multi_agents;
@@ -194,7 +194,8 @@ mod rollout_reconstruction;
 pub(crate) mod session;
 pub(crate) mod turn;
 pub(crate) mod turn_context;
-use self::config_snapshot::export_config_snapshot_if_configured;
+use self::config_lock::export_config_lock_if_configured;
+use self::config_lock::validate_config_lock_if_configured;
 #[cfg(test)]
 use self::handlers::submission_dispatch_span;
 use self::handlers::submission_loop;

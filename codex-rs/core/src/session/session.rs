@@ -131,15 +131,24 @@ impl SessionConfiguration {
             model: self.collaboration_mode.model().to_string(),
             model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
             service_tier: self.service_tier,
+            model_reasoning_summary: self.model_reasoning_summary,
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
             permission_profile: self.permission_profile(),
             active_permission_profile: self.active_permission_profile(),
+            windows_sandbox_level: self.windows_sandbox_level,
             cwd: self.cwd.clone(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
+            base_instructions: self.base_instructions.clone(),
+            developer_instructions: self.developer_instructions.clone(),
+            user_instructions: self.user_instructions.clone(),
+            compact_prompt: self.compact_prompt.clone(),
             session_source: self.session_source.clone(),
+            environments: self.environments.clone(),
+            dynamic_tools: self.dynamic_tools.clone(),
+            persist_extended_history: self.persist_extended_history,
         }
     }
 
@@ -705,7 +714,8 @@ impl Session {
                     ))
                     .await;
             session_configuration.thread_name = thread_name.clone();
-            export_config_snapshot_if_configured(&session_configuration, conversation_id).await?;
+            validate_config_lock_if_configured(&session_configuration).await?;
+            export_config_lock_if_configured(&session_configuration, conversation_id).await?;
             let state = SessionState::new(session_configuration.clone());
             let managed_network_requirements_configured = config
                 .config_layer_stack

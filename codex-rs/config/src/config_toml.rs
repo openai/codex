@@ -251,8 +251,11 @@ pub struct ConfigToml {
     /// Defaults to `$CODEX_HOME/log`.
     pub log_dir: Option<AbsolutePathBuf>,
 
-    /// Directory where Codex writes effective session config snapshots.
+    /// Directory where Codex writes effective session config lock files.
     pub config_snapshot_export_dir: Option<AbsolutePathBuf>,
+
+    /// Lockfile to replay as the authoritative effective config.
+    pub config_lock_file: Option<AbsolutePathBuf>,
 
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.

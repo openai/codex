@@ -115,6 +115,8 @@ use crate::config::permissions::default_builtin_permission_profile_name;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
 use crate::config::permissions::network_proxy_config_for_profile_selection;
 use crate::config::permissions::validate_user_permission_profile_names;
+use crate::config_lock::ConfigLockFile;
+use crate::config_lock::lock_layer_from_config;
 use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
@@ -618,8 +620,11 @@ pub struct Config {
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
 
-    /// Directory where Codex writes effective session config snapshots.
+    /// Directory where Codex writes effective session config lock files.
     pub config_snapshot_export_dir: Option<AbsolutePathBuf>,
+
+    /// Effective config lock used for strict replay validation.
+    pub(crate) config_lock: Option<Arc<ConfigLockFile>>,
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
@@ -959,6 +964,28 @@ impl ConfigBuilder {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, err));
             }
         };
+        if let Some(config_lock_file) = config_toml.config_lock_file.as_ref() {
+            let lock = ConfigLockFile::read_from_path(config_lock_file).await?;
+            let lock_layer = lock_layer_from_config(config_lock_file, &lock)?;
+            let lock_config_toml = lock.replay_config.clone();
+            let lock_config_layer_stack = ConfigLayerStack::new(
+                vec![lock_layer],
+                config_layer_stack.requirements().clone(),
+                config_layer_stack.requirements_toml().clone(),
+            )?;
+            let mut lock_overrides = harness_overrides;
+            lock_overrides.cwd = Some(lock.session.cwd.to_path_buf());
+            let mut config = Config::load_config_with_layer_stack(
+                LOCAL_FS.as_ref(),
+                lock_config_toml,
+                lock_overrides,
+                codex_home,
+                lock_config_layer_stack,
+            )
+            .await?;
+            config.config_lock = Some(Arc::new(lock));
+            return Ok(config);
+        }
         Config::load_config_with_layer_stack(
             LOCAL_FS.as_ref(),
             config_toml,
@@ -2891,6 +2918,7 @@ impl Config {
             sqlite_home,
             log_dir,
             config_snapshot_export_dir: cfg.config_snapshot_export_dir,
+            config_lock: None,
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),

@@ -6,12 +6,30 @@ use codex_features::Feature;
 use codex_features::FeatureToml;
 use codex_features::FeaturesToml;
 use codex_protocol::ThreadId;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
+
+use crate::config_lock::ConfigLockFile;
+use crate::config_lock::toml_round_trip;
 
 use super::SessionConfiguration;
 
-pub(crate) async fn export_config_snapshot_if_configured(
+pub(crate) async fn validate_config_lock_if_configured(
+    session_configuration: &SessionConfiguration,
+) -> anyhow::Result<()> {
+    let Some(expected) = session_configuration
+        .original_config_do_not_use
+        .config_lock
+        .as_ref()
+    else {
+        return Ok(());
+    };
+    let actual = session_configuration.to_config_lock()?;
+    expected
+        .validate_replay(&actual)
+        .context("config lock replay validation failed")?;
+    Ok(())
+}
+
+pub(crate) async fn export_config_lock_if_configured(
     session_configuration: &SessionConfiguration,
     conversation_id: ThreadId,
 ) -> anyhow::Result<()> {
@@ -20,73 +38,84 @@ pub(crate) async fn export_config_snapshot_if_configured(
         return Ok(());
     };
 
-    let snapshot = session_configuration.to_config_snapshot_toml()?;
-    let snapshot = toml::to_string_pretty(&snapshot)
-        .context("failed to serialize effective session config snapshot")?;
-    let path = export_dir.join(format!("{conversation_id}.config.toml"));
+    let lock = session_configuration.to_config_lock()?;
+    let lock = toml::to_string_pretty(&lock).context("failed to serialize config lock")?;
+    let path = export_dir.join(format!("{conversation_id}.config.lock.toml"));
 
     tokio::fs::create_dir_all(export_dir)
         .await
         .with_context(|| {
             format!(
-                "failed to create config snapshot export directory {}",
+                "failed to create config lock export directory {}",
                 export_dir.display()
             )
         })?;
-    tokio::fs::write(&path, snapshot).await.with_context(|| {
-        format!(
-            "failed to write effective session config snapshot to {}",
-            path.display()
-        )
-    })?;
+    tokio::fs::write(&path, lock)
+        .await
+        .with_context(|| format!("failed to write config lock to {}", path.display()))?;
 
     Ok(())
 }
 
 impl SessionConfiguration {
-    pub(crate) fn to_config_snapshot_toml(&self) -> anyhow::Result<ConfigToml> {
-        session_configuration_to_snapshot_config_toml(self)
+    pub(crate) fn to_config_lock(&self) -> anyhow::Result<ConfigLockFile> {
+        let replay_config = session_configuration_to_replay_config_toml(self)?;
+        Ok(ConfigLockFile::new(
+            replay_config,
+            self.thread_config_snapshot(),
+        ))
     }
 }
 
-fn session_configuration_to_snapshot_config_toml(
+fn session_configuration_to_replay_config_toml(
     sc: &SessionConfiguration,
 ) -> anyhow::Result<ConfigToml> {
     let config = sc.original_config_do_not_use.as_ref();
-    let mut snapshot: ConfigToml = config
+    let mut replay_config: ConfigToml = config
         .config_layer_stack
         .effective_config()
         .try_into()
-        .context("failed to deserialize effective config for snapshot")?;
+        .context("failed to deserialize effective config for lock replay config")?;
 
-    snapshot.model = Some(sc.collaboration_mode.model().to_string());
-    snapshot.model_reasoning_effort = sc.collaboration_mode.reasoning_effort();
-    snapshot.model_reasoning_summary = sc.model_reasoning_summary;
-    snapshot.service_tier = sc.service_tier;
-    snapshot.instructions = Some(sc.base_instructions.clone());
-    snapshot.developer_instructions = sc.developer_instructions.clone();
-    snapshot.compact_prompt = sc.compact_prompt.clone();
-    snapshot.personality = sc.personality;
-    snapshot.approval_policy = Some(sc.approval_policy.value());
-    snapshot.approvals_reviewer = Some(sc.approvals_reviewer);
-    snapshot.permission_profile = Some(sc.permission_profile.get().clone());
-    snapshot.web_search = Some(config.web_search_mode.value());
+    replay_config.model = Some(sc.collaboration_mode.model().to_string());
+    replay_config.model_reasoning_effort = sc.collaboration_mode.reasoning_effort();
+    replay_config.model_reasoning_summary = sc.model_reasoning_summary;
+    replay_config.service_tier = sc.service_tier;
+    replay_config.instructions = Some(sc.base_instructions.clone());
+    replay_config.developer_instructions = sc.developer_instructions.clone();
+    replay_config.compact_prompt = sc.compact_prompt.clone();
+    replay_config.personality = sc.personality;
+    replay_config.approval_policy = Some(sc.approval_policy.value());
+    replay_config.approvals_reviewer = Some(sc.approvals_reviewer);
+    replay_config.permission_profile = Some(sc.permission_profile.get().clone());
+    replay_config.web_search = Some(config.web_search_mode.value());
+    replay_config.model_provider = Some(config.model_provider_id.clone());
+    replay_config.model_reasoning_effort = config.model_reasoning_effort;
+    replay_config.plan_mode_reasoning_effort = config.plan_mode_reasoning_effort;
+    replay_config.model_verbosity = config.model_verbosity;
+    replay_config.include_permissions_instructions = Some(config.include_permissions_instructions);
+    replay_config.include_apps_instructions = Some(config.include_apps_instructions);
+    replay_config.include_environment_context = Some(config.include_environment_context);
+    replay_config.background_terminal_max_timeout = Some(config.background_terminal_max_timeout);
 
-    snapshot.profile = None;
-    snapshot.profiles.clear();
-    snapshot.config_snapshot_export_dir = None;
-    snapshot.model_instructions_file = None;
-    snapshot.experimental_instructions_file = None;
-    snapshot.experimental_compact_prompt_file = None;
-    snapshot.model_catalog_json = None;
-    snapshot.sandbox_mode = None;
-    snapshot.sandbox_workspace_write = None;
-    snapshot.default_permissions = None;
-    snapshot.permissions = None;
-    snapshot.experimental_use_unified_exec_tool = None;
-    snapshot.experimental_use_freeform_apply_patch = None;
+    replay_config.profile = None;
+    replay_config.profiles.clear();
+    replay_config.config_snapshot_export_dir = None;
+    replay_config.config_lock_file = None;
+    replay_config.model_instructions_file = None;
+    replay_config.experimental_instructions_file = None;
+    replay_config.experimental_compact_prompt_file = None;
+    replay_config.model_catalog_json = None;
+    replay_config.sandbox_mode = None;
+    replay_config.sandbox_workspace_write = None;
+    replay_config.default_permissions = None;
+    replay_config.permissions = None;
+    replay_config.experimental_use_unified_exec_tool = None;
+    replay_config.experimental_use_freeform_apply_patch = None;
 
-    let features = snapshot.features.get_or_insert_with(FeaturesToml::default);
+    let features = replay_config
+        .features
+        .get_or_insert_with(FeaturesToml::default);
     features.materialize_resolved_enabled(config.features.get());
     features.multi_agent_v2 = Some(FeatureToml::Config(resolved_config_to_toml(
         &config.multi_agent_v2,
@@ -99,12 +128,12 @@ fn session_configuration_to_snapshot_config_toml(
         enabled: Some(config.features.enabled(Feature::AppsMcpPathOverride)),
         path: config.apps_mcp_path_override.clone(),
     }));
-    snapshot.memories = Some(resolved_config_to_toml::<MemoriesToml, _>(
+    replay_config.memories = Some(resolved_config_to_toml::<MemoriesToml>(
         &config.memories,
         "memories",
     )?);
 
-    let agents = snapshot.agents.get_or_insert_with(Default::default);
+    let agents = replay_config.agents.get_or_insert_with(Default::default);
     agents.max_threads = if config.features.enabled(Feature::MultiAgentV2) {
         None
     } else {
@@ -114,27 +143,22 @@ fn session_configuration_to_snapshot_config_toml(
     agents.job_max_runtime_seconds = config.agent_job_max_runtime_seconds;
     agents.interrupt_message = Some(config.agent_interrupt_message_enabled);
 
-    snapshot
+    replay_config
         .skills
         .get_or_insert_with(Default::default)
         .include_instructions = Some(config.include_skill_instructions);
 
-    Ok(snapshot)
+    Ok(replay_config)
 }
 
-fn resolved_config_to_toml<Toml, Runtime>(
-    value: &Runtime,
+fn resolved_config_to_toml<Toml>(
+    value: &impl serde::Serialize,
     label: &'static str,
 ) -> anyhow::Result<Toml>
 where
-    Toml: DeserializeOwned,
-    Runtime: Serialize,
+    Toml: serde::de::DeserializeOwned + serde::Serialize,
 {
-    let value = toml::Value::try_from(value)
-        .with_context(|| format!("failed to serialize resolved {label} config"))?;
-    value
-        .try_into()
-        .with_context(|| format!("failed to convert resolved {label} config to snapshot TOML"))
+    toml_round_trip(value, label).map_err(anyhow::Error::from)
 }
 
 #[cfg(test)]
@@ -144,36 +168,38 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
-    async fn snapshot_overlays_resolved_session_values_and_materializes_features() {
+    async fn lock_contains_prompts_and_materializes_features() {
         let mut sc = crate::session::tests::make_session_configuration_for_tests().await;
         sc.base_instructions = "resolved instructions".to_string();
         sc.developer_instructions = Some("resolved developer instructions".to_string());
         sc.compact_prompt = Some("resolved compact prompt".to_string());
 
-        let snapshot = sc
-            .to_config_snapshot_toml()
-            .expect("snapshot config should serialize");
+        let lock = sc.to_config_lock().expect("lock should serialize");
 
+        assert_eq!(lock.session.base_instructions, sc.base_instructions);
         assert_eq!(
-            snapshot.model,
+            lock.session.developer_instructions,
+            sc.developer_instructions
+        );
+        assert_eq!(lock.session.compact_prompt, sc.compact_prompt);
+        assert_eq!(
+            lock.replay_config.model,
             Some(sc.collaboration_mode.model().to_string())
         );
         assert_eq!(
-            snapshot.model_reasoning_effort,
+            lock.replay_config.model_reasoning_effort,
             sc.collaboration_mode.reasoning_effort()
         );
-        assert_eq!(snapshot.instructions, Some(sc.base_instructions.clone()));
-        assert_eq!(snapshot.developer_instructions, sc.developer_instructions);
-        assert_eq!(snapshot.compact_prompt, sc.compact_prompt);
         assert_eq!(
-            snapshot.permission_profile,
+            lock.replay_config.permission_profile,
             Some(sc.permission_profile.get().clone())
         );
-        assert_eq!(snapshot.profile, None);
-        assert!(snapshot.profiles.is_empty());
-        assert_eq!(snapshot.config_snapshot_export_dir, None);
+        assert_eq!(lock.replay_config.profile, None);
+        assert!(lock.replay_config.profiles.is_empty());
+        assert_eq!(lock.replay_config.config_snapshot_export_dir, None);
+        assert_eq!(lock.replay_config.config_lock_file, None);
         assert_eq!(
-            snapshot.memories,
+            lock.replay_config.memories,
             Some(MemoriesToml {
                 disable_on_external_context: Some(
                     sc.original_config_do_not_use
@@ -215,10 +241,11 @@ mod tests {
             })
         );
 
-        let features = snapshot
+        let features = lock
+            .replay_config
             .features
             .as_ref()
-            .expect("snapshot should materialize feature states");
+            .expect("lock should materialize feature states");
         let feature_entries = features.entries();
         for spec in codex_features::FEATURES {
             assert_eq!(
@@ -244,5 +271,18 @@ mod tests {
                 ..
             })
         ));
+
+        assert_eq!(lock.version, crate::config_lock::CONFIG_LOCK_VERSION);
+    }
+
+    #[tokio::test]
+    async fn lock_validation_rejects_prompt_drift() {
+        let sc = crate::session::tests::make_session_configuration_for_tests().await;
+        let expected = sc.to_config_lock().expect("lock should serialize");
+        let mut drifted = sc;
+        drifted.base_instructions.push_str("\nchanged");
+        let drifted = drifted.to_config_lock().expect("lock should serialize");
+
+        assert!(expected.validate_replay(&drifted).is_err());
     }
 }
