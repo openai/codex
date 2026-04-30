@@ -921,7 +921,7 @@ mod tests {
         request_id: &str,
         active_selection_content: &str,
     ) {
-        write_frame(
+        if let Err(err) = write_frame(
             stream,
             &json!({
                 "type": "response",
@@ -947,8 +947,9 @@ mod tests {
                     }
                 }
             }),
-        )
-        .expect("write ide-context response");
+        ) {
+            panic!("write ide-context response failed: {err}");
+        }
     }
 
     #[cfg(unix)]
