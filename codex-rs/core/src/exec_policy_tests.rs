@@ -759,14 +759,18 @@ fn unmatched_safe_powershell_words_are_allowed() {
     assert_eq!(
         Decision::Allow,
         render_decision_for_unmatched_command(
-            AskForApproval::UnlessTrusted,
-            &permission_profile_from_sandbox_policy(&SandboxPolicy::new_read_only_policy()),
-            &read_only_file_system_sandbox_policy(),
-            Path::new("/tmp"),
             &command,
-            SandboxPermissions::UseDefault,
-            /*used_complex_parsing*/ false,
-            ExecPolicyCommandOrigin::PowerShell,
+            UnmatchedCommandContext {
+                approval_policy: AskForApproval::UnlessTrusted,
+                permission_profile: &permission_profile_from_sandbox_policy(
+                    &SandboxPolicy::new_read_only_policy(),
+                ),
+                file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+                sandbox_cwd: Path::new("/tmp"),
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                used_complex_parsing: false,
+                command_origin: ExecPolicyCommandOrigin::PowerShell,
+            },
         )
     );
 }
@@ -1090,20 +1094,24 @@ fn unmatched_granular_policy_still_prompts_for_restricted_sandbox_escalation() {
     assert_eq!(
         Decision::Prompt,
         render_decision_for_unmatched_command(
-            AskForApproval::Granular(GranularApprovalConfig {
-                sandbox_approval: true,
-                rules: true,
-                skill_approval: true,
-                request_permissions: true,
-                mcp_elicitations: true,
-            }),
-            &permission_profile_from_sandbox_policy(&SandboxPolicy::new_read_only_policy()),
-            &read_only_file_system_sandbox_policy(),
-            Path::new("/tmp"),
             &command,
-            SandboxPermissions::RequireEscalated,
-            /*used_complex_parsing*/ false,
-            ExecPolicyCommandOrigin::Direct,
+            UnmatchedCommandContext {
+                approval_policy: AskForApproval::Granular(GranularApprovalConfig {
+                    sandbox_approval: true,
+                    rules: true,
+                    skill_approval: true,
+                    request_permissions: true,
+                    mcp_elicitations: true,
+                }),
+                permission_profile: &permission_profile_from_sandbox_policy(
+                    &SandboxPolicy::new_read_only_policy(),
+                ),
+                file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+                sandbox_cwd: Path::new("/tmp"),
+                sandbox_permissions: SandboxPermissions::RequireEscalated,
+                used_complex_parsing: false,
+                command_origin: ExecPolicyCommandOrigin::Direct,
+            },
         )
     );
 }
@@ -1116,14 +1124,16 @@ fn unmatched_on_request_uses_split_filesystem_policy_for_escalation_prompts() {
     assert_eq!(
         Decision::Prompt,
         render_decision_for_unmatched_command(
-            AskForApproval::OnRequest,
-            &PermissionProfile::Disabled,
-            &restricted_file_system_policy,
-            Path::new("/tmp"),
             &command,
-            SandboxPermissions::RequireEscalated,
-            /*used_complex_parsing*/ false,
-            ExecPolicyCommandOrigin::Direct,
+            UnmatchedCommandContext {
+                approval_policy: AskForApproval::OnRequest,
+                permission_profile: &PermissionProfile::Disabled,
+                file_system_sandbox_policy: &restricted_file_system_policy,
+                sandbox_cwd: Path::new("/tmp"),
+                sandbox_permissions: SandboxPermissions::RequireEscalated,
+                used_complex_parsing: false,
+                command_origin: ExecPolicyCommandOrigin::Direct,
+            },
         )
     );
 }

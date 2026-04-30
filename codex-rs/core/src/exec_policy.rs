@@ -111,6 +111,17 @@ pub(crate) enum ExecPolicyCommandOrigin {
     PowerShell,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct UnmatchedCommandContext<'a> {
+    pub(crate) approval_policy: AskForApproval,
+    pub(crate) permission_profile: &'a PermissionProfile,
+    pub(crate) file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
+    pub(crate) sandbox_cwd: &'a Path,
+    pub(crate) sandbox_permissions: SandboxPermissions,
+    pub(crate) used_complex_parsing: bool,
+    pub(crate) command_origin: ExecPolicyCommandOrigin,
+}
+
 pub(crate) fn child_uses_parent_exec_policy(parent_config: &Config, child_config: &Config) -> bool {
     fn exec_policy_config_folders(config: &Config) -> Vec<AbsolutePathBuf> {
         config
@@ -266,14 +277,16 @@ impl ExecPolicyManager {
         let auto_amendment_allowed = !used_complex_parsing;
         let exec_policy_fallback = |cmd: &[String]| {
             render_decision_for_unmatched_command(
-                approval_policy,
-                &permission_profile,
-                file_system_sandbox_policy,
-                sandbox_cwd,
                 cmd,
-                sandbox_permissions,
-                used_complex_parsing,
-                command_origin,
+                UnmatchedCommandContext {
+                    approval_policy,
+                    permission_profile: &permission_profile,
+                    file_system_sandbox_policy,
+                    sandbox_cwd,
+                    sandbox_permissions,
+                    used_complex_parsing,
+                    command_origin,
+                },
             )
         };
         let match_options = MatchOptions {
@@ -596,15 +609,18 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
 
 /// If a command is not matched by any execpolicy rule, derive a [`Decision`].
 pub(crate) fn render_decision_for_unmatched_command(
-    approval_policy: AskForApproval,
-    permission_profile: &PermissionProfile,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    sandbox_cwd: &Path,
     command: &[String],
-    sandbox_permissions: SandboxPermissions,
-    used_complex_parsing: bool,
-    command_origin: ExecPolicyCommandOrigin,
+    context: UnmatchedCommandContext<'_>,
 ) -> Decision {
+    let UnmatchedCommandContext {
+        approval_policy,
+        permission_profile,
+        file_system_sandbox_policy,
+        sandbox_cwd,
+        sandbox_permissions,
+        used_complex_parsing,
+        command_origin,
+    } = context;
     let is_known_safe = match command_origin {
         ExecPolicyCommandOrigin::Direct => is_known_safe_command(command),
         #[cfg(windows)]
