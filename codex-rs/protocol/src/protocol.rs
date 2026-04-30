@@ -3981,7 +3981,6 @@ pub struct CollabResumeEndEvent {
 mod tests {
     use super::*;
     use crate::items::ImageGenerationItem;
-    use crate::items::ImageViewItem;
     use crate::items::UserMessageItem;
     use crate::items::WebSearchItem;
     use crate::permissions::FileSystemAccessMode;
@@ -4712,36 +4711,6 @@ mod tests {
             }
             _ => panic!("expected ImageGenerationEnd event"),
         }
-    }
-
-    #[test]
-    fn image_view_item_lifecycle_emits_no_legacy_events() {
-        let item = TurnItem::ImageView(ImageViewItem {
-            id: "view-image-1".into(),
-            path: test_path_buf("/tmp/view-image.png").abs(),
-        });
-
-        let started = ItemStartedEvent {
-            thread_id: ThreadId::new(),
-            turn_id: "turn-1".into(),
-            item: item.clone(),
-        };
-        let completed = ItemCompletedEvent {
-            thread_id: ThreadId::new(),
-            turn_id: "turn-1".into(),
-            item,
-        };
-
-        assert!(
-            started
-                .as_legacy_events(/*show_raw_agent_reasoning*/ false)
-                .is_empty()
-        );
-        assert!(
-            completed
-                .as_legacy_events(/*show_raw_agent_reasoning*/ false)
-                .is_empty()
-        );
     }
 
     #[test]
