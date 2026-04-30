@@ -1328,32 +1328,43 @@ async fn open_agent_picker_marks_terminal_read_errors_closed() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn open_agent_picker_marks_loaded_threads_open() -> Result<()> {
-    let mut app = Box::pin(make_test_app()).await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let started = app_server
-        .start_thread(app.chat_widget.config_ref())
-        .await?;
-    let thread_id = started.session.thread_id;
-    app.thread_event_channels
-        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+#[test]
+fn open_agent_picker_marks_loaded_threads_open() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
-    Box::pin(app.open_agent_picker(&mut app_server)).await;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
 
-    assert_eq!(
-        app.agent_navigation.get(&thread_id),
-        Some(&AgentPickerThreadEntry {
-            agent_nickname: None,
-            agent_role: None,
-            is_closed: false,
-        })
-    );
-    Ok(())
+    runtime.block_on(async {
+        let mut app = Box::pin(make_test_app()).await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await?;
+        let thread_id = started.session.thread_id;
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+
+        Box::pin(app.open_agent_picker(&mut app_server)).await;
+
+        assert_eq!(
+            app.agent_navigation.get(&thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: None,
+                agent_role: None,
+                is_closed: false,
+            })
+        );
+        Ok(())
+    })
 }
 
 #[test]
@@ -1565,68 +1576,84 @@ async fn update_memory_settings_persists_and_updates_widget_config() -> Result<(
     Ok(())
 }
 
-#[tokio::test]
-async fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
-    let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
-    let codex_home = tempdir()?;
-    app.config.codex_home = codex_home.path().to_path_buf().abs();
-    // Seed the previous setting so this test exercises the thread-mode update path.
-    app.config.memories.generate_memories = true;
+#[test]
+fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
-    let started = app_server.start_thread(&app.config).await?;
-    let thread_id = started.session.thread_id;
-    app.active_thread_id = Some(thread_id);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
 
-    Box::pin(app.update_memory_settings_with_app_server(
-        &mut app_server,
-        /*use_memories*/ true,
-        /*generate_memories*/ false,
-    ))
-    .await;
+    runtime.block_on(async {
+        let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
+        // Seed the previous setting so this test exercises the thread-mode update path.
+        app.config.memories.generate_memories = true;
 
-    let state_db = codex_state::StateRuntime::init(
-        codex_home.path().to_path_buf(),
-        app.config.model_provider_id.clone(),
-    )
-    .await
-    .expect("state db should initialize");
-    let memory_mode = state_db
-        .get_thread_memory_mode(thread_id)
+        let mut app_server =
+            Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+        let started = app_server.start_thread(&app.config).await?;
+        let thread_id = started.session.thread_id;
+        app.active_thread_id = Some(thread_id);
+
+        Box::pin(app.update_memory_settings_with_app_server(
+            &mut app_server,
+            /*use_memories*/ true,
+            /*generate_memories*/ false,
+        ))
+        .await;
+
+        let state_db = codex_state::StateRuntime::init(
+            codex_home.path().to_path_buf(),
+            app.config.model_provider_id.clone(),
+        )
         .await
-        .expect("thread memory mode should be readable");
-    assert_eq!(memory_mode.as_deref(), Some("disabled"));
+        .expect("state db should initialize");
+        let memory_mode = state_db
+            .get_thread_memory_mode(thread_id)
+            .await
+            .expect("thread memory mode should be readable");
+        assert_eq!(memory_mode.as_deref(), Some("disabled"));
 
-    app_server.shutdown().await?;
-    Ok(())
+        app_server.shutdown().await?;
+        Ok(())
+    })
 }
 
 #[tokio::test]
 async fn reset_memories_clears_local_memory_directories() -> Result<()> {
-    let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
-    let codex_home = tempdir()?;
-    app.config.codex_home = codex_home.path().to_path_buf().abs();
-    app.config.sqlite_home = codex_home.path().to_path_buf();
+    Box::pin(async {
+        let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
+        app.config.sqlite_home = codex_home.path().to_path_buf();
 
-    let memory_root = codex_home.path().join("memories");
-    let extensions_root = memory_root.join("extensions");
-    std::fs::create_dir_all(memory_root.join("rollout_summaries"))?;
-    std::fs::create_dir_all(&extensions_root)?;
-    std::fs::write(memory_root.join("MEMORY.md"), "stale memory\n")?;
-    std::fs::write(
-        memory_root.join("rollout_summaries").join("stale.md"),
-        "stale summary\n",
-    )?;
-    std::fs::write(extensions_root.join("stale.txt"), "stale extension\n")?;
+        let memory_root = codex_home.path().join("memories");
+        let extensions_root = memory_root.join("extensions");
+        std::fs::create_dir_all(memory_root.join("rollout_summaries"))?;
+        std::fs::create_dir_all(&extensions_root)?;
+        std::fs::write(memory_root.join("MEMORY.md"), "stale memory\n")?;
+        std::fs::write(
+            memory_root.join("rollout_summaries").join("stale.md"),
+            "stale summary\n",
+        )?;
+        std::fs::write(extensions_root.join("stale.txt"), "stale extension\n")?;
 
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+        let mut app_server =
+            Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
 
-    Box::pin(app.reset_memories_with_app_server(&mut app_server)).await;
+        Box::pin(app.reset_memories_with_app_server(&mut app_server)).await;
 
-    assert_eq!(std::fs::read_dir(&memory_root)?.count(), 0);
+        assert_eq!(std::fs::read_dir(&memory_root)?.count(), 0);
 
-    app_server.shutdown().await?;
-    Ok(())
+        app_server.shutdown().await?;
+        Ok(())
+    })
+    .await
 }
 
 #[tokio::test]
@@ -4866,46 +4893,49 @@ async fn thread_rollback_response_discards_queued_active_thread_events() {
 
 #[tokio::test]
 async fn new_session_requests_shutdown_for_previous_conversation() {
-    let (mut app, mut app_event_rx, mut op_rx) = Box::pin(make_test_app_with_channels()).await;
+    Box::pin(async {
+        let (mut app, mut app_event_rx, mut op_rx) = Box::pin(make_test_app_with_channels()).await;
 
-    let thread_id = ThreadId::new();
-    let event = crate::session_state::ThreadSessionState {
-        thread_id,
-        forked_from_id: None,
-        fork_parent_title: None,
-        thread_name: None,
-        model: "gpt-test".to_string(),
-        model_provider_id: "test-provider".to_string(),
-        service_tier: None,
-        approval_policy: AskForApproval::Never,
-        approvals_reviewer: ApprovalsReviewer::User,
-        permission_profile: PermissionProfile::read_only(),
-        active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
-        instruction_source_paths: Vec::new(),
-        reasoning_effort: None,
-        history_log_id: 0,
-        history_entry_count: 0,
-        network_proxy: None,
-        rollout_path: Some(PathBuf::new()),
-    };
+        let thread_id = ThreadId::new();
+        let event = crate::session_state::ThreadSessionState {
+            thread_id,
+            forked_from_id: None,
+            fork_parent_title: None,
+            thread_name: None,
+            model: "gpt-test".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
+            cwd: test_path_buf("/home/user/project").abs(),
+            instruction_source_paths: Vec::new(),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::new()),
+        };
 
-    app.chat_widget.handle_thread_session(event);
+        app.chat_widget.handle_thread_session(event);
 
-    while app_event_rx.try_recv().is_ok() {}
-    while op_rx.try_recv().is_ok() {}
+        while app_event_rx.try_recv().is_ok() {}
+        while op_rx.try_recv().is_ok() {}
 
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    Box::pin(app.shutdown_current_thread(&mut app_server)).await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        Box::pin(app.shutdown_current_thread(&mut app_server)).await;
 
-    assert!(
-        op_rx.try_recv().is_err(),
-        "shutdown should not submit Op::Shutdown"
-    );
+        assert!(
+            op_rx.try_recv().is_err(),
+            "shutdown should not submit Op::Shutdown"
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -4954,28 +4984,34 @@ async fn shutdown_first_exit_uses_app_server_shutdown_without_submitting_op() {
 
 #[tokio::test]
 async fn interrupt_without_active_turn_is_treated_as_handled() {
-    let mut app = make_test_app().await;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let started = app_server
-        .start_thread(app.chat_widget.config_ref())
+    Box::pin(async {
+        let mut app = make_test_app().await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
         .await
-        .expect("thread/start should succeed");
-    let thread_id = started.session.thread_id;
-    app.enqueue_primary_thread_session(started.session, started.turns)
-        .await
-        .expect("primary thread should be registered");
-    let op = AppCommand::interrupt();
-
-    let handled =
-        Box::pin(app.try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op))
+        .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
             .await
-            .expect("interrupt submission should not fail");
+            .expect("thread/start should succeed");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, started.turns)
+            .await
+            .expect("primary thread should be registered");
+        let op = AppCommand::interrupt();
 
-    assert_eq!(handled, true);
+        let handled = Box::pin(app.try_submit_active_thread_op_via_app_server(
+            &mut app_server,
+            thread_id,
+            &op,
+        ))
+        .await
+        .expect("interrupt submission should not fail");
+
+        assert_eq!(handled, true);
+    })
+    .await;
 }
 
 #[tokio::test]
