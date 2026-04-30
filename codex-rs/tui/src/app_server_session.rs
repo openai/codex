@@ -122,6 +122,10 @@ use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
+    color_eyre::eyre::eyre!("{context}: {err}")
+}
+
 /// Data collected during the TUI bootstrap phase that the main event loop
 /// needs to configure the UI, telemetry, and initial rate-limit prefetch.
 ///
@@ -236,7 +240,9 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("model/list failed during TUI bootstrap")?;
+            .map_err(|err| {
+                bootstrap_request_error("model/list failed during TUI bootstrap", err)
+            })?;
         let available_models = models
             .data
             .into_iter()
@@ -320,7 +326,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("account/read failed during TUI bootstrap")
+            .map_err(|err| bootstrap_request_error("account/read failed during TUI bootstrap", err))
     }
 
     pub(crate) async fn external_agent_config_detect(
@@ -375,7 +381,9 @@ impl AppServerSession {
                 ),
             })
             .await
-            .wrap_err("thread/start failed during TUI bootstrap")?;
+            .map_err(|err| {
+                bootstrap_request_error("thread/start failed during TUI bootstrap", err)
+            })?;
         started_thread_from_start_response(response, config, self.thread_params_mode()).await
     }
 
@@ -397,7 +405,9 @@ impl AppServerSession {
                 ),
             })
             .await
-            .wrap_err("thread/resume failed during TUI bootstrap")?;
+            .map_err(|err| {
+                bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
+            })?;
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
             .await;
@@ -426,7 +436,9 @@ impl AppServerSession {
                 ),
             })
             .await
-            .wrap_err("thread/fork failed during TUI bootstrap")?;
+            .map_err(|err| {
+                bootstrap_request_error("thread/fork failed during TUI bootstrap", err)
+            })?;
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
             .await;

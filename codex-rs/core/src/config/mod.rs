@@ -23,7 +23,6 @@ use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
 use codex_config::ThreadConfigLoader;
-use codex_config::config_toml::ConfigLockToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
@@ -626,7 +625,7 @@ pub struct Config {
     pub config_snapshot_export_dir: Option<AbsolutePathBuf>,
 
     /// Effective config lock used for strict replay validation.
-    pub(crate) config_lock: Option<Arc<ConfigLockToml>>,
+    pub(crate) config_lock: Option<Arc<ConfigToml>>,
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
@@ -974,6 +973,7 @@ impl ConfigBuilder {
                     "config lock file is missing [config_lock] metadata",
                 ));
             };
+            let expected_lock_config = lock_config_toml.clone();
             let lock_layer = lock_layer_from_config(config_lock_file, &lock_config_toml)?;
             let lock_config_toml = config_without_lock_controls(&lock_config_toml);
             let lock_config_layer_stack = ConfigLayerStack::new(
@@ -981,6 +981,7 @@ impl ConfigBuilder {
                 config_layer_stack.requirements().clone(),
                 config_layer_stack.requirements_toml().clone(),
             )?;
+            harness_overrides.cwd = Some(lock_metadata.cwd.to_path_buf());
             let mut config = Config::load_config_with_layer_stack(
                 LOCAL_FS.as_ref(),
                 lock_config_toml,
@@ -989,7 +990,7 @@ impl ConfigBuilder {
                 lock_config_layer_stack,
             )
             .await?;
-            config.config_lock = Some(Arc::new(lock_metadata));
+            config.config_lock = Some(Arc::new(expected_lock_config));
             return Ok(config);
         }
         Config::load_config_with_layer_stack(

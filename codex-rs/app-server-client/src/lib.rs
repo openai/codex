@@ -304,7 +304,15 @@ impl fmt::Display for TypedRequestError {
                 write!(f, "{method} transport error: {source}")
             }
             Self::Server { method, source } => {
-                write!(f, "{method} failed: {}", source.message)
+                write!(
+                    f,
+                    "{method} failed: {} (code {})",
+                    source.message, source.code
+                )?;
+                if let Some(data) = source.data.as_ref() {
+                    write!(f, ", data: {data}")?;
+                }
+                Ok(())
             }
             Self::Deserialize { method, source } => {
                 write!(f, "{method} response decode error: {source}")

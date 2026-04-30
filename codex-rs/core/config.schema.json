@@ -334,11 +334,8 @@
         "codex_version": {
           "type": "string"
         },
-        "config_sha256": {
-          "type": "string"
-        },
-        "session_sha256": {
-          "type": "string"
+        "cwd": {
+          "$ref": "#/definitions/AbsolutePathBuf"
         },
         "version": {
           "format": "uint32",
@@ -348,8 +345,7 @@
       },
       "required": [
         "codex_version",
-        "config_sha256",
-        "session_sha256",
+        "cwd",
         "version"
       ],
       "type": "object"

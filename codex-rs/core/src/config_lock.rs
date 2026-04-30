@@ -4,7 +4,6 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::config_toml::ConfigLockToml;
 use codex_config::config_toml::ConfigToml;
-use codex_config::version_for_toml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -39,60 +38,43 @@ pub(crate) async fn read_config_lock_from_path(path: &AbsolutePathBuf) -> io::Re
     Ok(lock_config)
 }
 
-pub(crate) fn config_lock_metadata(
-    config: &ConfigToml,
-    session: &ThreadConfigSnapshot,
-) -> io::Result<ConfigLockToml> {
-    Ok(ConfigLockToml {
+pub(crate) fn config_lock_metadata(session: &ThreadConfigSnapshot) -> ConfigLockToml {
+    ConfigLockToml {
         version: CONFIG_LOCK_VERSION,
         codex_version: env!("CARGO_PKG_VERSION").to_string(),
-        config_sha256: config_sha256(config)?,
-        session_sha256: session_sha256(session)?,
-    })
+        cwd: session.cwd.clone(),
+    }
 }
 
 pub(crate) fn validate_config_lock_replay(
-    expected: &ConfigLockToml,
-    expected_config: &ConfigToml,
-    actual_config: &ConfigToml,
-    actual_session: &ThreadConfigSnapshot,
+    expected_lock: &ConfigToml,
+    actual_lock: &ConfigToml,
 ) -> io::Result<()> {
-    validate_config_lock_metadata_shape(expected)?;
-
-    let expected_config_sha = config_sha256(expected_config)?;
-    if expected.config_sha256 != expected_config_sha {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "config lock file contents do not match [config_lock].config_sha256 \
-                 (stored {}, current {}); regenerate the lock after editing config values",
-                expected.config_sha256, expected_config_sha
-            ),
-        ));
+    match expected_lock.config_lock.as_ref() {
+        Some(expected) => validate_config_lock_metadata_shape(expected)?,
+        None => {
+            return Err(config_lock_error(
+                "config lock file is missing [config_lock] metadata",
+            ));
+        }
+    }
+    match actual_lock.config_lock.as_ref() {
+        Some(actual) => validate_config_lock_metadata_shape(actual)?,
+        None => {
+            return Err(config_lock_error(
+                "regenerated config lock is missing [config_lock] metadata",
+            ));
+        }
     }
 
-    let actual_config_sha = config_sha256(actual_config)?;
-    if expected.config_sha256 != actual_config_sha {
-        let expected_config = config_without_lock_controls(expected_config);
-        let actual_config = config_without_lock_controls(actual_config);
-        let diff = compact_diff("config", &expected_config, &actual_config)
+    let expected_lock = config_lock_for_comparison(expected_lock);
+    let actual_lock = config_lock_for_comparison(actual_lock);
+    if expected_lock != actual_lock {
+        let diff = compact_diff("config", &expected_lock, &actual_lock)
             .unwrap_or_else(|err| format!("failed to build config lock diff: {err}"));
-        return Err(lock_hash_mismatch(
-            "config",
-            &expected.config_sha256,
-            &actual_config_sha,
-            diff,
-        ));
-    }
-
-    let actual_session_sha = session_sha256(actual_session)?;
-    if expected.session_sha256 != actual_session_sha {
-        return Err(lock_hash_mismatch(
-            "session config",
-            &expected.session_sha256,
-            &actual_session_sha,
-            String::new(),
-        ));
+        return Err(config_lock_error(format!(
+            "replayed effective config does not match config lock: {diff}"
+        )));
     }
 
     Ok(())
@@ -121,56 +103,23 @@ pub(crate) fn config_without_lock_controls(config: &ConfigToml) -> ConfigToml {
 
 fn validate_config_lock_metadata_shape(lock: &ConfigLockToml) -> io::Result<()> {
     if lock.version != CONFIG_LOCK_VERSION {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "unsupported config lock version {}; expected {CONFIG_LOCK_VERSION}",
-                lock.version
-            ),
-        ));
-    }
-    if lock.config_sha256.is_empty() || lock.session_sha256.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "config lock metadata must include config_sha256 and session_sha256",
-        ));
+        return Err(config_lock_error(format!(
+            "unsupported config lock version {}; expected {CONFIG_LOCK_VERSION}",
+            lock.version
+        )));
     }
     Ok(())
 }
 
-fn config_sha256(config: &ConfigToml) -> io::Result<String> {
-    let config = config_without_lock_controls(config);
-    Ok(version_for_toml(&toml_value(
-        &config,
-        "config lock config",
-    )?))
+fn config_lock_for_comparison(config: &ConfigToml) -> ConfigToml {
+    let mut config = config.clone();
+    config.config_lock_file = None;
+    config.config_snapshot_export_dir = None;
+    config
 }
 
-fn session_sha256(session: &ThreadConfigSnapshot) -> io::Result<String> {
-    Ok(version_for_toml(&toml_value(
-        session,
-        "config lock session",
-    )?))
-}
-
-fn lock_hash_mismatch(
-    section: &str,
-    expected_sha: &str,
-    actual_sha: &str,
-    diff: String,
-) -> io::Error {
-    let suffix = if diff.is_empty() {
-        String::new()
-    } else {
-        format!(": {diff}")
-    };
-    io::Error::new(
-        io::ErrorKind::InvalidData,
-        format!(
-            "resolved {section} hash does not match config lock \
-             (expected {expected_sha}, actual {actual_sha}){suffix}"
-        ),
-    )
+fn config_lock_error(message: impl Into<String>) -> io::Error {
+    io::Error::other(message.into())
 }
 
 fn compact_diff<T: Serialize>(root: &str, expected: &T, actual: &T) -> io::Result<String> {

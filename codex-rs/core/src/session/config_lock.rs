@@ -23,15 +23,8 @@ pub(crate) async fn validate_config_lock_if_configured(
     else {
         return Ok(());
     };
-    let config = session_configuration.original_config_do_not_use.as_ref();
-    let expected_config: ConfigToml = config
-        .config_layer_stack
-        .effective_config()
-        .try_into()
-        .context("failed to deserialize config lock config")?;
-    let actual_config = session_configuration_to_lock_config_toml(session_configuration)?;
-    let actual_session = session_configuration.thread_config_snapshot();
-    validate_config_lock_replay(expected, &expected_config, &actual_config, &actual_session)
+    let actual = session_configuration.to_config_lock_toml()?;
+    validate_config_lock_replay(expected, &actual)
         .context("config lock replay validation failed")?;
     Ok(())
 }
@@ -67,10 +60,7 @@ pub(crate) async fn export_config_lock_if_configured(
 impl SessionConfiguration {
     pub(crate) fn to_config_lock_toml(&self) -> anyhow::Result<ConfigToml> {
         let mut lock_config = session_configuration_to_lock_config_toml(self)?;
-        lock_config.config_lock = Some(config_lock_metadata(
-            &lock_config,
-            &self.thread_config_snapshot(),
-        )?);
+        lock_config.config_lock = Some(config_lock_metadata(&self.thread_config_snapshot()));
         Ok(lock_config)
     }
 }
@@ -279,60 +269,42 @@ mod tests {
             .as_ref()
             .expect("lock should include metadata");
         assert_eq!(metadata.version, crate::config_lock::CONFIG_LOCK_VERSION);
-        assert!(metadata.config_sha256.starts_with("sha256:"));
-        assert!(metadata.session_sha256.starts_with("sha256:"));
+        assert_eq!(metadata.cwd, sc.cwd);
     }
 
     #[tokio::test]
     async fn lock_validation_rejects_prompt_drift() {
         let sc = crate::session::tests::make_session_configuration_for_tests().await;
-        let expected = sc.to_config_lock_toml().expect("lock should serialize");
-        let metadata = expected
-            .config_lock
-            .as_ref()
-            .expect("lock should include metadata");
-        let mut expected_config = expected.clone();
-        expected_config.config_lock = None;
-        let mut actual_session = sc.thread_config_snapshot();
-        actual_session.base_instructions.push_str("\nchanged");
+        let actual = sc.to_config_lock_toml().expect("lock should serialize");
+        let mut expected = actual.clone();
+        expected
+            .instructions
+            .as_mut()
+            .expect("lock should include instructions")
+            .push_str("\nchanged");
 
-        let error = validate_config_lock_replay(
-            metadata,
-            &expected_config,
-            &expected_config,
-            &actual_session,
-        )
-        .expect_err("prompt drift should fail validation");
+        let error =
+            validate_config_lock_replay(&expected, &actual).expect_err("prompt drift should fail");
         let message = error.to_string();
         assert!(
-            message.contains("resolved session config hash does not match config lock"),
+            message.contains("replayed effective config does not match config lock"),
             "{message}"
         );
+        assert!(message.contains("config.instructions"), "{message}");
     }
 
     #[tokio::test]
     async fn lock_validation_reports_config_diff() {
         let sc = crate::session::tests::make_session_configuration_for_tests().await;
         let expected = sc.to_config_lock_toml().expect("lock should serialize");
-        let metadata = expected
-            .config_lock
-            .as_ref()
-            .expect("lock should include metadata");
-        let mut expected_config = expected.clone();
-        expected_config.config_lock = None;
-        let mut actual_config = expected_config.clone();
-        actual_config.model = Some("different-model".to_string());
+        let mut actual = expected.clone();
+        actual.model = Some("different-model".to_string());
 
-        let error = validate_config_lock_replay(
-            metadata,
-            &expected_config,
-            &actual_config,
-            &sc.thread_config_snapshot(),
-        )
-        .expect_err("config drift should fail validation");
+        let error =
+            validate_config_lock_replay(&expected, &actual).expect_err("config drift should fail");
         let message = error.to_string();
         assert!(
-            message.contains("resolved config hash does not match config lock"),
+            message.contains("replayed effective config does not match config lock"),
             "{message}"
         );
         assert!(message.contains("config.model"), "{message}");

@@ -442,8 +442,7 @@ pub struct ConfigToml {
 pub struct ConfigLockToml {
     pub version: u32,
     pub codex_version: String,
-    pub config_sha256: String,
-    pub session_sha256: String,
+    pub cwd: AbsolutePathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
