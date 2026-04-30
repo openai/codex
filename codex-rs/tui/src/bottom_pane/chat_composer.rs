@@ -8776,17 +8776,17 @@ mod tests {
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
         assert_eq!(composer.textarea.text(), "second");
-        assert_eq!(composer.textarea.cursor(), "secon".len());
+        assert_eq!(composer.textarea.cursor(), "second".len() - 1);
 
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
         assert_eq!(composer.textarea.text(), "first");
-        assert_eq!(composer.textarea.cursor(), "firs".len());
+        assert_eq!(composer.textarea.cursor(), "first".len() - 1);
 
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         assert_eq!(composer.textarea.text(), "second");
-        assert_eq!(composer.textarea.cursor(), "secon".len());
+        assert_eq!(composer.textarea.cursor(), "second".len() - 1);
 
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
@@ -8979,12 +8979,12 @@ mod tests {
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
         assert_eq!(composer.current_text(), "!git");
-        assert_eq!(composer.textarea.cursor(), "gi".len());
+        assert_eq!(composer.textarea.cursor(), "git".len() - 1);
 
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
         assert_eq!(composer.current_text(), "first");
-        assert_eq!(composer.textarea.cursor(), "firs".len());
+        assert_eq!(composer.textarea.cursor(), "first".len() - 1);
     }
 
     #[test]

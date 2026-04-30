@@ -594,7 +594,7 @@ mod tests {
         }
 
         assert_eq!(composer.textarea.text(), "git status");
-        assert_eq!(composer.textarea.cursor(), "git statu".len());
+        assert_eq!(composer.textarea.cursor(), "git status".len() - 1);
         assert_eq!(composer.footer_mode(), FooterMode::HistorySearch);
     }
 
