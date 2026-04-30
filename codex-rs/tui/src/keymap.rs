@@ -854,6 +854,7 @@ impl RuntimeKeymap {
                     self.chat.increase_reasoning_effort.as_slice(),
                 ),
                 ("composer.submit", self.composer.submit.as_slice()),
+                ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 (
                     "composer.history_search_previous",
                     self.composer.history_search_previous.as_slice(),

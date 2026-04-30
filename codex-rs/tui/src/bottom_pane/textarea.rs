@@ -421,6 +421,15 @@ impl TextArea {
         self.beginning_of_line(self.cursor_pos)
     }
 
+    fn first_non_blank_of_current_line(&self) -> usize {
+        let bol = self.beginning_of_current_line();
+        let eol = self.end_of_current_line();
+        self.text[bol..eol]
+            .char_indices()
+            .find_map(|(offset, ch)| (!ch.is_whitespace()).then_some(bol + offset))
+            .unwrap_or(eol)
+    }
+
     fn end_of_line(&self, pos: usize) -> usize {
         self.text[pos..]
             .find('\n')
@@ -568,8 +577,9 @@ impl TextArea {
 
     fn handle_vim_insert(&mut self, event: KeyEvent) {
         if matches!(event.code, KeyCode::Esc) {
-            if self.cursor_pos > 0 {
-                self.cursor_pos = self.prev_atomic_boundary(self.cursor_pos);
+            let bol = self.beginning_of_current_line();
+            if self.cursor_pos > bol {
+                self.cursor_pos = self.prev_atomic_boundary(self.cursor_pos).max(bol);
             }
             self.enter_vim_normal_mode();
             return;
@@ -601,7 +611,7 @@ impl TextArea {
             return;
         }
         if self.vim_normal_keymap.insert_line_start.is_pressed(event) {
-            self.set_cursor(self.beginning_of_current_line());
+            self.set_cursor(self.first_non_blank_of_current_line());
             self.vim_mode = VimMode::Insert;
             return;
         }
@@ -609,7 +619,12 @@ impl TextArea {
             let eol = self.end_of_current_line();
             let insert_at = if eol < self.text.len() { eol + 1 } else { eol };
             self.insert_str_at(insert_at, "\n");
-            self.set_cursor(insert_at + 1);
+            let cursor = if eol < self.text.len() {
+                insert_at
+            } else {
+                insert_at + 1
+            };
+            self.set_cursor(cursor);
             self.vim_mode = VimMode::Insert;
             return;
         }
@@ -2003,6 +2018,19 @@ mod tests {
     }
 
     #[test]
+    fn vim_escape_from_insert_at_line_start_stays_on_line() {
+        let mut t = ta_with("one\ntwo");
+        t.set_cursor(/*pos*/ "one\n".len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
+        assert_eq!(t.cursor(), "one\n".len());
+    }
+
+    #[test]
     fn vim_escape_moves_by_grapheme_boundary() {
         let mut t = ta_with("👍👍");
         t.set_cursor(t.text().len());
@@ -2030,16 +2058,16 @@ mod tests {
     }
 
     #[test]
-    fn vim_shift_i_enters_insert_at_line_start_with_shift_only_binding() {
-        let mut t = ta_with("hello\nworld");
+    fn vim_shift_i_enters_insert_at_first_non_blank_with_shift_only_binding() {
+        let mut t = ta_with("hello\n  world");
         t.vim_normal_keymap.insert_line_start = vec![key_hint::shift(KeyCode::Char('i'))];
-        t.set_cursor(/*pos*/ 9);
+        t.set_cursor(/*pos*/ "hello\n  wor".len());
         t.set_vim_enabled(/*enabled*/ true);
 
         t.input(KeyEvent::new(KeyCode::Char('I'), KeyModifiers::NONE));
 
         assert_eq!(t.vim_mode_label(), Some("Insert"));
-        assert_eq!(t.cursor(), 6);
+        assert_eq!(t.cursor(), "hello\n  ".len());
     }
 
     #[test]
@@ -2067,6 +2095,19 @@ mod tests {
         assert_eq!(t.text(), "hello\n\nworld");
         assert_eq!(t.vim_mode_label(), Some("Insert"));
         assert_eq!(t.cursor(), 6);
+    }
+
+    #[test]
+    fn vim_o_opens_line_below_on_inserted_line() {
+        let mut t = ta_with("one\ntwo");
+        t.set_cursor(/*pos*/ 1);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "one\n\ntwo");
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+        assert_eq!(t.cursor(), "one\n".len());
     }
 
     #[test]
