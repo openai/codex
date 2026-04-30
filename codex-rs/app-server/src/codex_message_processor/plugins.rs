@@ -37,14 +37,15 @@ impl CodexMessageProcessor {
         {
             return Ok(empty_response());
         }
+        let plugins_input = crate::plugins_config_input_from_config(&config);
         plugins_manager.maybe_start_plugin_list_background_tasks_for_config(
-            &config,
+            &plugins_input,
             auth.clone(),
             &roots,
             Some(self.effective_plugins_changed_callback(config.clone())),
         );
 
-        let config_for_marketplace_listing = config.clone();
+        let config_for_marketplace_listing = plugins_input.clone();
         let plugins_manager_for_marketplace_listing = plugins_manager.clone();
         let (mut data, marketplace_load_errors) = match tokio::task::spawn_blocking(move || {
             let outcome = plugins_manager_for_marketplace_listing
@@ -145,7 +146,7 @@ impl CodexMessageProcessor {
             .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
         {
             match plugins_manager
-                .featured_plugin_ids_for_config(&config, auth.as_ref())
+                .featured_plugin_ids_for_config(&plugins_input, auth.as_ref())
                 .await
             {
                 Ok(featured_plugin_ids) => featured_plugin_ids,
@@ -201,6 +202,7 @@ impl CodexMessageProcessor {
         });
 
         let config = self.load_latest_config(config_cwd).await?;
+        let plugins_input = crate::plugins_config_input_from_config(&config);
 
         let plugin = match read_source {
             Ok(marketplace_path) => {
@@ -209,7 +211,7 @@ impl CodexMessageProcessor {
                     marketplace_path,
                 };
                 let outcome = plugins_manager
-                    .read_plugin_for_config(&config, &request)
+                    .read_plugin_for_config(&plugins_input, &request)
                     .await
                     .map_err(|err| Self::marketplace_error(err, "read plugin details"))?;
                 let environment_manager = self.thread_manager.environment_manager();
@@ -279,7 +281,7 @@ impl CodexMessageProcessor {
                     .app_ids
                     .iter()
                     .cloned()
-                    .map(codex_core::plugins::AppConnectorId)
+                    .map(codex_plugin::AppConnectorId)
                     .collect::<Vec<_>>();
                 let environment_manager = self.thread_manager.environment_manager();
                 let app_summaries = plugin_app_helpers::load_plugin_app_summaries(
@@ -570,7 +572,7 @@ impl CodexMessageProcessor {
         self.thread_manager
             .plugins_manager()
             .maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
-                &config,
+                &crate::plugins_config_input_from_config(&config),
                 auth.clone(),
                 Some(self.effective_plugins_changed_callback(config.clone())),
             );
@@ -602,7 +604,7 @@ impl CodexMessageProcessor {
         config: &Config,
         is_chatgpt_auth: bool,
         plugin_id: &str,
-        plugin_apps: &[codex_core::plugins::AppConnectorId],
+        plugin_apps: &[codex_plugin::AppConnectorId],
     ) -> Vec<AppSummary> {
         if plugin_apps.is_empty() || !config.features.apps_enabled_for_auth(is_chatgpt_auth) {
             return Vec::new();
@@ -675,7 +677,7 @@ impl CodexMessageProcessor {
         params: PluginUninstallParams,
     ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
         let PluginUninstallParams { plugin_id } = params;
-        if codex_core::plugins::PluginId::parse(&plugin_id).is_err()
+        if codex_plugin::PluginId::parse(&plugin_id).is_err()
             && (plugin_id.is_empty() || !is_valid_remote_plugin_id(&plugin_id))
         {
             return Err(invalid_request(
@@ -798,7 +800,7 @@ impl CodexMessageProcessor {
                 self.on_effective_plugins_changed(config.clone());
             }
             plugins_manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
-                &config,
+                &crate::plugins_config_input_from_config(&config),
                 auth.clone(),
                 Some(self.effective_plugins_changed_callback(config.clone())),
             );

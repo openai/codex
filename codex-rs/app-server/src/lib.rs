@@ -7,6 +7,7 @@ use codex_config::NoopThreadConfigLoader;
 use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
+use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::EnvironmentManagerArgs;
 use codex_features::Feature;
 use codex_login::AuthManager;
@@ -121,6 +122,16 @@ fn configured_thread_config_loader(config: &Config) -> Arc<dyn ThreadConfigLoade
         Some(endpoint) => Arc::new(RemoteThreadConfigLoader::new(endpoint)),
         None => Arc::new(NoopThreadConfigLoader),
     }
+}
+
+fn plugins_config_input_from_config(config: &Config) -> PluginsConfigInput {
+    PluginsConfigInput::new(
+        config.config_layer_stack.clone(),
+        config.features.enabled(Feature::Plugins),
+        config.features.enabled(Feature::RemotePlugin),
+        config.features.enabled(Feature::PluginHooks),
+        config.chatgpt_base_url.clone(),
+    )
 }
 
 /// Control-plane messages from the processor/transport side to the outbound router task.

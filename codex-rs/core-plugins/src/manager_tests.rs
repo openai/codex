@@ -1,15 +1,22 @@
 use super::*;
-use crate::config::CONFIG_TOML_FILE;
-use crate::config::ConfigBuilder;
-use crate::plugins::LoadedPlugin;
-use crate::plugins::PluginLoadOutcome;
-use crate::plugins::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
-use crate::plugins::test_support::TEST_CURATED_PLUGIN_SHA;
-use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated_plugin_sha;
-use crate::plugins::test_support::write_file;
-use crate::plugins::test_support::write_openai_curated_marketplace;
+use crate::LoadedPlugin;
+use crate::PluginLoadOutcome;
+use crate::installed_marketplaces::marketplace_install_root;
+use crate::loader::load_plugins_from_layer_stack;
+use crate::loader::refresh_non_curated_plugin_cache;
+use crate::loader::refresh_non_curated_plugin_cache_force_reinstall;
+use crate::marketplace::MarketplacePluginInstallPolicy;
+use crate::remote::RemoteInstalledPlugin;
+use crate::startup_sync::curated_plugins_repo_path;
+use crate::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
+use crate::test_support::TEST_CURATED_PLUGIN_SHA;
+use crate::test_support::load_plugins_config as load_plugins_config_input;
+use crate::test_support::write_curated_plugin_sha_with as write_curated_plugin_sha;
+use crate::test_support::write_file;
+use crate::test_support::write_openai_curated_marketplace;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::AppToolApproval;
+use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
@@ -17,12 +24,6 @@ use codex_config::ConfigRequirementsToml;
 use codex_config::McpServerConfig;
 use codex_config::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
-use codex_core_plugins::installed_marketplaces::marketplace_install_root;
-use codex_core_plugins::loader::load_plugins_from_layer_stack;
-use codex_core_plugins::loader::refresh_non_curated_plugin_cache;
-use codex_core_plugins::loader::refresh_non_curated_plugin_cache_force_reinstall;
-use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
-use codex_core_plugins::startup_sync::curated_plugins_repo_path;
 use codex_login::CodexAuth;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::test_support::PathBufExt;
@@ -140,13 +141,8 @@ async fn load_plugins_from_config(config_toml: &str, codex_home: &Path) -> Plugi
         .await
 }
 
-async fn load_config(codex_home: &Path, cwd: &Path) -> crate::config::Config {
-    ConfigBuilder::default()
-        .codex_home(codex_home.to_path_buf())
-        .fallback_cwd(Some(cwd.to_path_buf()))
-        .build()
-        .await
-        .expect("config should load")
+async fn load_config(codex_home: &Path, cwd: &Path) -> PluginsConfigInput {
+    load_plugins_config_input(codex_home, cwd).await
 }
 
 #[tokio::test]
@@ -350,14 +346,12 @@ remote_plugin = true
 
     let config = load_config(codex_home.path(), codex_home.path()).await;
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(vec![
-        codex_core_plugins::remote::RemoteInstalledPlugin {
-            marketplace_name: "chatgpt-global".to_string(),
-            id: "plugins~Plugin_linear".to_string(),
-            name: "linear".to_string(),
-            enabled: true,
-        },
-    ]);
+    manager.write_remote_installed_plugins_cache(vec![RemoteInstalledPlugin {
+        marketplace_name: "chatgpt-global".to_string(),
+        id: "plugins~Plugin_linear".to_string(),
+        name: "linear".to_string(),
+        enabled: true,
+    }]);
 
     let outcome = manager.plugins_for_config(&config).await;
     assert_eq!(
@@ -381,14 +375,12 @@ remote_plugin = true
 
     let config = load_config(codex_home.path(), codex_home.path()).await;
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(vec![
-        codex_core_plugins::remote::RemoteInstalledPlugin {
-            marketplace_name: "chatgpt-global".to_string(),
-            id: "plugins~Plugin_linear".to_string(),
-            name: "linear".to_string(),
-            enabled: true,
-        },
-    ]);
+    manager.write_remote_installed_plugins_cache(vec![RemoteInstalledPlugin {
+        marketplace_name: "chatgpt-global".to_string(),
+        id: "plugins~Plugin_linear".to_string(),
+        name: "linear".to_string(),
+        enabled: true,
+    }]);
 
     let outcome = manager.plugins_for_config(&config).await;
     assert_eq!(outcome, PluginLoadOutcome::default());
@@ -423,7 +415,7 @@ enabled = false
 enabled = true
 "#;
     let outcome = load_plugins_from_config(config_toml, codex_home.path()).await;
-    let skill_path = dunce::canonicalize(skill_path)
+    let skill_path = std::fs::canonicalize(skill_path)
         .expect("skill path should canonicalize")
         .abs();
 

@@ -1594,7 +1594,9 @@ enabled = true
     session
         .services
         .plugins_manager
-        .plugins_for_config(&initial_config)
+        .plugins_for_config(&crate::plugins::plugins_config_input_from_config(
+            &initial_config,
+        ))
         .await;
     std::fs::write(
         codex_home.join(CONFIG_TOML_FILE),

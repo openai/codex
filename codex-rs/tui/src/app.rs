@@ -50,7 +50,6 @@ use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::edit::ConfigEdit;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
 use crate::legacy_core::lookup_message_history_entry;
-use crate::legacy_core::plugins::PluginsManager;
 #[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::model_catalog::ModelCatalog;
@@ -120,6 +119,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ModelAvailabilityNuxConfig;
+use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;

@@ -14,7 +14,7 @@ use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
-use codex_core::plugins::PluginsManager;
+use codex_core_plugins::PluginsManager;
 use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::ResolvedMcpOAuthScopes;
 use codex_mcp::compute_auth_statuses;

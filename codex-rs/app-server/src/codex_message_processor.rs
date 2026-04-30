@@ -271,10 +271,6 @@ use codex_core::find_thread_name_by_id;
 use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::path_utils;
-use codex_core::plugins::PluginInstallError as CorePluginInstallError;
-use codex_core::plugins::PluginInstallRequest;
-use codex_core::plugins::PluginReadRequest;
-use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::sandboxing::SandboxPermissions;
@@ -282,6 +278,11 @@ use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
 use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
+use codex_core_plugins::PluginInstallError as CorePluginInstallError;
+use codex_core_plugins::PluginInstallRequest;
+use codex_core_plugins::PluginLoadOutcome;
+use codex_core_plugins::PluginReadRequest;
+use codex_core_plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core_plugins::loader::load_plugin_apps;
 use codex_core_plugins::loader::load_plugin_mcp_servers;
 use codex_core_plugins::manifest::PluginManifestInterface;
@@ -6303,8 +6304,9 @@ impl CodexMessageProcessor {
                 .get(&cwd)
                 .map_or(&[][..], std::vec::Vec::as_slice);
             let effective_skill_roots = if workspace_codex_plugins_enabled {
+                let plugins_input = crate::plugins_config_input_from_config(&config);
                 plugins_manager
-                    .effective_skill_roots_for_layer_stack(&config_layer_stack, &config)
+                    .effective_skill_roots_for_layer_stack(&config_layer_stack, &plugins_input)
                     .await
             } else {
                 Vec::new()
@@ -6386,15 +6388,16 @@ impl CodexMessageProcessor {
                 config.features.enabled(Feature::Plugins) && workspace_codex_plugins_enabled;
             let plugin_outcome = if plugins_enabled && config.features.enabled(Feature::PluginHooks)
             {
+                let plugins_input = crate::plugins_config_input_from_config(&config);
                 plugins_manager
                     .plugins_for_layer_stack(
                         &config.config_layer_stack,
-                        &config,
+                        &plugins_input,
                         /*plugin_hooks_feature_enabled*/ true,
                     )
                     .await
             } else {
-                codex_core::plugins::PluginLoadOutcome::default()
+                PluginLoadOutcome::default()
             };
             let hooks = codex_hooks::list_hooks(codex_hooks::HooksConfig {
                 feature_enabled: config.features.enabled(Feature::CodexHooks),
@@ -6452,10 +6455,13 @@ impl CodexMessageProcessor {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let plugins_manager = self.thread_manager.plugins_manager();
         let MarketplaceUpgradeParams { marketplace_name } = params;
+        let plugins_input = crate::plugins_config_input_from_config(&config);
 
         let outcome = tokio::task::spawn_blocking(move || {
-            plugins_manager
-                .upgrade_configured_marketplaces_for_config(&config, marketplace_name.as_deref())
+            plugins_manager.upgrade_configured_marketplaces_for_config(
+                &plugins_input,
+                marketplace_name.as_deref(),
+            )
         })
         .await
         .map_err(|err| internal_error(format!("failed to upgrade marketplaces: {err}")))?

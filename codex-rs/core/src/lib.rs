@@ -67,7 +67,7 @@ pub use message_history::history_metadata as message_history_metadata;
 pub use message_history::lookup as lookup_message_history_entry;
 pub use utils::path_utils;
 pub mod personality_migration;
-pub mod plugins;
+pub(crate) mod plugins;
 #[doc(hidden)]
 pub(crate) mod prompt_debug;
 #[doc(hidden)]

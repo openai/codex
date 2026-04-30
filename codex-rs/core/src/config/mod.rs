@@ -998,9 +998,10 @@ impl Config {
 
     pub async fn to_mcp_config(
         &self,
-        plugins_manager: &crate::plugins::PluginsManager,
+        plugins_manager: &codex_core_plugins::PluginsManager,
     ) -> McpConfig {
-        let loaded_plugins = plugins_manager.plugins_for_config(self).await;
+        let plugins_input = crate::plugins::plugins_config_input_from_config(self);
+        let loaded_plugins = plugins_manager.plugins_for_config(&plugins_input).await;
         let mut configured_mcp_servers = self.mcp_servers.get().clone();
         for plugin in loaded_plugins
             .plugins()

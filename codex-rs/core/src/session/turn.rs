@@ -170,7 +170,9 @@ pub(crate) async fn run_turn(
     let loaded_plugins = sess
         .services
         .plugins_manager
-        .plugins_for_config(&turn_context.config)
+        .plugins_for_config(&crate::plugins::plugins_config_input_from_config(
+            &turn_context.config,
+        ))
         .await;
     // Structured plugin:// mentions are resolved from the current session's
     // enabled plugins, then converted into turn-scoped guidance below.
@@ -1124,7 +1126,9 @@ pub(crate) async fn built_tools(
     let loaded_plugins = sess
         .services
         .plugins_manager
-        .plugins_for_config(&turn_context.config)
+        .plugins_for_config(&crate::plugins::plugins_config_input_from_config(
+            &turn_context.config,
+        ))
         .await;
 
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();

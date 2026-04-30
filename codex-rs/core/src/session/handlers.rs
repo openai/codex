@@ -620,8 +620,9 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
                 continue;
             }
         };
+        let plugins_input = crate::plugins::plugins_config_input_from_config(&config);
         let effective_skill_roots = plugins_manager
-            .effective_skill_roots_for_layer_stack(&config_layer_stack, &config)
+            .effective_skill_roots_for_layer_stack(&config_layer_stack, &plugins_input)
             .await;
         let skills_input = crate::SkillsLoadInput::new(
             cwd_abs.clone(),

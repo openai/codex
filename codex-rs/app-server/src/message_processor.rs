@@ -314,7 +314,7 @@ impl MessageProcessor {
             thread_manager
                 .plugins_manager()
                 .maybe_start_plugin_startup_tasks_for_config(
-                    &config,
+                    &crate::plugins_config_input_from_config(&config),
                     auth_manager.clone(),
                     Some(on_effective_plugins_changed),
                 );

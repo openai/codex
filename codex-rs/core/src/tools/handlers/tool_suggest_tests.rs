@@ -1,6 +1,4 @@
 use super::*;
-use crate::plugins::PluginInstallRequest;
-use crate::plugins::PluginsManager;
 use crate::plugins::test_support::load_plugins_config;
 use crate::plugins::test_support::write_curated_plugin_sha;
 use crate::plugins::test_support::write_openai_curated_marketplace;
@@ -11,6 +9,8 @@ use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::ToolSuggestDiscoverableType;
+use codex_core_plugins::PluginInstallRequest;
+use codex_core_plugins::PluginsManager;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
 use codex_rmcp_client::ElicitationResponse;
 use codex_tools::DiscoverablePluginInfo;

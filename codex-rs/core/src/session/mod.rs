@@ -274,7 +274,6 @@ use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
 use crate::mcp::McpManager;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
-use crate::plugins::PluginsManager;
 use crate::rollout::map_session_init_error;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
@@ -301,6 +300,7 @@ use crate::turn_timing::TurnTimingState;
 use crate::turn_timing::record_turn_ttfm_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
+use codex_core_plugins::PluginsManager;
 use codex_git_utils::get_git_repo_root;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::with_codex_apps_mcp;
@@ -475,7 +475,8 @@ impl Codex {
         let fs = environment
             .as_ref()
             .map(|environment| environment.get_filesystem());
-        let plugin_outcome = plugins_manager.plugins_for_config(&config).await;
+        let plugins_input = crate::plugins::plugins_config_input_from_config(&config);
+        let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
         let loaded_skills = skills_manager.skills_for_config(&skills_input, fs).await;
@@ -2666,7 +2667,9 @@ impl Session {
         let loaded_plugins = self
             .services
             .plugins_manager
-            .plugins_for_config(&turn_context.config)
+            .plugins_for_config(&crate::plugins::plugins_config_input_from_config(
+                &turn_context.config,
+            ))
             .await;
         if let Some(plugin_instructions) =
             AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
@@ -3362,7 +3365,8 @@ async fn build_hooks_for_config(
     let _ = hook_shell_argv.pop();
     let plugin_hooks_enabled = config.features.enabled(Feature::PluginHooks);
     let (plugin_hook_sources, plugin_hook_load_warnings) = if plugin_hooks_enabled {
-        let plugin_outcome = plugins_manager.plugins_for_config(config).await;
+        let plugins_input = crate::plugins::plugins_config_input_from_config(config);
+        let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
         (
             plugin_outcome.effective_plugin_hook_sources(),
             plugin_outcome.effective_plugin_hook_warnings(),

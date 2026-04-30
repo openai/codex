@@ -99,10 +99,6 @@ pub mod legacy_core {
         pub use codex_core::personality_migration::*;
     }
 
-    pub mod plugins {
-        pub use codex_core::plugins::PluginsManager;
-    }
-
     pub mod review_format {
         pub use codex_core::review_format::*;
     }

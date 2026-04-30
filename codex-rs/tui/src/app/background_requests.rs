@@ -7,6 +7,7 @@
 use super::*;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
+use codex_core_plugins::PluginsConfigInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 impl App {
@@ -232,8 +233,15 @@ impl App {
         }
 
         tokio::spawn(async move {
+            let plugins_input = PluginsConfigInput::new(
+                config.config_layer_stack.clone(),
+                config.features.enabled(Feature::Plugins),
+                config.features.enabled(Feature::RemotePlugin),
+                config.features.enabled(Feature::PluginHooks),
+                config.chatgpt_base_url.clone(),
+            );
             let plugins = PluginsManager::new(config.codex_home.to_path_buf())
-                .plugins_for_config(&config)
+                .plugins_for_config(&plugins_input)
                 .await
                 .capability_summaries()
                 .to_vec();

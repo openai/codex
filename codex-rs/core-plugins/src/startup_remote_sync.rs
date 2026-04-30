@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::config::Config;
-use crate::plugins::PluginsManager;
-use codex_core_plugins::startup_sync::has_local_curated_plugins_snapshot;
+use crate::manager::PluginsConfigInput;
+use crate::manager::PluginsManager;
+use crate::startup_sync::has_local_curated_plugins_snapshot;
 use codex_login::AuthManager;
 use tracing::info;
 use tracing::warn;
@@ -16,7 +16,7 @@ const STARTUP_REMOTE_PLUGIN_SYNC_PREREQUISITE_TIMEOUT: Duration = Duration::from
 pub(crate) fn start_startup_remote_plugin_sync_once(
     manager: Arc<PluginsManager>,
     codex_home: PathBuf,
-    config: Config,
+    config: PluginsConfigInput,
     auth_manager: Arc<AuthManager>,
 ) {
     let marker_path = startup_remote_plugin_sync_marker_path(codex_home.as_path());
@@ -96,5 +96,5 @@ async fn write_startup_remote_plugin_sync_marker(codex_home: &Path) -> std::io::
 }
 
 #[cfg(test)]
-#[path = "startup_sync_tests.rs"]
+#[path = "startup_remote_sync_tests.rs"]
 mod tests;

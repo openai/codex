@@ -1,11 +1,18 @@
-use crate::config::CONFIG_TOML_FILE;
-use crate::config::ConfigBuilder;
 use std::fs;
 use std::path::Path;
 
-use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
+use crate::OPENAI_CURATED_MARKETPLACE_NAME;
+use crate::PluginsConfigInput;
+use codex_config::CloudRequirementsLoader;
+use codex_config::LoaderOverrides;
+use codex_config::NoopThreadConfigLoader;
+use codex_config::loader::load_config_layers_state;
+use codex_exec_server::LOCAL_FS;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use toml::Value;
 
 pub(crate) const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+pub(crate) const TEST_CURATED_PLUGIN_CACHE_VERSION: &str = "01234567";
 
 pub(crate) fn write_file(path: &Path, contents: &str) {
     fs::create_dir_all(path.parent().expect("file should have a parent")).unwrap();
@@ -90,20 +97,43 @@ pub(crate) fn write_curated_plugin_sha_with(codex_home: &Path, sha: &str) {
     write_file(&codex_home.join(".tmp/plugins.sha"), &format!("{sha}\n"));
 }
 
-pub(crate) fn write_plugins_feature_config(codex_home: &Path) {
-    write_file(
-        &codex_home.join(CONFIG_TOML_FILE),
-        r#"[features]
-plugins = true
-"#,
-    );
+pub(crate) async fn load_plugins_config(codex_home: &Path, cwd: &Path) -> PluginsConfigInput {
+    let codex_home = AbsolutePathBuf::try_from(codex_home).expect("codex home should be absolute");
+    let cwd = AbsolutePathBuf::try_from(cwd).expect("cwd should be absolute");
+    let config_layer_stack = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        codex_home.as_path(),
+        Some(cwd),
+        &[],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudRequirementsLoader::default(),
+        &NoopThreadConfigLoader,
+    )
+    .await
+    .expect("config should load");
+    let effective_config = config_layer_stack.effective_config();
+    PluginsConfigInput::new(
+        config_layer_stack,
+        feature_enabled(&effective_config, "plugins", /*default_enabled*/ true),
+        feature_enabled(
+            &effective_config,
+            "remote_plugin",
+            /*default_enabled*/ false,
+        ),
+        feature_enabled(
+            &effective_config,
+            "plugin_hooks",
+            /*default_enabled*/ false,
+        ),
+        "https://chatgpt.com/backend-api/".to_string(),
+    )
 }
 
-pub(crate) async fn load_plugins_config(codex_home: &Path) -> crate::config::Config {
-    ConfigBuilder::default()
-        .codex_home(codex_home.to_path_buf())
-        .fallback_cwd(Some(codex_home.to_path_buf()))
-        .build()
-        .await
-        .expect("config should load")
+fn feature_enabled(config: &Value, key: &str, default_enabled: bool) -> bool {
+    config
+        .get("features")
+        .and_then(Value::as_table)
+        .and_then(|features| features.get(key))
+        .and_then(Value::as_bool)
+        .unwrap_or(default_enabled)
 }
