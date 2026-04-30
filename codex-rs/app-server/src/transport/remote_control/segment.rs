@@ -41,8 +41,14 @@ pub(super) struct ClientSegmentReassembler {
     assemblies: HashMap<ClientId, ClientSegmentAssembly>,
 }
 
+pub(super) enum ClientSegmentObservation {
+    Forward(ClientEnvelope),
+    Pending,
+    Dropped,
+}
+
 impl ClientSegmentReassembler {
-    pub(super) fn observe(&mut self, envelope: ClientEnvelope) -> Option<ClientEnvelope> {
+    pub(super) fn observe(&mut self, envelope: ClientEnvelope) -> ClientSegmentObservation {
         let ClientEvent::ClientMessageChunk {
             segment_id,
             segment_count,
@@ -50,7 +56,7 @@ impl ClientSegmentReassembler {
             message_chunk_base64,
         } = &envelope.event
         else {
-            return Some(envelope);
+            return ClientSegmentObservation::Forward(envelope);
         };
         let segment_id = *segment_id;
         let segment_count = *segment_count;
@@ -61,15 +67,18 @@ impl ClientSegmentReassembler {
                 client_id = envelope.client_id.0.as_str(),
                 "dropping segmented remote-control client envelope without seq_id"
             );
-            return None;
+            return ClientSegmentObservation::Dropped;
         };
         let Some(stream_id) = envelope.stream_id.clone() else {
             warn!(
                 client_id = envelope.client_id.0.as_str(),
                 "dropping segmented remote-control client envelope without stream_id"
             );
-            return None;
+            return ClientSegmentObservation::Dropped;
         };
+        if self.should_ignore_chunk(&envelope.client_id, &stream_id, metadata.seq_id, segment_id) {
+            return ClientSegmentObservation::Dropped;
+        }
         if segment_count == 0
             || segment_count > REMOTE_CONTROL_SEGMENT_COUNT_MAX
             || segment_id >= segment_count
@@ -81,7 +90,8 @@ impl ClientSegmentReassembler {
                 client_id = envelope.client_id.0.as_str(),
                 "dropping invalid segmented remote-control client envelope"
             );
-            return None;
+            self.remove_assembly(&envelope.client_id, &stream_id);
+            return ClientSegmentObservation::Dropped;
         }
 
         let now = Instant::now();
@@ -123,14 +133,18 @@ impl ClientSegmentReassembler {
                     client_id = envelope.client_id.0.as_str(),
                     "dropping segmented remote-control client envelope without assembly"
                 );
-                return None;
+                return ClientSegmentObservation::Dropped;
             };
-            if assembly.metadata != metadata {
+            if metadata.seq_id < assembly.metadata.seq_id {
+                AssemblyUpdate::Ignore
+            } else if assembly.metadata != metadata {
                 warn!(
                     client_id = envelope.client_id.0.as_str(),
                     "resetting segmented remote-control client envelope after metadata mismatch"
                 );
                 AssemblyUpdate::Drop
+            } else if segment_id < assembly.next_segment_id {
+                AssemblyUpdate::Pending
             } else if segment_id != assembly.next_segment_id {
                 warn!(
                     client_id = envelope.client_id.0.as_str(),
@@ -193,14 +207,15 @@ impl ClientSegmentReassembler {
         };
 
         match result {
-            AssemblyUpdate::Pending => None,
+            AssemblyUpdate::Pending => ClientSegmentObservation::Pending,
+            AssemblyUpdate::Ignore => ClientSegmentObservation::Dropped,
             AssemblyUpdate::Drop => {
                 self.remove_assembly(&envelope.client_id, &stream_id);
-                None
+                ClientSegmentObservation::Dropped
             }
             AssemblyUpdate::Complete(message) => {
                 self.remove_assembly(&envelope.client_id, &stream_id);
-                Some(ClientEnvelope {
+                ClientSegmentObservation::Forward(ClientEnvelope {
                     event: ClientEvent::ClientMessage { message },
                     ..envelope
                 })
@@ -214,6 +229,21 @@ impl ClientSegmentReassembler {
 
     pub(super) fn invalidate_client(&mut self, client_id: &ClientId) {
         self.assemblies.remove(client_id);
+    }
+
+    pub(super) fn should_ignore_chunk(
+        &self,
+        client_id: &ClientId,
+        stream_id: &StreamId,
+        seq_id: u64,
+        segment_id: usize,
+    ) -> bool {
+        self.assemblies.get(client_id).is_some_and(|assembly| {
+            assembly.stream_id == *stream_id
+                && (seq_id < assembly.metadata.seq_id
+                    || (seq_id == assembly.metadata.seq_id
+                        && segment_id < assembly.next_segment_id))
+        })
     }
 
     fn remove_assembly(&mut self, client_id: &ClientId, stream_id: &StreamId) {
@@ -243,6 +273,7 @@ impl ClientSegmentReassembler {
 
 enum AssemblyUpdate {
     Pending,
+    Ignore,
     Drop,
     Complete(JSONRPCMessage),
 }

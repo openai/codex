@@ -4,6 +4,7 @@ use super::protocol::ClientId;
 use super::protocol::ServerEnvelope;
 use super::protocol::ServerEvent;
 use super::protocol::StreamId;
+use super::segment::ClientSegmentObservation;
 use super::segment::ClientSegmentReassembler;
 use super::segment::REMOTE_CONTROL_SEGMENT_MAX_BYTES;
 use super::segment::split_server_envelope_for_transport;
@@ -27,30 +28,32 @@ fn reassembles_client_message_chunks() {
     let stream_id = Some(StreamId("stream-1".to_string()));
     let mut reassembler = ClientSegmentReassembler::default();
 
-    assert!(
-        reassembler
-            .observe(chunk_envelope(
-                client_id.clone(),
-                stream_id.clone(),
-                /*seq_id*/ 7,
-                /*segment_id*/ 0,
-                /*segment_count*/ 2,
-                raw.len(),
-                &raw[..split],
-            ))
-            .is_none()
-    );
-    let reassembled = reassembler
-        .observe(chunk_envelope(
+    assert!(matches!(
+        reassembler.observe(chunk_envelope(
             client_id.clone(),
-            stream_id,
+            stream_id.clone(),
             /*seq_id*/ 7,
-            /*segment_id*/ 1,
+            /*segment_id*/ 0,
             /*segment_count*/ 2,
             raw.len(),
-            &raw[split..],
-        ))
-        .expect("message should reassemble");
+            &raw[..split],
+        )),
+        ClientSegmentObservation::Pending
+    ));
+    let reassembled = match reassembler.observe(chunk_envelope(
+        client_id.clone(),
+        stream_id,
+        /*seq_id*/ 7,
+        /*segment_id*/ 1,
+        /*segment_count*/ 2,
+        raw.len(),
+        &raw[split..],
+    )) {
+        ClientSegmentObservation::Forward(reassembled) => reassembled,
+        ClientSegmentObservation::Pending | ClientSegmentObservation::Dropped => {
+            panic!("message should reassemble")
+        }
+    };
     assert_eq!(reassembled.client_id, client_id);
     assert_eq!(
         reassembled.stream_id,
@@ -113,33 +116,31 @@ fn invalidates_incomplete_stream_assemblies() {
     let stream_id = StreamId("stream-1".to_string());
     let mut reassembler = ClientSegmentReassembler::default();
 
-    assert!(
-        reassembler
-            .observe(chunk_envelope(
-                client_id.clone(),
-                Some(stream_id.clone()),
-                /*seq_id*/ 7,
-                /*segment_id*/ 0,
-                /*segment_count*/ 2,
-                raw.len(),
-                &raw[..split],
-            ))
-            .is_none()
-    );
+    assert!(matches!(
+        reassembler.observe(chunk_envelope(
+            client_id.clone(),
+            Some(stream_id.clone()),
+            /*seq_id*/ 7,
+            /*segment_id*/ 0,
+            /*segment_count*/ 2,
+            raw.len(),
+            &raw[..split],
+        )),
+        ClientSegmentObservation::Pending
+    ));
     reassembler.invalidate_stream(&client_id, &stream_id);
-    assert!(
-        reassembler
-            .observe(chunk_envelope(
-                client_id,
-                Some(stream_id),
-                /*seq_id*/ 7,
-                /*segment_id*/ 1,
-                /*segment_count*/ 2,
-                raw.len(),
-                &raw[split..],
-            ))
-            .is_none()
-    );
+    assert!(matches!(
+        reassembler.observe(chunk_envelope(
+            client_id,
+            Some(stream_id),
+            /*seq_id*/ 7,
+            /*segment_id*/ 1,
+            /*segment_count*/ 2,
+            raw.len(),
+            &raw[split..],
+        )),
+        ClientSegmentObservation::Dropped
+    ));
 }
 
 #[test]
@@ -155,60 +156,210 @@ fn resets_incomplete_client_assembly_when_stream_changes() {
     let second_stream_id = StreamId("stream-2".to_string());
     let mut reassembler = ClientSegmentReassembler::default();
 
-    assert!(
-        reassembler
-            .observe(chunk_envelope(
-                client_id.clone(),
-                Some(first_stream_id.clone()),
-                /*seq_id*/ 7,
-                /*segment_id*/ 0,
-                /*segment_count*/ 2,
-                raw.len(),
-                &raw[..split],
-            ))
-            .is_none()
-    );
-    assert!(
-        reassembler
-            .observe(chunk_envelope(
-                client_id.clone(),
-                Some(second_stream_id.clone()),
-                /*seq_id*/ 8,
-                /*segment_id*/ 0,
-                /*segment_count*/ 2,
-                raw.len(),
-                &raw[..split],
-            ))
-            .is_none()
-    );
-    let reassembled = reassembler
-        .observe(chunk_envelope(
+    assert!(matches!(
+        reassembler.observe(chunk_envelope(
             client_id.clone(),
-            Some(second_stream_id),
+            Some(first_stream_id.clone()),
+            /*seq_id*/ 7,
+            /*segment_id*/ 0,
+            /*segment_count*/ 2,
+            raw.len(),
+            &raw[..split],
+        )),
+        ClientSegmentObservation::Pending
+    ));
+    assert!(matches!(
+        reassembler.observe(chunk_envelope(
+            client_id.clone(),
+            Some(second_stream_id.clone()),
+            /*seq_id*/ 8,
+            /*segment_id*/ 0,
+            /*segment_count*/ 2,
+            raw.len(),
+            &raw[..split],
+        )),
+        ClientSegmentObservation::Pending
+    ));
+    let reassembled = match reassembler.observe(chunk_envelope(
+        client_id.clone(),
+        Some(second_stream_id),
+        /*seq_id*/ 8,
+        /*segment_id*/ 1,
+        /*segment_count*/ 2,
+        raw.len(),
+        &raw[split..],
+    )) {
+        ClientSegmentObservation::Forward(reassembled) => reassembled,
+        ClientSegmentObservation::Pending | ClientSegmentObservation::Dropped => {
+            panic!("replacement stream should reassemble")
+        }
+    };
+    assert_eq!(
+        reassembled.stream_id,
+        Some(StreamId("stream-2".to_string()))
+    );
+    assert!(matches!(
+        reassembler.observe(chunk_envelope(
+            client_id,
+            Some(first_stream_id),
+            /*seq_id*/ 7,
+            /*segment_id*/ 1,
+            /*segment_count*/ 2,
+            raw.len(),
+            &raw[split..],
+        )),
+        ClientSegmentObservation::Dropped
+    ));
+}
+
+#[test]
+fn ignores_stale_chunks_without_dropping_newer_assembly() {
+    let message = JSONRPCMessage::Notification(JSONRPCNotification {
+        method: "initialized".to_string(),
+        params: None,
+    });
+    let raw = serde_json::to_vec(&message).expect("message should serialize");
+    let split = raw.len() / 2;
+    let client_id = ClientId("client-1".to_string());
+    let stream_id = Some(StreamId("stream-1".to_string()));
+    let mut reassembler = ClientSegmentReassembler::default();
+
+    assert!(matches!(
+        reassembler.observe(chunk_envelope(
+            client_id.clone(),
+            stream_id.clone(),
+            /*seq_id*/ 8,
+            /*segment_id*/ 0,
+            /*segment_count*/ 2,
+            raw.len(),
+            &raw[..split],
+        )),
+        ClientSegmentObservation::Pending
+    ));
+    assert!(matches!(
+        reassembler.observe(chunk_envelope(
+            client_id.clone(),
+            stream_id.clone(),
+            /*seq_id*/ 7,
+            /*segment_id*/ 0,
+            /*segment_count*/ 2,
+            raw.len(),
+            &raw[..split],
+        )),
+        ClientSegmentObservation::Dropped
+    ));
+    assert!(matches!(
+        reassembler.observe(chunk_envelope(
+            client_id,
+            stream_id,
             /*seq_id*/ 8,
             /*segment_id*/ 1,
             /*segment_count*/ 2,
             raw.len(),
             &raw[split..],
-        ))
-        .expect("replacement stream should reassemble");
-    assert_eq!(
-        reassembled.stream_id,
-        Some(StreamId("stream-2".to_string()))
-    );
-    assert!(
-        reassembler
-            .observe(chunk_envelope(
-                client_id,
-                Some(first_stream_id),
-                /*seq_id*/ 7,
-                /*segment_id*/ 1,
-                /*segment_count*/ 2,
-                raw.len(),
-                &raw[split..],
-            ))
-            .is_none()
-    );
+        )),
+        ClientSegmentObservation::Forward(_)
+    ));
+}
+
+#[test]
+fn ignores_invalid_stale_chunks_without_dropping_newer_assembly() {
+    let message = JSONRPCMessage::Notification(JSONRPCNotification {
+        method: "initialized".to_string(),
+        params: None,
+    });
+    let raw = serde_json::to_vec(&message).expect("message should serialize");
+    let split = raw.len() / 2;
+    let client_id = ClientId("client-1".to_string());
+    let stream_id = Some(StreamId("stream-1".to_string()));
+    let mut reassembler = ClientSegmentReassembler::default();
+
+    assert!(matches!(
+        reassembler.observe(chunk_envelope(
+            client_id.clone(),
+            stream_id.clone(),
+            /*seq_id*/ 8,
+            /*segment_id*/ 0,
+            /*segment_count*/ 2,
+            raw.len(),
+            &raw[..split],
+        )),
+        ClientSegmentObservation::Pending
+    ));
+    assert!(matches!(
+        reassembler.observe(chunk_envelope(
+            client_id.clone(),
+            stream_id.clone(),
+            /*seq_id*/ 7,
+            /*segment_id*/ 1,
+            /*segment_count*/ 2,
+            raw.len(),
+            b"",
+        )),
+        ClientSegmentObservation::Dropped
+    ));
+    assert!(matches!(
+        reassembler.observe(chunk_envelope(
+            client_id,
+            stream_id,
+            /*seq_id*/ 8,
+            /*segment_id*/ 1,
+            /*segment_count*/ 2,
+            raw.len(),
+            &raw[split..],
+        )),
+        ClientSegmentObservation::Forward(_)
+    ));
+}
+
+#[test]
+fn ignores_invalid_duplicate_chunks_without_dropping_current_assembly() {
+    let message = JSONRPCMessage::Notification(JSONRPCNotification {
+        method: "initialized".to_string(),
+        params: None,
+    });
+    let raw = serde_json::to_vec(&message).expect("message should serialize");
+    let split = raw.len() / 2;
+    let client_id = ClientId("client-1".to_string());
+    let stream_id = Some(StreamId("stream-1".to_string()));
+    let mut reassembler = ClientSegmentReassembler::default();
+
+    assert!(matches!(
+        reassembler.observe(chunk_envelope(
+            client_id.clone(),
+            stream_id.clone(),
+            /*seq_id*/ 8,
+            /*segment_id*/ 0,
+            /*segment_count*/ 2,
+            raw.len(),
+            &raw[..split],
+        )),
+        ClientSegmentObservation::Pending
+    ));
+    assert!(matches!(
+        reassembler.observe(chunk_envelope(
+            client_id.clone(),
+            stream_id.clone(),
+            /*seq_id*/ 8,
+            /*segment_id*/ 0,
+            /*segment_count*/ 2,
+            raw.len(),
+            b"",
+        )),
+        ClientSegmentObservation::Dropped
+    ));
+    assert!(matches!(
+        reassembler.observe(chunk_envelope(
+            client_id,
+            stream_id,
+            /*seq_id*/ 8,
+            /*segment_id*/ 1,
+            /*segment_count*/ 2,
+            raw.len(),
+            &raw[split..],
+        )),
+        ClientSegmentObservation::Forward(_)
+    ));
 }
 
 fn chunk_envelope(
