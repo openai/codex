@@ -10,8 +10,8 @@ use super::status_line_setup::StatusLineItem;
 use crate::render::highlight::foreground_style_for_scopes;
 
 const STATUS_LINE_SEPARATOR: &str = " · ";
-const STATUS_LINE_COLOR_SATURATION_PERCENT: u16 = 75;
-const STATUS_LINE_COLOR_BRIGHTNESS_PERCENT: u16 = 95;
+const STATUS_LINE_COLOR_SATURATION_PERCENT: u16 = 85;
+const STATUS_LINE_COLOR_BRIGHTNESS_PERCENT: u16 = 100;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StatusLineAccent {
@@ -232,7 +232,7 @@ mod tests {
         )
         .expect("status line");
 
-        assert_eq!(line.spans[0].style.fg, Some(Color::Rgb(200, 18, 18)));
+        assert_eq!(line.spans[0].style.fg, Some(Color::Rgb(228, 11, 11)));
         assert!(!line.spans[0].style.add_modifier.contains(Modifier::DIM));
     }
 

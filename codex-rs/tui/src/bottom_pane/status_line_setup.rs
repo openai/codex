@@ -202,8 +202,8 @@ impl StatusLineSetupView {
     ///
     /// * `status_line_items` - Currently configured item IDs (in display order),
     ///   or `None` to start with all items disabled
-    /// * `use_theme_colors` - Whether the preview and saved status line use
-    ///   muted colors from the active theme
+    /// * `use_theme_colors` - Whether the preview and saved status line use colors from
+    ///   the active theme
     /// * `app_event_tx` - Event sender for dispatching configuration changes
     ///
     /// Items from `status_line_items` are shown first (in order) and marked as
@@ -218,7 +218,7 @@ impl StatusLineSetupView {
         let mut items = vec![MultiSelectItem {
             id: STATUS_LINE_USE_THEME_COLORS_ITEM_ID.to_string(),
             name: "Use theme colors".to_string(),
-            description: Some("Apply muted colors from the active /theme.".to_string()),
+            description: Some("Apply colors from the active /theme.".to_string()),
             enabled: use_theme_colors,
             orderable: false,
             section_break_after: true,
