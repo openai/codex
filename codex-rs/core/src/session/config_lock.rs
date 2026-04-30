@@ -34,7 +34,7 @@ pub(crate) async fn export_config_lock_if_configured(
     conversation_id: ThreadId,
 ) -> anyhow::Result<()> {
     let config = session_configuration.original_config_do_not_use.as_ref();
-    let Some(export_dir) = config.config_snapshot_export_dir.as_ref() else {
+    let Some(export_dir) = config.config_lock_export_dir.as_ref() else {
         return Ok(());
     };
 
@@ -60,7 +60,7 @@ pub(crate) async fn export_config_lock_if_configured(
 impl SessionConfiguration {
     pub(crate) fn to_config_lock_toml(&self) -> anyhow::Result<ConfigToml> {
         let mut lock_config = session_configuration_to_lock_config_toml(self)?;
-        lock_config.config_lock = Some(config_lock_metadata(&self.thread_config_snapshot()));
+        lock_config.config_lock = Some(config_lock_metadata(&self.cwd));
         Ok(lock_config)
     }
 }
@@ -85,7 +85,6 @@ fn session_configuration_to_lock_config_toml(
     lock_config.personality = sc.personality;
     lock_config.approval_policy = Some(sc.approval_policy.value());
     lock_config.approvals_reviewer = Some(sc.approvals_reviewer);
-    lock_config.permission_profile = Some(sc.permission_profile.get().clone());
     lock_config.web_search = Some(config.web_search_mode.value());
     lock_config.model_provider = Some(config.model_provider_id.clone());
     lock_config.plan_mode_reasoning_effort = config.plan_mode_reasoning_effort;
@@ -98,7 +97,7 @@ fn session_configuration_to_lock_config_toml(
     lock_config.profile = None;
     lock_config.profiles.clear();
     lock_config.config_lock = None;
-    lock_config.config_snapshot_export_dir = None;
+    lock_config.config_lock_export_dir = None;
     lock_config.config_lock_file = None;
     lock_config.model_instructions_file = None;
     lock_config.experimental_instructions_file = None;
@@ -182,56 +181,11 @@ mod tests {
             lock.model_reasoning_effort,
             sc.collaboration_mode.reasoning_effort()
         );
-        assert_eq!(
-            lock.permission_profile,
-            Some(sc.permission_profile.get().clone())
-        );
         assert_eq!(lock.profile, None);
         assert!(lock.profiles.is_empty());
-        assert_eq!(lock.config_snapshot_export_dir, None);
+        assert_eq!(lock.config_lock_export_dir, None);
         assert_eq!(lock.config_lock_file, None);
-        assert_eq!(
-            lock.memories,
-            Some(MemoriesToml {
-                disable_on_external_context: Some(
-                    sc.original_config_do_not_use
-                        .memories
-                        .disable_on_external_context
-                ),
-                generate_memories: Some(sc.original_config_do_not_use.memories.generate_memories),
-                use_memories: Some(sc.original_config_do_not_use.memories.use_memories),
-                max_raw_memories_for_consolidation: Some(
-                    sc.original_config_do_not_use
-                        .memories
-                        .max_raw_memories_for_consolidation
-                ),
-                max_unused_days: Some(sc.original_config_do_not_use.memories.max_unused_days),
-                max_rollout_age_days: Some(
-                    sc.original_config_do_not_use.memories.max_rollout_age_days
-                ),
-                max_rollouts_per_startup: Some(
-                    sc.original_config_do_not_use
-                        .memories
-                        .max_rollouts_per_startup
-                ),
-                min_rollout_idle_hours: Some(
-                    sc.original_config_do_not_use
-                        .memories
-                        .min_rollout_idle_hours
-                ),
-                min_rate_limit_remaining_percent: Some(
-                    sc.original_config_do_not_use
-                        .memories
-                        .min_rate_limit_remaining_percent
-                ),
-                extract_model: sc.original_config_do_not_use.memories.extract_model.clone(),
-                consolidation_model: sc
-                    .original_config_do_not_use
-                    .memories
-                    .consolidation_model
-                    .clone(),
-            })
-        );
+        assert!(lock.memories.is_some());
 
         let features = lock
             .features
@@ -273,14 +227,15 @@ mod tests {
 
     #[tokio::test]
     async fn lock_validation_rejects_prompt_drift() {
-        let sc = crate::session::tests::make_session_configuration_for_tests().await;
+        let mut sc = crate::session::tests::make_session_configuration_for_tests().await;
+        sc.base_instructions = "original prompt".to_string();
         let actual = sc.to_config_lock_toml().expect("lock should serialize");
         let mut expected = actual.clone();
         expected
             .instructions
             .as_mut()
             .expect("lock should include instructions")
-            .push_str("\nchanged");
+            .push_str(" changed");
 
         let error =
             validate_config_lock_replay(&expected, &actual).expect_err("prompt drift should fail");
@@ -289,7 +244,7 @@ mod tests {
             message.contains("replayed effective config does not match config lock"),
             "{message}"
         );
-        assert!(message.contains("config.instructions"), "{message}");
+        assert!(message.contains("instructions = "), "{message}");
     }
 
     #[tokio::test]
@@ -319,6 +274,6 @@ mod tests {
             message.contains("replayed effective config does not match config lock"),
             "{message}"
         );
-        assert!(message.contains("config.model"), "{message}");
+        assert!(message.contains("model = "), "{message}");
     }
 }

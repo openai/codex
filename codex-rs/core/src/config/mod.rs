@@ -622,7 +622,7 @@ pub struct Config {
     pub log_dir: PathBuf,
 
     /// Directory where Codex writes effective session config lock files.
-    pub config_snapshot_export_dir: Option<AbsolutePathBuf>,
+    pub config_lock_export_dir: Option<AbsolutePathBuf>,
 
     /// Effective config lock used for strict replay validation.
     pub config_lock_toml: Option<Arc<ConfigToml>>,
@@ -2180,9 +2180,7 @@ impl Config {
             permission_profile,
             file_system_sandbox_policy,
             mut active_permission_profile,
-        ) = if let Some(mut permission_profile) =
-            permission_profile.or_else(|| cfg.permission_profile.clone())
-        {
+        ) = if let Some(mut permission_profile) = permission_profile {
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
             let configured_network_proxy_config =
@@ -2923,7 +2921,7 @@ impl Config {
             codex_home,
             sqlite_home,
             log_dir,
-            config_snapshot_export_dir: cfg.config_snapshot_export_dir,
+            config_lock_export_dir: cfg.config_lock_export_dir,
             config_lock_toml: None,
             config_layer_stack,
             history,

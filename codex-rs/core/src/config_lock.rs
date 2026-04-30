@@ -7,13 +7,9 @@ use codex_config::config_toml::ConfigToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::Value as JsonValue;
-
-use crate::ThreadConfigSnapshot;
+use similar::TextDiff;
 
 pub(crate) const CONFIG_LOCK_VERSION: u32 = 1;
-const MAX_LOCK_DIFFS: usize = 5;
-const MAX_DIFF_VALUE_CHARS: usize = 120;
 
 pub(crate) async fn read_config_lock_from_path(path: &AbsolutePathBuf) -> io::Result<ConfigToml> {
     let contents = tokio::fs::read_to_string(path).await.map_err(|err| {
@@ -38,11 +34,11 @@ pub(crate) async fn read_config_lock_from_path(path: &AbsolutePathBuf) -> io::Re
     Ok(lock_config)
 }
 
-pub(crate) fn config_lock_metadata(session: &ThreadConfigSnapshot) -> ConfigLockToml {
+pub(crate) fn config_lock_metadata(cwd: &AbsolutePathBuf) -> ConfigLockToml {
     ConfigLockToml {
         version: CONFIG_LOCK_VERSION,
         codex_version: env!("CARGO_PKG_VERSION").to_string(),
-        cwd: session.cwd.clone(),
+        cwd: cwd.clone(),
     }
 }
 
@@ -97,7 +93,7 @@ pub(crate) fn config_without_lock_controls(config: &ConfigToml) -> ConfigToml {
     let mut config = config.clone();
     config.config_lock = None;
     config.config_lock_file = None;
-    config.config_snapshot_export_dir = None;
+    config.config_lock_export_dir = None;
     config
 }
 
@@ -114,7 +110,7 @@ fn validate_config_lock_metadata_shape(lock: &ConfigLockToml) -> io::Result<()> 
 fn config_lock_for_comparison(config: &ConfigToml) -> ConfigToml {
     let mut config = config.clone();
     config.config_lock_file = None;
-    config.config_snapshot_export_dir = None;
+    config.config_lock_export_dir = None;
     config
 }
 
@@ -123,129 +119,21 @@ fn config_lock_error(message: impl Into<String>) -> io::Error {
 }
 
 fn compact_diff<T: Serialize>(root: &str, expected: &T, actual: &T) -> io::Result<String> {
-    let expected = serde_json::to_value(expected).map_err(diff_serialize_error)?;
-    let actual = serde_json::to_value(actual).map_err(diff_serialize_error)?;
-    let mut diffs = Vec::new();
-    let truncated = collect_value_diffs(root, &expected, &actual, &mut diffs);
-    if truncated {
-        diffs.push("...".to_string());
-    }
-    Ok(diffs.join("; "))
-}
-
-fn diff_serialize_error(err: serde_json::Error) -> io::Error {
-    config_lock_error(format!("failed to serialize config lock diff value: {err}"))
-}
-
-fn collect_value_diffs(
-    path: &str,
-    expected: &JsonValue,
-    actual: &JsonValue,
-    diffs: &mut Vec<String>,
-) -> bool {
-    if expected == actual {
-        return false;
-    }
-    if diffs.len() >= MAX_LOCK_DIFFS {
-        return true;
-    }
-
-    match (expected, actual) {
-        (JsonValue::Object(expected), JsonValue::Object(actual)) => {
-            let mut keys = expected.keys().chain(actual.keys()).collect::<Vec<_>>();
-            keys.sort();
-            keys.dedup();
-            for key in keys {
-                let child_path = format!("{path}.{key}");
-                match (expected.get(key), actual.get(key)) {
-                    (Some(expected), Some(actual)) => {
-                        if collect_value_diffs(&child_path, expected, actual, diffs) {
-                            return true;
-                        }
-                    }
-                    (Some(expected), None) => {
-                        push_diff(&child_path, expected, &JsonValue::Null, diffs);
-                    }
-                    (None, Some(actual)) => {
-                        push_diff(&child_path, &JsonValue::Null, actual, diffs);
-                    }
-                    (None, None) => {}
-                }
-                if diffs.len() >= MAX_LOCK_DIFFS {
-                    return true;
-                }
-            }
-            false
-        }
-        (JsonValue::Array(expected), JsonValue::Array(actual)) => {
-            if expected.len() != actual.len() {
-                push_summary_diff(
-                    path,
-                    format!("[len {}]", expected.len()),
-                    format!("[len {}]", actual.len()),
-                    diffs,
-                );
-            }
-            for (index, (expected, actual)) in expected.iter().zip(actual.iter()).enumerate() {
-                let child_path = format!("{path}[{index}]");
-                if collect_value_diffs(&child_path, expected, actual, diffs) {
-                    return true;
-                }
-                if diffs.len() >= MAX_LOCK_DIFFS {
-                    return true;
-                }
-            }
-            false
-        }
-        _ => {
-            push_diff(path, expected, actual, diffs);
-            false
-        }
-    }
-}
-
-fn push_diff(path: &str, expected: &JsonValue, actual: &JsonValue, diffs: &mut Vec<String>) {
-    push_summary_diff(
-        path,
-        summarize_value(expected),
-        summarize_value(actual),
-        diffs,
-    );
-}
-
-fn push_summary_diff(path: &str, expected: String, actual: String, diffs: &mut Vec<String>) {
-    if diffs.len() < MAX_LOCK_DIFFS {
-        diffs.push(format!("{path}: expected {expected}, actual {actual}"));
-    }
-}
-
-fn summarize_value(value: &JsonValue) -> String {
-    match value {
-        JsonValue::Null => "null".to_string(),
-        JsonValue::Bool(value) => value.to_string(),
-        JsonValue::Number(value) => value.to_string(),
-        JsonValue::String(value) => summarize_string(value),
-        JsonValue::Array(values) => format!("[len {}]", values.len()),
-        JsonValue::Object(_) => "{...}".to_string(),
-    }
-}
-
-fn summarize_string(value: &str) -> String {
-    let escaped =
-        serde_json::to_string(value).unwrap_or_else(|_| "\"<invalid string>\"".to_string());
-    if escaped.chars().count() <= MAX_DIFF_VALUE_CHARS {
-        return escaped;
-    }
-    let max_inner_chars = MAX_DIFF_VALUE_CHARS.saturating_sub(5);
-    let escaped_inner = escaped
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .unwrap_or(escaped.as_str());
-    let truncated = escaped_inner
-        .chars()
-        .take(max_inner_chars)
-        .collect::<String>();
-    format!("\"{truncated}...\"")
+    let expected = toml::to_string_pretty(expected).map_err(|err| {
+        config_lock_error(format!(
+            "failed to serialize expected {root} lock TOML: {err}"
+        ))
+    })?;
+    let actual = toml::to_string_pretty(actual).map_err(|err| {
+        config_lock_error(format!(
+            "failed to serialize actual {root} lock TOML: {err}"
+        ))
+    })?;
+    Ok(TextDiff::from_lines(&expected, &actual)
+        .unified_diff()
+        .context_radius(2)
+        .header("expected", "actual")
+        .to_string())
 }
 
 fn toml_value<T: Serialize>(value: &T, label: &str) -> io::Result<toml::Value> {

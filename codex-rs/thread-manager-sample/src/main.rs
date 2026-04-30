@@ -215,7 +215,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         memories: MemoriesConfig::default(),
         sqlite_home: codex_home.to_path_buf(),
         log_dir: codex_home.join("log").to_path_buf(),
-        config_snapshot_export_dir: None,
+        config_lock_export_dir: None,
         config_lock_toml: None,
         codex_home,
         history: History::default(),
