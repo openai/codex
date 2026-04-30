@@ -30,12 +30,7 @@ pub(super) async fn resume_thread(
     store: &LocalThreadStore,
     params: ResumeThreadParams,
 ) -> ThreadStoreResult<()> {
-    if store
-        .lease_live_recorder(params.thread_id, params.rollout_path.as_deref())
-        .await?
-    {
-        return Ok(());
-    }
+    store.ensure_live_recorder_absent(params.thread_id).await?;
     let (rollout_path, history) = match (params.rollout_path, params.history) {
         (Some(rollout_path), history) => (rollout_path, history),
         (None, history) => {
@@ -133,24 +128,9 @@ pub(super) async fn shutdown_thread(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
-    let (recorder, should_close) = {
-        let mut recorders = store.live_recorders.lock().await;
-        let entry = recorders
-            .get_mut(&thread_id)
-            .ok_or(ThreadStoreError::ThreadNotFound { thread_id })?;
-        if entry.leases > 1 {
-            entry.leases -= 1;
-            (entry.recorder.clone(), false)
-        } else {
-            (entry.recorder.clone(), true)
-        }
-    };
-    if should_close {
-        recorder.shutdown().await.map_err(thread_store_io_error)?;
-        store.live_recorders.lock().await.remove(&thread_id);
-    } else {
-        recorder.flush().await.map_err(thread_store_io_error)?;
-    }
+    let recorder = store.live_recorder(thread_id).await?;
+    recorder.shutdown().await.map_err(thread_store_io_error)?;
+    store.live_recorders.lock().await.remove(&thread_id);
     Ok(())
 }
 
@@ -158,16 +138,13 @@ pub(super) async fn discard_thread(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
-    let mut recorders = store.live_recorders.lock().await;
-    let entry = recorders
-        .get_mut(&thread_id)
-        .ok_or(ThreadStoreError::ThreadNotFound { thread_id })?;
-    if entry.leases > 1 {
-        entry.leases -= 1;
-    } else {
-        recorders.remove(&thread_id);
-    }
-    Ok(())
+    store
+        .live_recorders
+        .lock()
+        .await
+        .remove(&thread_id)
+        .map(|_| ())
+        .ok_or(ThreadStoreError::ThreadNotFound { thread_id })
 }
 
 pub(super) async fn rollout_path(
@@ -180,7 +157,6 @@ pub(super) async fn rollout_path(
         .await
         .get(&thread_id)
         .ok_or(ThreadStoreError::ThreadNotFound { thread_id })?
-        .recorder
         .rollout_path()
         .to_path_buf())
 }

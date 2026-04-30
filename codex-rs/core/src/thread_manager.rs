@@ -1077,6 +1077,18 @@ impl ThreadManagerState {
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
+        if let InitialHistory::Resumed(resumed) = &initial_history
+            && self
+                .threads
+                .read()
+                .await
+                .contains_key(&resumed.conversation_id)
+        {
+            return Err(CodexErr::InvalidRequest(format!(
+                "thread {} is already running",
+                resumed.conversation_id
+            )));
+        }
         let environment =
             selected_primary_environment(self.environment_manager.as_ref(), &environments)?;
         let watch_registration = match environment.as_ref() {
@@ -1159,6 +1171,11 @@ impl ThreadManagerState {
             watch_registration,
         ));
         let mut threads = self.threads.write().await;
+        if threads.contains_key(&thread_id) {
+            return Err(CodexErr::InvalidRequest(format!(
+                "thread {thread_id} is already running"
+            )));
+        }
         threads.insert(thread_id, thread.clone());
 
         Ok(NewThread {

@@ -471,7 +471,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
 }
 
 #[tokio::test]
-async fn resume_active_thread_from_rollout_reuses_process_store_writer() {
+async fn resume_active_thread_from_rollout_rejects_duplicate_running_thread() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -504,7 +504,7 @@ async fn resume_active_thread_from_rollout_reuses_process_store_writer() {
         .rollout_path()
         .expect("source rollout path should exist");
 
-    let resumed = manager
+    let err = match manager
         .resume_thread_from_rollout(
             config,
             rollout_path,
@@ -512,18 +512,17 @@ async fn resume_active_thread_from_rollout_reuses_process_store_writer() {
             /*parent_trace*/ None,
         )
         .await
-        .expect("resume active source thread");
+    {
+        Ok(_) => panic!("resume active source thread should fail"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("already running"));
 
     source
         .thread
         .shutdown_and_wait()
         .await
         .expect("shutdown source thread");
-    resumed
-        .thread
-        .shutdown_and_wait()
-        .await
-        .expect("shutdown resumed thread");
 }
 
 #[tokio::test]
