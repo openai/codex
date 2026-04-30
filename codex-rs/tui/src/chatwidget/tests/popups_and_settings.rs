@@ -1,5 +1,8 @@
 use super::*;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::HookErrorInfo;
+use codex_app_server_protocol::HooksListEntry;
+use codex_app_server_protocol::HooksListResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_features::Stage;
 use pretty_assertions::assert_eq;
@@ -9,12 +12,14 @@ async fn realtime_error_closes_without_followup_closed_info() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
 
-    chat.on_realtime_conversation_realtime(RealtimeConversationRealtimeEvent {
-        payload: RealtimeEvent::Error("boom".to_string()),
+    chat.on_realtime_error(ThreadRealtimeErrorNotification {
+        thread_id: ThreadId::new().to_string(),
+        message: "boom".to_string(),
     });
     next_realtime_close_op(&mut op_rx);
 
-    chat.on_realtime_conversation_closed(RealtimeConversationClosedEvent {
+    chat.on_realtime_conversation_closed(ThreadRealtimeClosedNotification {
+        thread_id: ThreadId::new().to_string(),
         reason: Some("error".to_string()),
     });
 
@@ -74,6 +79,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         status_account_display: None,
+        runtime_model_provider_base_url: None,
         initial_plan_type: None,
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
@@ -100,6 +106,30 @@ async fn plugins_popup_loading_state_snapshot() {
         "expected /plugins to open in a loading state before the marketplace arrives, got:\n{popup}"
     );
     assert_chatwidget_snapshot!("plugins_popup_loading_state", popup);
+}
+
+#[tokio::test]
+async fn hooks_popup_shows_list_diagnostics() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.clone();
+
+    chat.on_hooks_loaded(
+        cwd.to_path_buf(),
+        Ok(HooksListResponse {
+            data: vec![HooksListEntry {
+                cwd: cwd.to_path_buf(),
+                hooks: Vec::new(),
+                warnings: vec!["skipped invalid matcher for PreToolUse".to_string()],
+                errors: vec![HookErrorInfo {
+                    path: test_path_buf("/tmp/hooks.json"),
+                    message: "failed to parse hooks config".to_string(),
+                }],
+            }],
+        }),
+    );
+
+    let popup = normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 112));
+    assert_chatwidget_snapshot!("hooks_popup_shows_list_diagnostics", popup);
 }
 
 #[tokio::test]
@@ -2323,13 +2353,11 @@ async fn server_overloaded_error_does_not_switch_models() {
     while rx.try_recv().is_ok() {}
     while op_rx.try_recv().is_ok() {}
 
-    chat.handle_codex_event(Event {
-        id: "err-1".to_string(),
-        msg: EventMsg::Error(ErrorEvent {
-            message: "server overloaded".to_string(),
-            codex_error_info: Some(CodexErrorInfo::ServerOverloaded),
-        }),
-    });
+    handle_error(
+        &mut chat,
+        "server overloaded",
+        Some(CodexErrorInfo::ServerOverloaded),
+    );
 
     while let Ok(event) = rx.try_recv() {
         if let AppEvent::UpdateModel(model) = event {

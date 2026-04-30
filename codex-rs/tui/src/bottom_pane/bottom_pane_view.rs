@@ -2,7 +2,7 @@ use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::render::renderable::Renderable;
-use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_app_server_protocol::ToolRequestUserInputParams;
 use crossterm::event::KeyEvent;
 
 use super::CancellationEvent;
@@ -101,8 +101,8 @@ pub(crate) trait BottomPaneView: Renderable {
     /// consumed.
     fn try_consume_user_input_request(
         &mut self,
-        request: RequestUserInputEvent,
-    ) -> Option<RequestUserInputEvent> {
+        request: ToolRequestUserInputParams,
+    ) -> Option<ToolRequestUserInputParams> {
         Some(request)
     }
 

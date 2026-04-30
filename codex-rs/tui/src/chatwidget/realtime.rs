@@ -1,13 +1,12 @@
 use super::*;
+use codex_app_server_protocol::ThreadRealtimeAudioChunk;
+use codex_app_server_protocol::ThreadRealtimeClosedNotification;
+use codex_app_server_protocol::ThreadRealtimeErrorNotification;
+use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
+use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
+use codex_app_server_protocol::ThreadRealtimeStartTransport;
+use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_config::config_toml::RealtimeTransport;
-use codex_protocol::protocol::ConversationStartParams;
-use codex_protocol::protocol::ConversationStartTransport;
-use codex_protocol::protocol::RealtimeAudioFrame;
-use codex_protocol::protocol::RealtimeConversationClosedEvent;
-use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
-use codex_protocol::protocol::RealtimeConversationStartedEvent;
-use codex_protocol::protocol::RealtimeEvent;
-use codex_protocol::protocol::RealtimeOutputModality;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSession;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
@@ -66,130 +65,7 @@ impl RealtimeConversationUiState {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct RenderedUserMessageEvent {
-    pub(super) message: String,
-    pub(super) remote_image_urls: Vec<String>,
-    pub(super) local_images: Vec<PathBuf>,
-    pub(super) text_elements: Vec<TextElement>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct PendingSteerCompareKey {
-    pub(super) message: String,
-    pub(super) image_count: usize,
-}
-
 impl ChatWidget {
-    pub(super) fn rendered_user_message_event_from_parts(
-        message: String,
-        text_elements: Vec<TextElement>,
-        local_images: Vec<PathBuf>,
-        remote_image_urls: Vec<String>,
-    ) -> RenderedUserMessageEvent {
-        RenderedUserMessageEvent {
-            message,
-            remote_image_urls,
-            local_images,
-            text_elements,
-        }
-    }
-
-    pub(super) fn rendered_user_message_event_from_event(
-        event: &UserMessageEvent,
-    ) -> RenderedUserMessageEvent {
-        Self::rendered_user_message_event_from_parts(
-            event.message.clone(),
-            event.text_elements.clone(),
-            event.local_images.clone(),
-            event.images.clone().unwrap_or_default(),
-        )
-    }
-
-    /// Build the compare key for a submitted pending steer without invoking the
-    /// expensive request-serialization path. Pending steers only need to match the
-    /// committed `ItemCompleted(UserMessage)` emitted after core drains input, which
-    /// preserves flattened text and total image count but not UI-only text ranges or
-    /// local image paths.
-    pub(super) fn pending_steer_compare_key_from_items(
-        items: &[UserInput],
-    ) -> PendingSteerCompareKey {
-        let mut message = String::new();
-        let mut image_count = 0;
-
-        for item in items {
-            match item {
-                UserInput::Text { text, .. } => message.push_str(text),
-                UserInput::Image { .. } | UserInput::LocalImage { .. } => image_count += 1,
-                UserInput::Skill { .. } | UserInput::Mention { .. } => {}
-                _ => {}
-            }
-        }
-
-        PendingSteerCompareKey {
-            message,
-            image_count,
-        }
-    }
-
-    pub(super) fn pending_steer_compare_key_from_item(
-        item: &codex_protocol::items::UserMessageItem,
-    ) -> PendingSteerCompareKey {
-        Self::pending_steer_compare_key_from_items(&item.content)
-    }
-
-    #[cfg(test)]
-    pub(super) fn rendered_user_message_event_from_inputs(
-        items: &[UserInput],
-    ) -> RenderedUserMessageEvent {
-        let mut message = String::new();
-        let mut remote_image_urls = Vec::new();
-        let mut local_images = Vec::new();
-        let mut text_elements = Vec::new();
-
-        for item in items {
-            match item {
-                UserInput::Text {
-                    text,
-                    text_elements: current_text_elements,
-                } => append_text_with_rebased_elements(
-                    &mut message,
-                    &mut text_elements,
-                    text,
-                    current_text_elements.iter().map(|element| {
-                        TextElement::new(
-                            element.byte_range,
-                            element.placeholder(text).map(str::to_string),
-                        )
-                    }),
-                ),
-                UserInput::Image { image_url } => remote_image_urls.push(image_url.clone()),
-                UserInput::LocalImage { path } => local_images.push(path.clone()),
-                UserInput::Skill { .. } | UserInput::Mention { .. } => {}
-                _ => {}
-            }
-        }
-
-        Self::rendered_user_message_event_from_parts(
-            message,
-            text_elements,
-            local_images,
-            remote_image_urls,
-        )
-    }
-
-    #[cfg(test)]
-    pub(super) fn should_render_realtime_user_message_event(
-        &self,
-        event: &UserMessageEvent,
-    ) -> bool {
-        if !self.realtime_conversation.is_live() {
-            return false;
-        }
-        let key = Self::rendered_user_message_event_from_event(event);
-        self.last_rendered_user_message_event.as_ref() != Some(&key)
-    }
-
     fn realtime_footer_hint_items() -> Vec<(String, String)> {
         vec![("/realtime".to_string(), "stop live voice".to_string())]
     }
@@ -232,16 +108,14 @@ impl ChatWidget {
 
     fn submit_realtime_conversation_start(
         &mut self,
-        transport: Option<ConversationStartTransport>,
+        transport: Option<ThreadRealtimeStartTransport>,
     ) {
         self.submit_op(AppCommand::realtime_conversation_start(
-            ConversationStartParams {
-                output_modality: RealtimeOutputModality::Audio,
-                prompt: None,
-                realtime_session_id: None,
-                transport,
-                voice: self.config.realtime.voice,
-            },
+            transport,
+            self.config
+                .realtime
+                .voice
+                .and_then(|voice| serde_json::to_value(voice).ok()),
         ));
     }
 
@@ -289,13 +163,13 @@ impl ChatWidget {
 
     pub(super) fn on_realtime_conversation_started(
         &mut self,
-        ev: RealtimeConversationStartedEvent,
+        notification: ThreadRealtimeStartedNotification,
     ) {
         if !self.realtime_conversation_enabled() {
             self.request_realtime_conversation_close(/*info_message*/ None);
             return;
         }
-        self.realtime_conversation.realtime_session_id = ev.realtime_session_id;
+        self.realtime_conversation.realtime_session_id = notification.realtime_session_id;
         self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
         if self.realtime_conversation_uses_webrtc() {
             self.realtime_conversation.phase = RealtimeConversationPhase::Starting;
@@ -306,58 +180,51 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(super) fn on_realtime_conversation_realtime(
+    pub(super) fn on_realtime_output_audio_delta(
         &mut self,
-        ev: RealtimeConversationRealtimeEvent,
+        notification: ThreadRealtimeOutputAudioDeltaNotification,
     ) {
-        if self.realtime_conversation_uses_webrtc()
-            && matches!(
-                ev.payload,
-                RealtimeEvent::AudioOut(_)
-                    | RealtimeEvent::InputAudioSpeechStarted(_)
-                    | RealtimeEvent::ResponseCreated(_)
-                    | RealtimeEvent::ResponseCancelled(_)
-                    | RealtimeEvent::ResponseDone(_)
-            )
-        {
+        if self.realtime_conversation_uses_webrtc() {
             return;
         }
-        match ev.payload {
-            RealtimeEvent::SessionUpdated {
-                realtime_session_id,
-                ..
-            } => {
-                self.realtime_conversation.realtime_session_id = Some(realtime_session_id);
-            }
-            RealtimeEvent::InputAudioSpeechStarted(_) => self.interrupt_realtime_audio_playback(),
-            RealtimeEvent::InputTranscriptDelta(_) => {}
-            RealtimeEvent::InputTranscriptDone(_) => {}
-            RealtimeEvent::OutputTranscriptDelta(_) => {}
-            RealtimeEvent::OutputTranscriptDone(_) => {}
-            RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
-            RealtimeEvent::ResponseCreated(_) => {}
-            RealtimeEvent::ResponseCancelled(_) => self.interrupt_realtime_audio_playback(),
-            RealtimeEvent::ResponseDone(_) => {}
-            RealtimeEvent::ConversationItemAdded(_item) => {}
-            RealtimeEvent::ConversationItemDone { .. } => {}
-            RealtimeEvent::HandoffRequested(_) => {}
-            RealtimeEvent::NoopRequested(_) => {}
-            RealtimeEvent::Error(message) => {
-                self.fail_realtime_conversation(format!("Realtime voice error: {message}"));
-            }
+        self.enqueue_realtime_audio_out(&notification.audio);
+    }
+
+    pub(super) fn on_realtime_item_added(
+        &mut self,
+        notification: ThreadRealtimeItemAddedNotification,
+    ) {
+        if self.realtime_conversation_uses_webrtc() {
+            return;
+        }
+        if matches!(
+            notification
+                .item
+                .get("type")
+                .and_then(|value| value.as_str()),
+            Some("input_audio_buffer.speech_started" | "response.cancelled")
+        ) {
+            self.interrupt_realtime_audio_playback();
         }
     }
 
-    pub(super) fn on_realtime_conversation_closed(&mut self, ev: RealtimeConversationClosedEvent) {
+    pub(super) fn on_realtime_error(&mut self, notification: ThreadRealtimeErrorNotification) {
+        self.fail_realtime_conversation(format!("Realtime voice error: {}", notification.message));
+    }
+
+    pub(super) fn on_realtime_conversation_closed(
+        &mut self,
+        notification: ThreadRealtimeClosedNotification,
+    ) {
         if self.realtime_conversation_uses_webrtc()
             && self.realtime_conversation.is_live()
-            && ev.reason.as_deref() == Some("transport_closed")
+            && notification.reason.as_deref() == Some("transport_closed")
         {
             return;
         }
 
         let requested = self.realtime_conversation.requested_close;
-        let reason = ev.reason;
+        let reason = notification.reason;
         self.reset_realtime_conversation_state();
         if !requested
             && let Some(reason) = reason
@@ -408,7 +275,7 @@ impl ChatWidget {
         self.realtime_conversation.transport = RealtimeConversationUiTransport::Webrtc {
             handle: Some(offer.handle),
         };
-        self.submit_realtime_conversation_start(Some(ConversationStartTransport::Webrtc {
+        self.submit_realtime_conversation_start(Some(ThreadRealtimeStartTransport::Webrtc {
             sdp: offer.offer_sdp,
         }));
         self.request_redraw();
@@ -480,7 +347,7 @@ impl ChatWidget {
         }
     }
 
-    fn enqueue_realtime_audio_out(&mut self, frame: &RealtimeAudioFrame) {
+    fn enqueue_realtime_audio_out(&mut self, frame: &ThreadRealtimeAudioChunk) {
         #[cfg(not(target_os = "linux"))]
         {
             if self.realtime_conversation.audio_player.is_none() {

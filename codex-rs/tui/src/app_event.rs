@@ -22,13 +22,13 @@ use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
+use codex_protocol::message_history::HistoryEntry;
 use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::protocol::GetHistoryEntryResponseEvent;
-use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
@@ -37,6 +37,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::UserMessage;
+use codex_app_server_protocol::AskForApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
 use codex_plugin::PluginCapabilitySummary;
@@ -45,7 +46,6 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::AskForApproval;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
 
@@ -61,6 +61,13 @@ pub(crate) enum RealtimeAudioDeviceKind {
 pub(crate) enum ThreadGoalSetMode {
     ConfirmIfExists,
     ReplaceExisting,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct HistoryLookupResponse {
+    pub(crate) offset: usize,
+    pub(crate) log_id: u64,
+    pub(crate) entry: Option<HistoryEntry>,
 }
 
 impl RealtimeAudioDeviceKind {
@@ -139,7 +146,7 @@ pub(crate) enum AppEvent {
     /// Deliver a synthetic history lookup response to a specific thread channel.
     ThreadHistoryEntryResponse {
         thread_id: ThreadId,
-        event: GetHistoryEntryResponseEvent,
+        event: HistoryLookupResponse,
     },
 
     /// Start a new session.
@@ -181,7 +188,7 @@ pub(crate) enum AppEvent {
     #[allow(dead_code)]
     FatalExitRequest(String),
 
-    /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
+    /// Forward a command to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(AppCommand),
 
@@ -283,10 +290,21 @@ pub(crate) enum AppEvent {
         cwd: PathBuf,
     },
 
+    /// Fetch lifecycle hook inventory for the provided working directory.
+    FetchHooksList {
+        cwd: PathBuf,
+    },
+
     /// Result of fetching plugin marketplace state.
     PluginsLoaded {
         cwd: PathBuf,
         result: Result<PluginListResponse, String>,
+    },
+
+    /// Result of fetching lifecycle hook inventory.
+    HooksLoaded {
+        cwd: PathBuf,
+        result: Result<codex_app_server_protocol::HooksListResponse, String>,
     },
 
     /// Open the prompt for adding a marketplace source.
@@ -705,6 +723,19 @@ pub(crate) enum AppEvent {
     SetAppEnabled {
         id: String,
         enabled: bool,
+    },
+
+    /// Enable or disable a hook by stable hook key.
+    SetHookEnabled {
+        key: String,
+        enabled: bool,
+    },
+
+    /// Result of persisting hook enabled state.
+    HookEnabledSet {
+        key: String,
+        enabled: bool,
+        result: Result<(), String>,
     },
 
     /// Notify that the manage skills popup was closed.

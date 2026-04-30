@@ -6992,6 +6992,9 @@ pub struct CommandExecOutputDeltaNotification {
     pub cap_reached: bool,
 }
 
+/// Deprecated legacy notification for `apply_patch` textual output.
+///
+/// The server no longer emits this notification.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

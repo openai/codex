@@ -2485,6 +2485,7 @@ name = "codex-core-api"
 version = "0.0.0"
 dependencies = [
  "codex-analytics",
+ "codex-app-server-protocol",
  "codex-arg0",
  "codex-config",
  "codex-core",
@@ -3515,6 +3516,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-core-api",
+ "serde_json",
  "tracing",
 ]
 
@@ -3589,6 +3591,7 @@ dependencies = [
  "codex-install-context",
  "codex-login",
  "codex-mcp",
+ "codex-model-provider",
  "codex-model-provider-info",
  "codex-models-manager",
  "codex-otel",
@@ -3902,6 +3905,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
+ "codex-otel",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-pty",

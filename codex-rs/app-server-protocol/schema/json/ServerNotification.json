@@ -1032,6 +1032,7 @@
       "type": "object"
     },
     "FileChangeOutputDeltaNotification": {
+      "description": "Deprecated legacy notification for `apply_patch` textual output.\n\nThe server no longer emits this notification.",
       "properties": {
         "delta": {
           "type": "string"
@@ -5191,6 +5192,7 @@
       "type": "object"
     },
     {
+      "description": "Deprecated legacy apply_patch output stream notification.",
       "properties": {
         "method": {
           "enum": [

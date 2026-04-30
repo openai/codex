@@ -8,28 +8,74 @@ use crate::legacy_core::config::ConfigBuilder;
 use crate::status::StatusAccountDisplay;
 use crate::test_support::PathBufExt;
 use crate::test_support::test_path_buf;
+use crate::token_usage::TokenUsage;
+use crate::token_usage::TokenUsageInfo;
 use chrono::Duration as ChronoDuration;
 use chrono::TimeZone;
 use chrono::Utc;
+use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::CreditsSnapshot;
+use codex_app_server_protocol::FileSystemAccessMode;
+use codex_app_server_protocol::FileSystemPath;
+use codex_app_server_protocol::FileSystemSandboxEntry;
+use codex_app_server_protocol::FileSystemSpecialPath;
+use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
+use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
+use codex_app_server_protocol::PermissionProfileNetworkPermissions;
+use codex_app_server_protocol::RateLimitSnapshot;
+use codex_app_server_protocol::RateLimitWindow;
+use codex_model_provider_info::ModelProviderAwsAuthInfo;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ActivePermissionProfileModification;
-use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::CreditsSnapshot;
-use codex_protocol::protocol::NetworkSandboxPolicy;
-use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::RateLimitWindow;
-use codex_protocol::protocol::TokenUsage;
-use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::*;
 use tempfile::TempDir;
+
+fn app_server_workspace_write_profile(network_enabled: bool) -> PermissionProfile {
+    AppServerPermissionProfile::Managed {
+        network: PermissionProfileNetworkPermissions {
+            enabled: network_enabled,
+        },
+        file_system: PermissionProfileFileSystemPermissions::Restricted {
+            entries: vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Root,
+                    },
+                    access: FileSystemAccessMode::Read,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::ProjectRoots { subpath: None },
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::SlashTmp,
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Tmpdir,
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+            ],
+            glob_scan_max_depth: None,
+        },
+    }
+    .into()
+}
 
 async fn test_config(temp_home: &TempDir) -> Config {
     let mut config = ConfigBuilder::default()
@@ -37,13 +83,11 @@ async fn test_config(temp_home: &TempDir) -> Config {
         .build()
         .await
         .expect("load config");
+    config.approvals_reviewer = ApprovalsReviewer::User;
     config
         .permissions
-        .set_permission_profile(PermissionProfile::workspace_write_with(
-            &[],
-            NetworkSandboxPolicy::Enabled,
-            /*exclude_tmpdir_env_var*/ false,
-            /*exclude_slash_tmp*/ false,
+        .set_permission_profile(app_server_workspace_write_profile(
+            /*network_enabled*/ true,
         ))
         .expect("set permission profile");
     config
@@ -170,13 +214,13 @@ async fn status_snapshot_includes_reasoning_details() {
         limit_id: None,
         limit_name: None,
         primary: Some(RateLimitWindow {
-            used_percent: 72.5,
-            window_minutes: Some(300),
+            used_percent: 72,
+            window_duration_mins: Some(300),
             resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 600)),
         }),
         secondary: Some(RateLimitWindow {
-            used_percent: 45.0,
-            window_minutes: Some(10080),
+            used_percent: 45,
+            window_duration_mins: Some(10080),
             resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 1_200)),
         }),
         credits: None,
@@ -223,16 +267,13 @@ async fn status_permissions_non_default_workspace_write_uses_workspace_label() {
     config
         .permissions
         .approval_policy
-        .set(AskForApproval::OnRequest)
+        .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     config.cwd = test_path_buf("/workspace/tests").abs();
     config
         .permissions
-        .set_permission_profile(PermissionProfile::workspace_write_with(
-            &[],
-            NetworkSandboxPolicy::Enabled,
-            /*exclude_tmpdir_env_var*/ false,
-            /*exclude_slash_tmp*/ false,
+        .set_permission_profile(app_server_workspace_write_profile(
+            /*network_enabled*/ true,
         ))
         .expect("set permission profile");
 
@@ -249,7 +290,7 @@ async fn status_permissions_named_read_only_profile_shows_builtin_label() {
     config
         .permissions
         .approval_policy
-        .set(AskForApproval::OnRequest)
+        .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     config
         .permissions
@@ -272,7 +313,7 @@ async fn status_permissions_read_only_profile_shows_additional_writable_roots() 
     config
         .permissions
         .approval_policy
-        .set(AskForApproval::OnRequest)
+        .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     let extra_root = test_path_buf("/workspace/extra").abs();
     let file_system_policy = PermissionProfile::read_only()
@@ -308,7 +349,7 @@ async fn status_permissions_named_workspace_profile_shows_builtin_label() {
     config
         .permissions
         .approval_policy
-        .set(AskForApproval::OnRequest)
+        .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     config
         .permissions
@@ -332,7 +373,7 @@ async fn status_permissions_workspace_auto_review_shows_reviewer_label() {
     config
         .permissions
         .approval_policy
-        .set(AskForApproval::OnRequest)
+        .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     config
         .permissions
@@ -355,7 +396,7 @@ async fn status_permissions_named_profile_shows_additional_writable_roots() {
     config
         .permissions
         .approval_policy
-        .set(AskForApproval::OnRequest)
+        .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     let extra_root = test_path_buf("/workspace/extra").abs();
     config
@@ -390,7 +431,7 @@ async fn status_permissions_broadened_workspace_profile_shows_builtin_label() {
     config
         .permissions
         .approval_policy
-        .set(AskForApproval::OnRequest)
+        .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     config
         .permissions
@@ -477,6 +518,56 @@ async fn status_snapshot_shows_active_user_defined_profile() {
 }
 
 #[tokio::test]
+async fn status_model_provider_uses_bedrock_runtime_base_url() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model_provider_id = "amazon-bedrock".to_string();
+    config.model_provider =
+        ModelProviderInfo::create_amazon_bedrock_provider(Some(ModelProviderAwsAuthInfo {
+            profile: None,
+            region: Some("eu-west-1".to_string()),
+        }));
+    config.model_provider.base_url =
+        Some("https://bedrock-mantle.us-east-1.api.aws/openai/v1".to_string());
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+        .single()
+        .expect("timestamp");
+    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let runtime_base_url = "https://bedrock-mantle.eu-west-1.api.aws/openai/v1";
+
+    let (composite, _handle) = new_status_output_with_rate_limits_handle(
+        &config,
+        Some(runtime_base_url),
+        test_status_account_display().as_ref(),
+        /*token_info*/ None,
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ &[],
+        None,
+        captured_at,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+        "<none>".to_string(),
+        /*refreshing_rate_limits*/ false,
+    );
+    let rendered = render_lines(&composite.display_lines(/*width*/ 120)).join("\n");
+
+    assert!(
+        rendered.contains(&format!("Amazon Bedrock - {runtime_base_url}")),
+        "expected /status to render runtime Bedrock URL, got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("bedrock-mantle.us-east-1"),
+        "expected /status to ignore configured Bedrock base URL, got: {rendered}"
+    );
+}
+
+#[tokio::test]
 async fn status_snapshot_shows_auto_review_permissions() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
@@ -531,14 +622,17 @@ async fn status_permissions_full_disk_managed_with_network_is_danger_full_access
     config
         .permissions
         .approval_policy
-        .set(AskForApproval::OnRequest)
+        .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     config
         .permissions
-        .set_permission_profile(PermissionProfile::Managed {
-            file_system: ManagedFileSystemPermissions::Unrestricted,
-            network: NetworkSandboxPolicy::Enabled,
-        })
+        .set_permission_profile(
+            AppServerPermissionProfile::Managed {
+                network: PermissionProfileNetworkPermissions { enabled: true },
+                file_system: PermissionProfileFileSystemPermissions::Unrestricted,
+            }
+            .into(),
+        )
         .expect("set permission profile");
 
     assert_eq!(
@@ -554,14 +648,17 @@ async fn status_permissions_full_disk_managed_without_network_is_external_sandbo
     config
         .permissions
         .approval_policy
-        .set(AskForApproval::OnRequest)
+        .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     config
         .permissions
-        .set_permission_profile(PermissionProfile::Managed {
-            file_system: ManagedFileSystemPermissions::Unrestricted,
-            network: NetworkSandboxPolicy::Restricted,
-        })
+        .set_permission_profile(
+            AppServerPermissionProfile::Managed {
+                network: PermissionProfileNetworkPermissions { enabled: false },
+                file_system: PermissionProfileFileSystemPermissions::Unrestricted,
+            }
+            .into(),
+        )
         .expect("set permission profile");
 
     assert_eq!(
@@ -649,8 +746,8 @@ async fn status_snapshot_includes_monthly_limit() {
         limit_id: None,
         limit_name: None,
         primary: Some(RateLimitWindow {
-            used_percent: 12.0,
-            window_minutes: Some(43_200),
+            used_percent: 12,
+            window_duration_mins: Some(43_200),
             resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 86_400)),
         }),
         secondary: None,
@@ -955,8 +1052,8 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
         limit_id: None,
         limit_name: None,
         primary: Some(RateLimitWindow {
-            used_percent: 72.5,
-            window_minutes: Some(300),
+            used_percent: 72,
+            window_duration_mins: Some(300),
             resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 600)),
         }),
         secondary: None,
@@ -1068,6 +1165,7 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
     let token_info = token_info_for(&model_slug, &config, &usage);
     let (composite, _) = new_status_output_with_rate_limits_handle(
         &config,
+        /*runtime_model_provider_base_url*/ None,
         account_display.as_ref(),
         Some(&token_info),
         &usage,
@@ -1115,13 +1213,13 @@ async fn status_snapshot_shows_refreshing_limits_notice() {
         limit_id: None,
         limit_name: None,
         primary: Some(RateLimitWindow {
-            used_percent: 45.0,
-            window_minutes: Some(300),
+            used_percent: 45,
+            window_duration_mins: Some(300),
             resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 900)),
         }),
         secondary: Some(RateLimitWindow {
-            used_percent: 30.0,
-            window_minutes: Some(10_080),
+            used_percent: 30,
+            window_duration_mins: Some(10_080),
             resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 2_700)),
         }),
         credits: None,
@@ -1182,13 +1280,13 @@ async fn status_snapshot_includes_credits_and_limits() {
         limit_id: None,
         limit_name: None,
         primary: Some(RateLimitWindow {
-            used_percent: 45.0,
-            window_minutes: Some(300),
+            used_percent: 45,
+            window_duration_mins: Some(300),
             resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 900)),
         }),
         secondary: Some(RateLimitWindow {
-            used_percent: 30.0,
-            window_minutes: Some(10_080),
+            used_percent: 30,
+            window_duration_mins: Some(10_080),
             resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 2_700)),
         }),
         credits: Some(CreditsSnapshot {
@@ -1368,13 +1466,13 @@ async fn status_snapshot_shows_stale_limits_message() {
         limit_id: None,
         limit_name: None,
         primary: Some(RateLimitWindow {
-            used_percent: 72.5,
-            window_minutes: Some(300),
+            used_percent: 72,
+            window_duration_mins: Some(300),
             resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 600)),
         }),
         secondary: Some(RateLimitWindow {
-            used_percent: 40.0,
-            window_minutes: Some(10_080),
+            used_percent: 40,
+            window_duration_mins: Some(10_080),
             resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 1_800)),
         }),
         credits: None,
@@ -1435,13 +1533,13 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
         limit_id: None,
         limit_name: None,
         primary: Some(RateLimitWindow {
-            used_percent: 60.0,
-            window_minutes: Some(300),
+            used_percent: 60,
+            window_duration_mins: Some(300),
             resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 1_200)),
         }),
         secondary: Some(RateLimitWindow {
-            used_percent: 35.0,
-            window_minutes: Some(10_080),
+            used_percent: 35,
+            window_duration_mins: Some(10_080),
             resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 2_400)),
         }),
         credits: Some(CreditsSnapshot {

@@ -7,6 +7,7 @@ use crate::app_server_session::AppServerSession;
 use crate::diff_render::display_path_for;
 use crate::key_hint;
 use crate::legacy_core::config::Config;
+use crate::session_resume::resolve_session_thread_id;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -561,11 +562,8 @@ impl PickerState {
                         Some(thread_id) => Some(thread_id),
                         None => match path.as_ref() {
                             Some(path) => {
-                                crate::resolve_session_thread_id(
-                                    path.as_path(),
-                                    /*id_str_if_uuid*/ None,
-                                )
-                                .await
+                                resolve_session_thread_id(path.as_path(), /*id_str_if_uuid*/ None)
+                                    .await
                             }
                             None => None,
                         },

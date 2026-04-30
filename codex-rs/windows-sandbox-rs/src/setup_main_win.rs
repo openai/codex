@@ -6,6 +6,7 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use codex_otel::StatsigMetricsSettings;
 use codex_windows_sandbox::LOG_FILE_NAME;
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
@@ -18,6 +19,7 @@ use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
 use codex_windows_sandbox::ensure_allow_write_aces;
 use codex_windows_sandbox::extract_setup_failure;
 use codex_windows_sandbox::hide_newly_created_users;
+use codex_windows_sandbox::install_wfp_filters;
 use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
@@ -88,6 +90,8 @@ struct Payload {
     proxy_ports: Vec<u16>,
     #[serde(default)]
     allow_local_binding: bool,
+    #[serde(default)]
+    otel: Option<StatsigMetricsSettings>,
     real_user: String,
     #[serde(default)]
     mode: SetupMode,
@@ -601,6 +605,14 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                 format!("ensure offline outbound block failed: {err}"),
             )));
         }
+        install_wfp_filters(
+            &payload.codex_home,
+            &payload.offline_username,
+            payload.otel.as_ref(),
+            |message| {
+                let _ = log_line(log, message);
+            },
+        );
     }
 
     if payload.read_roots.is_empty() {
@@ -896,4 +908,50 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     }
     log_note("setup binary completed", Some(sbx_dir));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Payload;
+    use super::SETUP_VERSION;
+    use codex_otel::StatsigMetricsSettings;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    fn payload_json() -> serde_json::Value {
+        json!({
+            "version": SETUP_VERSION,
+            "offline_username": "CodexSandboxOffline",
+            "online_username": "CodexSandboxOnline",
+            "codex_home": "C:\\codex-home",
+            "command_cwd": "C:\\workspace",
+            "read_roots": [],
+            "write_roots": [],
+            "proxy_ports": [],
+            "real_user": "User",
+        })
+    }
+
+    #[test]
+    fn payload_defaults_otel_absent() {
+        let payload: Payload = serde_json::from_value(payload_json()).expect("payload");
+
+        assert_eq!(payload.otel, None);
+    }
+
+    #[test]
+    fn payload_accepts_otel_settings() {
+        let mut payload = payload_json();
+        payload["otel"] = json!({
+            "environment": "prod",
+        });
+        let payload: Payload = serde_json::from_value(payload).expect("payload");
+
+        assert_eq!(
+            payload.otel,
+            Some(StatsigMetricsSettings {
+                environment: "prod".to_string(),
+            })
+        );
+    }
 }
