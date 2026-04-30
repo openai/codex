@@ -2485,7 +2485,7 @@ async fn thread_resume_surfaces_cloud_requirements_load_errors() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
+async fn thread_resume_rejects_invalid_thread_id_for_loaded_path() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -2536,22 +2536,16 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
         })
         .await?;
 
-    let resume_resp: JSONRPCResponse = timeout(
+    let resume_err: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
     )
     .await??;
-    let ThreadResumeResponse {
-        thread: resumed, ..
-    } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    assert_eq!(resumed.id, thread.id);
-    let resumed_path = resumed.path.as_ref().expect("resumed thread path");
-    let original_path = thread.path.as_ref().expect("original thread path");
-    assert_eq!(
-        normalized_existing_path(resumed_path)?,
-        normalized_existing_path(original_path)?
+    assert!(
+        resume_err.error.message.contains("invalid thread id"),
+        "unexpected resume error: {}",
+        resume_err.error.message
     );
-    assert_eq!(resumed.status, ThreadStatus::Idle);
 
     Ok(())
 }
