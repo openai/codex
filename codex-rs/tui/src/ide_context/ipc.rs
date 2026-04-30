@@ -284,22 +284,50 @@ fn write_frame<T: std::io::Write + ?Sized>(stream: &mut T, message: &Value) -> s
 }
 
 #[cfg(any(unix, windows))]
-fn read_frame<T: std::io::Read + ?Sized>(stream: &mut T) -> Result<Value, IdeContextError> {
+fn read_frame<T: std::io::Read + ?Sized>(
+    stream: &mut T,
+    deadline: Instant,
+) -> Result<Value, IdeContextError> {
     let mut len_bytes = [0_u8; 4];
-    stream
-        .read_exact(&mut len_bytes)
-        .map_err(IdeContextError::Read)?;
+    read_exact_before_deadline(stream, &mut len_bytes, deadline)?;
     let len = u32::from_le_bytes(len_bytes) as usize;
     if len > MAX_IPC_FRAME_BYTES {
         return Err(IdeContextError::ResponseTooLarge);
     }
 
     let mut payload = vec![0_u8; len];
-    stream
-        .read_exact(&mut payload)
-        .map_err(IdeContextError::Read)?;
+    read_exact_before_deadline(stream, &mut payload, deadline)?;
     serde_json::from_slice(&payload)
         .map_err(|err| IdeContextError::InvalidResponse(format!("invalid JSON payload: {err}")))
+}
+
+#[cfg(any(unix, windows))]
+fn read_exact_before_deadline<T: std::io::Read + ?Sized>(
+    stream: &mut T,
+    buf: &mut [u8],
+    deadline: Instant,
+) -> Result<(), IdeContextError> {
+    // std::io::Read::read_exact has no way to observe our request deadline between partial reads.
+    // Keep the frame header and payload under the same budget as the surrounding response wait.
+    let mut read_so_far = 0;
+    while read_so_far < buf.len() {
+        ensure_deadline_not_expired(deadline)?;
+        match stream.read(&mut buf[read_so_far..]) {
+            Ok(0) => {
+                return Err(IdeContextError::Read(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "failed to fill whole IDE context frame",
+                )));
+            }
+            Ok(bytes_read) => {
+                read_so_far += bytes_read;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(IdeContextError::Read(error)),
+        }
+    }
+
+    ensure_deadline_not_expired(deadline)
 }
 
 #[cfg(any(unix, windows))]
@@ -310,7 +338,7 @@ fn read_response_frame<T: std::io::Read + std::io::Write + ?Sized>(
 ) -> Result<Value, IdeContextError> {
     loop {
         ensure_deadline_not_expired(deadline)?;
-        let message = read_frame(stream)?;
+        let message = read_frame(stream, deadline)?;
         match message.get("type").and_then(Value::as_str) {
             Some("response") => {
                 if message.get("requestId").and_then(Value::as_str) == Some(request_id) {
@@ -418,6 +446,11 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[cfg(any(unix, windows))]
+    fn test_deadline() -> Instant {
+        Instant::now() + Duration::from_secs(1)
+    }
+
+    #[cfg(any(unix, windows))]
     #[test]
     fn retryable_after_recent_toggle_covers_transient_errors() {
         assert!(
@@ -481,6 +514,49 @@ mod tests {
         ));
     }
 
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn read_frame_respects_deadline_while_reading_payload() {
+        struct SlowPayloadReader {
+            header: [u8; 4],
+            header_sent: bool,
+            payload: Vec<u8>,
+        }
+
+        impl std::io::Read for SlowPayloadReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if !self.header_sent {
+                    self.header_sent = true;
+                    buf[..self.header.len()].copy_from_slice(&self.header);
+                    return Ok(self.header.len());
+                }
+
+                std::thread::sleep(Duration::from_millis(20));
+                let bytes_to_copy = self.payload.len().min(buf.len());
+                buf[..bytes_to_copy].copy_from_slice(&self.payload[..bytes_to_copy]);
+                self.payload.drain(..bytes_to_copy);
+                Ok(bytes_to_copy)
+            }
+        }
+
+        let payload = br#"{"type":"response"}"#.to_vec();
+        let mut stream = SlowPayloadReader {
+            header: u32::try_from(payload.len())
+                .expect("payload length fits u32")
+                .to_le_bytes(),
+            header_sent: false,
+            payload,
+        };
+
+        let err = read_frame(&mut stream, Instant::now() + Duration::from_millis(1))
+            .expect_err("expired deadline should fail while reading payload");
+
+        assert!(matches!(
+            err,
+            IdeContextError::Read(error) if error.kind() == std::io::ErrorKind::TimedOut
+        ));
+    }
+
     #[cfg(unix)]
     #[test]
     fn fetch_ide_context_handles_interleaved_messages() {
@@ -494,7 +570,7 @@ mod tests {
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept");
 
-            let initialize = read_frame(&mut stream).expect("read initialize");
+            let initialize = read_frame(&mut stream, test_deadline()).expect("read initialize");
             assert_eq!(
                 initialize.get("method").and_then(Value::as_str),
                 Some("initialize")
@@ -525,7 +601,7 @@ mod tests {
             )
             .expect("write initialize response");
 
-            let ide_context = read_frame(&mut stream).expect("read ide-context");
+            let ide_context = read_frame(&mut stream, test_deadline()).expect("read ide-context");
             assert_eq!(
                 ide_context.get("method").and_then(Value::as_str),
                 Some("ide-context")
@@ -571,7 +647,7 @@ mod tests {
             )
             .expect("write client discovery request");
             let discovery_response =
-                read_frame(&mut stream).expect("read client discovery response");
+                read_frame(&mut stream, test_deadline()).expect("read client discovery response");
             assert_eq!(
                 discovery_response.get("type").and_then(Value::as_str),
                 Some("client-discovery-response")
