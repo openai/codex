@@ -47,11 +47,7 @@ impl IdeContextState {
     }
 
     fn status_indicator(&self) -> Option<IdeContextStatusIndicator> {
-        if !self.enabled {
-            return None;
-        }
-
-        Some(IdeContextStatusIndicator::Active)
+        self.enabled.then_some(IdeContextStatusIndicator::Active)
     }
 
     fn should_retry_recent_toggle(&self) -> bool {
@@ -88,10 +84,10 @@ impl IdeContextState {
             let client = if let Some(client) = self.client.as_mut() {
                 client
             } else {
-                self.client.insert(IdeContextClient::connect_for_prompt()?)
+                self.client.insert(IdeContextClient::connect()?)
             };
 
-            let result = client.fetch_ide_context_for_prompt(workspace_root);
+            let result = client.fetch_ide_context(workspace_root);
             match result {
                 Ok(context) => return Ok(context),
                 Err(err) => {

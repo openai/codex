@@ -20,8 +20,7 @@ use super::IdeContext;
 // The desktop IPC client gives requests 5 seconds to complete. Match that prompt-time budget here:
 // fetching IDE context includes router discovery and extension event-loop work, so a shorter TUI
 // deadline can incorrectly skip context even though the IDE answers normally.
-const IDE_CONTEXT_PROMPT_TIMEOUT: Duration = Duration::from_secs(5);
-const IDE_CONTEXT_PROBE_TIMEOUT: Duration = IDE_CONTEXT_PROMPT_TIMEOUT;
+const IDE_CONTEXT_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(any(unix, windows))]
 const IDE_CONTEXT_IDLE_READ_TIMEOUT: Duration = Duration::from_millis(50);
 #[cfg(any(unix, windows))]
@@ -333,25 +332,14 @@ impl IpcFrameBuffer {
 #[cfg(any(unix, windows))]
 impl IdeContextClient {
     pub(crate) fn connect() -> Result<Self, IdeContextError> {
-        Self::connect_to_socket(default_ipc_socket_path(), IDE_CONTEXT_PROBE_TIMEOUT)
-    }
-
-    pub(crate) fn connect_for_prompt() -> Result<Self, IdeContextError> {
-        Self::connect_to_socket(default_ipc_socket_path(), IDE_CONTEXT_PROMPT_TIMEOUT)
+        Self::connect_to_socket(default_ipc_socket_path(), IDE_CONTEXT_REQUEST_TIMEOUT)
     }
 
     pub(crate) fn fetch_ide_context(
         &mut self,
         workspace_root: &Path,
     ) -> Result<IdeContext, IdeContextError> {
-        self.fetch_ide_context_with_timeout(workspace_root, IDE_CONTEXT_PROBE_TIMEOUT)
-    }
-
-    pub(crate) fn fetch_ide_context_for_prompt(
-        &mut self,
-        workspace_root: &Path,
-    ) -> Result<IdeContext, IdeContextError> {
-        self.fetch_ide_context_with_timeout(workspace_root, IDE_CONTEXT_PROMPT_TIMEOUT)
+        self.fetch_ide_context_with_timeout(workspace_root, IDE_CONTEXT_REQUEST_TIMEOUT)
     }
 
     fn connect_to_socket(socket_path: PathBuf, timeout: Duration) -> Result<Self, IdeContextError> {
@@ -429,18 +417,7 @@ impl IdeContextClient {
         Err(IdeContextError::UnsupportedPlatform)
     }
 
-    pub(crate) fn connect_for_prompt() -> Result<Self, IdeContextError> {
-        Err(IdeContextError::UnsupportedPlatform)
-    }
-
     pub(crate) fn fetch_ide_context(
-        &mut self,
-        _workspace_root: &Path,
-    ) -> Result<IdeContext, IdeContextError> {
-        Err(IdeContextError::UnsupportedPlatform)
-    }
-
-    pub(crate) fn fetch_ide_context_for_prompt(
         &mut self,
         _workspace_root: &Path,
     ) -> Result<IdeContext, IdeContextError> {
@@ -1233,20 +1210,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn write_frame_in_two_chunks(
-        stream: &mut impl std::io::Write,
-        message: &Value,
-        delay: Duration,
-    ) {
-        let payload = write_frame_header(stream, message);
-        std::thread::sleep(delay);
-        stream
-            .write_all(&payload)
-            .expect("write test IPC frame payload");
-        stream.flush().expect("flush test IPC frame payload");
-    }
-
-    #[cfg(unix)]
     fn write_frame_header(stream: &mut impl std::io::Write, message: &Value) -> Vec<u8> {
         let payload = serde_json::to_vec(message).expect("serialize test IPC message");
         let payload_len = u32::try_from(payload.len())
@@ -1451,76 +1414,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn ide_context_idle_reader_preserves_split_frame() {
-        use std::os::unix::net::UnixListener;
-        use std::thread;
-
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let socket_path = tempdir.path().join("codex-ipc.sock");
-        let listener = UnixListener::bind(&socket_path).expect("bind socket");
-        let (discovery_tx, discovery_rx) = std::sync::mpsc::channel();
-
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
-
-            let initialize = read_frame(&mut stream, test_deadline()).expect("read initialize");
-            let initialize_request_id = initialize
-                .get("requestId")
-                .and_then(Value::as_str)
-                .expect("initialize request id");
-            write_initialize_response(&mut stream, initialize_request_id);
-
-            write_frame_in_two_chunks(
-                &mut stream,
-                &json!({
-                    "type": "client-discovery-request",
-                    "requestId": "split-discovery-request",
-                    "request": {
-                        "type": "request",
-                        "method": "ide-context"
-                    }
-                }),
-                IDE_CONTEXT_IDLE_READ_TIMEOUT * 2,
-            );
-            let discovery_response =
-                read_frame(&mut stream, test_deadline()).expect("read client discovery response");
-            assert_eq!(
-                discovery_response.get("requestId").and_then(Value::as_str),
-                Some("split-discovery-request")
-            );
-            discovery_tx
-                .send(())
-                .expect("notify split discovery response was received");
-
-            let ide_context = read_frame(&mut stream, test_deadline()).expect("read ide-context");
-            let ide_context_request_id = ide_context
-                .get("requestId")
-                .and_then(Value::as_str)
-                .expect("ide-context request id");
-            write_ide_context_response(&mut stream, ide_context_request_id, "after split frame");
-        });
-
-        let mut client = IdeContextClient::connect_to_socket(socket_path, Duration::from_secs(1))
-            .expect("connect IDE context client");
-        discovery_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("idle client should preserve and answer split frames");
-        let context = client
-            .fetch_ide_context_for_prompt(Path::new("/repo"))
-            .expect("fetch IDE context after split idle frame");
-
-        server.join().expect("server joins");
-        assert_eq!(
-            context
-                .active_file
-                .as_ref()
-                .map(|file| file.active_selection_content.as_str()),
-            Some("after split frame")
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
     fn ide_context_client_sends_request_while_idle_frame_is_incomplete() {
         use std::io::Write;
         use std::os::unix::net::UnixListener;
@@ -1577,7 +1470,7 @@ mod tests {
             .expect("connect IDE context client");
         std::thread::sleep(IDE_CONTEXT_IDLE_READ_TIMEOUT * 2);
         let context = client
-            .fetch_ide_context_for_prompt(Path::new("/repo"))
+            .fetch_ide_context(Path::new("/repo"))
             .expect("fetch IDE context while idle frame is incomplete");
 
         server.join().expect("server joins");
@@ -1646,7 +1539,7 @@ mod tests {
             .fetch_ide_context(Path::new("/repo"))
             .expect("fetch first IDE context");
         let second = client
-            .fetch_ide_context_for_prompt(Path::new("/repo"))
+            .fetch_ide_context(Path::new("/repo"))
             .expect("fetch second IDE context");
 
         server.join().expect("server joins");
@@ -1662,75 +1555,6 @@ mod tests {
                     .map(|file| file.active_selection_content.as_str()),
             ],
             [Some("first"), Some("second")]
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ide_context_client_answers_idle_inbound_requests() {
-        use std::os::unix::net::UnixListener;
-        use std::thread;
-
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let socket_path = tempdir.path().join("codex-ipc.sock");
-        let listener = UnixListener::bind(&socket_path).expect("bind socket");
-
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
-
-            let initialize = read_frame(&mut stream, test_deadline()).expect("read initialize");
-            let initialize_request_id = initialize
-                .get("requestId")
-                .and_then(Value::as_str)
-                .expect("initialize request id");
-            write_initialize_response(&mut stream, initialize_request_id);
-
-            write_frame(
-                &mut stream,
-                &json!({
-                    "type": "request",
-                    "requestId": "idle-request",
-                    "sourceClientId": "vscode-client",
-                    "version": 0,
-                    "method": "unknown-method",
-                    "params": {}
-                }),
-            )
-            .expect("write idle request");
-
-            let idle_response =
-                read_frame(&mut stream, test_deadline()).expect("read idle request response");
-            assert_eq!(
-                idle_response,
-                json!({
-                    "type": "response",
-                    "requestId": "idle-request",
-                    "resultType": "error",
-                    "error": "no-handler-for-request"
-                })
-            );
-
-            let ide_context = read_frame(&mut stream, test_deadline()).expect("read ide-context");
-            let ide_context_request_id = ide_context
-                .get("requestId")
-                .and_then(Value::as_str)
-                .expect("ide-context request id");
-            write_ide_context_response(&mut stream, ide_context_request_id, "selected");
-        });
-
-        let mut client = IdeContextClient::connect_to_socket(socket_path, Duration::from_secs(1))
-            .expect("connect IDE context client");
-        let context = client
-            .fetch_ide_context_for_prompt(Path::new("/repo"))
-            .expect("fetch IDE context after idle request");
-
-        server.join().expect("server joins");
-        assert_eq!(
-            context
-                .active_file
-                .as_ref()
-                .map(|file| file.active_selection_content.as_str()),
-            Some("selected")
         );
     }
 }
