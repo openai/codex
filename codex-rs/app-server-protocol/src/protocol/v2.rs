@@ -6417,6 +6417,10 @@ impl From<CoreTurnItem> for ThreadItem {
                 query: search.query,
                 action: Some(WebSearchAction::from(search.action)),
             },
+            CoreTurnItem::ImageView(image) => ThreadItem::ImageView {
+                id: image.id,
+                path: image.path,
+            },
             CoreTurnItem::ImageGeneration(image) => ThreadItem::ImageGeneration {
                 id: image.id,
                 status: image.status,
@@ -8033,6 +8037,7 @@ mod tests {
     use super::*;
     use codex_protocol::items::AgentMessageContent;
     use codex_protocol::items::AgentMessageItem;
+    use codex_protocol::items::ImageViewItem;
     use codex_protocol::items::ReasoningItem;
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
@@ -10311,6 +10316,19 @@ mod tests {
                     query: Some("docs".to_string()),
                     queries: None,
                 }),
+            }
+        );
+
+        let image_view_item = TurnItem::ImageView(ImageViewItem {
+            id: "view-image-1".to_string(),
+            path: test_path_buf("/tmp/view-image.png").abs(),
+        });
+
+        assert_eq!(
+            ThreadItem::from(image_view_item),
+            ThreadItem::ImageView {
+                id: "view-image-1".to_string(),
+                path: test_path_buf("/tmp/view-image.png").abs(),
             }
         );
     }

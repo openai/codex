@@ -1423,9 +1423,6 @@ pub enum EventMsg {
 
     ExecCommandEnd(ExecCommandEndEvent),
 
-    /// Notification that the agent attached a local image via the view_image tool.
-    ViewImageToolCall(ViewImageToolCallEvent),
-
     ExecApprovalRequest(ExecApprovalRequestEvent),
 
     RequestPermissions(RequestPermissionsEvent),
@@ -1857,6 +1854,7 @@ impl HasLegacyEvent for ItemStartedEvent {
             TurnItem::WebSearch(item) => vec![EventMsg::WebSearchBegin(WebSearchBeginEvent {
                 call_id: item.id.clone(),
             })],
+            TurnItem::ImageView(_) => Vec::new(),
             TurnItem::ImageGeneration(item) => {
                 vec![EventMsg::ImageGenerationBegin(ImageGenerationBeginEvent {
                     call_id: item.id.clone(),
@@ -3148,14 +3146,6 @@ pub struct ExecCommandEndEvent {
     pub status: ExecCommandStatus,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ViewImageToolCallEvent {
-    /// Identifier for the originating tool call.
-    pub call_id: String,
-    /// Local filesystem path provided to the tool.
-    pub path: AbsolutePathBuf,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecOutputStream {
@@ -3991,6 +3981,7 @@ pub struct CollabResumeEndEvent {
 mod tests {
     use super::*;
     use crate::items::ImageGenerationItem;
+    use crate::items::ImageViewItem;
     use crate::items::UserMessageItem;
     use crate::items::WebSearchItem;
     use crate::permissions::FileSystemAccessMode;
@@ -4721,6 +4712,36 @@ mod tests {
             }
             _ => panic!("expected ImageGenerationEnd event"),
         }
+    }
+
+    #[test]
+    fn image_view_item_lifecycle_emits_no_legacy_events() {
+        let item = TurnItem::ImageView(ImageViewItem {
+            id: "view-image-1".into(),
+            path: test_path_buf("/tmp/view-image.png").abs(),
+        });
+
+        let started = ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            item: item.clone(),
+        };
+        let completed = ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            item,
+        };
+
+        assert!(
+            started
+                .as_legacy_events(/*show_raw_agent_reasoning*/ false)
+                .is_empty()
+        );
+        assert!(
+            completed
+                .as_legacy_events(/*show_raw_agent_reasoning*/ false)
+                .is_empty()
+        );
     }
 
     #[test]

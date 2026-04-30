@@ -107,13 +107,14 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::TurnComplete(_)
         | EventMsg::ImageGenerationEnd(_) => Some(EventPersistenceMode::Limited),
         EventMsg::ItemCompleted(event) => {
-            // Plan items are derived from streaming tags and are not part of the
-            // raw ResponseItem history, so we persist their completion to replay
-            // them on resume without bloating rollouts with every item lifecycle.
-            if matches!(event.item, codex_protocol::items::TurnItem::Plan(_)) {
-                Some(EventPersistenceMode::Limited)
-            } else {
-                None
+            // Persist completed items that are not recoverable from raw ResponseItem
+            // history without bloating rollouts with every item lifecycle.
+            match &event.item {
+                codex_protocol::items::TurnItem::Plan(_) => Some(EventPersistenceMode::Limited),
+                codex_protocol::items::TurnItem::ImageView(_) => {
+                    Some(EventPersistenceMode::Extended)
+                }
+                _ => None,
             }
         }
         EventMsg::Error(_)
@@ -121,7 +122,6 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::WebSearchEnd(_)
         | EventMsg::ExecCommandEnd(_)
         | EventMsg::McpToolCallEnd(_)
-        | EventMsg::ViewImageToolCall(_)
         | EventMsg::CollabAgentSpawnEnd(_)
         | EventMsg::CollabAgentInteractionEnd(_)
         | EventMsg::CollabWaitingEnd(_)

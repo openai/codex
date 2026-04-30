@@ -32,6 +32,7 @@ pub enum TurnItem {
     Plan(PlanItem),
     Reasoning(ReasoningItem),
     WebSearch(WebSearchItem),
+    ImageView(ImageViewItem),
     ImageGeneration(ImageGenerationItem),
     ContextCompaction(ContextCompactionItem),
 }
@@ -112,6 +113,12 @@ pub struct WebSearchItem {
     pub id: String,
     pub query: String,
     pub action: WebSearchAction,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
+pub struct ImageViewItem {
+    pub id: String,
+    pub path: AbsolutePathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
@@ -390,6 +397,7 @@ impl TurnItem {
             TurnItem::Plan(item) => item.id.clone(),
             TurnItem::Reasoning(item) => item.id.clone(),
             TurnItem::WebSearch(item) => item.id.clone(),
+            TurnItem::ImageView(item) => item.id.clone(),
             TurnItem::ImageGeneration(item) => item.id.clone(),
             TurnItem::ContextCompaction(item) => item.id.clone(),
         }
@@ -402,6 +410,7 @@ impl TurnItem {
             TurnItem::AgentMessage(item) => item.as_legacy_events(),
             TurnItem::Plan(_) => Vec::new(),
             TurnItem::WebSearch(item) => vec![item.as_legacy_event()],
+            TurnItem::ImageView(_) => Vec::new(),
             TurnItem::ImageGeneration(item) => vec![item.as_legacy_event()],
             TurnItem::Reasoning(item) => item.as_legacy_events(show_raw_agent_reasoning),
             TurnItem::ContextCompaction(item) => vec![item.as_legacy_event()],
