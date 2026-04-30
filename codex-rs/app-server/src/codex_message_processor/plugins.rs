@@ -333,8 +333,7 @@ impl CodexMessageProcessor {
         self.clear_plugin_related_caches();
         Ok(PluginShareSaveResponse {
             remote_plugin_id: result.remote_plugin_id,
-            // TODO(remote plugins): populate this once the backend returns a share URL.
-            share_url: String::new(),
+            share_url: result.share_url.unwrap_or_default(),
         })
     }
 

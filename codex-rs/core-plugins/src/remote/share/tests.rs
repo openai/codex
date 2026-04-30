@@ -169,6 +169,7 @@ async fn save_remote_plugin_share_creates_workspace_plugin() {
         })))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({
             "plugin_id": "plugins_123",
+            "share_url": "https://chatgpt.example/plugins/share/share-key-1",
         })))
         .expect(1)
         .mount(&server)
@@ -186,7 +187,8 @@ async fn save_remote_plugin_share_creates_workspace_plugin() {
     assert_eq!(
         result,
         RemotePluginShareSaveResult {
-            remote_plugin_id: "plugins_123".to_string()
+            remote_plugin_id: "plugins_123".to_string(),
+            share_url: Some("https://chatgpt.example/plugins/share/share-key-1".to_string()),
         }
     );
 
@@ -308,7 +310,8 @@ async fn save_remote_plugin_share_updates_existing_workspace_plugin() {
     assert_eq!(
         result,
         RemotePluginShareSaveResult {
-            remote_plugin_id: "plugins_123".to_string()
+            remote_plugin_id: "plugins_123".to_string(),
+            share_url: None,
         }
     );
 }

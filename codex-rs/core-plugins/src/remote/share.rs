@@ -19,6 +19,7 @@ const REMOTE_PLUGIN_SHARE_MAX_ARCHIVE_BYTES: usize = 50 * 1024 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemotePluginShareSaveResult {
     pub remote_plugin_id: String,
+    pub share_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -46,6 +47,7 @@ struct RemoteWorkspacePluginCreateRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RemoteWorkspacePluginCreateResponse {
     plugin_id: String,
+    share_url: Option<String>,
 }
 
 pub async fn save_remote_plugin_share(
@@ -93,6 +95,7 @@ pub async fn save_remote_plugin_share(
 
     Ok(RemotePluginShareSaveResult {
         remote_plugin_id: response.plugin_id,
+        share_url: response.share_url,
     })
 }
 

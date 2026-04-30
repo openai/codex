@@ -80,6 +80,7 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
         })))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({
             "plugin_id": "plugins_123",
+            "share_url": "https://chatgpt.example/plugins/share/share-key-1",
         })))
         .expect(1)
         .mount(&server)
@@ -107,7 +108,7 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
         response,
         PluginShareSaveResponse {
             remote_plugin_id: "plugins_123".to_string(),
-            share_url: String::new(),
+            share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
         }
     );
     Ok(())
