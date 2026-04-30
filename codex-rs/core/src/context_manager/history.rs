@@ -452,7 +452,7 @@ impl ContextManager {
     }
 }
 
-fn truncate_function_output_payload(
+pub(crate) fn truncate_function_output_payload(
     output: &FunctionCallOutputPayload,
     policy: TruncationPolicy,
 ) -> FunctionCallOutputPayload {

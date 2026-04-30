@@ -1,8 +1,8 @@
 //! Prompt rendering for IDE context injected into TUI user turns.
 
-use codex_protocol::user_input::ByteRange;
-use codex_protocol::user_input::TextElement;
-use codex_protocol::user_input::UserInput;
+use codex_app_server_protocol::ByteRange;
+use codex_app_server_protocol::TextElement;
+use codex_app_server_protocol::UserInput;
 
 use super::IdeContext;
 
@@ -80,10 +80,14 @@ fn prefixed_text_input(prefix: String, text: String, text_elements: Vec<TextElem
         text_elements: text_elements
             .into_iter()
             .map(|element| {
-                element.map_range(|range| ByteRange {
-                    start: range.start + prefix_len,
-                    end: range.end + prefix_len,
-                })
+                let range = element.byte_range.clone();
+                TextElement::new(
+                    ByteRange {
+                        start: range.start + prefix_len,
+                        end: range.end + prefix_len,
+                    },
+                    element.placeholder().map(str::to_string),
+                )
             })
             .collect(),
     }
@@ -268,7 +272,10 @@ mod tests {
             },
             UserInput::Text {
                 text,
-                text_elements: vec![TextElement::new((4..10).into(), Some("$figma".to_string()))],
+                text_elements: vec![TextElement::new(
+                    ByteRange { start: 4, end: 10 },
+                    Some("$figma".to_string()),
+                )],
             },
         ];
 
@@ -285,7 +292,10 @@ mod tests {
                 UserInput::Text {
                     text: format!("{expected_prefix}Ask $figma"),
                     text_elements: vec![TextElement::new(
-                        (prefix_len + 4..prefix_len + 10).into(),
+                        ByteRange {
+                            start: prefix_len + 4,
+                            end: prefix_len + 10,
+                        },
                         Some("$figma".to_string()),
                     )],
                 },

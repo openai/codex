@@ -1,11 +1,52 @@
 use super::*;
-use codex_protocol::models::ManagedFileSystemPermissions;
-use codex_protocol::permissions::FileSystemAccessMode;
-use codex_protocol::permissions::FileSystemPath;
-use codex_protocol::permissions::FileSystemSandboxEntry;
-use codex_protocol::permissions::FileSystemSpecialPath;
-use codex_protocol::protocol::NetworkSandboxPolicy;
+use codex_app_server_protocol::FileSystemAccessMode;
+use codex_app_server_protocol::FileSystemPath;
+use codex_app_server_protocol::FileSystemSandboxEntry;
+use codex_app_server_protocol::FileSystemSpecialPath;
+use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
+use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
+use codex_app_server_protocol::PermissionProfileNetworkPermissions;
 use pretty_assertions::assert_eq;
+
+fn app_server_workspace_write_profile(extra_root: AbsolutePathBuf) -> PermissionProfile {
+    AppServerPermissionProfile::Managed {
+        network: PermissionProfileNetworkPermissions { enabled: false },
+        file_system: PermissionProfileFileSystemPermissions::Restricted {
+            entries: vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Root,
+                    },
+                    access: FileSystemAccessMode::Read,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::ProjectRoots { subpath: None },
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::SlashTmp,
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Tmpdir,
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path: extra_root },
+                    access: FileSystemAccessMode::Write,
+                },
+            ],
+            glob_scan_max_depth: None,
+        },
+    }
+    .into()
+}
 
 #[tokio::test]
 async fn approvals_selection_popup_snapshot() {
@@ -57,12 +98,7 @@ async fn preset_matching_accepts_workspace_write_with_extra_roots() {
         .into_iter()
         .find(|p| p.id == "auto")
         .expect("auto preset exists");
-    let current_profile = PermissionProfile::workspace_write_with(
-        &[test_path_buf("/tmp/extra").abs()],
-        NetworkSandboxPolicy::Restricted,
-        /*exclude_tmpdir_env_var*/ false,
-        /*exclude_slash_tmp*/ false,
-    );
+    let current_profile = app_server_workspace_write_profile(test_path_buf("/tmp/extra").abs());
     let cwd = test_path_buf("/tmp/project").abs();
 
     assert!(
@@ -91,8 +127,9 @@ async fn preset_matching_does_not_treat_non_cwd_writable_profile_as_read_only() 
         .into_iter()
         .find(|p| p.id == "read-only")
         .expect("read-only preset exists");
-    let current_profile = PermissionProfile::Managed {
-        file_system: ManagedFileSystemPermissions::Restricted {
+    let current_profile: PermissionProfile = AppServerPermissionProfile::Managed {
+        network: PermissionProfileNetworkPermissions { enabled: false },
+        file_system: PermissionProfileFileSystemPermissions::Restricted {
             entries: vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
@@ -109,8 +146,8 @@ async fn preset_matching_does_not_treat_non_cwd_writable_profile_as_read_only() 
             ],
             glob_scan_max_depth: None,
         },
-        network: NetworkSandboxPolicy::Restricted,
-    };
+    }
+    .into();
     let cwd = test_path_buf("/tmp/project").abs();
 
     assert!(
@@ -208,15 +245,17 @@ async fn startup_does_not_prompt_for_windows_sandbox_when_not_requested() {
 async fn approvals_popup_shows_disabled_presets() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.config.permissions.approval_policy =
-        Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
+    chat.config.permissions.approval_policy = Constrained::new(
+        AskForApproval::OnRequest.to_core(),
+        |candidate| match AskForApproval::from(*candidate) {
             AskForApproval::OnRequest => Ok(()),
             _ => Err(invalid_value(
                 candidate.to_string(),
                 "this message should be printed in the description",
             )),
-        })
-        .expect("construct constrained approval policy");
+        },
+    )
+    .expect("construct constrained approval policy");
     chat.open_approvals_popup();
 
     let width = 80;
@@ -245,12 +284,14 @@ async fn approvals_popup_navigation_skips_disabled() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
 
-    chat.config.permissions.approval_policy =
-        Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
+    chat.config.permissions.approval_policy = Constrained::new(
+        AskForApproval::OnRequest.to_core(),
+        |candidate| match AskForApproval::from(*candidate) {
             AskForApproval::OnRequest => Ok(()),
             _ => Err(invalid_value(candidate.to_string(), "[on-request]")),
-        })
-        .expect("construct constrained approval policy");
+        },
+    )
+    .expect("construct constrained approval policy");
     chat.open_approvals_popup();
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -315,7 +356,7 @@ async fn approvals_popup_navigation_skips_disabled() {
     assert!(
         app_events.iter().any(|ev| matches!(
             ev,
-            AppEvent::CodexOp(AppCommand::OverrideTurnContext {
+            AppEvent::CodexOp(Op::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::OnRequest),
                 personality: None,
                 ..
@@ -326,7 +367,7 @@ async fn approvals_popup_navigation_skips_disabled() {
     assert!(
         !app_events.iter().any(|ev| matches!(
             ev,
-            AppEvent::CodexOp(AppCommand::OverrideTurnContext {
+            AppEvent::CodexOp(Op::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::Never),
                 personality: None,
                 ..
@@ -400,7 +441,7 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
     chat.config
         .permissions
         .approval_policy
-        .set(AskForApproval::Never)
+        .set(AskForApproval::Never.to_core())
         .expect("set approval policy");
     chat.config
         .permissions
@@ -442,7 +483,7 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
     chat.config
         .permissions
         .approval_policy
-        .set(AskForApproval::OnRequest)
+        .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     chat.config
         .permissions
@@ -500,7 +541,7 @@ async fn permissions_selection_hides_auto_review_when_feature_disabled_even_if_a
     chat.config
         .permissions
         .approval_policy
-        .set(AskForApproval::OnRequest)
+        .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     chat.config
         .permissions
@@ -530,27 +571,25 @@ async fn permissions_selection_marks_auto_review_current_after_session_configure
         .features
         .set_enabled(Feature::GuardianApproval, /*enabled*/ true);
 
-    chat.handle_codex_event(Event {
-        id: "session-configured".to_string(),
-        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-            session_id: ThreadId::new(),
-            forked_from_id: None,
-            thread_name: None,
-            model: "gpt-test".to_string(),
-            model_provider_id: "test-provider".to_string(),
-            service_tier: None,
-            approval_policy: AskForApproval::OnRequest,
-            approvals_reviewer: ApprovalsReviewer::AutoReview,
-            permission_profile: PermissionProfile::workspace_write(),
-            active_permission_profile: None,
-            cwd: test_project_path().abs(),
-            reasoning_effort: None,
-            history_log_id: 0,
-            history_entry_count: 0,
-            initial_messages: None,
-            network_proxy: None,
-            rollout_path: Some(PathBuf::new()),
-        }),
+    chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "gpt-test".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::OnRequest,
+        approvals_reviewer: ApprovalsReviewer::AutoReview,
+        permission_profile: PermissionProfile::workspace_write(),
+        active_permission_profile: None,
+        cwd: test_project_path().abs(),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: None,
+        history_log_id: 0,
+        history_entry_count: 0,
+        network_proxy: None,
+        rollout_path: Some(PathBuf::new()),
     });
 
     chat.open_permissions_popup();
@@ -578,34 +617,27 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
 
     let extra_root = test_path_buf("/tmp/guardian-approvals-extra").abs();
     let cwd = test_project_path().abs();
-    let permission_profile = PermissionProfile::workspace_write_with(
-        &[extra_root],
-        NetworkSandboxPolicy::Restricted,
-        /*exclude_tmpdir_env_var*/ false,
-        /*exclude_slash_tmp*/ false,
-    );
+    let permission_profile = app_server_workspace_write_profile(extra_root);
 
-    chat.handle_codex_event(Event {
-        id: "session-configured-custom-workspace".to_string(),
-        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-            session_id: ThreadId::new(),
-            forked_from_id: None,
-            thread_name: None,
-            model: "gpt-test".to_string(),
-            model_provider_id: "test-provider".to_string(),
-            service_tier: None,
-            approval_policy: AskForApproval::OnRequest,
-            approvals_reviewer: ApprovalsReviewer::AutoReview,
-            permission_profile,
-            active_permission_profile: None,
-            cwd,
-            reasoning_effort: None,
-            history_log_id: 0,
-            history_entry_count: 0,
-            initial_messages: None,
-            network_proxy: None,
-            rollout_path: Some(PathBuf::new()),
-        }),
+    chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "gpt-test".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::OnRequest,
+        approvals_reviewer: ApprovalsReviewer::AutoReview,
+        permission_profile,
+        active_permission_profile: None,
+        cwd,
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: None,
+        history_log_id: 0,
+        history_entry_count: 0,
+        network_proxy: None,
+        rollout_path: Some(PathBuf::new()),
     });
 
     chat.open_permissions_popup();
@@ -630,7 +662,7 @@ async fn permissions_selection_can_disable_auto_review() {
     chat.config
         .permissions
         .approval_policy
-        .set(AskForApproval::OnRequest)
+        .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     chat.config
         .permissions
@@ -670,7 +702,7 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
     chat.config
         .permissions
         .approval_policy
-        .set(AskForApproval::OnRequest)
+        .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     chat.config
         .permissions
@@ -699,7 +731,7 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
 
     let op = std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|event| match event {
-            AppEvent::CodexOp(op @ AppCommand::OverrideTurnContext { .. }) => Some(op),
+            AppEvent::CodexOp(op @ Op::OverrideTurnContext { .. }) => Some(op),
             _ => None,
         })
         .expect("expected OverrideTurnContext op");
@@ -710,7 +742,6 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             cwd: None,
             approval_policy: Some(AskForApproval::OnRequest),
             approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-            sandbox_policy: None,
             permission_profile: Some(PermissionProfile::workspace_write()),
             windows_sandbox_level: None,
             model: None,

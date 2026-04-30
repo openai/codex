@@ -5293,7 +5293,7 @@ pub struct ThreadRealtimeStartParams {
     #[ts(optional = nullable)]
     pub prompt: Option<Option<String>>,
     #[ts(optional = nullable)]
-    pub session_id: Option<String>,
+    pub realtime_session_id: Option<String>,
     #[ts(optional = nullable)]
     pub transport: Option<ThreadRealtimeStartTransport>,
     #[ts(optional = nullable)]
@@ -5383,7 +5383,7 @@ pub struct ThreadRealtimeListVoicesResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartedNotification {
     pub thread_id: String,
-    pub session_id: Option<String>,
+    pub realtime_session_id: Option<String>,
     pub version: RealtimeConversationVersion,
 }
 
@@ -6992,6 +6992,9 @@ pub struct CommandExecOutputDeltaNotification {
     pub cap_reached: bool,
 }
 
+/// Deprecated legacy notification for `apply_patch` textual output.
+///
+/// The server no longer emits this notification.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

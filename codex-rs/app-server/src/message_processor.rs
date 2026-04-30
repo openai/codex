@@ -1212,16 +1212,11 @@ impl MessageProcessor {
         params: ExternalAgentConfigImportParams,
     ) -> Result<(), JSONRPCErrorError> {
         let needs_runtime_refresh = migration_items_need_runtime_refresh(&params.migration_items);
+        let has_migration_items = !params.migration_items.is_empty();
         let has_plugin_imports = params.migration_items.iter().any(|item| {
             matches!(
                 item.item_type,
                 ExternalAgentConfigMigrationItemType::Plugins
-            )
-        });
-        let has_session_imports = params.migration_items.iter().any(|item| {
-            matches!(
-                item.item_type,
-                ExternalAgentConfigMigrationItemType::Sessions
             )
         });
         let pending_session_imports = self
@@ -1235,11 +1230,13 @@ impl MessageProcessor {
             .send_response(request_id, ExternalAgentConfigImportResponse {})
             .await;
 
-        if !has_plugin_imports && !has_session_imports {
+        if !has_migration_items {
             return Ok(());
         }
 
-        if pending_plugin_imports.is_empty() && pending_session_imports.is_empty() {
+        let has_background_imports =
+            !pending_plugin_imports.is_empty() || !pending_session_imports.is_empty();
+        if !has_background_imports {
             self.outgoing
                 .send_server_notification(ServerNotification::ExternalAgentConfigImportCompleted(
                     ExternalAgentConfigImportCompletedNotification {},

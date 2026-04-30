@@ -1397,6 +1397,7 @@ server_notification_definitions! {
     CommandExecOutputDelta => "command/exec/outputDelta" (v2::CommandExecOutputDeltaNotification),
     CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
     TerminalInteraction => "item/commandExecution/terminalInteraction" (v2::TerminalInteractionNotification),
+    /// Deprecated legacy apply_patch output stream notification.
     FileChangeOutputDelta => "item/fileChange/outputDelta" (v2::FileChangeOutputDeltaNotification),
     FileChangePatchUpdated => "item/fileChange/patchUpdated" (v2::FileChangePatchUpdatedNotification),
     ServerRequestResolved => "serverRequest/resolved" (v2::ServerRequestResolvedNotification),
@@ -2558,7 +2559,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(Some("You are on a call".to_string())),
-                session_id: Some("sess_456".to_string()),
+                realtime_session_id: Some("sess_456".to_string()),
                 transport: None,
                 voice: Some(RealtimeVoice::Marin),
             },
@@ -2571,7 +2572,7 @@ mod tests {
                     "threadId": "thr_123",
                     "outputModality": "audio",
                     "prompt": "You are on a call",
-                    "sessionId": "sess_456",
+                    "realtimeSessionId": "sess_456",
                     "transport": null,
                     "voice": "marin"
                 }
@@ -2589,7 +2590,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: None,
-                session_id: None,
+                realtime_session_id: None,
                 transport: None,
                 voice: None,
             },
@@ -2601,7 +2602,7 @@ mod tests {
                 "params": {
                     "threadId": "thr_123",
                     "outputModality": "audio",
-                    "sessionId": null,
+                    "realtimeSessionId": null,
                     "transport": null,
                     "voice": null
                 }
@@ -2615,7 +2616,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(None),
-                session_id: None,
+                realtime_session_id: None,
                 transport: None,
                 voice: None,
             },
@@ -2628,7 +2629,7 @@ mod tests {
                     "threadId": "thr_123",
                     "outputModality": "audio",
                     "prompt": null,
-                    "sessionId": null,
+                    "realtimeSessionId": null,
                     "transport": null,
                     "voice": null
                 }
@@ -2642,7 +2643,7 @@ mod tests {
             "params": {
                 "threadId": "thr_123",
                 "outputModality": "audio",
-                "sessionId": null,
+                "realtimeSessionId": null,
                 "transport": null,
                 "voice": null
             }
@@ -2659,7 +2660,7 @@ mod tests {
                 "threadId": "thr_123",
                 "outputModality": "audio",
                 "prompt": null,
-                "sessionId": null,
+                "realtimeSessionId": null,
                 "transport": null,
                 "voice": null
             }
@@ -2771,7 +2772,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(Some("You are on a call".to_string())),
-                session_id: None,
+                realtime_session_id: None,
                 transport: None,
                 voice: None,
             },
@@ -2854,7 +2855,7 @@ mod tests {
         let notification =
             ServerNotification::ThreadRealtimeStarted(v2::ThreadRealtimeStartedNotification {
                 thread_id: "thr_123".to_string(),
-                session_id: Some("sess_456".to_string()),
+                realtime_session_id: Some("sess_456".to_string()),
                 version: RealtimeConversationVersion::V1,
             });
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&notification);

@@ -5677,7 +5677,7 @@ mod tests {
             dependencies: None,
             policy: None,
             path_to_skills_md: skill_path.clone(),
-            scope: codex_protocol::protocol::SkillScope::User,
+            scope: crate::test_support::skill_scope_user(),
         }]));
 
         let ActivePopup::Skill(popup) = &composer.active_popup else {
@@ -5719,7 +5719,7 @@ mod tests {
             dependencies: None,
             policy: None,
             path_to_skills_md: skill_path.clone(),
-            scope: codex_protocol::protocol::SkillScope::Repo,
+            scope: crate::test_support::skill_scope_repo(),
         }]));
         composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
             config_name: "google-calendar@debug".to_string(),
@@ -5810,7 +5810,7 @@ mod tests {
                     dependencies: None,
                     policy: None,
                     path_to_skills_md: test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs(),
-                    scope: codex_protocol::protocol::SkillScope::Repo,
+                    scope: crate::test_support::skill_scope_repo(),
                 }]));
                 composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
                 config_name: "google-calendar@debug".to_string(),

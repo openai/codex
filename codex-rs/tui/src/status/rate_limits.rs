@@ -13,9 +13,9 @@ use chrono::DateTime;
 use chrono::Duration as ChronoDuration;
 use chrono::Local;
 use chrono::Utc;
-use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
-use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::RateLimitWindow;
+use codex_app_server_protocol::CreditsSnapshot as CoreCreditsSnapshot;
+use codex_app_server_protocol::RateLimitSnapshot;
+use codex_app_server_protocol::RateLimitWindow;
 
 const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
 const STATUS_LIMIT_BAR_FILLED: &str = "█";
@@ -79,9 +79,9 @@ impl RateLimitWindowDisplay {
         let resets_at = resets_at_utc.map(|dt| format_reset_timestamp(dt, captured_at));
 
         Self {
-            used_percent: window.used_percent,
+            used_percent: f64::from(window.used_percent),
             resets_at,
-            window_minutes: window.window_minutes,
+            window_minutes: window.window_duration_mins,
         }
     }
 }

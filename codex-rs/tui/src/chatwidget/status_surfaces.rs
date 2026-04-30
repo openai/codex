@@ -33,7 +33,6 @@ const TERMINAL_TITLE_ACTION_REQUIRED_PREFIX_HIDDEN: &str = "[ . ] Action Require
 pub(super) enum TerminalTitleStatusKind {
     Working,
     WaitingForBackgroundTerminal,
-    Undoing,
     #[default]
     Thinking,
 }
@@ -711,7 +710,6 @@ impl ChatWidget {
             }
             TerminalTitleStatusKind::Working => "Working".to_string(),
             TerminalTitleStatusKind::WaitingForBackgroundTerminal => "Waiting".to_string(),
-            TerminalTitleStatusKind::Undoing => "Undoing".to_string(),
             TerminalTitleStatusKind::Thinking => "Thinking".to_string(),
         }
     }
@@ -748,9 +746,7 @@ impl ChatWidget {
             return false;
         }
 
-        self.mcp_startup_status.is_some()
-            || self.bottom_pane.is_task_running()
-            || self.terminal_title_status_kind == TerminalTitleStatusKind::Undoing
+        self.mcp_startup_status.is_some() || self.bottom_pane.is_task_running()
     }
 
     pub(super) fn should_animate_terminal_title_spinner(&self) -> bool {

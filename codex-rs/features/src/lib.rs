@@ -172,6 +172,10 @@ pub enum Feature {
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
     BrowserUse,
+    /// Allow Browser Use integration with external browsers.
+    ///
+    /// Requirements-only gate: this should be set from requirements, not user config.
+    BrowserUseExternal,
     /// Allow Codex Computer Use.
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
@@ -915,6 +919,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::BrowserUseExternal,
+        key: "browser_use_external",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
         id: Feature::ComputerUse,
         key: "computer_use",
         stage: Stage::Stable,
@@ -975,7 +985,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Goals,
         key: "goals",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Goals",
+            menu_description: "Set a persistent goal Codex can continue over time",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {

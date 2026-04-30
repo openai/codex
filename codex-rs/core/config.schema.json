@@ -373,6 +373,9 @@
             "browser_use": {
               "type": "boolean"
             },
+            "browser_use_external": {
+              "type": "boolean"
+            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -3388,6 +3391,9 @@
           "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
         },
         "browser_use": {
+          "type": "boolean"
+        },
+        "browser_use_external": {
           "type": "boolean"
         },
         "child_agents_md": {

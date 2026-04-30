@@ -1,16 +1,15 @@
+//! Queue prompt overlays and deferred tool activity while another interrupt is visible.
+
 use std::collections::VecDeque;
 
 use crate::app::app_server_requests::ResolvedAppServerRequest;
-use codex_protocol::approvals::ElicitationRequestEvent;
-use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
-use codex_protocol::protocol::ExecApprovalRequestEvent;
-use codex_protocol::protocol::ExecCommandBeginEvent;
-use codex_protocol::protocol::ExecCommandEndEvent;
-use codex_protocol::protocol::McpToolCallBeginEvent;
-use codex_protocol::protocol::McpToolCallEndEvent;
-use codex_protocol::protocol::PatchApplyEndEvent;
+use crate::approval_events::ApplyPatchApprovalRequestEvent;
+use crate::approval_events::ExecApprovalRequestEvent;
+use codex_app_server_protocol::McpServerElicitationRequestParams;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
+use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
-use codex_protocol::request_user_input::RequestUserInputEvent;
 
 use super::ChatWidget;
 
@@ -18,14 +17,14 @@ use super::ChatWidget;
 pub(crate) enum QueuedInterrupt {
     ExecApproval(ExecApprovalRequestEvent),
     ApplyPatchApproval(ApplyPatchApprovalRequestEvent),
-    Elicitation(ElicitationRequestEvent),
+    Elicitation {
+        request_id: AppServerRequestId,
+        params: McpServerElicitationRequestParams,
+    },
     RequestPermissions(RequestPermissionsEvent),
-    RequestUserInput(RequestUserInputEvent),
-    ExecBegin(ExecCommandBeginEvent),
-    ExecEnd(ExecCommandEndEvent),
-    McpBegin(McpToolCallBeginEvent),
-    McpEnd(McpToolCallEndEvent),
-    PatchEnd(PatchApplyEndEvent),
+    RequestUserInput(ToolRequestUserInputParams),
+    ItemStarted(ThreadItem),
+    ItemCompleted(ThreadItem),
 }
 
 #[derive(Default)]
@@ -54,8 +53,13 @@ impl InterruptManager {
             .push_back(QueuedInterrupt::ApplyPatchApproval(ev));
     }
 
-    pub(crate) fn push_elicitation(&mut self, ev: ElicitationRequestEvent) {
-        self.queue.push_back(QueuedInterrupt::Elicitation(ev));
+    pub(crate) fn push_elicitation(
+        &mut self,
+        request_id: AppServerRequestId,
+        params: McpServerElicitationRequestParams,
+    ) {
+        self.queue
+            .push_back(QueuedInterrupt::Elicitation { request_id, params });
     }
 
     pub(crate) fn push_request_permissions(&mut self, ev: RequestPermissionsEvent) {
@@ -63,28 +67,16 @@ impl InterruptManager {
             .push_back(QueuedInterrupt::RequestPermissions(ev));
     }
 
-    pub(crate) fn push_user_input(&mut self, ev: RequestUserInputEvent) {
+    pub(crate) fn push_user_input(&mut self, ev: ToolRequestUserInputParams) {
         self.queue.push_back(QueuedInterrupt::RequestUserInput(ev));
     }
 
-    pub(crate) fn push_exec_begin(&mut self, ev: ExecCommandBeginEvent) {
-        self.queue.push_back(QueuedInterrupt::ExecBegin(ev));
+    pub(crate) fn push_item_started(&mut self, item: ThreadItem) {
+        self.queue.push_back(QueuedInterrupt::ItemStarted(item));
     }
 
-    pub(crate) fn push_exec_end(&mut self, ev: ExecCommandEndEvent) {
-        self.queue.push_back(QueuedInterrupt::ExecEnd(ev));
-    }
-
-    pub(crate) fn push_mcp_begin(&mut self, ev: McpToolCallBeginEvent) {
-        self.queue.push_back(QueuedInterrupt::McpBegin(ev));
-    }
-
-    pub(crate) fn push_mcp_end(&mut self, ev: McpToolCallEndEvent) {
-        self.queue.push_back(QueuedInterrupt::McpEnd(ev));
-    }
-
-    pub(crate) fn push_patch_end(&mut self, ev: PatchApplyEndEvent) {
-        self.queue.push_back(QueuedInterrupt::PatchEnd(ev));
+    pub(crate) fn push_item_completed(&mut self, item: ThreadItem) {
+        self.queue.push_back(QueuedInterrupt::ItemCompleted(item));
     }
 
     pub(crate) fn remove_resolved_prompt(&mut self, request: &ResolvedAppServerRequest) -> bool {
@@ -99,14 +91,15 @@ impl InterruptManager {
             match q {
                 QueuedInterrupt::ExecApproval(ev) => chat.handle_exec_approval_now(ev),
                 QueuedInterrupt::ApplyPatchApproval(ev) => chat.handle_apply_patch_approval_now(ev),
-                QueuedInterrupt::Elicitation(ev) => chat.handle_elicitation_request_now(ev),
+                QueuedInterrupt::Elicitation { request_id, params } => {
+                    chat.handle_elicitation_request_now(request_id, params);
+                }
                 QueuedInterrupt::RequestPermissions(ev) => chat.handle_request_permissions_now(ev),
                 QueuedInterrupt::RequestUserInput(ev) => chat.handle_request_user_input_now(ev),
-                QueuedInterrupt::ExecBegin(ev) => chat.handle_exec_begin_now(ev),
-                QueuedInterrupt::ExecEnd(ev) => chat.handle_exec_end_now(ev),
-                QueuedInterrupt::McpBegin(ev) => chat.handle_mcp_begin_now(ev),
-                QueuedInterrupt::McpEnd(ev) => chat.handle_mcp_end_now(ev),
-                QueuedInterrupt::PatchEnd(ev) => chat.handle_patch_apply_end_now(ev),
+                QueuedInterrupt::ItemStarted(item) => chat.handle_queued_item_started_now(item),
+                QueuedInterrupt::ItemCompleted(item) => {
+                    chat.handle_queued_item_completed_now(item);
+                }
             }
         }
     }
@@ -123,11 +116,11 @@ impl QueuedInterrupt {
                 matches!(request, ResolvedAppServerRequest::FileChangeApproval { id }
                     if ev.call_id == id.as_str())
             }
-            QueuedInterrupt::Elicitation(ev) => {
+            QueuedInterrupt::Elicitation { request_id, params } => {
                 matches!(request, ResolvedAppServerRequest::McpElicitation {
                     server_name,
-                    request_id,
-                } if ev.server_name == server_name.as_str() && &ev.id == request_id)
+                    request_id: resolved_request_id,
+                } if params.server_name == server_name.as_str() && request_id == resolved_request_id)
             }
             QueuedInterrupt::RequestPermissions(ev) => {
                 matches!(request, ResolvedAppServerRequest::PermissionsApproval { id }
@@ -135,31 +128,28 @@ impl QueuedInterrupt {
             }
             QueuedInterrupt::RequestUserInput(ev) => {
                 matches!(request, ResolvedAppServerRequest::UserInput { call_id }
-                    if ev.call_id == call_id.as_str())
+                    if ev.item_id == call_id.as_str())
             }
-            QueuedInterrupt::ExecBegin(_)
-            | QueuedInterrupt::ExecEnd(_)
-            | QueuedInterrupt::McpBegin(_)
-            | QueuedInterrupt::McpEnd(_)
-            | QueuedInterrupt::PatchEnd(_) => false,
+            QueuedInterrupt::ItemStarted(_) | QueuedInterrupt::ItemCompleted(_) => false,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use codex_protocol::approvals::ExecApprovalRequestEvent;
-    use codex_protocol::protocol::ExecCommandBeginEvent;
-    use codex_protocol::protocol::ExecCommandSource;
-    use codex_protocol::request_user_input::RequestUserInputEvent;
+    use crate::approval_events::ExecApprovalRequestEvent;
+    use codex_app_server_protocol::CommandExecutionSource;
+    use codex_app_server_protocol::CommandExecutionStatus;
+    use codex_app_server_protocol::ThreadItem;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
     use super::*;
 
-    fn user_input(call_id: &str, turn_id: &str) -> RequestUserInputEvent {
-        RequestUserInputEvent {
-            call_id: call_id.to_string(),
+    fn user_input(call_id: &str, turn_id: &str) -> ToolRequestUserInputParams {
+        ToolRequestUserInputParams {
+            thread_id: "thread-1".to_string(),
+            item_id: call_id.to_string(),
             turn_id: turn_id.to_string(),
             questions: Vec::new(),
         }
@@ -178,20 +168,21 @@ mod tests {
             proposed_network_policy_amendments: None,
             additional_permissions: None,
             available_decisions: None,
-            parsed_cmd: Vec::new(),
         }
     }
 
-    fn exec_begin(call_id: &str) -> ExecCommandBeginEvent {
-        ExecCommandBeginEvent {
-            call_id: call_id.to_string(),
-            process_id: None,
-            turn_id: "turn".to_string(),
-            command: vec!["true".to_string()],
+    fn command_execution(call_id: &str) -> ThreadItem {
+        ThreadItem::CommandExecution {
+            id: call_id.to_string(),
+            command: "true".to_string(),
             cwd: AbsolutePathBuf::current_dir().expect("current dir"),
-            parsed_cmd: Vec::new(),
-            source: ExecCommandSource::Agent,
-            interaction_input: None,
+            process_id: None,
+            source: CommandExecutionSource::Agent,
+            status: CommandExecutionStatus::InProgress,
+            command_actions: Vec::new(),
+            aggregated_output: None,
+            exit_code: None,
+            duration_ms: None,
         }
     }
 
@@ -211,7 +202,7 @@ mod tests {
         let Some(QueuedInterrupt::RequestUserInput(remaining)) = manager.queue.front() else {
             panic!("expected remaining queued user input");
         };
-        assert_eq!(remaining.call_id, "call-a");
+        assert_eq!(remaining.item_id, "call-a");
     }
 
     #[test]
@@ -237,7 +228,7 @@ mod tests {
     #[test]
     fn remove_resolved_prompt_keeps_lifecycle_events() {
         let mut manager = InterruptManager::new();
-        manager.push_exec_begin(exec_begin("call"));
+        manager.push_item_started(command_execution("call"));
 
         assert!(
             !manager.remove_resolved_prompt(&ResolvedAppServerRequest::ExecApproval {
@@ -248,7 +239,7 @@ mod tests {
         assert_eq!(manager.queue.len(), 1);
         assert!(matches!(
             manager.queue.front(),
-            Some(QueuedInterrupt::ExecBegin(_))
+            Some(QueuedInterrupt::ItemStarted(_))
         ));
     }
 }

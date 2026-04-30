@@ -1,0 +1,11 @@
+---
+source: tui/src/bottom_pane/hooks_browser_view.rs
+expression: "render_lines(&view, 112)"
+---
+                                                                                                                
+  PermissionRequest hooks                                                                                       
+  Turn hooks on or off. Your changes are saved automatically.                                                   
+                                                                                                                
+  No hooks installed for this event.                                                                            
+                                                                                                                
+  Press esc to go back

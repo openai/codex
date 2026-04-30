@@ -122,6 +122,16 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     assert!(engine.warnings().is_empty());
     assert_eq!(engine.handlers.len(), 1);
     assert!(engine.handlers[0].source.is_managed());
+    let listed = crate::list_hooks(crate::HooksConfig {
+        legacy_notify_argv: None,
+        feature_enabled: true,
+        config_layer_stack: Some(config_layer_stack.clone()),
+        plugin_hook_sources: Vec::new(),
+        plugin_hook_load_warnings: Vec::new(),
+        shell_program: None,
+        shell_args: Vec::new(),
+    });
+    assert!(listed.hooks[0].is_managed);
     let cwd = cwd();
     let preview = engine.preview_pre_tool_use(&PreToolUseRequest {
         session_id: ThreadId::new(),
@@ -560,7 +570,7 @@ print(json.dumps({
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
         /*config_layer_stack*/ None,
-        plugin_hook_sources,
+        plugin_hook_sources.clone(),
         Vec::new(),
         CommandShell {
             program: String::new(),
@@ -583,6 +593,19 @@ print(json.dumps({
     assert_eq!(preview.len(), 1);
     assert_eq!(preview[0].source, HookSource::Plugin);
     assert_eq!(preview[0].source_path, source_path);
+    let listed = crate::list_hooks(crate::HooksConfig {
+        legacy_notify_argv: None,
+        feature_enabled: true,
+        config_layer_stack: None,
+        plugin_hook_sources,
+        plugin_hook_load_warnings: Vec::new(),
+        shell_program: None,
+        shell_args: Vec::new(),
+    });
+    assert_eq!(
+        listed.hooks[0].plugin_id.as_deref(),
+        Some("demo-plugin@test-marketplace")
+    );
 
     let outcome = engine
         .run_pre_tool_use(PreToolUseRequest {

@@ -222,7 +222,7 @@ Example with notification opt-out:
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); returns the tracking thread id.
 - `config/read` — fetch the effective config on disk after resolving config layering.
 - `externalAgentConfig/detect` — detect migratable external-agent artifacts with `includeHome` and optional `cwds`; each detected item includes `cwd` (`null` for home), and plugin/session migration items may additionally include structured `details` grouping plugin ids or session metadata.
-- `externalAgentConfig/import` — apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home) and any plugin/session `details` returned by detect. When a request includes plugin or session imports, the server emits `externalAgentConfig/import/completed` after the full import finishes (immediately after the response when everything completed synchronously, or after background imports finish).
+- `externalAgentConfig/import` — apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home) and any plugin/session `details` returned by detect. When a request includes migration items, the server emits `externalAgentConfig/import/completed` once after the full import finishes (immediately after the response when everything completed synchronously, or after background imports finish).
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk, with optional `reloadUserConfig: true` to hot-reload loaded threads.
 - `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), pinned feature values (`featureRequirements`), managed lifecycle hooks (`hooks`), `enforceResidency`, and `network` constraints such as canonical domain/socket permissions plus `managedAllowedDomainsOnly` and `dangerFullAccessDenylistOnly`.
@@ -761,14 +761,14 @@ const offer = await pc.createOffer();
 await pc.setLocalDescription(offer);
 ```
 
-Then send `offer.sdp` to app-server. Core uses `experimental_realtime_ws_backend_prompt` for the backend instructions and the thread conversation id for the realtime session id. The start response is `{}`; the remote answer SDP arrives later as `thread/realtime/sdp` and should be passed to `setRemoteDescription()`:
+Then send `offer.sdp` to app-server. Core uses `experimental_realtime_ws_backend_prompt` for the backend instructions and the thread conversation id as the default Realtime API session identifier. This `realtimeSessionId` value refers to the upstream Realtime API session, not a Codex session/thread-group id. The start response is `{}`; the remote answer SDP arrives later as `thread/realtime/sdp` and should be passed to `setRemoteDescription()`:
 
 ```json
 { "method": "thread/realtime/start", "id": 40, "params": {
     "threadId": "thr_123",
     "outputModality": "audio",
     "prompt": "You are on a call.",
-    "sessionId": null,
+    "realtimeSessionId": null,
     "transport": { "type": "webrtc", "sdp": "v=0\r\no=..." }
 } }
 { "id": 40, "result": {} }
@@ -1100,7 +1100,7 @@ The fuzzy file search session API emits per-query notifications:
 
 The thread realtime API emits thread-scoped notifications for session lifecycle and streaming media:
 
-- `thread/realtime/started` — `{ threadId, sessionId }` once realtime starts for the thread (experimental).
+- `thread/realtime/started` — `{ threadId, realtimeSessionId }` once realtime starts for the thread (experimental). `realtimeSessionId` is the upstream Realtime API session identifier, not a Codex session/thread-group id.
 - `thread/realtime/itemAdded` — `{ threadId, item }` for raw non-audio realtime items that do not have a dedicated typed app-server notification, including `handoff_request` (experimental). `item` is forwarded as raw JSON while the upstream websocket item schema remains unstable.
 - `thread/realtime/transcript/delta` — `{ threadId, role, delta }` for live realtime transcript deltas (experimental).
 - `thread/realtime/transcript/done` — `{ threadId, role, text }` when realtime emits the final full text for a transcript part (experimental).
@@ -1183,7 +1183,7 @@ There are additional item-specific events:
 #### fileChange
 
 - `item/fileChange/patchUpdated` - when `features.apply_patch_streaming_events` is enabled, streams structured file-change snapshots parsed from the model-generated patch before it is executed.
-- `item/fileChange/outputDelta` - contains the tool call response of the underlying `apply_patch` tool call.
+- `item/fileChange/outputDelta` - deprecated legacy protocol entry for `apply_patch` text output; retained for compatibility but no longer emitted by the server.
 
 ### Errors
 

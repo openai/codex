@@ -106,6 +106,11 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
             .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))
     }
 
+    /// Returns the provider base URL that will be used at request time.
+    async fn runtime_base_url(&self) -> codex_protocol::error::Result<Option<String>> {
+        Ok(self.info().base_url.clone())
+    }
+
     /// Returns the auth provider used to attach request credentials.
     async fn api_auth(&self) -> codex_protocol::error::Result<SharedAuthProvider> {
         let auth = self.auth().await;
@@ -331,6 +336,22 @@ mod tests {
         );
 
         assert_eq!(provider.capabilities(), ProviderCapabilities::default());
+    }
+
+    #[tokio::test]
+    async fn configured_provider_runtime_base_url_uses_configured_base_url() {
+        let provider = create_model_provider(
+            provider_for("https://example.test/v1".to_string()),
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(
+            provider
+                .runtime_base_url()
+                .await
+                .expect("runtime base URL should resolve"),
+            Some("https://example.test/v1".to_string())
+        );
     }
 
     #[test]
