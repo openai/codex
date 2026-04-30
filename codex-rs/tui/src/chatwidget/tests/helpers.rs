@@ -1422,6 +1422,7 @@ pub(super) fn plugins_test_summary(
         enabled,
         install_policy,
         auth_policy: PluginAuthPolicy::OnInstall,
+        status: None,
         interface: Some(plugins_test_interface(
             display_name,
             description,
