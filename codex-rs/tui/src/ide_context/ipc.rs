@@ -155,49 +155,11 @@ pub(crate) fn fetch_ide_context_from_socket(
     workspace_root: &Path,
     timeout: Duration,
 ) -> Result<IdeContext, IdeContextError> {
-    // Unlike UnixStream, std::fs::File does not let us put a read/write timeout on a Windows
-    // named-pipe client. Run the blocking exchange on a worker thread and bound the caller with
-    // recv_timeout so a stuck IDE provider cannot freeze the TUI.
-    let workspace_root = workspace_root.to_path_buf();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name("codex-tui-ide-context-ipc".to_string())
-        .spawn(move || {
-            let result =
-                fetch_ide_context_from_socket_blocking(socket_path, &workspace_root, timeout);
-            let _ = tx.send(result);
-        })
-        .map_err(|err| {
-            IdeContextError::Read(std::io::Error::other(format!(
-                "failed to spawn IDE context worker: {err}"
-            )))
-        })?;
-
-    match rx.recv_timeout(timeout) {
-        Ok(result) => result,
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(timeout_error()),
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            Err(IdeContextError::Read(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "IDE context worker disconnected",
-            )))
-        }
-    }
-}
-
-#[cfg(windows)]
-fn fetch_ide_context_from_socket_blocking(
-    socket_path: PathBuf,
-    workspace_root: &Path,
-    timeout: Duration,
-) -> Result<IdeContext, IdeContextError> {
-    let mut stream = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(socket_path)
+    let deadline = Instant::now() + timeout;
+    let mut stream = super::windows_pipe::WindowsPipeStream::connect(socket_path, deadline)
         .map_err(IdeContextError::Connect)?;
 
-    fetch_ide_context_from_stream(&mut stream, workspace_root, Instant::now() + timeout)
+    fetch_ide_context_from_stream(&mut stream, workspace_root, deadline)
 }
 
 #[cfg(any(unix, windows))]
