@@ -2673,38 +2673,6 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_thread_realtime_start_accepts_legacy_session_id() -> Result<()> {
-        let legacy_request = json!({
-            "method": "thread/realtime/start",
-            "id": 9,
-            "params": {
-                "threadId": "thr_123",
-                "outputModality": "audio",
-                "sessionId": "sess_456",
-                "transport": null,
-                "voice": null
-            }
-        });
-
-        assert_eq!(
-            serde_json::from_value::<ClientRequest>(legacy_request)?,
-            ClientRequest::ThreadRealtimeStart {
-                request_id: RequestId::Integer(9),
-                params: v2::ThreadRealtimeStartParams {
-                    thread_id: "thr_123".to_string(),
-                    output_modality: RealtimeOutputModality::Audio,
-                    prompt: None,
-                    realtime_session_id: Some("sess_456".to_string()),
-                    transport: None,
-                    voice: None,
-                },
-            }
-        );
-
-        Ok(())
-    }
-
-    #[test]
     fn serialize_thread_status_changed_notification() -> Result<()> {
         let notification =
             ServerNotification::ThreadStatusChanged(v2::ThreadStatusChangedNotification {

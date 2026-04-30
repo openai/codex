@@ -162,7 +162,7 @@ pub struct ConversationStartParams {
         skip_serializing_if = "Option::is_none"
     )]
     pub prompt: Option<Option<String>>,
-    #[serde(alias = "session_id", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub realtime_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transport: Option<ConversationStartTransport>,
@@ -366,7 +366,6 @@ pub struct RealtimeResponseDone {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub enum RealtimeEvent {
     SessionUpdated {
-        #[serde(alias = "session_id")]
         realtime_session_id: String,
         instructions: Option<String>,
     },
@@ -1668,7 +1667,6 @@ pub enum RealtimeConversationVersion {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct RealtimeConversationStartedEvent {
-    #[serde(alias = "session_id")]
     pub realtime_session_id: Option<String>,
     pub version: RealtimeConversationVersion,
 }
@@ -4893,27 +4891,6 @@ mod tests {
     }
 
     #[test]
-    fn realtime_conversation_start_accepts_legacy_session_id_on_input() {
-        let start = serde_json::from_value::<Op>(json!({
-            "type": "realtime_conversation_start",
-            "output_modality": "audio",
-            "session_id": "conv_1"
-        }))
-        .expect("legacy realtime session id should deserialize");
-
-        assert_eq!(
-            start,
-            Op::RealtimeConversationStart(ConversationStartParams {
-                output_modality: RealtimeOutputModality::Audio,
-                prompt: None,
-                realtime_session_id: Some("conv_1".to_string()),
-                transport: None,
-                voice: None,
-            })
-        );
-    }
-
-    #[test]
     fn realtime_conversation_started_event_uses_realtime_session_id() {
         let event = RealtimeConversationStartedEvent {
             realtime_session_id: Some("conv_1".to_string()),
@@ -4927,14 +4904,6 @@ mod tests {
                 "version": "v2"
             })
         );
-
-        let legacy = serde_json::from_value::<RealtimeConversationStartedEvent>(json!({
-            "session_id": "conv_1",
-            "version": "v2"
-        }))
-        .expect("legacy realtime started event should deserialize");
-
-        assert_eq!(legacy, event);
     }
 
     #[test]

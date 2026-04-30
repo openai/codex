@@ -5292,7 +5292,6 @@ pub struct ThreadRealtimeStartParams {
     )]
     #[ts(optional = nullable)]
     pub prompt: Option<Option<String>>,
-    #[serde(alias = "sessionId")]
     #[ts(optional = nullable)]
     pub realtime_session_id: Option<String>,
     #[ts(optional = nullable)]
