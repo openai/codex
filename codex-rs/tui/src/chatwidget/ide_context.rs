@@ -83,19 +83,31 @@ impl IdeContextState {
         &mut self,
         workspace_root: &Path,
     ) -> Result<IdeContext, IdeContextError> {
-        let client = if let Some(client) = self.client.as_mut() {
-            client
-        } else {
-            self.client.insert(IdeContextClient::connect_for_prompt()?)
-        };
+        let mut retried_after_reset = false;
+        loop {
+            let client = if let Some(client) = self.client.as_mut() {
+                client
+            } else {
+                self.client.insert(IdeContextClient::connect_for_prompt()?)
+            };
 
-        let result = client.fetch_ide_context_for_prompt(workspace_root);
-        if let Err(err) = &result
-            && err.should_reset_client()
-        {
-            self.client = None;
+            let result = client.fetch_ide_context_for_prompt(workspace_root);
+            match result {
+                Ok(context) => return Ok(context),
+                Err(err) => {
+                    let should_retry =
+                        !retried_after_reset && err.should_retry_prompt_fetch_after_reset();
+                    if err.should_reset_client() || should_retry {
+                        self.client = None;
+                    }
+                    if should_retry {
+                        retried_after_reset = true;
+                        continue;
+                    }
+                    return Err(err);
+                }
+            }
         }
-        result
     }
 }
 

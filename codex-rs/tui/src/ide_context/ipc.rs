@@ -116,12 +116,55 @@ impl IdeContextError {
                 "Codex timed out waiting for IDE context. It will keep trying on future messages."
                     .to_string()
             }
-            IdeContextError::Send(_)
-            | IdeContextError::InvalidResponse(_)
-            | IdeContextError::RequestFailed(_) => {
-                "Codex will keep trying on future messages.".to_string()
+            IdeContextError::RequestFailed(error) if error == "client-disconnected" => {
+                "The IDE connection changed while Codex was requesting context. Codex will keep trying on future messages."
+                    .to_string()
             }
-            IdeContextError::Read(_) => "Codex will keep trying on future messages.".to_string(),
+            IdeContextError::RequestFailed(error) if error == "request-timeout" => {
+                "The IDE extension did not answer in time. Codex will keep trying on future messages."
+                    .to_string()
+            }
+            IdeContextError::RequestFailed(error) if error == "request-version-mismatch" => {
+                "The connected IDE extension is not compatible with this IDE context request."
+                    .to_string()
+            }
+            IdeContextError::RequestFailed(error) if error == "no-handler-for-request" => {
+                "The connected IDE client does not support IDE context requests.".to_string()
+            }
+            IdeContextError::Send(_) => {
+                "Codex lost the IDE connection while requesting context. Codex will keep trying on future messages."
+                    .to_string()
+            }
+            IdeContextError::InvalidResponse(_) => {
+                "Codex received an unexpected IDE context response. Codex will keep trying on future messages."
+                    .to_string()
+            }
+            IdeContextError::RequestFailed(_) => {
+                "The IDE extension did not provide context. Codex will keep trying on future messages."
+                    .to_string()
+            }
+            IdeContextError::Read(_) => {
+                "Codex could not read IDE context. Codex will keep trying on future messages."
+                    .to_string()
+            }
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    pub(crate) fn should_retry_prompt_fetch_after_reset(&self) -> bool {
+        match self {
+            IdeContextError::Send(_) => true,
+            IdeContextError::Read(error) => matches!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::UnexpectedEof
+            ),
+            IdeContextError::RequestFailed(error) => error == "client-disconnected",
+            IdeContextError::Connect(_)
+            | IdeContextError::InvalidResponse(_)
+            | IdeContextError::ResponseTooLarge => false,
         }
     }
 
@@ -154,6 +197,11 @@ impl IdeContextError {
 
     #[cfg(not(any(unix, windows)))]
     pub(crate) fn should_reset_client(&self) -> bool {
+        false
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    pub(crate) fn should_retry_prompt_fetch_after_reset(&self) -> bool {
         false
     }
 }
