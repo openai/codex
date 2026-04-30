@@ -25,8 +25,10 @@ use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_shell_command::is_dangerous_command::command_might_be_dangerous;
+#[cfg(windows)]
 use codex_shell_command::is_dangerous_command::is_dangerous_powershell_words;
 use codex_shell_command::is_safe_command::is_known_safe_command;
+#[cfg(windows)]
 use codex_shell_command::is_safe_command::is_safe_powershell_words;
 use thiserror::Error;
 use tokio::fs;
@@ -105,6 +107,7 @@ static BANNED_PREFIX_SUGGESTIONS: &[&[&str]] = &[
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ExecPolicyCommandOrigin {
     Direct,
+    #[cfg(windows)]
     PowerShell,
 }
 
@@ -604,6 +607,7 @@ pub(crate) fn render_decision_for_unmatched_command(
 ) -> Decision {
     let is_known_safe = match command_origin {
         ExecPolicyCommandOrigin::Direct => is_known_safe_command(command),
+        #[cfg(windows)]
         ExecPolicyCommandOrigin::PowerShell => is_safe_powershell_words(command),
     };
     if is_known_safe && !used_complex_parsing {
@@ -627,6 +631,7 @@ pub(crate) fn render_decision_for_unmatched_command(
     // forbid the command.
     let command_is_dangerous = match command_origin {
         ExecPolicyCommandOrigin::Direct => command_might_be_dangerous(command),
+        #[cfg(windows)]
         ExecPolicyCommandOrigin::PowerShell => is_dangerous_powershell_words(command),
     };
     if command_is_dangerous || environment_lacks_sandbox_protections {
