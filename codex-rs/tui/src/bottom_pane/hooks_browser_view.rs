@@ -2,7 +2,6 @@ use codex_app_server_protocol::HookErrorInfo;
 use codex_app_server_protocol::HookEventName;
 use codex_app_server_protocol::HookMetadata;
 use codex_app_server_protocol::HookSource;
-use codex_plugin::PluginId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -85,7 +84,9 @@ impl HooksBrowserView {
                 let active = self
                     .hooks
                     .iter()
-                    .filter(|hook| hook.event_name == event_name && hook.enabled)
+                    .filter(|hook| {
+                        hook.event_name == event_name && (hook.enabled || hook.is_managed)
+                    })
                     .count();
                 EventRow {
                     event_name,
@@ -291,12 +292,12 @@ impl HooksBrowserView {
         self.handlers_for_event(event_name)
             .enumerate()
             .map(|(idx, hook)| {
-                let marker = if hook.enabled { 'x' } else { ' ' };
-                let row = if hook.is_managed {
-                    format!("[x] Admin managed {}", summary_source(hook, idx))
+                let marker = if hook.enabled || hook.is_managed {
+                    'x'
                 } else {
-                    format!("[{marker}] {}", summary_source(hook, idx))
+                    ' '
                 };
+                let row = format!("[{marker}] {}", hook_title(idx));
                 let mut line = Line::from(row);
                 line = truncate_line_with_ellipsis_if_overflow(line, width);
                 if hook.is_managed {
@@ -321,24 +322,9 @@ impl HooksBrowserView {
                 "Matcher", matcher, width, /*max_lines*/ None,
             ));
         }
-        // Plugin hooks show the marketplace here; other hooks show the config path.
-        let source_value = match hook.source {
-            HookSource::Plugin => hook
-                .plugin_id
-                .as_deref()
-                .and_then(|plugin_id| {
-                    PluginId::parse(plugin_id)
-                        .ok()
-                        .map(|plugin_id| plugin_id.marketplace_name)
-                })
-                .unwrap_or_else(|| {
-                    format_directory_display(&hook.source_path, /*max_width*/ None)
-                }),
-            _ => format_directory_display(&hook.source_path, /*max_width*/ None),
-        };
         lines.extend(detail_wrapped_lines(
             "Source",
-            &source_value,
+            &detail_source_value(hook),
             width,
             /*max_lines*/ None,
         ));
@@ -377,7 +363,7 @@ impl HooksBrowserView {
                     ])
                 } else if selected_hook.is_some_and(|hook| hook.is_managed) {
                     Line::from(vec![
-                        "Admin managed; press ".into(),
+                        "Managed hooks are always on; press ".into(),
                         key_hint::plain(KeyCode::Esc).into(),
                         " to go back".into(),
                     ])
@@ -567,42 +553,49 @@ fn event_description(event_name: HookEventName) -> &'static str {
     }
 }
 
-fn summary_source(hook: &HookMetadata, idx: usize) -> String {
-    let hook_label = hook
-        .status_message
-        .as_deref()
-        .filter(|message| !message.trim().is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("Hook {}", idx + 1));
-    let source_label = match hook.source {
-        // Parse the plugin name from the `<plugin>@<marketplace>` id for display.
+fn hook_title(idx: usize) -> String {
+    format!("Hook {}", idx + 1)
+}
+
+fn hook_source_summary(hook: &HookMetadata) -> String {
+    match hook.source {
         HookSource::Plugin => hook
             .plugin_id
             .as_deref()
-            .and_then(|plugin_id| {
-                PluginId::parse(plugin_id)
-                    .ok()
-                    .map(|plugin_id| plugin_id.plugin_name)
-            })
-            .or_else(|| hook.plugin_id.clone())
+            .map(|plugin_id| format!("Plugin - {plugin_id}"))
             .unwrap_or_else(|| "Plugin".to_string()),
         _ => config_source_label(hook.source).to_string(),
-    };
-    format!("{hook_label} - {source_label}")
+    }
+}
+
+fn detail_source_value(hook: &HookMetadata) -> String {
+    match hook.source {
+        HookSource::Plugin => hook_source_summary(hook),
+        HookSource::System
+        | HookSource::Mdm
+        | HookSource::CloudRequirements
+        | HookSource::LegacyManagedConfigFile
+        | HookSource::LegacyManagedConfigMdm => config_source_label(hook.source).to_string(),
+        _ => format!(
+            "{} - {}",
+            config_source_label(hook.source),
+            format_directory_display(&hook.source_path, /*max_width*/ None)
+        ),
+    }
 }
 
 fn config_source_label(source: HookSource) -> &'static str {
     match source {
-        HookSource::System => "System Config",
-        HookSource::User => "User Config",
-        HookSource::Project => "Project Config",
-        HookSource::Mdm => "MDM",
-        HookSource::SessionFlags => "Session Flags",
+        HookSource::System => "Admin config",
+        HookSource::User => "User config",
+        HookSource::Project => "Project config",
+        HookSource::Mdm => "Admin config",
+        HookSource::SessionFlags => "Session flags",
         HookSource::Plugin => unreachable!("plugin hooks are handled by summary_source"),
-        HookSource::CloudRequirements => "Cloud Requirements",
-        HookSource::LegacyManagedConfigFile => "Legacy Managed Config",
-        HookSource::LegacyManagedConfigMdm => "Legacy Managed MDM",
-        HookSource::Unknown => "Unknown Source",
+        HookSource::CloudRequirements => "Admin config",
+        HookSource::LegacyManagedConfigFile => "Admin config",
+        HookSource::LegacyManagedConfigMdm => "Admin config",
+        HookSource::Unknown => "Unknown source",
     }
 }
 
@@ -920,6 +913,35 @@ mod tests {
             "hooks_browser_empty_handlers",
             render_lines(&view, /*width*/ 112)
         );
+    }
+
+    #[test]
+    fn managed_hooks_count_as_active() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let view = HooksBrowserView::new(
+            vec![hook(
+                "path:managed",
+                HookEventName::PreToolUse,
+                HookSource::System,
+                /*plugin_id*/ None,
+                "/enterprise/hooks/pre-tool-use-check.sh",
+                /*enabled*/ false,
+                /*is_managed*/ true,
+                /*display_order*/ 0,
+            )],
+            Vec::new(),
+            Vec::new(),
+            AppEventSender::new(tx_raw),
+        );
+
+        let rows = view.event_rows();
+        let pre_tool_use = rows
+            .into_iter()
+            .find(|row| row.event_name == HookEventName::PreToolUse)
+            .expect("pre tool use row");
+
+        assert_eq!(pre_tool_use.installed, 1);
+        assert_eq!(pre_tool_use.active, 1);
     }
 
     fn assert_unmanaged_toggle_key(key_code: KeyCode) {
