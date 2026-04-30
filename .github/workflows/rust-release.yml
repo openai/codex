@@ -49,9 +49,8 @@ jobs:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
-    # Codex binaries can take a long time to build, particularly on Windows.
-    # Ideally, this would be 60 minutes, but let's add some headroom because
-    # having to restart a release build due to a timeout is a major pain.
+    # Release builds can take a long time, so leave some headroom to avoid
+    # having to restart the full workflow due to a timeout.
     timeout-minutes: 90
     permissions:
       contents: read

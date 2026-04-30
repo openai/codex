@@ -163,7 +163,7 @@ pub struct ConversationStartParams {
     )]
     pub prompt: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
+    pub realtime_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transport: Option<ConversationStartTransport>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -366,7 +366,7 @@ pub struct RealtimeResponseDone {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub enum RealtimeEvent {
     SessionUpdated {
-        session_id: String,
+        realtime_session_id: String,
         instructions: Option<String>,
     },
     InputAudioSpeechStarted(RealtimeInputAudioSpeechStarted),
@@ -1667,7 +1667,7 @@ pub enum RealtimeConversationVersion {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct RealtimeConversationStartedEvent {
-    pub session_id: Option<String>,
+    pub realtime_session_id: Option<String>,
     pub version: RealtimeConversationVersion,
 }
 
@@ -4764,14 +4764,14 @@ mod tests {
         let start = Op::RealtimeConversationStart(ConversationStartParams {
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("be helpful".to_string())),
-            session_id: Some("conv_1".to_string()),
+            realtime_session_id: Some("conv_1".to_string()),
             transport: None,
             voice: None,
         });
         let webrtc_start = Op::RealtimeConversationStart(ConversationStartParams {
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("be helpful".to_string())),
-            session_id: Some("conv_1".to_string()),
+            realtime_session_id: Some("conv_1".to_string()),
             transport: Some(ConversationStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
             }),
@@ -4784,14 +4784,14 @@ mod tests {
         let default_prompt_start = Op::RealtimeConversationStart(ConversationStartParams {
             output_modality: RealtimeOutputModality::Audio,
             prompt: None,
-            session_id: None,
+            realtime_session_id: None,
             transport: None,
             voice: None,
         });
         let null_prompt_start = Op::RealtimeConversationStart(ConversationStartParams {
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(None),
-            session_id: None,
+            realtime_session_id: None,
             transport: None,
             voice: None,
         });
@@ -4803,7 +4803,7 @@ mod tests {
                 "type": "realtime_conversation_start",
                 "output_modality": "audio",
                 "prompt": "be helpful",
-                "session_id": "conv_1"
+                "realtime_session_id": "conv_1"
             })
         );
         assert_eq!(
@@ -4880,12 +4880,28 @@ mod tests {
                 "type": "realtime_conversation_start",
                 "output_modality": "audio",
                 "prompt": "be helpful",
-                "session_id": "conv_1",
+                "realtime_session_id": "conv_1",
                 "transport": {
                     "type": "webrtc",
                     "sdp": "v=offer\r\n"
                 },
                 "voice": "cove"
+            })
+        );
+    }
+
+    #[test]
+    fn realtime_conversation_started_event_uses_realtime_session_id() {
+        let event = RealtimeConversationStartedEvent {
+            realtime_session_id: Some("conv_1".to_string()),
+            version: RealtimeConversationVersion::V2,
+        };
+
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            json!({
+                "realtime_session_id": "conv_1",
+                "version": "v2"
             })
         );
     }

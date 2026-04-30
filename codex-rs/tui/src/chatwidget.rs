@@ -6954,7 +6954,7 @@ impl ChatWidget {
                 if !from_replay {
                     self.on_realtime_conversation_started(
                         codex_protocol::protocol::RealtimeConversationStartedEvent {
-                            session_id: notification.session_id,
+                            realtime_session_id: notification.realtime_session_id,
                             version: notification.version,
                         },
                     );
