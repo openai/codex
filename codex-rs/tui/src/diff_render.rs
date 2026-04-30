@@ -77,6 +77,7 @@ const LIGHT_256_GUTTER_FG_IDX: u8 = 236;
 
 use crate::color::is_light;
 use crate::color::perceptual_distance;
+use crate::diff_model::FileChange;
 use crate::exec_command::relativize_to_home;
 use crate::render::Insets;
 use crate::render::highlight::DiffScopeBackgroundRgbs;
@@ -94,7 +95,6 @@ use crate::terminal_palette::indexed_color;
 use crate::terminal_palette::rgb_color;
 use crate::terminal_palette::stdout_color_level;
 use codex_git_utils::get_git_repo_root;
-use codex_protocol::protocol::FileChange;
 use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
 
@@ -299,7 +299,7 @@ pub struct DiffSummary {
 }
 
 impl DiffSummary {
-    pub fn new(changes: HashMap<PathBuf, FileChange>, cwd: AbsolutePathBuf) -> Self {
+    pub(crate) fn new(changes: HashMap<PathBuf, FileChange>, cwd: AbsolutePathBuf) -> Self {
         Self { changes, cwd }
     }
 }

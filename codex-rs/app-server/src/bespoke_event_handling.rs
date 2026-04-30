@@ -887,7 +887,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 msg,
                 &conversation_id.to_string(),
                 &event_turn_id,
-                /*is_file_change_output*/ false,
             );
             outgoing.send_server_notification(notification).await;
         }
@@ -905,7 +904,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 EventMsg::CollabCloseEnd(end_event),
                 &conversation_id.to_string(),
                 &event_turn_id,
-                /*is_file_change_output*/ false,
             );
             outgoing.send_server_notification(notification).await;
         }
@@ -1041,7 +1039,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 msg,
                 &conversation_id.to_string(),
                 &event_turn_id,
-                /*is_file_change_output*/ false,
             );
             outgoing.send_server_notification(notification).await;
         }
@@ -1124,7 +1121,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                     EventMsg::PatchApplyBegin(patch_begin_event),
                     &conversation_id.to_string(),
                     &event_turn_id,
-                    /*is_file_change_output*/ false,
                 );
                 outgoing.send_server_notification(notification).await;
             }
@@ -1166,28 +1162,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                     EventMsg::ExecCommandBegin(exec_command_begin_event),
                     &conversation_id.to_string(),
                     &event_turn_id,
-                    /*is_file_change_output*/ false,
                 );
                 outgoing.send_server_notification(notification).await;
             }
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
-            let item_id = exec_command_output_delta_event.call_id.clone();
-            // The underlying EventMsg::ExecCommandOutputDelta is used for shell, unified_exec,
-            // and apply_patch tool calls. We represent apply_patch with the FileChange item, and
-            // everything else with the CommandExecution item.
-            //
-            // We need to detect which item type it is so we can emit the right notification.
-            // We already have state tracking FileChange items on item/started, so let's use that.
-            let is_file_change = {
-                let state = thread_state.lock().await;
-                state.turn_summary.file_change_started.contains(&item_id)
-            };
             let notification = item_event_to_server_notification(
                 EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event),
                 &conversation_id.to_string(),
                 &event_turn_id,
-                is_file_change,
             );
             outgoing.send_server_notification(notification).await;
         }
@@ -1213,7 +1196,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 EventMsg::ExecCommandEnd(exec_command_end_event),
                 &conversation_id.to_string(),
                 &event_turn_id,
-                /*is_file_change_output*/ false,
             );
             outgoing.send_server_notification(notification).await;
         }

@@ -10,7 +10,6 @@ use crate::protocol::v2::CollabAgentToolCallStatus;
 use crate::protocol::v2::CommandExecutionOutputDeltaNotification;
 use crate::protocol::v2::DynamicToolCallOutputContentItem;
 use crate::protocol::v2::DynamicToolCallStatus;
-use crate::protocol::v2::FileChangeOutputDeltaNotification;
 use crate::protocol::v2::FileChangePatchUpdatedNotification;
 use crate::protocol::v2::ItemCompletedNotification;
 use crate::protocol::v2::ItemStartedNotification;
@@ -37,7 +36,6 @@ pub fn item_event_to_server_notification(
     msg: EventMsg,
     thread_id: &str,
     turn_id: &str,
-    is_file_change_output: bool,
 ) -> ServerNotification {
     let thread_id = thread_id.to_string();
     let turn_id = turn_id.to_string();
@@ -477,23 +475,14 @@ pub fn item_event_to_server_notification(
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
             let item_id = exec_command_output_delta_event.call_id;
             let delta = String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string();
-            if is_file_change_output {
-                ServerNotification::FileChangeOutputDelta(FileChangeOutputDeltaNotification {
+            ServerNotification::CommandExecutionOutputDelta(
+                CommandExecutionOutputDeltaNotification {
                     thread_id,
                     turn_id,
                     item_id,
                     delta,
-                })
-            } else {
-                ServerNotification::CommandExecutionOutputDelta(
-                    CommandExecutionOutputDeltaNotification {
-                        thread_id,
-                        turn_id,
-                        item_id,
-                        delta,
-                    },
-                )
-            }
+                },
+            )
         }
         EventMsg::TerminalInteraction(terminal_event) => {
             ServerNotification::TerminalInteraction(TerminalInteractionNotification {
@@ -522,6 +511,8 @@ mod tests {
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::protocol::CollabResumeBeginEvent;
     use codex_protocol::protocol::CollabResumeEndEvent;
+    use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
+    use codex_protocol::protocol::ExecOutputStream;
     use codex_protocol::protocol::McpInvocation;
     use codex_protocol::protocol::McpToolCallBeginEvent;
     use codex_protocol::protocol::McpToolCallEndEvent;
@@ -549,6 +540,18 @@ mod tests {
         }
     }
 
+    fn assert_command_execution_output_delta_server_notification(
+        notification: ServerNotification,
+        expected: CommandExecutionOutputDeltaNotification,
+    ) {
+        match notification {
+            ServerNotification::CommandExecutionOutputDelta(payload) => {
+                assert_eq!(payload, expected)
+            }
+            other => panic!("expected command execution output delta, got {other:?}"),
+        }
+    }
+
     #[test]
     fn collab_resume_begin_maps_to_item_started_resume_agent() {
         let event = CollabResumeBeginEvent {
@@ -563,7 +566,6 @@ mod tests {
             EventMsg::CollabResumeBegin(event.clone()),
             "thread-1",
             "turn-1",
-            /*is_file_change_output*/ false,
         );
         assert_item_started_server_notification(
             notification,
@@ -601,7 +603,6 @@ mod tests {
             EventMsg::CollabResumeEnd(event.clone()),
             "thread-2",
             "turn-2",
-            /*is_file_change_output*/ false,
         );
         assert_item_completed_server_notification(
             notification,
@@ -644,7 +645,6 @@ mod tests {
             EventMsg::McpToolCallBegin(begin_event.clone()),
             "thread-1",
             "turn_1",
-            /*is_file_change_output*/ false,
         );
         assert_item_started_server_notification(
             notification,
@@ -682,7 +682,6 @@ mod tests {
             EventMsg::McpToolCallBegin(begin_event.clone()),
             "thread-2",
             "turn_2",
-            /*is_file_change_output*/ false,
         );
         assert_item_started_server_notification(
             notification,
@@ -735,7 +734,6 @@ mod tests {
             EventMsg::McpToolCallEnd(end_event.clone()),
             "thread-3",
             "turn_3",
-            /*is_file_change_output*/ false,
         );
         assert_item_completed_server_notification(
             notification,
@@ -781,7 +779,6 @@ mod tests {
             EventMsg::McpToolCallEnd(end_event.clone()),
             "thread-4",
             "turn_4",
-            /*is_file_change_output*/ false,
         );
         assert_item_completed_server_notification(
             notification,
@@ -801,6 +798,29 @@ mod tests {
                     }),
                     duration_ms: Some(1),
                 },
+            },
+        );
+    }
+
+    #[test]
+    fn exec_command_output_delta_maps_to_command_execution_output_delta() {
+        let notification = item_event_to_server_notification(
+            EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                call_id: "call-1".to_string(),
+                stream: ExecOutputStream::Stdout,
+                chunk: b"hello".to_vec(),
+            }),
+            "thread-1",
+            "turn-1",
+        );
+
+        assert_command_execution_output_delta_server_notification(
+            notification,
+            CommandExecutionOutputDeltaNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "call-1".to_string(),
+                delta: "hello".to_string(),
             },
         );
     }

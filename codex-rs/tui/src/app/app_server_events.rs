@@ -7,11 +7,9 @@ use super::app_server_event_targets::server_request_thread_id;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
-use crate::app_server_session::app_server_rate_limit_snapshot_to_core;
 use crate::app_server_session::status_account_display_from_auth_mode;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 
@@ -77,9 +75,8 @@ impl App {
                 self.refresh_mcp_startup_expected_servers_from_config();
             }
             ServerNotification::AccountRateLimitsUpdated(notification) => {
-                self.chat_widget.on_rate_limit_snapshot(Some(
-                    app_server_rate_limit_snapshot_to_core(notification.rate_limits.clone()),
-                ));
+                self.chat_widget
+                    .on_rate_limit_snapshot(Some(notification.rate_limits.clone()));
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {
@@ -185,24 +182,5 @@ impl App {
         if let Err(err) = result {
             tracing::warn!("failed to enqueue app-server request: {err}");
         }
-    }
-
-    async fn reject_app_server_request(
-        &self,
-        app_server_client: &AppServerSession,
-        request_id: codex_app_server_protocol::RequestId,
-        reason: String,
-    ) -> std::result::Result<(), String> {
-        app_server_client
-            .reject_server_request(
-                request_id,
-                JSONRPCErrorError {
-                    code: -32000,
-                    message: reason,
-                    data: None,
-                },
-            )
-            .await
-            .map_err(|err| format!("failed to reject app-server request: {err}"))
     }
 }
