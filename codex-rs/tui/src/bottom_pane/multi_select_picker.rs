@@ -882,10 +882,14 @@ mod tests {
 
     fn test_picker(items: Vec<MultiSelectItem>) -> MultiSelectPicker {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
-        MultiSelectPicker::builder("Test".to_string(), None, AppEventSender::new(tx))
-            .items(items)
-            .enable_ordering()
-            .build()
+        MultiSelectPicker::builder(
+            "Test".to_string(),
+            /*subtitle*/ None,
+            AppEventSender::new(tx),
+        )
+        .items(items)
+        .enable_ordering()
+        .build()
     }
 
     fn item(id: &str, orderable: bool, section_break_after: bool) -> MultiSelectItem {
