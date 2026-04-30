@@ -144,7 +144,6 @@ async fn emits_deprecation_notice_for_notify() -> anyhow::Result<()> {
             "Use lifecycle hooks for new automation instead of adding new `notify` configurations."
         ),
     );
-
     Ok(())
 }
 
