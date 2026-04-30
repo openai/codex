@@ -692,8 +692,9 @@ fn allow_managed_hooks_only_false_keeps_unmanaged_hooks() {
     let temp = tempdir().expect("create temp dir");
     let config_path =
         AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
-    let (requirements, requirements_toml) =
-        requirements_with_managed_hooks_only(/*allow_managed_hooks_only*/ false, None);
+    let (requirements, requirements_toml) = requirements_with_managed_hooks_only(
+        /*allow_managed_hooks_only*/ false, /*managed_hooks*/ None,
+    );
     let config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
             ConfigLayerSource::User { file: config_path },
@@ -717,7 +718,7 @@ fn allow_managed_hooks_only_false_keeps_unmanaged_hooks() {
 
     assert!(engine.warnings().is_empty());
     assert_eq!(engine.handlers.len(), 1);
-    assert!(!engine.handlers[0].is_managed);
+    assert!(!engine.handlers[0].source.is_managed());
     assert_eq!(engine.handlers[0].command, "python3 /tmp/user-hook.py");
 }
 
@@ -757,7 +758,7 @@ fn allow_managed_hooks_only_in_config_toml_does_not_enable_policy() {
 
     assert!(engine.warnings().is_empty());
     assert_eq!(engine.handlers.len(), 1);
-    assert!(!engine.handlers[0].is_managed);
+    assert!(!engine.handlers[0].source.is_managed());
     assert_eq!(engine.handlers[0].command, "python3 /tmp/user-hook.py");
 }
 
@@ -787,8 +788,9 @@ fn allow_managed_hooks_only_skips_unmanaged_json_and_toml_hooks() {
             }"#,
     )
     .expect("write hooks.json");
-    let (requirements, requirements_toml) =
-        requirements_with_managed_hooks_only(/*allow_managed_hooks_only*/ true, None);
+    let (requirements, requirements_toml) = requirements_with_managed_hooks_only(
+        /*allow_managed_hooks_only*/ true, /*managed_hooks*/ None,
+    );
     let config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
             ConfigLayerSource::User {
@@ -850,8 +852,9 @@ fn allow_managed_hooks_only_skips_unmanaged_plugin_hooks() {
         source_relative_path: "hooks/hooks.json".to_string(),
         hooks: pre_tool_use_hook_events("python3 /tmp/plugin-hook.py"),
     }];
-    let (requirements, requirements_toml) =
-        requirements_with_managed_hooks_only(/*allow_managed_hooks_only*/ true, None);
+    let (requirements, requirements_toml) = requirements_with_managed_hooks_only(
+        /*allow_managed_hooks_only*/ true, /*managed_hooks*/ None,
+    );
     let config_layer_stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
         .expect("config layer stack");
 
@@ -960,7 +963,12 @@ fn allow_managed_hooks_only_keeps_managed_requirement_and_config_layer_hooks() {
             "python3 /tmp/legacy-mdm-hook.py",
         ]
     );
-    assert!(engine.handlers.iter().all(|handler| handler.is_managed));
+    assert!(
+        engine
+            .handlers
+            .iter()
+            .all(|handler| handler.source.is_managed())
+    );
 }
 
 #[test]
