@@ -118,6 +118,7 @@ pub(crate) struct TurnState {
     granted_permissions: Option<AdditionalPermissionProfile>,
     strict_auto_review_enabled: bool,
     pub(crate) tool_calls: u64,
+    pub(crate) continuation_activity_count: u64,
     pub(crate) has_memory_citation: bool,
     pub(crate) token_usage_at_turn_start: TokenUsage,
 }
@@ -129,6 +130,15 @@ pub(crate) struct PendingRequestPermissions {
 }
 
 impl TurnState {
+    pub(crate) fn record_tool_call(&mut self) {
+        self.tool_calls = self.tool_calls.saturating_add(1);
+        self.record_continuation_activity();
+    }
+
+    pub(crate) fn record_continuation_activity(&mut self) {
+        self.continuation_activity_count = self.continuation_activity_count.saturating_add(1);
+    }
+
     pub(crate) fn insert_pending_approval(
         &mut self,
         key: String,

@@ -13,8 +13,10 @@ use crate::tasks::RegularTask;
 use anyhow::Context;
 use codex_features::Feature;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadGoal;
@@ -90,7 +92,7 @@ pub(crate) enum GoalRuntimeEvent<'a> {
     TurnFinished {
         turn_context: &'a TurnContext,
         turn_completed: bool,
-        tool_calls: u64,
+        continuation_activity_count: u64,
     },
     MaybeContinueIfIdle,
     TaskAborted {
@@ -118,6 +120,30 @@ pub(crate) struct GoalRuntimeState {
 struct GoalContinuationCandidate {
     goal_id: String,
     items: Vec<ResponseInputItem>,
+}
+
+pub(crate) fn turn_item_counts_as_goal_continuation_activity(item: &TurnItem) -> bool {
+    // Keep this match exhaustive so new built-in turn item kinds force a
+    // review of whether they should keep goal auto-continuation alive.
+    match item {
+        TurnItem::UserMessage(_) => false,
+        TurnItem::HookPrompt(_) => false,
+        TurnItem::AgentMessage(_) => false,
+        TurnItem::Plan(_) => false,
+        TurnItem::Reasoning(_) => false,
+        TurnItem::WebSearch(_) => true,
+        TurnItem::ImageGeneration(_) => true,
+        TurnItem::ContextCompaction(_) => false,
+    }
+}
+
+pub(crate) fn response_item_counts_as_goal_continuation_activity_without_turn_item(
+    item: &ResponseItem,
+) -> bool {
+    matches!(
+        item,
+        ResponseItem::ToolSearchCall { execution, .. } if execution != "client"
+    )
 }
 
 impl GoalRuntimeState {
@@ -277,8 +303,8 @@ impl Session {
     /// suppresses that steering, external mutations account best-effort before
     /// changing state, interrupts pause active goals, resumes reactivate paused
     /// goals, explicit maybe-continue events start idle goal continuation turns,
-    /// and no-tool continuation turns suppress the next automatic continuation
-    /// until user/tool/external activity resets it.
+    /// and continuation turns with no counted autonomous activity suppress the
+    /// next automatic continuation until user/tool/external activity resets it.
     pub(crate) fn goal_runtime_apply<'a>(
         self: &'a Arc<Self>,
         event: GoalRuntimeEvent<'a>,
@@ -312,10 +338,14 @@ impl Session {
             GoalRuntimeEvent::TurnFinished {
                 turn_context,
                 turn_completed,
-                tool_calls,
+                continuation_activity_count,
             } => Box::pin(async move {
-                self.finish_thread_goal_turn(turn_context, turn_completed, tool_calls)
-                    .await;
+                self.finish_thread_goal_turn(
+                    turn_context,
+                    turn_completed,
+                    continuation_activity_count,
+                )
+                .await;
                 Ok(())
             }),
             GoalRuntimeEvent::MaybeContinueIfIdle => Box::pin(async move {
@@ -757,7 +787,7 @@ impl Session {
         self: &Arc<Self>,
         turn_context: &TurnContext,
         turn_completed: bool,
-        turn_tool_calls: u64,
+        turn_continuation_activity_count: u64,
     ) {
         if turn_completed
             && let Err(err) = self
@@ -770,7 +800,7 @@ impl Session {
         if self
             .take_thread_goal_continuation_turn(&turn_context.sub_id)
             .await
-            && turn_tool_calls == 0
+            && turn_continuation_activity_count == 0
         {
             self.goal_runtime
                 .continuation_suppressed
@@ -1261,7 +1291,7 @@ impl Session {
             .load(Ordering::SeqCst)
         {
             tracing::debug!(
-                "skipping active goal continuation because the last continuation made no tool calls"
+                "skipping active goal continuation because the last continuation made no counted autonomous activity"
             );
             return None;
         }
@@ -1513,12 +1543,28 @@ mod tests {
     use super::continuation_prompt;
     use super::escape_xml_text;
     use super::goal_token_delta_for_usage;
+    use super::response_item_counts_as_goal_continuation_activity_without_turn_item;
     use super::should_ignore_goal_for_mode;
+    use super::turn_item_counts_as_goal_continuation_activity;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::ModeKind;
+    use codex_protocol::items::AgentMessageContent;
+    use codex_protocol::items::AgentMessageItem;
+    use codex_protocol::items::ContextCompactionItem;
+    use codex_protocol::items::HookPromptFragment;
+    use codex_protocol::items::HookPromptItem;
+    use codex_protocol::items::ImageGenerationItem;
+    use codex_protocol::items::PlanItem;
+    use codex_protocol::items::ReasoningItem;
+    use codex_protocol::items::TurnItem;
+    use codex_protocol::items::UserMessageItem;
+    use codex_protocol::items::WebSearchItem;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::models::WebSearchAction;
     use codex_protocol::protocol::ThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::TokenUsage;
+    use codex_protocol::user_input::UserInput;
     use std::time::Duration;
     use std::time::Instant;
 
@@ -1541,6 +1587,125 @@ mod tests {
         };
 
         assert_eq!(580, goal_token_delta_for_usage(&usage));
+    }
+
+    #[test]
+    fn turn_item_goal_continuation_activity_matches_expected_variants() {
+        let cases = [
+            (
+                false,
+                TurnItem::UserMessage(UserMessageItem::new(&[UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: Vec::new(),
+                }])),
+            ),
+            (
+                false,
+                TurnItem::HookPrompt(HookPromptItem::from_fragments(
+                    None,
+                    vec![HookPromptFragment::from_single_hook("hook text", "hook-1")],
+                )),
+            ),
+            (
+                false,
+                TurnItem::AgentMessage(AgentMessageItem::new(&[AgentMessageContent::Text {
+                    text: "hello".to_string(),
+                }])),
+            ),
+            (
+                false,
+                TurnItem::Plan(PlanItem {
+                    id: "plan-1".to_string(),
+                    text: "plan".to_string(),
+                }),
+            ),
+            (
+                false,
+                TurnItem::Reasoning(ReasoningItem {
+                    id: "reason-1".to_string(),
+                    summary_text: vec!["thinking".to_string()],
+                    raw_content: Vec::new(),
+                }),
+            ),
+            (
+                true,
+                TurnItem::WebSearch(WebSearchItem {
+                    id: "ws-1".to_string(),
+                    query: "benchmark note structure".to_string(),
+                    action: WebSearchAction::Search {
+                        query: Some("benchmark note structure".to_string()),
+                        queries: None,
+                    },
+                }),
+            ),
+            (
+                true,
+                TurnItem::ImageGeneration(ImageGenerationItem {
+                    id: "ig-1".to_string(),
+                    status: "completed".to_string(),
+                    revised_prompt: None,
+                    result: String::new(),
+                    saved_path: None,
+                }),
+            ),
+            (
+                false,
+                TurnItem::ContextCompaction(ContextCompactionItem::new()),
+            ),
+        ];
+
+        for (expected, item) in cases {
+            assert_eq!(
+                expected,
+                turn_item_counts_as_goal_continuation_activity(&item),
+                "unexpected continuation-activity classification for {item:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_response_goal_continuation_activity_only_counts_server_tool_search() {
+        let cases = [
+            (
+                false,
+                ResponseItem::ToolSearchCall {
+                    id: None,
+                    call_id: Some("search-client".to_string()),
+                    status: Some("completed".to_string()),
+                    execution: "client".to_string(),
+                    arguments: serde_json::json!({ "query": "calendar" }),
+                },
+            ),
+            (
+                true,
+                ResponseItem::ToolSearchCall {
+                    id: None,
+                    call_id: Some("search-server".to_string()),
+                    status: Some("completed".to_string()),
+                    execution: "server".to_string(),
+                    arguments: serde_json::json!({ "query": "calendar" }),
+                },
+            ),
+            (
+                false,
+                ResponseItem::WebSearchCall {
+                    id: Some("ws-1".to_string()),
+                    status: Some("completed".to_string()),
+                    action: Some(WebSearchAction::Search {
+                        query: Some("calendar".to_string()),
+                        queries: None,
+                    }),
+                },
+            ),
+        ];
+
+        for (expected, item) in cases {
+            assert_eq!(
+                expected,
+                response_item_counts_as_goal_continuation_activity_without_turn_item(&item),
+                "unexpected raw continuation-activity classification for {item:?}"
+            );
+        }
     }
 
     #[test]
