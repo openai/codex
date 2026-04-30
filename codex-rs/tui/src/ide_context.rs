@@ -15,40 +15,40 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct IdeContext {
-    pub(crate) active_file: Option<ActiveFile>,
+    active_file: Option<ActiveFile>,
     #[serde(default)]
-    pub(crate) open_tabs: Vec<FileDescriptor>,
+    open_tabs: Vec<FileDescriptor>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ActiveFile {
+struct ActiveFile {
     #[serde(flatten)]
-    pub(crate) descriptor: FileDescriptor,
-    pub(crate) selection: Range,
+    descriptor: FileDescriptor,
+    selection: Range,
     #[serde(default)]
-    pub(crate) active_selection_content: String,
+    active_selection_content: String,
     #[serde(default)]
-    pub(crate) selections: Vec<Range>,
+    selections: Vec<Range>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct FileDescriptor {
-    pub(crate) label: String,
-    pub(crate) path: String,
+struct FileDescriptor {
+    label: String,
+    path: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
-pub(crate) struct Range {
-    pub(crate) start: Position,
-    pub(crate) end: Position,
+struct Range {
+    start: Position,
+    end: Position,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
-pub(crate) struct Position {
-    pub(crate) line: u32,
-    pub(crate) character: u32,
+struct Position {
+    line: u32,
+    character: u32,
 }
 
 #[cfg(test)]

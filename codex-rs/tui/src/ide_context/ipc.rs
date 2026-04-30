@@ -18,11 +18,16 @@ use super::IdeContext;
 // deadline can incorrectly skip context even though the IDE answers normally.
 const IDE_CONTEXT_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(any(unix, windows))]
-const IPC_READ_CHUNK_BYTES: usize = 64 * 1024;
-#[cfg(any(unix, windows))]
 const MAX_IPC_FRAME_BYTES: usize = 256 * 1024 * 1024;
 #[cfg(any(unix, windows))]
 const TUI_SOURCE_CLIENT_ID: &str = "codex-tui";
+#[cfg(any(unix, windows))]
+const OPEN_IDE_HINT: &str =
+    "Open this project in VS Code or Cursor with the Codex extension active.";
+#[cfg(any(unix, windows))]
+const IDE_DID_NOT_PROVIDE_CONTEXT_HINT: &str = "The IDE extension did not provide context.";
+#[cfg(any(unix, windows))]
+const KEEP_TRYING_HINT: &str = "Codex will keep trying on future messages.";
 
 #[derive(Debug, Error)]
 pub(crate) enum IdeContextError {
@@ -53,16 +58,12 @@ impl IdeContextError {
     #[cfg(any(unix, windows))]
     pub(crate) fn user_facing_hint(&self) -> String {
         match self {
-            IdeContextError::Connect(_) => {
-                "Open this project in VS Code or Cursor with the Codex extension active."
-                    .to_string()
-            }
+            IdeContextError::Connect(_) => OPEN_IDE_HINT.to_string(),
             IdeContextError::RequestFailed(error) if error == "no-client-found" => {
-                "Open this project in VS Code or Cursor with the Codex extension active."
-                    .to_string()
+                OPEN_IDE_HINT.to_string()
             }
             IdeContextError::RequestFailed(_) => {
-                "The IDE extension did not provide context. Try /ide again.".to_string()
+                format!("{IDE_DID_NOT_PROVIDE_CONTEXT_HINT} Try /ide again.")
             }
             IdeContextError::ResponseTooLarge => {
                 "The selected IDE context is too large. Clear any large selection in your IDE and try /ide again.".to_string()
@@ -83,25 +84,19 @@ impl IdeContextError {
                 "The selected IDE context is too large. Clear any large selection in your IDE."
                     .to_string()
             }
-            IdeContextError::Connect(_) => {
-                "Open this project in VS Code or Cursor with the Codex extension active."
-                    .to_string()
-            }
+            IdeContextError::Connect(_) => OPEN_IDE_HINT.to_string(),
             IdeContextError::RequestFailed(error) if error == "no-client-found" => {
-                "Open this project in VS Code or Cursor with the Codex extension active."
-                    .to_string()
+                OPEN_IDE_HINT.to_string()
             }
             IdeContextError::Read(error) if error.kind() == std::io::ErrorKind::TimedOut => {
                 "Codex timed out waiting for IDE context. It will keep trying on future messages."
                     .to_string()
             }
             IdeContextError::RequestFailed(error) if error == "client-disconnected" => {
-                "The IDE connection changed while Codex was requesting context. Codex will keep trying on future messages."
-                    .to_string()
+                hint_with_retry("The IDE connection changed while Codex was requesting context.")
             }
             IdeContextError::RequestFailed(error) if error == "request-timeout" => {
-                "The IDE extension did not answer in time. Codex will keep trying on future messages."
-                    .to_string()
+                hint_with_retry("The IDE extension did not answer in time.")
             }
             IdeContextError::RequestFailed(error) if error == "request-version-mismatch" => {
                 "The connected IDE extension is not compatible with this IDE context request."
@@ -111,21 +106,13 @@ impl IdeContextError {
                 "The connected IDE client does not support IDE context requests.".to_string()
             }
             IdeContextError::Send(_) => {
-                "Codex lost the IDE connection while requesting context. Codex will keep trying on future messages."
-                    .to_string()
+                hint_with_retry("Codex lost the IDE connection while requesting context.")
             }
             IdeContextError::InvalidResponse(_) => {
-                "Codex received an unexpected IDE context response. Codex will keep trying on future messages."
-                    .to_string()
+                hint_with_retry("Codex received an unexpected IDE context response.")
             }
-            IdeContextError::RequestFailed(_) => {
-                "The IDE extension did not provide context. Codex will keep trying on future messages."
-                    .to_string()
-            }
-            IdeContextError::Read(_) => {
-                "Codex could not read IDE context. Codex will keep trying on future messages."
-                    .to_string()
-            }
+            IdeContextError::RequestFailed(_) => hint_with_retry(IDE_DID_NOT_PROVIDE_CONTEXT_HINT),
+            IdeContextError::Read(_) => hint_with_retry("Codex could not read IDE context."),
         }
     }
 
@@ -140,94 +127,16 @@ impl IdeContextError {
     }
 }
 
+#[cfg(any(unix, windows))]
+fn hint_with_retry(message: &str) -> String {
+    format!("{message} {KEEP_TRYING_HINT}")
+}
+
 #[cfg(unix)]
 type IdeContextStream = UnixDeadlineStream;
 
 #[cfg(windows)]
 type IdeContextStream = super::windows_pipe::WindowsPipeStream;
-
-#[cfg(any(unix, windows))]
-#[derive(Default)]
-struct IpcFrameBuffer {
-    buffer: Vec<u8>,
-    expected_len: Option<usize>,
-}
-
-#[cfg(any(unix, windows))]
-enum IpcFrame {
-    Message(Value),
-    IgnoredBroadcast,
-}
-
-#[cfg(any(unix, windows))]
-impl IpcFrameBuffer {
-    fn read_next_message(
-        &mut self,
-        stream: &mut IdeContextStream,
-        deadline: Instant,
-    ) -> Result<Value, IdeContextError> {
-        loop {
-            while let Some(frame) = self.pop_complete_frame()? {
-                match frame {
-                    IpcFrame::Message(message) => return Ok(message),
-                    IpcFrame::IgnoredBroadcast => {}
-                }
-            }
-
-            ensure_deadline_not_expired(deadline)?;
-            stream.set_deadline(deadline);
-            let mut chunk = [0_u8; IPC_READ_CHUNK_BYTES];
-            match std::io::Read::read(stream, &mut chunk) {
-                Ok(0) => {
-                    return Err(IdeContextError::Read(std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        "IDE context IPC stream closed",
-                    )));
-                }
-                Ok(bytes_read) => self.push_bytes(&chunk[..bytes_read]),
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(error) => return Err(IdeContextError::Read(error)),
-            }
-        }
-    }
-
-    fn push_bytes(&mut self, bytes: &[u8]) {
-        self.buffer.extend_from_slice(bytes);
-    }
-
-    fn pop_complete_frame(&mut self) -> Result<Option<IpcFrame>, IdeContextError> {
-        if self.expected_len.is_none() && self.buffer.len() >= 4 {
-            self.read_frame_len();
-        }
-
-        let Some(expected_len) = self.expected_len else {
-            return Ok(None);
-        };
-        if expected_len > MAX_IPC_FRAME_BYTES {
-            return Err(IdeContextError::ResponseTooLarge);
-        }
-        if self.buffer.len() < expected_len {
-            return Ok(None);
-        }
-
-        let payload = self.buffer.drain(..expected_len).collect::<Vec<_>>();
-        self.expected_len = None;
-        let message = serde_json::from_slice::<Value>(&payload).map_err(|err| {
-            IdeContextError::InvalidResponse(format!("invalid JSON payload: {err}"))
-        })?;
-        if message.get("type").and_then(Value::as_str) == Some("broadcast") {
-            return Ok(Some(IpcFrame::IgnoredBroadcast));
-        }
-        Ok(Some(IpcFrame::Message(message)))
-    }
-
-    fn read_frame_len(&mut self) {
-        let mut len_bytes = [0_u8; 4];
-        len_bytes.copy_from_slice(&self.buffer[..4]);
-        self.buffer.drain(..4);
-        self.expected_len = Some(u32::from_le_bytes(len_bytes) as usize);
-    }
-}
 
 #[cfg(any(unix, windows))]
 pub(crate) fn fetch_ide_context(workspace_root: &Path) -> Result<IdeContext, IdeContextError> {
@@ -749,7 +658,7 @@ fn write_frame<T: std::io::Write + ?Sized>(stream: &mut T, message: &Value) -> s
     stream.flush()
 }
 
-#[cfg(all(test, unix))]
+#[cfg(any(unix, windows))]
 fn read_frame<T: std::io::Read + ?Sized>(
     stream: &mut T,
     deadline: Instant,
@@ -767,7 +676,7 @@ fn read_frame<T: std::io::Read + ?Sized>(
         .map_err(|err| IdeContextError::InvalidResponse(format!("invalid JSON payload: {err}")))
 }
 
-#[cfg(all(test, unix))]
+#[cfg(any(unix, windows))]
 fn read_exact_before_deadline<T: std::io::Read + ?Sized>(
     stream: &mut T,
     buf: &mut [u8],
@@ -802,10 +711,10 @@ fn read_response_frame(
     request_id: &str,
     deadline: Instant,
 ) -> Result<Value, IdeContextError> {
-    let mut frame_buffer = IpcFrameBuffer::default();
     loop {
         ensure_deadline_not_expired(deadline)?;
-        let message = frame_buffer.read_next_message(stream, deadline)?;
+        stream.set_deadline(deadline);
+        let message = read_frame(stream, deadline)?;
         match message.get("type").and_then(Value::as_str) {
             Some("response") => {
                 if message.get("requestId").and_then(Value::as_str) == Some(request_id) {
