@@ -1669,7 +1669,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Result<()> {
+async fn thread_resume_uses_path_over_thread_id_when_thread_is_running() -> Result<()> {
     let server = responses::start_mock_server().await;
     let first_body = responses::sse(vec![
         responses::ev_response_created("resp-1"),
@@ -1749,24 +1749,6 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
     )
     .await??;
 
-    let resume_id = primary
-        .send_thread_resume_request(ThreadResumeParams {
-            thread_id: thread_id.clone(),
-            path: Some(PathBuf::from("/tmp/does-not-match-running-rollout.jsonl")),
-            ..Default::default()
-        })
-        .await?;
-    let resume_err: JSONRPCError = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_error_message(RequestId::Integer(resume_id)),
-    )
-    .await??;
-    assert!(
-        resume_err.error.message.contains("mismatched path"),
-        "unexpected resume error: {}",
-        resume_err.error.message
-    );
-
     let other_thread_id = ThreadId::new().to_string();
     let resume_by_path_id = primary
         .send_thread_resume_request(ThreadResumeParams {
@@ -1775,19 +1757,15 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
             ..Default::default()
         })
         .await?;
-    let resume_by_path_err: JSONRPCError = timeout(
+    let resume_by_path_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_error_message(RequestId::Integer(resume_by_path_id)),
+        primary.read_stream_until_response_message(RequestId::Integer(resume_by_path_id)),
     )
     .await??;
-    assert!(
-        resume_by_path_err
-            .error
-            .message
-            .contains("from source thread"),
-        "unexpected resume error: {}",
-        resume_by_path_err.error.message
-    );
+    let ThreadResumeResponse {
+        thread: resumed, ..
+    } = to_response::<ThreadResumeResponse>(resume_by_path_resp)?;
+    assert_eq!(resumed.id, thread_id);
 
     primary
         .interrupt_turn_and_wait_for_aborted(thread_id, running_turn.id, DEFAULT_READ_TIMEOUT)
@@ -2485,7 +2463,7 @@ async fn thread_resume_surfaces_cloud_requirements_load_errors() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_rejects_invalid_thread_id_for_loaded_path() -> Result<()> {
+async fn thread_resume_uses_path_over_invalid_thread_id() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -2536,16 +2514,15 @@ async fn thread_resume_rejects_invalid_thread_id_for_loaded_path() -> Result<()>
         })
         .await?;
 
-    let resume_err: JSONRPCError = timeout(
+    let resume_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
     )
     .await??;
-    assert!(
-        resume_err.error.message.contains("invalid thread id"),
-        "unexpected resume error: {}",
-        resume_err.error.message
-    );
+    let ThreadResumeResponse {
+        thread: resumed, ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(resumed.id, thread.id);
 
     Ok(())
 }

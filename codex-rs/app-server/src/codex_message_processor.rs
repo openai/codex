@@ -4487,42 +4487,19 @@ impl CodexMessageProcessor {
         request_id: &ConnectionRequestId,
         params: &ThreadResumeParams,
     ) -> Result<bool, JSONRPCErrorError> {
-        let running_thread = if let Ok(existing_thread_id) =
-            ThreadId::from_string(&params.thread_id)
-            && let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await
-        {
-            if params.history.is_some() {
+        let running_thread = if params.history.is_some() {
+            if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
+                && self
+                    .thread_manager
+                    .get_thread(existing_thread_id)
+                    .await
+                    .is_ok()
+            {
                 return Err(invalid_request(format!(
                     "cannot resume thread {existing_thread_id} with history while it is already running"
                 )));
             }
-
-            if let (Some(requested_path), Some(active_path)) = (
-                params.path.as_ref(),
-                existing_thread.rollout_path().as_ref(),
-            ) && requested_path != active_path
-            {
-                return Err(invalid_request(format!(
-                    "cannot resume running thread {existing_thread_id} with mismatched path: requested `{}`, active `{}`",
-                    requested_path.display(),
-                    active_path.display()
-                )));
-            }
-
-            let source_thread = self
-                .read_stored_thread_for_resume(
-                    &params.thread_id,
-                    params.path.as_ref(),
-                    /*include_history*/ true,
-                )
-                .await?;
-            if source_thread.thread_id != existing_thread_id {
-                return Err(invalid_request(format!(
-                    "cannot resume running thread {existing_thread_id} from source thread {}",
-                    source_thread.thread_id
-                )));
-            }
-            Some((existing_thread_id, existing_thread, source_thread))
+            None
         } else if params.path.is_some() {
             let source_thread = self
                 .read_stored_thread_for_resume(
@@ -4533,22 +4510,27 @@ impl CodexMessageProcessor {
                 .await?;
             let existing_thread_id = source_thread.thread_id;
             if let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await {
-                let requested_thread_id = ThreadId::from_string(&params.thread_id)
-                    .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
-                if existing_thread_id != requested_thread_id {
-                    return Err(invalid_request(format!(
-                        "cannot resume running thread {requested_thread_id} from source thread {existing_thread_id}"
-                    )));
-                }
-                if params.history.is_some() {
-                    return Err(invalid_request(format!(
-                        "cannot resume thread {existing_thread_id} with history while it is already running"
-                    )));
-                }
                 Some((existing_thread_id, existing_thread, source_thread))
             } else {
                 None
             }
+        } else if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
+            && let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await
+        {
+            let source_thread = self
+                .read_stored_thread_for_resume(
+                    &params.thread_id,
+                    /*path*/ None,
+                    /*include_history*/ true,
+                )
+                .await?;
+            if source_thread.thread_id != existing_thread_id {
+                return Err(invalid_request(format!(
+                    "cannot resume running thread {existing_thread_id} from source thread {}",
+                    source_thread.thread_id
+                )));
+            }
+            Some((existing_thread_id, existing_thread, source_thread))
         } else {
             None
         };
