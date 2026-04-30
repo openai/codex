@@ -4856,7 +4856,7 @@ async fn thread_rollback_response_discards_queued_active_thread_events() {
 
 #[tokio::test]
 async fn new_session_requests_shutdown_for_previous_conversation() {
-    let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    let (mut app, mut app_event_rx, mut op_rx) = Box::pin(make_test_app_with_channels()).await;
 
     let thread_id = ThreadId::new();
     let event = SessionConfiguredEvent {
@@ -4887,10 +4887,12 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
     while app_event_rx.try_recv().is_ok() {}
     while op_rx.try_recv().is_ok() {}
 
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-    app.shutdown_current_thread(&mut app_server).await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
+    Box::pin(app.shutdown_current_thread(&mut app_server)).await;
 
     assert!(
         op_rx.try_recv().is_err(),
