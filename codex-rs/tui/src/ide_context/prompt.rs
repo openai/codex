@@ -28,7 +28,15 @@ pub(crate) fn apply_ide_context_to_user_input(
         .iter()
         .position(|item| matches!(item, UserInput::Text { .. }))
     {
-        let item = items.remove(text_index);
+        // Prefix the existing text item in place so image and text items keep
+        // the same relative order they had in the user's original submission.
+        let item = std::mem::replace(
+            &mut items[text_index],
+            UserInput::Text {
+                text: String::new(),
+                text_elements: Vec::new(),
+            },
+        );
         let UserInput::Text {
             text,
             text_elements,
@@ -36,7 +44,7 @@ pub(crate) fn apply_ide_context_to_user_input(
         else {
             unreachable!("position matched a text item");
         };
-        items.insert(0, prefixed_text_input(prefix, text, text_elements));
+        items[text_index] = prefixed_text_input(prefix, text, text_elements);
     } else {
         items.insert(
             0,
@@ -271,15 +279,15 @@ mod tests {
         assert_eq!(
             items,
             vec![
+                UserInput::LocalImage {
+                    path: PathBuf::from("/tmp/screenshot.png"),
+                },
                 UserInput::Text {
                     text: format!("{expected_prefix}Ask $figma"),
                     text_elements: vec![TextElement::new(
                         (prefix_len + 4..prefix_len + 10).into(),
                         Some("$figma".to_string()),
                     )],
-                },
-                UserInput::LocalImage {
-                    path: PathBuf::from("/tmp/screenshot.png"),
                 },
             ]
         );
