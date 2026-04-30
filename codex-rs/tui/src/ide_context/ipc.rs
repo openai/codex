@@ -445,7 +445,7 @@ mod tests {
     #[cfg(unix)]
     use pretty_assertions::assert_eq;
 
-    #[cfg(any(unix, windows))]
+    #[cfg(unix)]
     fn test_deadline() -> Instant {
         Instant::now() + Duration::from_secs(1)
     }
