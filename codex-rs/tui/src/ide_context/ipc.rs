@@ -579,7 +579,7 @@ fn write_frame<T: std::io::Write + ?Sized>(stream: &mut T, message: &Value) -> s
     stream.flush()
 }
 
-#[cfg(all(test, any(unix, windows)))]
+#[cfg(all(test, unix))]
 fn read_frame<T: std::io::Read + ?Sized>(
     stream: &mut T,
     deadline: Instant,
@@ -597,7 +597,7 @@ fn read_frame<T: std::io::Read + ?Sized>(
         .map_err(|err| IdeContextError::InvalidResponse(format!("invalid JSON payload: {err}")))
 }
 
-#[cfg(all(test, any(unix, windows)))]
+#[cfg(all(test, unix))]
 fn read_exact_before_deadline<T: std::io::Read + ?Sized>(
     stream: &mut T,
     buf: &mut [u8],
@@ -734,7 +734,7 @@ fn ensure_success_response(response: &Value) -> Result<(), IdeContextError> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     #[cfg(unix)]
