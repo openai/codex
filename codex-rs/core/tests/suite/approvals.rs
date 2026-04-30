@@ -1003,7 +1003,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             model_override: Some("gpt-5.2"),
             outcome: Outcome::Auto,
             expectation: Expectation::CommandFailure {
-                output_contains: "AskForApproval::Granular.sandbox_approval is false",
+                output_contains: "you should not ask for escalated permissions",
             },
         },
         ScenarioSpec {
