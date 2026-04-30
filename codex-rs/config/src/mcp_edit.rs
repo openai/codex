@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use tokio::task;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
+use toml_edit::InlineTable;
 use toml_edit::Item as TomlItem;
 use toml_edit::Table as TomlTable;
 use toml_edit::value;
@@ -16,6 +17,17 @@ use crate::CONFIG_TOML_FILE;
 use crate::McpServerConfig;
 use crate::McpServerEnvVar;
 use crate::McpServerTransportConfig;
+
+#[derive(Clone, Debug)]
+pub enum ConfigEdit {
+    SetPath {
+        segments: Vec<String>,
+        value: TomlItem,
+    },
+    ClearPath {
+        segments: Vec<String>,
+    },
+}
 
 pub async fn load_global_mcp_servers(
     codex_home: &Path,
@@ -62,6 +74,7 @@ fn ensure_no_inline_bearer_tokens(value: &TomlValue) -> std::io::Result<()> {
 pub struct ConfigEditsBuilder {
     codex_home: PathBuf,
     mcp_servers: Option<BTreeMap<String, McpServerConfig>>,
+    edits: Vec<ConfigEdit>,
 }
 
 impl ConfigEditsBuilder {
@@ -69,11 +82,20 @@ impl ConfigEditsBuilder {
         Self {
             codex_home: codex_home.to_path_buf(),
             mcp_servers: None,
+            edits: Vec::new(),
         }
     }
 
     pub fn replace_mcp_servers(mut self, servers: &BTreeMap<String, McpServerConfig>) -> Self {
         self.mcp_servers = Some(servers.clone());
+        self
+    }
+
+    pub fn with_edits<I>(mut self, edits: I) -> Self
+    where
+        I: IntoIterator<Item = ConfigEdit>,
+    {
+        self.edits.extend(edits);
         self
     }
 
@@ -91,6 +113,9 @@ impl ConfigEditsBuilder {
         if let Some(servers) = self.mcp_servers.as_ref() {
             replace_mcp_servers(&mut doc, servers);
         }
+        for edit in self.edits {
+            apply_config_edit(&mut doc, edit);
+        }
         fs::create_dir_all(&self.codex_home)?;
         fs::write(config_path, doc.to_string())
     }
@@ -103,6 +128,155 @@ fn read_or_create_document(config_path: &Path) -> std::io::Result<DocumentMut> {
             .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err)),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(DocumentMut::new()),
         Err(err) => Err(err),
+    }
+}
+
+fn apply_config_edit(doc: &mut DocumentMut, edit: ConfigEdit) -> bool {
+    match edit {
+        ConfigEdit::SetPath { segments, value } => insert(doc, &segments, value),
+        ConfigEdit::ClearPath { segments } => remove(doc, &segments),
+    }
+}
+
+fn insert(doc: &mut DocumentMut, segments: &[String], value: TomlItem) -> bool {
+    let Some((last, parents)) = segments.split_last() else {
+        return false;
+    };
+
+    let Some(parent) = descend(doc, parents, TraversalMode::Create) else {
+        return false;
+    };
+
+    let mut value = value;
+    if let Some(existing) = parent.get(last) {
+        preserve_decor(existing, &mut value);
+    }
+    parent[last] = value;
+    true
+}
+
+fn remove(doc: &mut DocumentMut, segments: &[String]) -> bool {
+    let Some((last, parents)) = segments.split_last() else {
+        return false;
+    };
+
+    let Some(parent) = descend(doc, parents, TraversalMode::Existing) else {
+        return false;
+    };
+
+    parent.remove(last).is_some()
+}
+
+#[derive(Clone, Copy)]
+enum TraversalMode {
+    Create,
+    Existing,
+}
+
+fn descend<'a>(
+    doc: &'a mut DocumentMut,
+    segments: &[String],
+    mode: TraversalMode,
+) -> Option<&'a mut TomlTable> {
+    let mut current = doc.as_table_mut();
+
+    for segment in segments {
+        match mode {
+            TraversalMode::Create => {
+                if !current.contains_key(segment.as_str()) {
+                    current.insert(segment.as_str(), TomlItem::Table(new_implicit_table()));
+                }
+
+                let item = current.get_mut(segment.as_str())?;
+                current = ensure_table_for_write(item)?;
+            }
+            TraversalMode::Existing => {
+                let item = current.get_mut(segment.as_str())?;
+                current = ensure_table_for_read(item)?;
+            }
+        }
+    }
+
+    Some(current)
+}
+
+fn ensure_table_for_write(item: &mut TomlItem) -> Option<&mut TomlTable> {
+    match item {
+        TomlItem::Table(table) => Some(table),
+        TomlItem::Value(value) => {
+            if let Some(inline) = value.as_inline_table() {
+                *item = TomlItem::Table(table_from_inline(inline));
+                item.as_table_mut()
+            } else {
+                *item = TomlItem::Table(new_implicit_table());
+                item.as_table_mut()
+            }
+        }
+        TomlItem::None => {
+            *item = TomlItem::Table(new_implicit_table());
+            item.as_table_mut()
+        }
+        _ => None,
+    }
+}
+
+fn ensure_table_for_read(item: &mut TomlItem) -> Option<&mut TomlTable> {
+    match item {
+        TomlItem::Table(table) => Some(table),
+        TomlItem::Value(value) => {
+            let inline = value.as_inline_table()?;
+            *item = TomlItem::Table(table_from_inline(inline));
+            item.as_table_mut()
+        }
+        _ => None,
+    }
+}
+
+fn table_from_inline(inline: &InlineTable) -> TomlTable {
+    let mut table = new_implicit_table();
+    for (key, value) in inline.iter() {
+        let mut value = value.clone();
+        let decor = value.decor_mut();
+        decor.set_suffix("");
+        table.insert(key, TomlItem::Value(value));
+    }
+    table
+}
+
+fn new_implicit_table() -> TomlTable {
+    let mut table = TomlTable::new();
+    table.set_implicit(true);
+    table
+}
+
+fn preserve_decor(existing: &TomlItem, replacement: &mut TomlItem) {
+    match (existing, replacement) {
+        (TomlItem::Table(existing_table), TomlItem::Table(replacement_table)) => {
+            replacement_table
+                .decor_mut()
+                .clone_from(existing_table.decor());
+            for (key, existing_item) in existing_table.iter() {
+                if let (Some(existing_key), Some(mut replacement_key)) =
+                    (existing_table.key(key), replacement_table.key_mut(key))
+                {
+                    replacement_key
+                        .leaf_decor_mut()
+                        .clone_from(existing_key.leaf_decor());
+                    replacement_key
+                        .dotted_decor_mut()
+                        .clone_from(existing_key.dotted_decor());
+                }
+                if let Some(replacement_item) = replacement_table.get_mut(key) {
+                    preserve_decor(existing_item, replacement_item);
+                }
+            }
+        }
+        (TomlItem::Value(existing_value), TomlItem::Value(replacement_value)) => {
+            replacement_value
+                .decor_mut()
+                .clone_from(existing_value.decor());
+        }
+        _ => {}
     }
 }
 

@@ -6,6 +6,7 @@ use crate::plugins::test_support::write_curated_plugin_sha;
 use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use crate::plugins::test_support::write_plugins_feature_config;
+use codex_core_plugins::OPENAI_BUNDLED_MARKETPLACE_NAME;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
 use codex_tools::DiscoverablePluginInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -74,17 +75,7 @@ async fn list_tool_suggest_discoverable_plugins_returns_microsoft_curated_plugin
 #[tokio::test]
 async fn list_tool_suggest_discoverable_plugins_deduplicates_allowlisted_configured_plugin() {
     let codex_home = tempdir().expect("tempdir should succeed");
-    let plugin_id = TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST
-        .iter()
-        .copied()
-        .find(|plugin_id| {
-            plugin_id
-                .rsplit_once('@')
-                .is_some_and(|(_plugin_name, marketplace_name)| {
-                    marketplace_name == OPENAI_BUNDLED_MARKETPLACE_NAME
-                })
-        })
-        .expect("allowlist should include a bundled plugin");
+    let plugin_id = "computer-use@openai-bundled";
     let (plugin_name, marketplace_name) = plugin_id
         .rsplit_once('@')
         .expect("plugin id should include a marketplace");
@@ -134,15 +125,7 @@ async fn list_tool_suggest_discoverable_plugins_ignores_missing_allowlisted_plug
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());
     write_openai_curated_marketplace(&curated_root, &["slack"]);
-    let marketplace_name = TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST
-        .iter()
-        .copied()
-        .filter_map(|plugin_id| plugin_id.rsplit_once('@'))
-        .find(|(_plugin_name, marketplace_name)| {
-            *marketplace_name == OPENAI_BUNDLED_MARKETPLACE_NAME
-        })
-        .map(|(_plugin_name, marketplace_name)| marketplace_name)
-        .expect("allowlist should include a bundled plugin");
+    let marketplace_name = OPENAI_BUNDLED_MARKETPLACE_NAME;
     let marketplace_root = codex_home
         .path()
         .join(format!(".tmp/marketplaces/{marketplace_name}"));

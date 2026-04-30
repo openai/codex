@@ -17,16 +17,30 @@ use codex_config::ConfigRequirementsToml;
 use codex_config::McpServerConfig;
 use codex_config::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::installed_marketplaces::marketplace_install_root;
+use codex_core_plugins::loader::configured_curated_plugin_ids_from_codex_home;
 use codex_core_plugins::loader::load_plugins_from_layer_stack;
+use codex_core_plugins::loader::plugin_telemetry_metadata_from_root;
+use codex_core_plugins::loader::refresh_curated_plugin_cache;
 use codex_core_plugins::loader::refresh_non_curated_plugin_cache;
 use codex_core_plugins::loader::refresh_non_curated_plugin_cache_force_reinstall;
+use codex_core_plugins::manifest::PluginManifestInterface;
+use codex_core_plugins::marketplace::MarketplaceError;
+use codex_core_plugins::marketplace::MarketplacePluginAuthPolicy;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
+use codex_core_plugins::marketplace::MarketplacePluginPolicy;
+use codex_core_plugins::marketplace::MarketplacePluginSource;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
+use codex_core_plugins::store::PluginStore;
+use codex_core_plugins::store::PluginStoreError;
 use codex_login::CodexAuth;
 use codex_protocol::protocol::Product;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
@@ -350,7 +364,7 @@ remote_plugin = true
 
     let config = load_config(codex_home.path(), codex_home.path()).await;
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(vec![
+    manager.write_remote_installed_plugins_cache_for_testing(vec![
         codex_core_plugins::remote::RemoteInstalledPlugin {
             marketplace_name: "chatgpt-global".to_string(),
             id: "plugins~Plugin_linear".to_string(),
@@ -381,7 +395,7 @@ remote_plugin = true
 
     let config = load_config(codex_home.path(), codex_home.path()).await;
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(vec![
+    manager.write_remote_installed_plugins_cache_for_testing(vec![
         codex_core_plugins::remote::RemoteInstalledPlugin {
             marketplace_name: "chatgpt-global".to_string(),
             id: "plugins~Plugin_linear".to_string(),

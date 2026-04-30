@@ -2,13 +2,13 @@ use anyhow::Context;
 use std::collections::HashSet;
 use tracing::warn;
 
-use super::PluginCapabilitySummary;
-use super::PluginsManager;
-use crate::config::Config;
+use crate::OPENAI_BUNDLED_MARKETPLACE_NAME;
+use crate::OPENAI_CURATED_MARKETPLACE_NAME;
+use crate::PluginCapabilitySummary;
+use crate::TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST;
+use crate::manager::PluginManagerConfig;
+use crate::manager::PluginsManager;
 use codex_config::types::ToolSuggestDiscoverableType;
-use codex_core_plugins::OPENAI_BUNDLED_MARKETPLACE_NAME;
-use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
-use codex_core_plugins::TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST;
 use codex_features::Feature;
 use codex_tools::DiscoverablePluginInfo;
 
@@ -17,23 +17,23 @@ const TOOL_SUGGEST_DISCOVERABLE_MARKETPLACE_ALLOWLIST: &[&str] = &[
     OPENAI_CURATED_MARKETPLACE_NAME,
 ];
 
-pub(crate) async fn list_tool_suggest_discoverable_plugins(
-    config: &Config,
+pub async fn list_tool_suggest_discoverable_plugins(
+    config: &(impl PluginManagerConfig + ?Sized),
 ) -> anyhow::Result<Vec<DiscoverablePluginInfo>> {
-    if !config.features.enabled(Feature::Plugins) {
+    if !config.feature_enabled(Feature::Plugins) {
         return Ok(Vec::new());
     }
 
-    let plugins_manager = PluginsManager::new(config.codex_home.to_path_buf());
+    let plugins_manager = PluginsManager::new(config.codex_home().to_path_buf());
     let configured_plugin_ids = config
-        .tool_suggest
+        .tool_suggest()
         .discoverables
         .iter()
         .filter(|discoverable| discoverable.kind == ToolSuggestDiscoverableType::Plugin)
         .map(|discoverable| discoverable.id.as_str())
         .collect::<HashSet<_>>();
     let disabled_plugin_ids = config
-        .tool_suggest
+        .tool_suggest()
         .disabled_tools
         .iter()
         .filter(|disabled_tool| disabled_tool.kind == ToolSuggestDiscoverableType::Plugin)
@@ -93,7 +93,3 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
     });
     Ok(discoverable_plugins)
 }
-
-#[cfg(test)]
-#[path = "discoverable_tests.rs"]
-mod tests;

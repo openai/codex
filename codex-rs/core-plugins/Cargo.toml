@@ -13,16 +13,20 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
 codex-app-server-protocol = { workspace = true }
+codex-analytics = { workspace = true }
 codex-config = { workspace = true }
 codex-core-skills = { workspace = true }
 codex-exec-server = { workspace = true }
+codex-features = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
+codex-tools = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-plugins = { workspace = true }
 chrono = { workspace = true }
@@ -34,8 +38,9 @@ serde_json = { workspace = true }
 tar = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["fs", "macros", "rt", "time"] }
+tokio = { workspace = true, features = ["fs", "macros", "rt", "sync", "time"] }
 toml = { workspace = true }
+toml_edit = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 zip = { workspace = true }

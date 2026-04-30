@@ -56,3 +56,7 @@ impl ContextualUserFragment for AvailablePluginsInstructions {
         format!("\n{}\n", lines.join("\n"))
     }
 }
+
+#[cfg(test)]
+#[path = "available_plugins_instructions_tests.rs"]
+mod tests;

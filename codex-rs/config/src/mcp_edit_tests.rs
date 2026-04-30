@@ -4,6 +4,7 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use toml::Value as TomlValue;
 
 #[tokio::test]
 async fn replace_mcp_servers_serializes_per_tool_approval_overrides() -> anyhow::Result<()> {
@@ -79,6 +80,51 @@ approval_mode = "approve"
     assert_eq!(loaded, servers);
 
     std::fs::remove_dir_all(&codex_home)?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_edits_set_and_clear_nested_paths() -> anyhow::Result<()> {
+    let codex_home = tempfile::tempdir()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"plugins = { "sample@test" = { enabled = false, keep = true } }
+"#,
+    )?;
+
+    ConfigEditsBuilder::new(codex_home.path())
+        .with_edits([
+            ConfigEdit::SetPath {
+                segments: vec![
+                    "plugins".to_string(),
+                    "sample@test".to_string(),
+                    "enabled".to_string(),
+                ],
+                value: value(true),
+            },
+            ConfigEdit::ClearPath {
+                segments: vec![
+                    "plugins".to_string(),
+                    "sample@test".to_string(),
+                    "keep".to_string(),
+                ],
+            },
+        ])
+        .apply()
+        .await?;
+
+    let config: TomlValue = toml::from_str(&std::fs::read_to_string(
+        codex_home.path().join(CONFIG_TOML_FILE),
+    )?)?;
+    let plugin = config
+        .get("plugins")
+        .and_then(|plugins| plugins.get("sample@test"))
+        .and_then(TomlValue::as_table)
+        .expect("plugin config should be a table");
+
+    assert_eq!(plugin.get("enabled"), Some(&TomlValue::Boolean(true)));
+    assert_eq!(plugin.get("keep"), None);
 
     Ok(())
 }

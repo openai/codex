@@ -1,15 +1,6 @@
-#[cfg(test)]
-use crate::context::AvailablePluginsInstructions;
-#[cfg(test)]
-use crate::context::ContextualUserFragment;
-use crate::plugins::PluginCapabilitySummary;
+use crate::PluginCapabilitySummary;
 
-#[cfg(test)]
-pub(crate) fn render_plugins_section(plugins: &[PluginCapabilitySummary]) -> Option<String> {
-    AvailablePluginsInstructions::from_plugins(plugins).map(|instructions| instructions.render())
-}
-
-pub(crate) fn render_explicit_plugin_instructions(
+pub fn render_explicit_plugin_instructions(
     plugin: &PluginCapabilitySummary,
     available_mcp_servers: &[String],
     available_apps: &[String],
@@ -56,7 +47,3 @@ pub(crate) fn render_explicit_plugin_instructions(
 
     Some(lines.join("\n"))
 }
-
-#[cfg(test)]
-#[path = "render_tests.rs"]
-mod tests;
