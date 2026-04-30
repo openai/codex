@@ -51,7 +51,7 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
 pub fn is_safe_powershell_words(command: &[String]) -> bool {
     #[cfg(windows)]
     {
-        return is_safe_powershell_words_windows(command);
+        is_safe_powershell_words_windows(command)
     }
 
     #[cfg(not(windows))]
