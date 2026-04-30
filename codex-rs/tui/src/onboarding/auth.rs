@@ -876,7 +876,9 @@ impl AuthModeWidget {
             match request_handle
                 .request_typed::<LoginAccountResponse>(ClientRequest::LoginAccount {
                     request_id: onboarding_request_id(),
-                    params: LoginAccountParams::Chatgpt,
+                    params: LoginAccountParams::Chatgpt {
+                        codex_streamlined_login: false,
+                    },
                 })
                 .await
             {

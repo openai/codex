@@ -5,13 +5,14 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_tools::REQUEST_USER_INPUT_TOOL_NAME;
 use codex_tools::normalize_request_user_input_args;
 use codex_tools::request_user_input_unavailable_message;
 
 pub struct RequestUserInputHandler {
-    pub default_mode_request_user_input: bool,
+    pub available_modes: Vec<ModeKind>,
 }
 
 impl ToolHandler for RequestUserInputHandler {
@@ -46,9 +47,7 @@ impl ToolHandler for RequestUserInputHandler {
         }
 
         let mode = session.collaboration_mode().await.mode;
-        if let Some(message) =
-            request_user_input_unavailable_message(mode, self.default_mode_request_user_input)
-        {
+        if let Some(message) = request_user_input_unavailable_message(mode, &self.available_modes) {
             return Err(FunctionCallError::RespondToModel(message));
         }
 

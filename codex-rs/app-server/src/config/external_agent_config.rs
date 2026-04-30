@@ -144,8 +144,24 @@ impl ExternalAgentConfigService {
         Ok(items)
     }
 
-    pub(crate) fn detect_recent_sessions(&self) -> io::Result<Vec<ExternalAgentSessionMigration>> {
-        detect_recent_sessions(&self.external_agent_home, &self.codex_home)
+    pub(crate) fn external_agent_session_source_path(
+        &self,
+        path: &Path,
+    ) -> io::Result<Option<PathBuf>> {
+        if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+            return Ok(None);
+        }
+        let path = match fs::canonicalize(path) {
+            Ok(path) => path,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        let projects_root = match fs::canonicalize(self.external_agent_home.join("projects")) {
+            Ok(projects_root) => projects_root,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        Ok(path.starts_with(projects_root).then_some(path))
     }
 
     pub(crate) async fn import(
@@ -252,7 +268,7 @@ impl ExternalAgentConfigService {
             || self.external_agent_home.join("settings.json"),
             |repo_root| repo_root.join(EXTERNAL_AGENT_DIR).join("settings.json"),
         );
-        let settings = read_external_settings(&source_settings)?;
+        let settings = effective_external_settings(&source_settings)?;
         let target_config = repo_root.map_or_else(
             || self.codex_home.join("config.toml"),
             |repo_root| repo_root.join(".codex").join("config.toml"),
@@ -569,7 +585,7 @@ impl ExternalAgentConfigService {
     ) -> io::Result<Option<JsonValue>> {
         if repo_root.is_some() && source_settings.is_none() {
             let home_settings = self.external_agent_home.join("settings.json");
-            match read_external_settings(&home_settings) {
+            match effective_external_settings(&home_settings) {
                 Ok(settings) => Ok(settings),
                 Err(err) => {
                     tracing::warn!(
@@ -636,7 +652,7 @@ impl ExternalAgentConfigService {
             |cwd| cwd.join(EXTERNAL_AGENT_DIR).join("settings.json"),
         );
         let source_root = cwd.unwrap_or(self.external_agent_home.as_path());
-        let import_sources = read_external_settings(&source_settings)?
+        let import_sources = effective_external_settings(&source_settings)?
             .map(|settings| collect_marketplace_import_sources(&settings, source_root))
             .unwrap_or_default();
 
@@ -697,9 +713,11 @@ impl ExternalAgentConfigService {
                 |cwd| cwd.join(EXTERNAL_AGENT_DIR).join("settings.json"),
             );
             let source_root = cwd.unwrap_or(self.external_agent_home.as_path());
-            let import_source = read_external_settings(&source_settings)?.and_then(|settings| {
-                collect_marketplace_import_sources(&settings, source_root).remove(&marketplace_name)
-            });
+            let import_source =
+                effective_external_settings(&source_settings)?.and_then(|settings| {
+                    collect_marketplace_import_sources(&settings, source_root)
+                        .remove(&marketplace_name)
+                });
             let Some(import_source) = import_source else {
                 outcome.failed_marketplaces.push(marketplace_name);
                 outcome.failed_plugin_ids.extend(plugin_ids);
@@ -767,13 +785,9 @@ impl ExternalAgentConfigService {
                 self.codex_home.join("config.toml"),
             )
         };
-        if !source_settings.is_file() {
+        let Some(settings) = effective_external_settings(&source_settings)? else {
             return Ok(());
-        }
-
-        let raw_settings = fs::read_to_string(&source_settings)?;
-        let settings: JsonValue = serde_json::from_str(&raw_settings)
-            .map_err(|err| invalid_data_error(err.to_string()))?;
+        };
         let migrated = build_config_from_external(&settings)?;
         if is_empty_toml_table(&migrated) {
             return Ok(());
@@ -822,7 +836,7 @@ impl ExternalAgentConfigService {
         };
         let settings = self.mcp_settings(
             repo_root.as_deref(),
-            read_external_settings(&source_settings)?,
+            effective_external_settings(&source_settings)?,
         )?;
         let migrated = build_mcp_config_from_external(
             self.source_root(repo_root.as_deref()).as_path(),
@@ -999,6 +1013,43 @@ fn read_external_settings(path: &Path) -> io::Result<Option<JsonValue>> {
     Ok(Some(settings))
 }
 
+fn effective_external_settings(project_settings: &Path) -> io::Result<Option<JsonValue>> {
+    let mut effective = read_external_settings(project_settings)?;
+    let Some(settings_dir) = project_settings.parent() else {
+        return Ok(effective);
+    };
+    let local_settings = settings_dir.join("settings.local.json");
+    let local_settings = match read_external_settings(&local_settings) {
+        Ok(Some(local_settings)) => local_settings,
+        Ok(None) => return Ok(effective),
+        Err(err) if err.kind() == io::ErrorKind::InvalidData => return Ok(effective),
+        Err(err) => return Err(err),
+    };
+    if let Some(effective) = effective.as_mut() {
+        merge_json_settings(effective, &local_settings);
+    } else {
+        effective = Some(local_settings);
+    }
+    Ok(effective)
+}
+
+fn merge_json_settings(existing: &mut JsonValue, incoming: &JsonValue) {
+    match (existing, incoming) {
+        (JsonValue::Object(existing), JsonValue::Object(incoming)) => {
+            for (key, incoming_value) in incoming {
+                match existing.get_mut(key) {
+                    Some(existing_value) => merge_json_settings(existing_value, incoming_value),
+                    None => {
+                        existing.insert(key.clone(), incoming_value.clone());
+                    }
+                }
+            }
+        }
+        (existing, incoming) => {
+            *existing = incoming.clone();
+        }
+    }
+}
 fn extract_plugin_migration_details(
     settings: &JsonValue,
     source_root: &Path,

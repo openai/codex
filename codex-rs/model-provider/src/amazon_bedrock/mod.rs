@@ -11,7 +11,6 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
@@ -94,12 +93,10 @@ impl ModelProvider for AmazonBedrockModelProvider {
         &self,
         _codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
-        collaboration_modes_config: CollaborationModesConfig,
     ) -> SharedModelsManager {
         Arc::new(StaticModelsManager::new(
             /*auth_manager*/ None,
             config_model_catalog.unwrap_or_else(static_model_catalog),
-            collaboration_modes_config,
         ))
     }
 }

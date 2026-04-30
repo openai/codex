@@ -37,7 +37,12 @@ impl CodexMessageProcessor {
         {
             return Ok(empty_response());
         }
-        plugins_manager.maybe_start_non_curated_plugin_cache_refresh(&roots);
+        plugins_manager.maybe_start_plugin_list_background_tasks_for_config(
+            &config,
+            auth.clone(),
+            &roots,
+            Some(self.effective_plugins_changed_callback(config.clone())),
+        );
 
         let config_for_marketplace_listing = config.clone();
         let plugins_manager_for_marketplace_listing = plugins_manager.clone();
@@ -251,22 +256,14 @@ impl CodexMessageProcessor {
                 if !config.features.enabled(Feature::Plugins)
                     || !config.features.enabled(Feature::RemotePlugin)
                 {
-                    return Err(invalid_request(format!(
-                        "remote plugin read is not enabled for marketplace {remote_marketplace_name}"
-                    )));
+                    return Err(invalid_request("remote plugin read is not enabled"));
                 }
                 let auth = self.auth_manager.auth().await;
                 let remote_plugin_service_config = RemotePluginServiceConfig {
                     chatgpt_base_url: config.chatgpt_base_url.clone(),
                 };
-                if plugin_name.is_empty()
-                    || !plugin_name
-                        .chars()
-                        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '~')
-                {
-                    return Err(invalid_request(
-                        "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed",
-                    ));
+                if plugin_name.is_empty() || !is_valid_remote_plugin_id(&plugin_name) {
+                    return Err(invalid_request("invalid remote plugin id"));
                 }
                 let remote_detail = codex_core_plugins::remote::fetch_remote_plugin_detail(
                     &remote_plugin_service_config,
@@ -296,6 +293,122 @@ impl CodexMessageProcessor {
         };
 
         Ok(PluginReadResponse { plugin })
+    }
+
+    pub(super) async fn plugin_share_save(
+        &self,
+        request_id: ConnectionRequestId,
+        params: PluginShareSaveParams,
+    ) {
+        let result = self.plugin_share_save_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn plugin_share_save_response(
+        &self,
+        params: PluginShareSaveParams,
+    ) -> Result<PluginShareSaveResponse, JSONRPCErrorError> {
+        let (config, auth) = self.load_plugin_share_config_and_auth().await?;
+        let PluginShareSaveParams {
+            plugin_path,
+            remote_plugin_id,
+        } = params;
+        if let Some(remote_plugin_id) = remote_plugin_id.as_ref()
+            && (remote_plugin_id.is_empty() || !is_valid_remote_plugin_id(remote_plugin_id))
+        {
+            return Err(invalid_request("invalid remote plugin id"));
+        }
+
+        let remote_plugin_service_config = RemotePluginServiceConfig {
+            chatgpt_base_url: config.chatgpt_base_url.clone(),
+        };
+        let result = codex_core_plugins::remote::save_remote_plugin_share(
+            &remote_plugin_service_config,
+            auth.as_ref(),
+            plugin_path.as_path(),
+            remote_plugin_id.as_deref(),
+        )
+        .await
+        .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "save remote plugin share"))?;
+        self.clear_plugin_related_caches();
+        Ok(PluginShareSaveResponse {
+            remote_plugin_id: result.remote_plugin_id,
+            share_url: result.share_url.unwrap_or_default(),
+        })
+    }
+
+    pub(super) async fn plugin_share_list(
+        &self,
+        request_id: ConnectionRequestId,
+        _params: PluginShareListParams,
+    ) {
+        let result = self.plugin_share_list_response().await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn plugin_share_list_response(
+        &self,
+    ) -> Result<PluginShareListResponse, JSONRPCErrorError> {
+        let (config, auth) = self.load_plugin_share_config_and_auth().await?;
+        let remote_plugin_service_config = RemotePluginServiceConfig {
+            chatgpt_base_url: config.chatgpt_base_url.clone(),
+        };
+        let data = codex_core_plugins::remote::list_remote_plugin_shares(
+            &remote_plugin_service_config,
+            auth.as_ref(),
+        )
+        .await
+        .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "list remote plugin shares"))?
+        .into_iter()
+        .map(remote_plugin_summary_to_info)
+        .collect();
+        Ok(PluginShareListResponse { data })
+    }
+
+    pub(super) async fn plugin_share_delete(
+        &self,
+        request_id: ConnectionRequestId,
+        params: PluginShareDeleteParams,
+    ) {
+        let result = self.plugin_share_delete_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn plugin_share_delete_response(
+        &self,
+        params: PluginShareDeleteParams,
+    ) -> Result<PluginShareDeleteResponse, JSONRPCErrorError> {
+        let (config, auth) = self.load_plugin_share_config_and_auth().await?;
+        let PluginShareDeleteParams { remote_plugin_id } = params;
+        if remote_plugin_id.is_empty() || !is_valid_remote_plugin_id(&remote_plugin_id) {
+            return Err(invalid_request("invalid remote plugin id"));
+        }
+
+        let remote_plugin_service_config = RemotePluginServiceConfig {
+            chatgpt_base_url: config.chatgpt_base_url.clone(),
+        };
+        codex_core_plugins::remote::delete_remote_plugin_share(
+            &remote_plugin_service_config,
+            auth.as_ref(),
+            &remote_plugin_id,
+        )
+        .await
+        .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "delete remote plugin share"))?;
+        self.clear_plugin_related_caches();
+        Ok(PluginShareDeleteResponse {})
+    }
+
+    async fn load_plugin_share_config_and_auth(
+        &self,
+    ) -> Result<(Config, Option<CodexAuth>), JSONRPCErrorError> {
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        if !config.features.enabled(Feature::Plugins)
+            || !config.features.enabled(Feature::RemotePlugin)
+        {
+            return Err(invalid_request("plugin sharing is not enabled"));
+        }
+        let auth = self.auth_manager.auth().await;
+        Ok((config, auth))
     }
 
     pub(super) async fn plugin_install(
@@ -362,17 +475,10 @@ impl CodexMessageProcessor {
             }
         };
 
-        self.clear_plugin_related_caches();
+        self.on_effective_plugins_changed(config.clone());
 
         let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
-
         if !plugin_mcp_servers.is_empty() {
-            if let Err(err) = self.queue_mcp_server_refresh_for_config(&config).await {
-                warn!(
-                    plugin = result.plugin_id.as_key(),
-                    "failed to queue MCP refresh after plugin install: {err:?}"
-                );
-            }
             self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
                 .await;
         }
@@ -403,14 +509,10 @@ impl CodexMessageProcessor {
         if !config.features.enabled(Feature::Plugins)
             || !config.features.enabled(Feature::RemotePlugin)
         {
-            return Err(invalid_request(format!(
-                "remote plugin install is not enabled for marketplace {remote_marketplace_name}"
-            )));
+            return Err(invalid_request("remote plugin install is not enabled"));
         }
         if plugin_name.is_empty() || !is_valid_remote_plugin_id(&plugin_name) {
-            return Err(invalid_request(
-                "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed",
-            ));
+            return Err(invalid_request("invalid remote plugin id"));
         }
 
         let auth = self.auth_manager.auth().await;
@@ -436,9 +538,10 @@ impl CodexMessageProcessor {
                 "remote plugin {plugin_name} is not available for install"
             )));
         }
+        let actual_remote_marketplace_name = remote_detail.marketplace_name.clone();
         let validated_bundle = codex_core_plugins::remote_bundle::validate_remote_plugin_bundle(
             &plugin_name,
-            &remote_marketplace_name,
+            &actual_remote_marketplace_name,
             &remote_detail.summary.name,
             remote_detail.release_version.as_deref(),
             remote_detail.bundle_download_url.as_deref(),
@@ -458,25 +561,22 @@ impl CodexMessageProcessor {
         codex_core_plugins::remote::install_remote_plugin(
             &remote_plugin_service_config,
             auth.as_ref(),
-            &remote_marketplace_name,
+            &actual_remote_marketplace_name,
             &plugin_name,
         )
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "install remote plugin"))?;
 
-        // TODO(remote plugins): remote marketplaces do not yet have a local
-        // marketplace/read-path sync, so this install path reads MCP/apps directly
-        // from the just-cached bundle.
-        self.clear_plugin_related_caches();
+        self.thread_manager
+            .plugins_manager()
+            .maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
+                &config,
+                auth.clone(),
+                Some(self.effective_plugins_changed_callback(config.clone())),
+            );
 
         let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
         if !plugin_mcp_servers.is_empty() {
-            if let Err(err) = self.queue_mcp_server_refresh_for_config(&config).await {
-                warn!(
-                    plugin = result.plugin_id.as_key(),
-                    "failed to queue MCP refresh after remote plugin install: {err:?}"
-                );
-            }
             self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
                 .await;
         }
@@ -576,13 +676,13 @@ impl CodexMessageProcessor {
     ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
         let PluginUninstallParams { plugin_id } = params;
         if codex_core::plugins::PluginId::parse(&plugin_id).is_err()
-            && !is_valid_remote_uninstall_plugin_id(&plugin_id)
+            && (plugin_id.is_empty() || !is_valid_remote_plugin_id(&plugin_id))
         {
             return Err(invalid_request(
-                "invalid plugin id: expected a local plugin id in the form `plugin@marketplace` or a remote plugin id starting with `plugins~`, `app_`, `asdk_app_`, or `connector_`",
+                "invalid plugin id: expected a local plugin id or remote plugin id",
             ));
         }
-        if is_valid_remote_uninstall_plugin_id(&plugin_id) {
+        if !plugin_id.is_empty() && is_valid_remote_plugin_id(&plugin_id) {
             return self.remote_plugin_uninstall_response(plugin_id).await;
         }
         let plugins_manager = self.thread_manager.plugins_manager();
@@ -591,7 +691,15 @@ impl CodexMessageProcessor {
             .uninstall_plugin(plugin_id)
             .await
             .map_err(Self::plugin_uninstall_error)?;
-        self.clear_plugin_related_caches();
+        match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(config) => self.on_effective_plugins_changed(config),
+            Err(err) => {
+                warn!(
+                    "failed to reload config after plugin uninstall, clearing plugin-related caches only: {err:?}"
+                );
+                self.clear_plugin_related_caches();
+            }
+        }
         Ok(PluginUninstallResponse {})
     }
 
@@ -666,25 +774,39 @@ impl CodexMessageProcessor {
             return Err(invalid_request("remote plugin uninstall is not enabled"));
         }
         if plugin_id.is_empty() || !is_valid_remote_plugin_id(&plugin_id) {
-            return Err(invalid_request(
-                "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed",
-            ));
+            return Err(invalid_request("invalid remote plugin id"));
         }
 
         let auth = self.auth_manager.auth().await;
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
-        codex_core_plugins::remote::uninstall_remote_plugin(
+        let uninstall_result = codex_core_plugins::remote::uninstall_remote_plugin(
             &remote_plugin_service_config,
             auth.as_ref(),
             config.codex_home.to_path_buf(),
             &plugin_id,
         )
-        .await
-        .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "uninstall remote plugin"))?;
+        .await;
 
-        self.clear_plugin_related_caches();
+        if matches!(
+            &uninstall_result,
+            Ok(()) | Err(RemotePluginCatalogError::CacheRemove(_))
+        ) {
+            let plugins_manager = self.thread_manager.plugins_manager();
+            if plugins_manager.clear_remote_installed_plugins_cache() {
+                self.on_effective_plugins_changed(config.clone());
+            }
+            plugins_manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
+                &config,
+                auth.clone(),
+                Some(self.effective_plugins_changed_callback(config.clone())),
+            );
+        }
+
+        uninstall_result.map_err(|err| {
+            remote_plugin_catalog_error_to_jsonrpc(err, "uninstall remote plugin")
+        })?;
         Ok(PluginUninstallResponse {})
     }
 }
@@ -693,15 +815,6 @@ fn is_valid_remote_plugin_id(plugin_name: &str) -> bool {
     plugin_name
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '~')
-}
-
-fn is_valid_remote_uninstall_plugin_id(plugin_name: &str) -> bool {
-    !plugin_name.is_empty()
-        && is_valid_remote_plugin_id(plugin_name)
-        && (plugin_name.starts_with("plugins~")
-            || plugin_name.starts_with("app_")
-            || plugin_name.starts_with("asdk_app_")
-            || plugin_name.starts_with("connector_"))
 }
 
 fn remote_marketplace_to_info(marketplace: RemoteMarketplace) -> PluginMarketplaceEntry {
@@ -770,12 +883,6 @@ fn remote_plugin_catalog_error_to_jsonrpc(
                 data: None,
             }
         }
-        RemotePluginCatalogError::UnknownMarketplace { .. }
-        | RemotePluginCatalogError::MarketplaceMismatch { .. } => JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: format!("{context}: {err}"),
-            data: None,
-        },
         RemotePluginCatalogError::UnexpectedStatus { status, .. } if status.as_u16() == 404 => {
             JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -783,12 +890,22 @@ fn remote_plugin_catalog_error_to_jsonrpc(
                 data: None,
             }
         }
+        RemotePluginCatalogError::InvalidPluginPath { .. }
+        | RemotePluginCatalogError::ArchiveTooLarge { .. } => JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message: format!("{context}: {err}"),
+            data: None,
+        },
         RemotePluginCatalogError::AuthToken(_)
         | RemotePluginCatalogError::Request { .. }
         | RemotePluginCatalogError::UnexpectedStatus { .. }
         | RemotePluginCatalogError::Decode { .. }
         | RemotePluginCatalogError::UnexpectedPluginId { .. }
         | RemotePluginCatalogError::UnexpectedEnabledState { .. }
+        | RemotePluginCatalogError::Archive { .. }
+        | RemotePluginCatalogError::ArchiveJoin(_)
+        | RemotePluginCatalogError::MissingUploadEtag
+        | RemotePluginCatalogError::UnexpectedResponse(_)
         | RemotePluginCatalogError::CacheRemove(_) => JSONRPCErrorError {
             code: INTERNAL_ERROR_CODE,
             message: format!("{context}: {err}"),

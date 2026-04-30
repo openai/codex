@@ -315,7 +315,7 @@ async fn approvals_popup_navigation_skips_disabled() {
     assert!(
         app_events.iter().any(|ev| matches!(
             ev,
-            AppEvent::CodexOp(Op::OverrideTurnContext {
+            AppEvent::CodexOp(AppCommand::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::OnRequest),
                 personality: None,
                 ..
@@ -326,7 +326,7 @@ async fn approvals_popup_navigation_skips_disabled() {
     assert!(
         !app_events.iter().any(|ev| matches!(
             ev,
-            AppEvent::CodexOp(Op::OverrideTurnContext {
+            AppEvent::CodexOp(AppCommand::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::Never),
                 personality: None,
                 ..
@@ -542,6 +542,7 @@ async fn permissions_selection_marks_auto_review_current_after_session_configure
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::AutoReview,
             permission_profile: PermissionProfile::workspace_write(),
+            active_permission_profile: None,
             cwd: test_project_path().abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -596,6 +597,7 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::AutoReview,
             permission_profile,
+            active_permission_profile: None,
             cwd,
             reasoning_effort: None,
             history_log_id: 0,
@@ -697,7 +699,7 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
 
     let op = std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|event| match event {
-            AppEvent::CodexOp(op @ Op::OverrideTurnContext { .. }) => Some(op),
+            AppEvent::CodexOp(op @ AppCommand::OverrideTurnContext { .. }) => Some(op),
             _ => None,
         })
         .expect("expected OverrideTurnContext op");

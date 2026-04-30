@@ -374,7 +374,6 @@ fn append_matcher_groups(
             ));
             continue;
         }
-
         for (handler_index, handler) in group.hooks.into_iter().enumerate() {
             match handler {
                 HookHandlerConfig::Command {

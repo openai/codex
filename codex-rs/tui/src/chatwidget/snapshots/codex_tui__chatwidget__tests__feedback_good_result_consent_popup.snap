@@ -6,6 +6,7 @@ expression: popup
 
   The following files will be sent:
     • codex-logs.log
+    • auto-review-rollout-thread-1.jsonl
     • codex-connectivity-diagnostics.txt
 
 › 1. Yes  Share the current Codex session logs with the team for

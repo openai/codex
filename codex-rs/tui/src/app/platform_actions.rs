@@ -65,7 +65,11 @@ pub(super) fn side_return_shortcut_matches(key_event: KeyEvent) -> bool {
             modifiers,
             kind: KeyEventKind::Press,
             ..
-        } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c') => true,
+        } if modifiers.contains(KeyModifiers::CONTROL)
+            && (c.eq_ignore_ascii_case(&'c') || c.eq_ignore_ascii_case(&'d')) =>
+        {
+            true
+        }
         _ => false,
     }
 }
@@ -75,7 +79,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn side_return_shortcuts_match_esc_and_ctrl_c() {
+    fn side_return_shortcuts_match_esc_ctrl_c_and_ctrl_d() {
         assert!(side_return_shortcut_matches(KeyEvent::new(
             KeyCode::Esc,
             KeyModifiers::NONE,
@@ -93,8 +97,12 @@ mod tests {
             KeyCode::Char('C'),
             KeyModifiers::CONTROL,
         )));
-        assert!(!side_return_shortcut_matches(KeyEvent::new(
+        assert!(side_return_shortcut_matches(KeyEvent::new(
             KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('D'),
             KeyModifiers::CONTROL,
         )));
         assert!(!side_return_shortcut_matches(KeyEvent::new_with_kind(

@@ -1603,14 +1603,12 @@ async fn session_configured_reports_permission_profile_for_external_sandbox() ->
     };
     let expected_sandbox_policy = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
+        config.permissions.permission_profile = codex_config::Constrained::allow_any(
+            PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy),
+        );
         config
             .set_legacy_sandbox_policy(sandbox_policy)
             .expect("set sandbox policy");
-        config.permissions.permission_profile =
-            codex_config::Constrained::allow_any(PermissionProfile::from_runtime_permissions(
-                &FileSystemSandboxPolicy::external_sandbox(),
-                NetworkSandboxPolicy::Restricted,
-            ));
     });
 
     let test = builder.build(&server).await?;
@@ -1680,7 +1678,10 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
         .thread_manager
         .fork_thread(
             usize::MAX,
-            fork_config,
+            fork_config.clone(),
+            std::sync::Arc::new(codex_thread_store::LocalThreadStore::new(
+                codex_rollout::RolloutConfig::from_view(&fork_config),
+            )),
             rollout_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -2360,6 +2361,7 @@ async fn set_rate_limits_retains_previous_credits() {
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         permission_profile: config.permissions.permission_profile.clone(),
+        active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -2462,6 +2464,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         permission_profile: config.permissions.permission_profile.clone(),
+        active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -2909,6 +2912,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         permission_profile: config.permissions.permission_profile.clone(),
+        active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -3345,6 +3349,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         permission_profile: config.permissions.permission_profile.clone(),
+        active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -3449,6 +3454,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         permission_profile: config.permissions.permission_profile.clone(),
+        active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -3661,6 +3667,7 @@ async fn make_session_with_config_and_rx(
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         permission_profile: config.permissions.permission_profile.clone(),
+        active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -4242,6 +4249,7 @@ fn op_kind_distinguishes_turn_ops() {
             approvals_reviewer: None,
             sandbox_policy: None,
             permission_profile: None,
+            active_permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -4728,6 +4736,38 @@ async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
 }
 
 #[tokio::test]
+async fn cached_guardian_subagent_exposes_its_rollout_path() {
+    let (parent_session, _parent_turn_context) = make_session_and_context().await;
+    let parent_session = Arc::new(parent_session);
+
+    let (mut child_session, _child_turn_context) = make_session_and_context().await;
+    let child_rollout_path = attach_thread_persistence(&mut child_session).await;
+    let (child_tx_sub, _child_rx_sub) = async_channel::bounded(4);
+    let (_child_tx_event, child_rx_event) = async_channel::unbounded();
+    let (_child_status_tx, child_agent_status) = watch::channel(AgentStatus::PendingInit);
+    let child_session_loop_handle = tokio::spawn(async {});
+    let child_codex = Codex {
+        tx_sub: child_tx_sub,
+        rx_event: child_rx_event,
+        agent_status: child_agent_status,
+        session: Arc::new(child_session),
+        session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
+    };
+    parent_session
+        .guardian_review_session
+        .cache_for_test(child_codex)
+        .await;
+
+    assert_eq!(
+        parent_session
+            .guardian_review_session
+            .trunk_rollout_path()
+            .await,
+        Some(child_rollout_path)
+    );
+}
+
+#[tokio::test]
 async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
     let (parent_session, parent_turn_context) = make_session_and_context().await;
     let parent_session = Arc::new(parent_session);
@@ -4843,6 +4883,7 @@ where
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
         permission_profile: config.permissions.permission_profile.clone(),
+        active_permission_profile: config.permissions.active_permission_profile(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),

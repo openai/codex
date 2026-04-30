@@ -16,6 +16,7 @@ use toml::Table;
 
 mod feature_configs;
 mod legacy;
+pub use feature_configs::AppsMcpPathOverrideConfigToml;
 pub use feature_configs::MultiAgentV2ConfigToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
@@ -149,6 +150,8 @@ pub enum Feature {
     Apps,
     /// Enable MCP apps.
     EnableMcpApps,
+    /// Use the new path for the built-in apps MCP server.
+    AppsMcpPathOverride,
     /// Enable the tool_search tool for apps.
     ToolSearch,
     /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
@@ -557,6 +560,8 @@ pub fn is_known_feature_key(key: &str) -> bool {
 pub struct FeaturesToml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apps_mcp_path_override: Option<FeatureToml<AppsMcpPathOverrideConfigToml>>,
     /// Boolean feature toggles keyed by canonical or legacy feature name.
     #[serde(flatten)]
     entries: BTreeMap<String, bool>,
@@ -574,6 +579,13 @@ impl FeaturesToml {
         let mut entries = self.entries.clone();
         if let Some(enabled) = self.multi_agent_v2.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::MultiAgentV2.key().to_string(), enabled);
+        }
+        if let Some(enabled) = self
+            .apps_mcp_path_override
+            .as_ref()
+            .and_then(FeatureToml::enabled)
+        {
+            entries.insert(Feature::AppsMcpPathOverride.key().to_string(), enabled);
         }
         entries
     }
@@ -845,6 +857,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::EnableMcpApps,
         key: "enable_mcp_apps",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::AppsMcpPathOverride,
+        key: "apps_mcp_path_override",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

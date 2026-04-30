@@ -5,6 +5,7 @@
 //! changes show up as stable, reviewable diffs.
 
 pub(super) use super::*;
+pub(super) use crate::app_command::AppCommand;
 pub(super) use crate::app_event::AppEvent;
 pub(super) use crate::app_event::ExitMode;
 #[cfg(not(target_os = "linux"))]
@@ -111,7 +112,6 @@ pub(super) use codex_core_skills::model::SkillMetadata;
 pub(super) use codex_features::FEATURES;
 pub(super) use codex_features::Feature;
 pub(super) use codex_git_utils::CommitLogEntry;
-pub(super) use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 pub(super) use codex_otel::RuntimeMetricsSummary;
 pub(super) use codex_otel::SessionTelemetry;
 pub(super) use codex_protocol::ThreadId;
@@ -170,9 +170,6 @@ pub(super) use codex_protocol::protocol::GuardianRiskLevel;
 pub(super) use codex_protocol::protocol::GuardianUserAuthorization;
 pub(super) use codex_protocol::protocol::ImageGenerationEndEvent;
 pub(super) use codex_protocol::protocol::ItemCompletedEvent;
-pub(super) use codex_protocol::protocol::McpStartupCompleteEvent;
-pub(super) use codex_protocol::protocol::McpStartupStatus;
-pub(super) use codex_protocol::protocol::McpStartupUpdateEvent;
 pub(super) use codex_protocol::protocol::ModelVerification as CoreModelVerification;
 pub(super) use codex_protocol::protocol::ModelVerificationEvent;
 pub(super) use codex_protocol::protocol::NonSteerableTurnKind;

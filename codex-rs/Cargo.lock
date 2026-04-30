@@ -1749,6 +1749,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-agent-graph-store"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-protocol",
+ "codex-state",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "codex-agent-identity"
 version = "0.0.0"
 dependencies = [
@@ -2466,6 +2481,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-core-api"
+version = "0.0.0"
+dependencies = [
+ "codex-analytics",
+ "codex-arg0",
+ "codex-config",
+ "codex-core",
+ "codex-exec-server",
+ "codex-features",
+ "codex-login",
+ "codex-model-provider-info",
+ "codex-models-manager",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+]
+
+[[package]]
 name = "codex-core-plugins"
 version = "0.0.0"
 dependencies = [
@@ -2945,9 +2977,7 @@ dependencies = [
  "codex-config",
  "codex-core",
  "codex-exec-server",
- "codex-features",
  "codex-login",
- "codex-models-manager",
  "codex-protocol",
  "codex-shell-command",
  "codex-utils-absolute-path",
@@ -3479,6 +3509,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-thread-manager-sample"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-core-api",
+ "tracing",
+]
+
+[[package]]
 name = "codex-thread-store"
 version = "0.0.0"
 dependencies = [
@@ -3836,6 +3876,8 @@ version = "0.0.0"
 dependencies = [
  "pretty_assertions",
  "regex-lite",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

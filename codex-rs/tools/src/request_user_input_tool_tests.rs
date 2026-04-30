@@ -1,8 +1,20 @@
 use super::*;
 use crate::JsonSchema;
+use codex_features::Feature;
+use codex_features::Features;
 use codex_protocol::config_types::ModeKind;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+
+fn default_mode_enabled_available_modes() -> Vec<ModeKind> {
+    let mut features = Features::with_defaults();
+    features.enable(Feature::DefaultModeRequestUserInput);
+    request_user_input_available_modes(&features)
+}
+
+fn default_available_modes() -> Vec<ModeKind> {
+    request_user_input_available_modes(&Features::with_defaults())
+}
 
 #[test]
 fn request_user_input_tool_includes_questions_schema() {
@@ -92,37 +104,28 @@ fn request_user_input_tool_includes_questions_schema() {
 #[test]
 fn request_user_input_unavailable_messages_respect_default_mode_feature_flag() {
     assert_eq!(
-        request_user_input_unavailable_message(
-            ModeKind::Plan,
-            /*default_mode_request_user_input*/ false
-        ),
+        request_user_input_unavailable_message(ModeKind::Plan, &default_available_modes()),
         None
     );
     assert_eq!(
-        request_user_input_unavailable_message(
-            ModeKind::Default,
-            /*default_mode_request_user_input*/ false
-        ),
+        request_user_input_unavailable_message(ModeKind::Default, &default_available_modes()),
         Some("request_user_input is unavailable in Default mode".to_string())
     );
     assert_eq!(
         request_user_input_unavailable_message(
             ModeKind::Default,
-            /*default_mode_request_user_input*/ true
+            &default_mode_enabled_available_modes()
         ),
         None
     );
     assert_eq!(
-        request_user_input_unavailable_message(
-            ModeKind::Execute,
-            /*default_mode_request_user_input*/ false
-        ),
+        request_user_input_unavailable_message(ModeKind::Execute, &default_available_modes()),
         Some("request_user_input is unavailable in Execute mode".to_string())
     );
     assert_eq!(
         request_user_input_unavailable_message(
             ModeKind::PairProgramming,
-            /*default_mode_request_user_input*/ false
+            &default_available_modes()
         ),
         Some("request_user_input is unavailable in Pair Programming mode".to_string())
     );
@@ -131,11 +134,11 @@ fn request_user_input_unavailable_messages_respect_default_mode_feature_flag() {
 #[test]
 fn request_user_input_tool_description_mentions_available_modes() {
     assert_eq!(
-        request_user_input_tool_description(/*default_mode_request_user_input*/ false),
+        request_user_input_tool_description(&default_available_modes()),
         "Request user input for one to three short questions and wait for the response. This tool is only available in Plan mode.".to_string()
     );
     assert_eq!(
-        request_user_input_tool_description(/*default_mode_request_user_input*/ true),
+        request_user_input_tool_description(&default_mode_enabled_available_modes()),
         "Request user input for one to three short questions and wait for the response. This tool is only available in Default or Plan mode.".to_string()
     );
 }

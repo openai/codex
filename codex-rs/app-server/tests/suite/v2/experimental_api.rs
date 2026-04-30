@@ -79,7 +79,7 @@ async fn realtime_conversation_start_requires_experimental_api_capability() -> R
             thread_id: "thr_123".to_string(),
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("hello".to_string())),
-            session_id: None,
+            realtime_session_id: None,
             transport: None,
             voice: None,
         })
@@ -149,7 +149,7 @@ async fn realtime_webrtc_start_requires_experimental_api_capability() -> Result<
             thread_id: "thr_123".to_string(),
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("hello".to_string())),
-            session_id: None,
+            realtime_session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
             }),

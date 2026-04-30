@@ -8,20 +8,9 @@ use crate::config::Config;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::OPENAI_BUNDLED_MARKETPLACE_NAME;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
+use codex_core_plugins::TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST;
 use codex_features::Feature;
 use codex_tools::DiscoverablePluginInfo;
-
-const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
-    "github@openai-curated",
-    "notion@openai-curated",
-    "slack@openai-curated",
-    "gmail@openai-curated",
-    "google-calendar@openai-curated",
-    "google-drive@openai-curated",
-    "linear@openai-curated",
-    "figma@openai-curated",
-    "computer-use@openai-bundled",
-];
 
 const TOOL_SUGGEST_DISCOVERABLE_MARKETPLACE_ALLOWLIST: &[&str] = &[
     OPENAI_BUNDLED_MARKETPLACE_NAME,

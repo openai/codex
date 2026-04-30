@@ -1,0 +1,26 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-core-api"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_core_api"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-arg0 = { workspace = true }
+codex-analytics = { workspace = true }
+codex-config = { workspace = true }
+codex-core = { workspace = true }
+codex-exec-server = { workspace = true }
+codex-features = { workspace = true }
+codex-login = { workspace = true }
+codex-model-provider-info = { workspace = true }
+codex-models-manager = { workspace = true }
+codex-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }

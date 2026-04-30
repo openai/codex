@@ -88,6 +88,7 @@ Fetch the built-in collaboration mode presets with `collaborationMode/list`. Thi
 
 - `data` - ordered list of collaboration mode masks (partial settings to apply on top of the base mode)
   - For tri-state fields like `reasoning_effort` and `developer_instructions`, omit the field to keep the current value, set it to `null` to clear it, or set a concrete value to update it.
+  - Built-in presets do not set `model`. The Plan preset sets `reasoning_effort` to medium; clients keep or override model separately.
 
 When sending `turn/start` with `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 

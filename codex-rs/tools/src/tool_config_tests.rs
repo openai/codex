@@ -3,12 +3,10 @@ use codex_features::Feature;
 use codex_features::Features;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -52,42 +50,50 @@ fn model_info() -> ModelInfo {
 }
 
 #[test]
-fn unified_exec_is_blocked_for_windows_managed_profiles_only() {
-    assert!(!unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &PermissionProfile::read_only(),
-        WindowsSandboxLevel::RestrictedToken,
-    ));
-    assert!(!unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &PermissionProfile::workspace_write(),
-        WindowsSandboxLevel::RestrictedToken,
-    ));
-    assert!(unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &PermissionProfile::Disabled,
-        WindowsSandboxLevel::RestrictedToken,
-    ));
-    assert!(unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &PermissionProfile::External {
-            network: Default::default(),
-        },
-        WindowsSandboxLevel::RestrictedToken,
-    ));
-    assert!(unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &PermissionProfile::Managed {
-            file_system: ManagedFileSystemPermissions::Unrestricted,
-            network: NetworkSandboxPolicy::Enabled,
-        },
-        WindowsSandboxLevel::RestrictedToken,
-    ));
-    assert!(unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &PermissionProfile::Disabled,
-        WindowsSandboxLevel::Disabled,
-    ));
+fn model_provided_unified_exec_requires_feature_flag() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.disable(Feature::UnifiedExec);
+
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    assert_eq!(tools_config.shell_type, ConfigShellToolType::ShellCommand);
+}
+
+#[test]
+fn unified_exec_can_be_enabled_for_restricted_token_workspace_write() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::workspace_write(),
+        windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+    });
+
+    let expected_shell_type = if codex_utils_pty::conpty_supported() {
+        ConfigShellToolType::UnifiedExec
+    } else {
+        ConfigShellToolType::ShellCommand
+    };
+    assert_eq!(tools_config.shell_type, expected_shell_type);
 }
 
 #[test]
@@ -149,7 +155,7 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
 }
 
 #[test]
-fn subagents_keep_request_user_input_mode_config_and_agent_jobs_workers_opt_in_by_label() {
+fn subagents_keep_request_user_input_config_and_agent_jobs_workers_opt_in_by_label() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::DefaultModeRequestUserInput);
@@ -169,7 +175,10 @@ fn subagents_keep_request_user_input_mode_config_and_agent_jobs_workers_opt_in_b
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
-    assert!(tools_config.default_mode_request_user_input);
+    assert_eq!(
+        tools_config.request_user_input_available_modes,
+        request_user_input_available_modes(&features)
+    );
     assert!(tools_config.agent_jobs_tools);
     assert!(tools_config.agent_jobs_worker_tools);
 }

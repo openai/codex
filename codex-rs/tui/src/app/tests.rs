@@ -6,6 +6,7 @@ use super::*;
 use crate::app_backtrack::BacktrackSelection;
 use crate::app_backtrack::BacktrackState;
 use crate::app_backtrack::user_count;
+use crate::app_command::AppCommand;
 
 use crate::chatwidget::ChatWidgetInit;
 use crate::chatwidget::create_initial_user_message;
@@ -441,12 +442,12 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
             }
             AppEvent::SubmitThreadOp {
                 thread_id: op_thread_id,
-                op: Op::UserTurn { items, .. },
+                op: AppCommand::UserTurn { items, .. },
             } => {
                 assert_eq!(op_thread_id, thread_id);
                 submitted_items = Some(items);
             }
-            AppEvent::CodexOp(Op::UserTurn { items, .. }) => {
+            AppEvent::CodexOp(AppCommand::UserTurn { items, .. }) => {
                 submitted_items = Some(items);
             }
             _ => {}
@@ -3570,6 +3571,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: Some(ReasoningEffortConfig::High),
             history_log_id: 0,
@@ -3811,6 +3813,7 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
         cwd: cwd.abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
@@ -4323,6 +4326,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4386,6 +4390,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4479,6 +4484,7 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4865,6 +4871,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: None,
         history_log_id: 0,
@@ -4977,6 +4984,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,

@@ -241,7 +241,7 @@ pub fn build_tool_registry_plan(
 
     plan.push_spec(
         create_request_user_input_tool(request_user_input_tool_description(
-            config.default_mode_request_user_input,
+            &config.request_user_input_available_modes,
         )),
         /*supports_parallel_tool_calls*/ false,
         config.code_mode_enabled,

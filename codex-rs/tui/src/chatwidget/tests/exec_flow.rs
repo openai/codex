@@ -114,7 +114,7 @@ async fn exec_approval_uses_approval_id_when_present() {
     let mut found = false;
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::SubmitThreadOp {
-            op: Op::ExecApproval { id, decision, .. },
+            op: AppCommand::ExecApproval { id, decision, .. },
             ..
         } = app_ev
         {
@@ -1059,6 +1059,7 @@ async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -1712,7 +1713,7 @@ async fn apply_patch_approval_sends_op_with_call_id() {
     let mut found = false;
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::SubmitThreadOp {
-            op: Op::PatchApproval { id, decision },
+            op: AppCommand::PatchApproval { id, decision },
             ..
         } = app_ev
         {
@@ -1751,7 +1752,7 @@ async fn apply_patch_full_flow_integration_like() {
     let mut maybe_op: Option<Op> = None;
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::SubmitThreadOp { op, .. } = app_ev {
-            maybe_op = Some(op);
+            maybe_op = Some(op.into_core());
             break;
         }
     }

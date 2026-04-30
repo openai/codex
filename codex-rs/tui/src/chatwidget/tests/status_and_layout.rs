@@ -1791,6 +1791,7 @@ async fn session_configured_clears_goal_status_footer() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: Some(ReasoningEffortConfig::default()),
             history_log_id: 0,
@@ -1901,10 +1902,7 @@ fn goal_status_indicator_line_formats_goal_text() {
             },
             "Goal unmet (4K / 5K tokens)",
         ),
-        (
-            GoalStatusIndicator::Paused,
-            "Goal paused (/goal to unpause)",
-        ),
+        (GoalStatusIndicator::Paused, "Goal paused (/goal resume)"),
         (
             GoalStatusIndicator::BudgetLimited { usage: None },
             "Goal abandoned",

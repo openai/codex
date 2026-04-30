@@ -25,6 +25,8 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
+use codex_app_server_protocol::PermissionProfileModificationParams;
+use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
@@ -76,13 +78,14 @@ use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
@@ -399,6 +402,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         approvals_reviewer: None,
         sandbox_mode,
         permission_profile: None,
+        default_permissions: None,
         cwd: resolved_cwd,
         model_provider: model_provider.clone(),
         service_tier: None,
@@ -665,37 +669,24 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
 
     // Handle resume subcommand through existing `thread/list` + `thread/resume`
     // APIs so exec no longer reaches into rollout storage directly.
-    let (primary_thread_id, fallback_session_configured) =
-        if let Some(ExecCommand::Resume(args)) = command.as_ref() {
-            if let Some(thread_id) = resolve_resume_thread_id(&client, &config, args).await? {
-                let response: ThreadResumeResponse = send_request_with_response(
-                    &client,
-                    ClientRequest::ThreadResume {
-                        request_id: request_ids.next(),
-                        params: thread_resume_params_from_config(&config, thread_id),
-                    },
-                    "thread/resume",
-                )
-                .await
-                .map_err(anyhow::Error::msg)?;
-                let session_configured = session_configured_from_thread_resume_response(&response)
+    let (primary_thread_id, fallback_session_configured) = if let Some(ExecCommand::Resume(args)) =
+        command.as_ref()
+    {
+        if let Some(thread_id) = resolve_resume_thread_id(&client, &config, args).await? {
+            let response: ThreadResumeResponse = send_request_with_response(
+                &client,
+                ClientRequest::ThreadResume {
+                    request_id: request_ids.next(),
+                    params: thread_resume_params_from_config(&config, thread_id),
+                },
+                "thread/resume",
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+            let session_configured =
+                session_configured_from_thread_resume_response(&response, &config)
                     .map_err(anyhow::Error::msg)?;
-                (session_configured.session_id, session_configured)
-            } else {
-                let response: ThreadStartResponse = send_request_with_response(
-                    &client,
-                    ClientRequest::ThreadStart {
-                        request_id: request_ids.next(),
-                        params: thread_start_params_from_config(&config),
-                    },
-                    "thread/start",
-                )
-                .await
-                .map_err(anyhow::Error::msg)?;
-                let session_configured = session_configured_from_thread_start_response(&response)
-                    .map_err(anyhow::Error::msg)?;
-                (session_configured.session_id, session_configured)
-            }
+            (session_configured.session_id, session_configured)
         } else {
             let response: ThreadStartResponse = send_request_with_response(
                 &client,
@@ -707,10 +698,26 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             )
             .await
             .map_err(anyhow::Error::msg)?;
-            let session_configured = session_configured_from_thread_start_response(&response)
-                .map_err(anyhow::Error::msg)?;
+            let session_configured =
+                session_configured_from_thread_start_response(&response, &config)
+                    .map_err(anyhow::Error::msg)?;
             (session_configured.session_id, session_configured)
-        };
+        }
+    } else {
+        let response: ThreadStartResponse = send_request_with_response(
+            &client,
+            ClientRequest::ThreadStart {
+                request_id: request_ids.next(),
+                params: thread_start_params_from_config(&config),
+            },
+            "thread/start",
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+        let session_configured = session_configured_from_thread_start_response(&response, &config)
+            .map_err(anyhow::Error::msg)?;
+        (session_configured.session_id, session_configured)
+    };
 
     let primary_thread_id_for_span = primary_thread_id.to_string();
     // Use the start/resume response as the authoritative bootstrap payload.
@@ -745,7 +752,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             items,
             output_schema,
         } => {
-            let permission_profile = Some(config.permissions.permission_profile().into());
             let response: TurnStartResponse = send_request_with_response(
                 &client,
                 ClientRequest::TurnStart {
@@ -759,7 +765,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         approval_policy: Some(default_approval_policy.into()),
                         approvals_reviewer: None,
                         sandbox_policy: None,
-                        permission_profile,
+                        permissions: None,
                         model: None,
                         service_tier: None,
                         effort: default_effort,
@@ -916,14 +922,21 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
 }
 
 fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
+    let permissions = permissions_selection_from_config(config);
+    let sandbox = permissions.is_none().then(|| {
+        sandbox_mode_from_permission_profile(
+            &config.permissions.permission_profile(),
+            config.cwd.as_path(),
+        )
+    });
     ThreadStartParams {
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
-        sandbox: None,
-        permission_profile: Some(config.permissions.permission_profile().into()),
+        sandbox: sandbox.flatten(),
+        permissions,
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
         ..ThreadStartParams::default()
@@ -931,6 +944,13 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
 }
 
 fn thread_resume_params_from_config(config: &Config, thread_id: String) -> ThreadResumeParams {
+    let permissions = permissions_selection_from_config(config);
+    let sandbox = permissions.is_none().then(|| {
+        sandbox_mode_from_permission_profile(
+            &config.permissions.permission_profile(),
+            config.cwd.as_path(),
+        )
+    });
     ThreadResumeParams {
         thread_id,
         model: config.model.clone(),
@@ -938,10 +958,60 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
-        sandbox: None,
-        permission_profile: Some(config.permissions.permission_profile().into()),
+        sandbox: sandbox.flatten(),
+        permissions,
         config: config_request_overrides_from_config(config),
         ..ThreadResumeParams::default()
+    }
+}
+
+fn permissions_selection_from_config(config: &Config) -> Option<PermissionProfileSelectionParams> {
+    config
+        .permissions
+        .active_permission_profile()
+        .map(permissions_selection_from_active_profile)
+}
+
+fn permissions_selection_from_active_profile(
+    active: ActivePermissionProfile,
+) -> PermissionProfileSelectionParams {
+    let modifications = active
+        .modifications
+        .into_iter()
+        .map(|modification| match modification {
+            ActivePermissionProfileModification::AdditionalWritableRoot { path } => {
+                PermissionProfileModificationParams::AdditionalWritableRoot { path }
+            }
+        })
+        .collect::<Vec<_>>();
+    PermissionProfileSelectionParams::Profile {
+        id: active.id,
+        modifications: (!modifications.is_empty()).then_some(modifications),
+    }
+}
+
+fn sandbox_mode_from_permission_profile(
+    permission_profile: &PermissionProfile,
+    cwd: &Path,
+) -> Option<codex_app_server_protocol::SandboxMode> {
+    match permission_profile {
+        PermissionProfile::Disabled => {
+            Some(codex_app_server_protocol::SandboxMode::DangerFullAccess)
+        }
+        PermissionProfile::External { .. } => None,
+        PermissionProfile::Managed { .. } => {
+            let file_system_policy = permission_profile.file_system_sandbox_policy();
+            if file_system_policy.has_full_disk_write_access() {
+                permission_profile
+                    .network_sandbox_policy()
+                    .is_enabled()
+                    .then_some(codex_app_server_protocol::SandboxMode::DangerFullAccess)
+            } else if file_system_policy.can_write_path_with_cwd(cwd, cwd) {
+                Some(codex_app_server_protocol::SandboxMode::WorkspaceWrite)
+            } else {
+                Some(codex_app_server_protocol::SandboxMode::ReadOnly)
+            }
+        }
     }
 }
 
@@ -977,6 +1047,7 @@ where
 
 fn session_configured_from_thread_start_response(
     response: &ThreadStartResponse,
+    config: &Config,
 ) -> Result<SessionConfiguredEvent, String> {
     session_configured_from_thread_response(
         &response.thread.id,
@@ -987,8 +1058,12 @@ fn session_configured_from_thread_start_response(
         response.service_tier,
         response.approval_policy.to_core(),
         response.approvals_reviewer.to_core(),
-        response.sandbox.to_core(),
-        response.permission_profile.clone().map(Into::into),
+        response
+            .permission_profile
+            .clone()
+            .map(Into::into)
+            .unwrap_or_else(|| config.permissions.permission_profile()),
+        response.active_permission_profile.clone().map(Into::into),
         response.cwd.clone(),
         response.reasoning_effort,
     )
@@ -996,6 +1071,7 @@ fn session_configured_from_thread_start_response(
 
 fn session_configured_from_thread_resume_response(
     response: &ThreadResumeResponse,
+    config: &Config,
 ) -> Result<SessionConfiguredEvent, String> {
     session_configured_from_thread_response(
         &response.thread.id,
@@ -1006,8 +1082,12 @@ fn session_configured_from_thread_resume_response(
         response.service_tier,
         response.approval_policy.to_core(),
         response.approvals_reviewer.to_core(),
-        response.sandbox.to_core(),
-        response.permission_profile.clone().map(Into::into),
+        response
+            .permission_profile
+            .clone()
+            .map(Into::into)
+            .unwrap_or_else(|| config.permissions.permission_profile()),
+        response.active_permission_profile.clone().map(Into::into),
         response.cwd.clone(),
         response.reasoning_effort,
     )
@@ -1035,8 +1115,8 @@ fn session_configured_from_thread_response(
     service_tier: Option<codex_protocol::config_types::ServiceTier>,
     approval_policy: AskForApproval,
     approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
-    sandbox_policy: SandboxPolicy,
-    permission_profile: Option<PermissionProfile>,
+    permission_profile: PermissionProfile,
+    active_permission_profile: Option<codex_protocol::models::ActivePermissionProfile>,
     cwd: AbsolutePathBuf,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> Result<SessionConfiguredEvent, String> {
@@ -1052,9 +1132,8 @@ fn session_configured_from_thread_response(
         service_tier,
         approval_policy,
         approvals_reviewer,
-        permission_profile: permission_profile.unwrap_or_else(|| {
-            PermissionProfile::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, cwd.as_path())
-        }),
+        permission_profile,
+        active_permission_profile,
         cwd,
         reasoning_effort,
         history_log_id: 0,

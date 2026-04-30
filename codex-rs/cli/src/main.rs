@@ -62,7 +62,6 @@ use codex_features::is_known_feature_key;
 use codex_login::AuthManager;
 use codex_memories_write::clear_memory_roots_contents;
 use codex_models_manager::bundled_models_response;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
@@ -1411,8 +1410,7 @@ async fn run_debug_models_command(
         let config = Config::load_with_cli_overrides(cli_overrides).await?;
         let auth_manager =
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true).await;
-        let models_manager =
-            build_models_manager(&config, auth_manager, CollaborationModesConfig::default());
+        let models_manager = build_models_manager(&config, auth_manager);
         models_manager
             .raw_model_catalog(RefreshStrategy::OnlineIfUncached)
             .await
@@ -1920,6 +1918,38 @@ mod tests {
     fn update_parses_as_update_subcommand() {
         let cli = MultitoolCli::try_parse_from(["codex", "update"]).expect("parse");
         assert!(matches!(cli.subcommand, Some(Subcommand::Update)));
+    }
+
+    #[test]
+    fn sandbox_macos_parses_permissions_profile() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "sandbox",
+            "macos",
+            "--permissions-profile",
+            ":workspace",
+            "--",
+            "echo",
+        ])
+        .expect("parse");
+
+        let Some(Subcommand::Sandbox(SandboxArgs {
+            cmd: SandboxCommand::Macos(command),
+        })) = cli.subcommand
+        else {
+            panic!("expected sandbox macos command");
+        };
+
+        assert_eq!(command.permissions_profile.as_deref(), Some(":workspace"));
+        assert_eq!(command.command, vec!["echo"]);
+    }
+
+    #[test]
+    fn sandbox_macos_rejects_explicit_profile_controls_without_profile() {
+        let err = MultitoolCli::try_parse_from(["codex", "sandbox", "macos", "-C", "/tmp"])
+            .expect_err("parse should fail");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
     }
 
     #[test]

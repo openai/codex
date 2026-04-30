@@ -642,7 +642,7 @@ fn server_notification_thread_events(
             vec![Event {
                 id: String::new(),
                 msg: EventMsg::RealtimeConversationStarted(RealtimeConversationStartedEvent {
-                    session_id: notification.session_id,
+                    realtime_session_id: notification.realtime_session_id,
                     version: notification.version,
                 }),
             }],

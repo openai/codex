@@ -16,8 +16,8 @@ instructionSources: Array<AbsolutePathBuf>, approvalPolicy: AskForApproval, /**
  * Reviewer currently used for approval requests on this thread.
  */
 approvalsReviewer: ApprovalsReviewer, /**
- * Legacy sandbox policy retained for compatibility. New clients should use
- * `permissionProfile` when present as the canonical active permissions
- * view.
+ * Legacy sandbox policy retained for compatibility. Experimental clients
+ * should prefer `permissionProfile` when they need exact runtime
+ * permissions.
  */
 sandbox: SandboxPolicy, reasoningEffort: ReasoningEffort | null};

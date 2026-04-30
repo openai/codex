@@ -1,8 +1,7 @@
 //! Validates that the collaboration mode list endpoint returns the expected default presets.
 //!
 //! The test drives the app server through the MCP harness and asserts that the list response
-//! includes the plan and default modes with their default model and reasoning effort
-//! settings, which keeps the API contract visible in one place.
+//! includes the plan and default modes, which keeps the API contract visible in one place.
 
 #![allow(clippy::unwrap_used)]
 
