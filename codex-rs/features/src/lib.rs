@@ -596,6 +596,9 @@ impl FeaturesToml {
             apps_mcp_path_override,
             entries,
         } = self;
+        for key in legacy::legacy_feature_keys() {
+            entries.remove(key);
+        }
         for spec in FEATURES {
             let enabled = features.enabled(spec.id);
             if spec.id == Feature::MultiAgentV2 {
