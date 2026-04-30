@@ -150,6 +150,7 @@ fn is_powershellish_executable_available(powershell_or_pwsh_exe: &std::path::Pat
 #[cfg(test)]
 mod tests {
     use super::extract_powershell_command;
+    #[cfg(windows)]
     use super::parse_powershell_command_plain_commands;
 
     #[test]
