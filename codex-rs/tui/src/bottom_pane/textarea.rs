@@ -2669,6 +2669,17 @@ mod tests {
     }
 
     #[test]
+    fn c0_line_feed_inserts_newline_through_insert_newline_keymap() {
+        let mut t = ta_with("ab");
+        t.set_cursor(/*pos*/ 1);
+
+        t.input(KeyEvent::new(KeyCode::Char('\u{000a}'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "a\nb");
+        assert_eq!(t.cursor(), 2);
+    }
+
+    #[test]
     fn c0_control_chars_respect_unbound_editor_movement() {
         let mut t = ta_with("a\nb");
         t.set_cursor(/*pos*/ 2);
