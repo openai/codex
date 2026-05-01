@@ -21,7 +21,6 @@ pub(crate) struct EnvironmentContext {
 pub(crate) struct EnvironmentContextEnvironment {
     pub(crate) id: String,
     pub(crate) cwd: PathBuf,
-    pub(crate) default: bool,
 }
 
 impl EnvironmentContextEnvironment {
@@ -34,7 +33,6 @@ impl EnvironmentContextEnvironment {
             .map(|(index, environment)| Self {
                 id: environment.environment_id.clone(),
                 cwd: environment.cwd.to_path_buf(),
-                default: index == 0,
             })
             .collect()
     }
@@ -217,10 +215,7 @@ impl ContextualUserFragment for EnvironmentContext {
         if !self.environments.is_empty() {
             lines.push("  <environments>".to_string());
             for environment in &self.environments {
-                lines.push(format!(
-                    "    <environment id=\"{}\" default=\"{}\">",
-                    environment.id, environment.default
-                ));
+                lines.push(format!("    <environment id=\"{}\">", environment.id));
                 lines.push(format!(
                     "      <cwd>{}</cwd>",
                     environment.cwd.to_string_lossy()

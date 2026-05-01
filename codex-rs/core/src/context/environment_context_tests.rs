@@ -204,12 +204,10 @@ fn serialize_environment_context_with_multiple_selected_environments() {
             EnvironmentContextEnvironment {
                 id: "local".to_string(),
                 cwd: PathBuf::from("/repo/local"),
-                default: true,
             },
             EnvironmentContextEnvironment {
                 id: "remote".to_string(),
                 cwd: PathBuf::from("/repo/remote"),
-                default: false,
             },
         ],
         Some("2026-02-26".to_string()),
@@ -220,10 +218,10 @@ fn serialize_environment_context_with_multiple_selected_environments() {
 
     let expected = r#"<environment_context>
   <environments>
-    <environment id="local" default="true">
+    <environment id="local">
       <cwd>/repo/local</cwd>
     </environment>
-    <environment id="remote" default="false">
+    <environment id="remote">
       <cwd>/repo/remote</cwd>
     </environment>
   </environments>
