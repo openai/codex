@@ -2368,8 +2368,8 @@ async fn thread_rollback_fails_when_num_turns_is_zero() {
 
 #[tokio::test]
 async fn set_rate_limits_retains_previous_credits() {
-    let codex_home = tempfile::tempdir().expect("create temp dir");
-    let config = build_test_config(codex_home.path()).await;
+    let codex_home = tempfile::tempdir().expect("create temp dir").keep();
+    let config = build_test_config(codex_home.as_path()).await;
     let config = Arc::new(config);
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
@@ -3440,8 +3440,8 @@ async fn absolute_cwd_update_with_turn_environment_is_allowed() {
 
 #[tokio::test]
 async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
-    let codex_home = tempfile::tempdir().expect("create temp dir");
-    let mut config = build_test_config(codex_home.path()).await;
+    let codex_home = tempfile::tempdir().expect("create temp dir").keep();
+    let mut config = build_test_config(codex_home.as_path()).await;
     config
         .features
         .enable(Feature::ShellZshFork)
