@@ -8,6 +8,7 @@ pub use outgoing_message::OutgoingResponse;
 pub use outgoing_message::QueuedOutgoingMessage;
 pub use transport::AppServerTransport;
 pub use transport::AppServerTransportParseError;
+pub use transport::CHANNEL_CAPACITY;
 pub use transport::ConnectionOrigin;
 pub use transport::RemoteControlHandle;
 pub use transport::TransportEvent;
