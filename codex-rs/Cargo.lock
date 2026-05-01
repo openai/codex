@@ -1980,6 +1980,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-app-server-daemon"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-app-server",
+ "codex-app-server-protocol",
+ "codex-core",
+ "codex-uds",
+ "futures",
+ "libc",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+]
+
+[[package]]
 name = "codex-app-server-protocol"
 version = "0.0.0"
 dependencies = [
@@ -2206,6 +2224,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "codex-app-server",
+ "codex-app-server-daemon",
  "codex-app-server-protocol",
  "codex-app-server-test-client",
  "codex-arg0",

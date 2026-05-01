@@ -8,6 +8,7 @@
 - [Message Schema](#message-schema)
 - [Core Primitives](#core-primitives)
 - [Lifecycle Overview](#lifecycle-overview)
+- [Daemon Lifecycle Commands](#daemon-lifecycle-commands)
 - [Initialization](#initialization)
 - [API Overview](#api-overview)
 - [Events](#events)
@@ -91,6 +92,26 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 - Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, sandbox policy or experimental `permissions` profile selection, approval policy, approvals reviewer, etc. This immediately returns the new turn object. The app-server emits `turn/started` when that turn actually begins running.
 - Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
 - Finish the turn: When the model is done (or the turn is interrupted via making the `turn/interrupt` call), the server sends `turn/completed` with the final turn state and token usage.
+
+## Daemon Lifecycle Commands
+
+For SSH-driven local lifecycle management, `codex app-server` also provides
+machine-readable daemon commands:
+
+```sh
+codex app-server start
+codex app-server restart
+codex app-server stop
+codex app-server version
+```
+
+These commands print one JSON object to stdout. `start` prefers a user-scoped
+`systemd` backend when it is available and falls back to a pidfile-backed
+detached process otherwise. Both backends launch app-server on the default Unix
+control socket and wait until the JSON-RPC initialize handshake succeeds before
+reporting success. `version` connects through that same control socket and
+reports both the local CLI version and the version reported by the running
+app-server.
 
 ## Initialization
 
