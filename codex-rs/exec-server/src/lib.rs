@@ -42,6 +42,7 @@ pub use environment::EnvironmentManagerArgs;
 pub use environment::LOCAL_ENVIRONMENT_ID;
 pub use environment::REMOTE_ENVIRONMENT_ID;
 pub use environment_provider::DefaultEnvironmentProvider;
+pub use environment_provider::DefaultEnvironmentSelection;
 pub use environment_provider::EnvironmentProvider;
 pub use fs_helper::CODEX_FS_HELPER_ARG1;
 pub use fs_helper_main::main as run_fs_helper_main;

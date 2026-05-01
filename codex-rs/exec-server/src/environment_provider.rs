@@ -21,6 +21,17 @@ pub trait EnvironmentProvider: Send + Sync {
         &self,
         local_runtime_paths: &ExecServerRuntimePaths,
     ) -> Result<HashMap<String, Environment>, ExecServerError>;
+
+    fn default_environment_selection(&self) -> DefaultEnvironmentSelection {
+        DefaultEnvironmentSelection::Derived
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DefaultEnvironmentSelection {
+    Derived,
+    Environment(String),
+    Disabled,
 }
 
 /// Default provider backed by `CODEX_EXEC_SERVER_URL`.
@@ -68,6 +79,14 @@ impl EnvironmentProvider for DefaultEnvironmentProvider {
         local_runtime_paths: &ExecServerRuntimePaths,
     ) -> Result<HashMap<String, Environment>, ExecServerError> {
         Ok(self.environments(local_runtime_paths))
+    }
+
+    fn default_environment_selection(&self) -> DefaultEnvironmentSelection {
+        if normalize_exec_server_url(self.exec_server_url.clone()).1 {
+            DefaultEnvironmentSelection::Disabled
+        } else {
+            DefaultEnvironmentSelection::Derived
+        }
     }
 }
 
@@ -135,6 +154,10 @@ mod tests {
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
         assert!(!environments.contains_key(REMOTE_ENVIRONMENT_ID));
+        assert_eq!(
+            provider.default_environment_selection(),
+            DefaultEnvironmentSelection::Disabled
+        );
     }
 
     #[tokio::test]
