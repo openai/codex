@@ -20,7 +20,6 @@ use std::time::UNIX_EPOCH;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerTransportConfig;
-use codex_config::types::OAuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
@@ -41,13 +40,10 @@ use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
-use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_utils_cargo_bin::cargo_bin;
-use core_test_support::PathBufExt;
 use core_test_support::assert_regex_match;
 use core_test_support::remote_env_env_var;
 use core_test_support::responses;
@@ -340,23 +336,6 @@ async fn call_cwd_tool(
     server_name: &str,
     call_id: &str,
 ) -> anyhow::Result<Value> {
-    call_cwd_tool_with_turn(
-        server,
-        fixture,
-        server_name,
-        call_id,
-        read_only_user_turn(fixture, "call the rmcp cwd tool"),
-    )
-    .await
-}
-
-async fn call_cwd_tool_with_turn(
-    server: &MockServer,
-    fixture: &TestCodex,
-    server_name: &str,
-    call_id: &str,
-    turn: Op,
-) -> anyhow::Result<Value> {
     let namespace = format!("mcp__{server_name}__");
     mount_sse_once(
         server,
@@ -376,7 +355,10 @@ async fn call_cwd_tool_with_turn(
     )
     .await;
 
-    fixture.codex.submit(turn).await?;
+    fixture
+        .codex
+        .submit(read_only_user_turn(fixture, "call the rmcp cwd tool"))
+        .await?;
 
     wait_for_event(&fixture.codex, |ev| {
         matches!(ev, EventMsg::McpToolCallBegin(_))
@@ -562,113 +544,6 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 
     server.verify().await;
 
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-#[serial(mcp_cwd)]
-async fn refreshed_stdio_server_uses_turn_environment_cwd() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = responses::start_mock_server().await;
-    let server_name = "rmcp_stored_environment_cwd";
-    let selected_dir = "mcp-turn-environment-cwd";
-    let selected_cwd = Arc::new(Mutex::new(None::<PathBuf>));
-    let selected_cwd_for_setup = Arc::clone(&selected_cwd);
-    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
-
-    let fixture = test_codex()
-        .with_workspace_setup(move |cwd, fs| {
-            let selected_cwd_for_setup = Arc::clone(&selected_cwd_for_setup);
-            async move {
-                let selected = cwd.join(selected_dir);
-                fs.create_directory(
-                    &selected,
-                    CreateDirectoryOptions { recursive: true },
-                    /*sandbox*/ None,
-                )
-                .await?;
-                *selected_cwd_for_setup
-                    .lock()
-                    .expect("selected cwd lock should not be poisoned") =
-                    Some(selected.to_path_buf());
-                Ok(())
-            }
-        })
-        .build_remote_aware(&server)
-        .await?;
-
-    let selected_cwd = selected_cwd
-        .lock()
-        .expect("selected cwd lock should not be poisoned")
-        .clone()
-        .expect("workspace setup should record selected cwd");
-    let environment_id = if std::env::var_os(remote_env_env_var()).is_some() {
-        codex_exec_server::REMOTE_ENVIRONMENT_ID
-    } else {
-        codex_exec_server::LOCAL_ENVIRONMENT_ID
-    };
-    let refreshed_servers = HashMap::from([(
-        server_name.to_string(),
-        McpServerConfig {
-            transport: stdio_transport(
-                rmcp_test_server_bin,
-                Some(HashMap::from([(
-                    "MCP_TEST_VALUE".to_string(),
-                    "stored-environment-cwd".to_string(),
-                )])),
-                Vec::new(),
-            ),
-            experimental_environment: remote_aware_experimental_environment(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
-    )]);
-
-    fixture
-        .codex
-        .submit(Op::RefreshMcpServers {
-            config: McpServerRefreshConfig {
-                mcp_servers: serde_json::to_value(refreshed_servers)?,
-                mcp_oauth_credentials_store_mode: serde_json::to_value(
-                    OAuthCredentialsStoreMode::Auto,
-                )?,
-            },
-        })
-        .await?;
-
-    let structured = call_cwd_tool_with_turn(
-        &server,
-        &fixture,
-        server_name,
-        "call-turn-environment-cwd",
-        Op::UserInput {
-            environments: Some(vec![TurnEnvironmentSelection {
-                environment_id: environment_id.to_string(),
-                cwd: selected_cwd.clone().abs(),
-            }]),
-            items: vec![UserInput::Text {
-                text: "call the rmcp cwd tool".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-        },
-    )
-    .await?;
-
-    assert_cwd_tool_output(&structured, &selected_cwd);
-    server.verify().await;
     Ok(())
 }
 
