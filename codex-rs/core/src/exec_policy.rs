@@ -25,11 +25,7 @@ use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_shell_command::is_dangerous_command::command_might_be_dangerous;
-#[cfg(windows)]
-use codex_shell_command::is_dangerous_command::is_dangerous_powershell_words;
 use codex_shell_command::is_safe_command::is_known_safe_command;
-#[cfg(windows)]
-use codex_shell_command::is_safe_command::is_safe_powershell_words;
 use thiserror::Error;
 use tokio::fs;
 use tokio::sync::Semaphore;
@@ -41,8 +37,6 @@ use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use codex_shell_command::bash::parse_shell_lc_plain_commands;
 use codex_shell_command::bash::parse_shell_lc_single_command_prefix;
-#[cfg(windows)]
-use codex_shell_command::powershell::parse_powershell_command_plain_commands;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use shlex::try_join as shlex_try_join;
 
@@ -104,10 +98,22 @@ static BANNED_PREFIX_SUGGESTIONS: &[&[&str]] = &[
     &["osascript"],
 ];
 
+/// Describes which unmatched-command heuristics should classify the command
+/// words being evaluated by exec-policy.
+///
+/// The command tokens may be the original argv or a shell-specific lowering of
+/// a wrapper such as `bash -lc ...` or `powershell.exe -Command ...`. We only
+/// need to distinguish the PowerShell case because its safelist and dangerous
+/// heuristics operate on PowerShell-flavored inner command words rather than
+/// the generic command classifier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ExecPolicyCommandOrigin {
-    Direct,
+    /// Use the generic unmatched-command heuristics.
+    Generic,
     #[cfg(windows)]
+    /// The command words came from the `-Command` body of a top-level
+    /// PowerShell wrapper, so use PowerShell-specific unmatched-command
+    /// heuristics for the lowered words.
     PowerShell,
 }
 
@@ -120,6 +126,13 @@ pub(crate) struct UnmatchedCommandContext<'a> {
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) used_complex_parsing: bool,
     pub(crate) command_origin: ExecPolicyCommandOrigin,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ExecPolicyCommands {
+    commands: Vec<Vec<String>>,
+    used_complex_parsing: bool,
+    command_origin: ExecPolicyCommandOrigin,
 }
 
 pub(crate) fn child_uses_parent_exec_policy(parent_config: &Config, child_config: &Config) -> bool {
@@ -270,7 +283,11 @@ impl ExecPolicyManager {
             prefix_rule,
         } = req;
         let exec_policy = self.current();
-        let (commands, used_complex_parsing, command_origin) = commands_for_exec_policy(command);
+        let ExecPolicyCommands {
+            commands,
+            used_complex_parsing,
+            command_origin,
+        } = commands_for_exec_policy(command);
         // Keep heredoc prefix parsing for rule evaluation so existing
         // allow/prompt/forbidden rules still apply, but avoid auto-derived
         // amendments when only the heredoc fallback parser matched.
@@ -622,9 +639,11 @@ pub(crate) fn render_decision_for_unmatched_command(
         command_origin,
     } = context;
     let is_known_safe = match command_origin {
-        ExecPolicyCommandOrigin::Direct => is_known_safe_command(command),
+        ExecPolicyCommandOrigin::Generic => is_known_safe_command(command),
         #[cfg(windows)]
-        ExecPolicyCommandOrigin::PowerShell => is_safe_powershell_words(command),
+        ExecPolicyCommandOrigin::PowerShell => {
+            codex_shell_command::is_safe_command::is_safe_powershell_words(command)
+        }
     };
     if is_known_safe && !used_complex_parsing {
         return Decision::Allow;
@@ -646,9 +665,11 @@ pub(crate) fn render_decision_for_unmatched_command(
     // but if the user has explicitly disabled prompts, we must
     // forbid the command.
     let command_is_dangerous = match command_origin {
-        ExecPolicyCommandOrigin::Direct => command_might_be_dangerous(command),
+        ExecPolicyCommandOrigin::Generic => command_might_be_dangerous(command),
         #[cfg(windows)]
-        ExecPolicyCommandOrigin::PowerShell => is_dangerous_powershell_words(command),
+        ExecPolicyCommandOrigin::PowerShell => {
+            codex_shell_command::is_dangerous_command::is_dangerous_powershell_words(command)
+        }
     };
     if command_is_dangerous || environment_lacks_sandbox_protections {
         return match approval_policy {
@@ -739,31 +760,44 @@ fn default_policy_path(codex_home: &Path) -> PathBuf {
     codex_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
 }
 
-fn commands_for_exec_policy(
-    command: &[String],
-) -> (Vec<Vec<String>>, bool, ExecPolicyCommandOrigin) {
+fn commands_for_exec_policy(command: &[String]) -> ExecPolicyCommands {
     if let Some(commands) = parse_shell_lc_plain_commands(command)
         && !commands.is_empty()
     {
-        return (commands, false, ExecPolicyCommandOrigin::Direct);
+        return ExecPolicyCommands {
+            commands,
+            used_complex_parsing: false,
+            command_origin: ExecPolicyCommandOrigin::Generic,
+        };
     }
 
     #[cfg(windows)]
-    if let Some(commands) = parse_powershell_command_plain_commands(command)
-        && !commands.is_empty()
     {
-        return (commands, false, ExecPolicyCommandOrigin::PowerShell);
+        if let Some(commands) =
+            codex_shell_command::powershell::parse_powershell_command_into_plain_commands(command)
+            && !commands.is_empty()
+        {
+            return ExecPolicyCommands {
+                commands,
+                used_complex_parsing: false,
+                command_origin: ExecPolicyCommandOrigin::PowerShell,
+            };
+        }
     }
 
     if let Some(single_command) = parse_shell_lc_single_command_prefix(command) {
-        return (vec![single_command], true, ExecPolicyCommandOrigin::Direct);
+        return ExecPolicyCommands {
+            commands: vec![single_command],
+            used_complex_parsing: true,
+            command_origin: ExecPolicyCommandOrigin::Generic,
+        };
     }
 
-    (
-        vec![command.to_vec()],
-        false,
-        ExecPolicyCommandOrigin::Direct,
-    )
+    ExecPolicyCommands {
+        commands: vec![command.to_vec()],
+        used_complex_parsing: false,
+        command_origin: ExecPolicyCommandOrigin::Generic,
+    }
 }
 
 /// Derive a proposed execpolicy amendment when a command requires user approval

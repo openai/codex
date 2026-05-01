@@ -682,7 +682,7 @@ fn evaluate_intercepted_exec_policy(
                 sandbox_cwd,
                 sandbox_permissions,
                 used_complex_parsing,
-                command_origin: crate::exec_policy::ExecPolicyCommandOrigin::Direct,
+                command_origin: crate::exec_policy::ExecPolicyCommandOrigin::Generic,
             },
         )
     };
