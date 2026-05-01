@@ -4683,7 +4683,7 @@ mod tests {
         let event = ItemStartedEvent {
             thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
-            item: TurnItem::McpToolCall(Box::new(McpToolCallItem {
+            item: TurnItem::McpToolCall(McpToolCallItem {
                 id: "mcp-1".into(),
                 server: "server".into(),
                 tool: "tool".into(),
@@ -4693,7 +4693,7 @@ mod tests {
                 result: None,
                 error: None,
                 duration: None,
-            })),
+            }),
         };
 
         let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
@@ -4785,7 +4785,7 @@ mod tests {
         let event = ItemCompletedEvent {
             thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
-            item: TurnItem::McpToolCall(Box::new(McpToolCallItem {
+            item: TurnItem::McpToolCall(McpToolCallItem {
                 id: "mcp-1".into(),
                 server: "server".into(),
                 tool: "tool".into(),
@@ -4800,7 +4800,7 @@ mod tests {
                 }),
                 error: None,
                 duration: Some(Duration::from_millis(42)),
-            })),
+            }),
         };
 
         let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);

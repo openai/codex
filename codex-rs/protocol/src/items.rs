@@ -34,6 +34,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use ts_rs::TS;
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 #[serde(tag = "type")]
 #[ts(tag = "type")]
@@ -47,7 +48,7 @@ pub enum TurnItem {
     ImageView(ImageViewItem),
     ImageGeneration(ImageGenerationItem),
     FileChange(FileChangeItem),
-    McpToolCall(Box<McpToolCallItem>),
+    McpToolCall(McpToolCallItem),
     ContextCompaction(ContextCompactionItem),
 }
 
