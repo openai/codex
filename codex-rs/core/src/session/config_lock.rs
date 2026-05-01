@@ -100,6 +100,11 @@ fn session_configuration_to_lock_config_toml(
     Ok(lock_config)
 }
 
+/// Saves values chosen during session construction from the model catalog,
+/// collaboration mode, and resolved prompt setup.
+///
+/// These values are not always present in the raw layer stack, so copy them
+/// from the live session when the lockfile should be fully self-contained.
 fn save_session_resolved_fields(sc: &SessionConfiguration, lock_config: &mut ConfigToml) {
     lock_config.model = Some(sc.collaboration_mode.model().to_string());
     lock_config.model_reasoning_effort = sc.collaboration_mode.reasoning_effort();
@@ -113,6 +118,11 @@ fn save_session_resolved_fields(sc: &SessionConfiguration, lock_config: &mut Con
     lock_config.approvals_reviewer = Some(sc.approvals_reviewer);
 }
 
+/// Saves values stored on `Config` after higher-level resolution,
+/// normalization, defaulting, or feature materialization.
+///
+/// Persist the resolved representation so replay compares against the behavior
+/// Codex actually ran with, not only the user-authored TOML inputs.
 fn save_config_resolved_fields(
     config: &Config,
     lock_config: &mut ConfigToml,
