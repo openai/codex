@@ -80,48 +80,28 @@ impl EnvironmentContext {
     /// comparing turn to turn, since the initial environment_context will
     /// include the shell, and then it is not configurable from turn to turn.
     pub(crate) fn equals_except_shell(&self, other: &EnvironmentContext) -> bool {
-        let EnvironmentContext {
-            environments,
-            current_date,
-            timezone,
-            network,
-            subagents,
-        } = other;
-        self.model_facing_single_cwd() == Self::single_environment_cwd(environments)
-            && self.multiple_environments_equal_except_shell(environments)
-            && self.current_date == *current_date
-            && self.timezone == *timezone
-            && self.network == *network
-            && self.subagents == *subagents
+        self.environments_equal_except_shell(other)
+            && self.current_date == other.current_date
+            && self.timezone == other.timezone
+            && self.network == other.network
+            && self.subagents == other.subagents
     }
 
     pub(crate) fn diff_from_turn_context_item(
         before: &TurnContextItem,
         after: &EnvironmentContext,
     ) -> Self {
-        let before_context = Self::from_turn_context_item(
-            before,
-            after
-                .single_environment_shell()
-                .unwrap_or("bash")
-                .to_string(),
-        );
         let before_network = Self::network_from_turn_context_item(before);
-        let environments = after
-            .model_facing_multiple_environments()
-            .map(<[_]>::to_vec)
-            .unwrap_or_else(|| {
-                after
-                    .model_facing_single_cwd()
-                    .filter(|cwd| before_context.model_facing_single_cwd() != Some(*cwd))
-                    .cloned()
-                    .zip(after.single_environment_shell())
-                    .map(|(cwd, shell)| {
-                        EnvironmentContextEnvironment::legacy(cwd, shell.to_string())
-                    })
-                    .into_iter()
-                    .collect()
-            });
+        let environments = match after.environments.as_slice() {
+            [environment] if before.cwd.as_path() != environment.cwd.as_path() => {
+                vec![EnvironmentContextEnvironment::legacy(
+                    environment.cwd.clone(),
+                    environment.shell.clone(),
+                )]
+            }
+            [_, _, ..] => after.environments.clone(),
+            [_] | [] => Vec::new(),
+        };
         let network = if before_network != after.network {
             after.network.clone()
         } else {
@@ -205,46 +185,17 @@ impl EnvironmentContext {
         ))
     }
 
-    fn model_facing_single_cwd(&self) -> Option<&AbsolutePathBuf> {
-        Self::single_environment_cwd(&self.environments)
-    }
-
-    fn single_environment_shell(&self) -> Option<&str> {
-        (self.environments.len() == 1).then(|| self.environments[0].shell.as_str())
-    }
-
-    fn model_facing_multiple_environments(&self) -> Option<&[EnvironmentContextEnvironment]> {
-        Self::multiple_environments(&self.environments)
-    }
-
-    fn single_environment_cwd(
-        environments: &[EnvironmentContextEnvironment],
-    ) -> Option<&AbsolutePathBuf> {
-        (environments.len() == 1).then(|| &environments[0].cwd)
-    }
-
-    fn multiple_environments(
-        environments: &[EnvironmentContextEnvironment],
-    ) -> Option<&[EnvironmentContextEnvironment]> {
-        (environments.len() > 1).then_some(environments)
-    }
-
-    fn multiple_environments_equal_except_shell(
-        &self,
-        other: &[EnvironmentContextEnvironment],
-    ) -> bool {
-        match (
-            self.model_facing_multiple_environments(),
-            Self::multiple_environments(other),
-        ) {
-            (Some(left), Some(right)) => {
+    fn environments_equal_except_shell(&self, other: &EnvironmentContext) -> bool {
+        match (self.environments.as_slice(), other.environments.as_slice()) {
+            ([left], [right]) => left.cwd == right.cwd,
+            (left, right) if left.len() > 1 && right.len() > 1 => {
                 left.len() == right.len()
                     && left
                         .iter()
                         .zip(right.iter())
                         .all(|(left, right)| left.id == right.id && left.cwd == right.cwd)
             }
-            (None, None) => true,
+            ([], []) => true,
             _ => false,
         }
     }
@@ -257,23 +208,28 @@ impl ContextualUserFragment for EnvironmentContext {
 
     fn body(&self) -> String {
         let mut lines = Vec::new();
-        if let Some(environments) = self.model_facing_multiple_environments() {
-            lines.push("  <environments>".to_string());
-            for environment in environments {
-                lines.push(format!("    <environment id=\"{}\">", environment.id));
+        match self.environments.as_slice() {
+            [environment] => {
                 lines.push(format!(
-                    "      <cwd>{}</cwd>",
+                    "  <cwd>{}</cwd>",
                     environment.cwd.to_string_lossy()
                 ));
-                lines.push(format!("      <shell>{}</shell>", environment.shell));
-                lines.push("    </environment>".to_string());
+                lines.push(format!("  <shell>{}</shell>", environment.shell));
             }
-            lines.push("  </environments>".to_string());
-        } else if let Some(cwd) = self.model_facing_single_cwd() {
-            lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
-            if let Some(shell) = self.single_environment_shell() {
-                lines.push(format!("  <shell>{shell}</shell>"));
+            [_, _, ..] => {
+                lines.push("  <environments>".to_string());
+                for environment in &self.environments {
+                    lines.push(format!("    <environment id=\"{}\">", environment.id));
+                    lines.push(format!(
+                        "      <cwd>{}</cwd>",
+                        environment.cwd.to_string_lossy()
+                    ));
+                    lines.push(format!("      <shell>{}</shell>", environment.shell));
+                    lines.push("    </environment>".to_string());
+                }
+                lines.push("  </environments>".to_string());
             }
+            [] => {}
         }
         if let Some(current_date) = &self.current_date {
             lines.push(format!("  <current_date>{current_date}</current_date>"));
