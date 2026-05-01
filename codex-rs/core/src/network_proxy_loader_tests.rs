@@ -105,6 +105,75 @@ default_permissions = "workspace"
 }
 
 #[test]
+fn higher_precedence_profile_network_overrides_mitm_hooks() {
+    let lower_network: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+mode = "limited"
+mitm = false
+
+[permissions.workspace.network.domains]
+"lower.example.com" = "allow"
+
+[[permissions.workspace.network.mitm_hooks]]
+host = "lower.example.com"
+
+[permissions.workspace.network.mitm_hooks.match]
+methods = ["POST"]
+path_prefixes = ["/repos/openai/"]
+"#,
+    )
+    .expect("lower layer should parse");
+    let higher_network: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+mode = "full"
+mitm = true
+
+[permissions.workspace.network.domains]
+"higher.example.com" = "allow"
+
+[[permissions.workspace.network.mitm_hooks]]
+host = "api.github.com"
+
+[permissions.workspace.network.mitm_hooks.match]
+methods = ["PUT"]
+path_prefixes = ["/repos/openai/"]
+"#,
+    )
+    .expect("higher layer should parse");
+
+    let mut config = NetworkProxyConfig::default();
+    apply_network_tables(
+        &mut config,
+        network_tables_from_toml(&lower_network).expect("lower layer should deserialize"),
+    )
+    .expect("lower layer should apply");
+    apply_network_tables(
+        &mut config,
+        network_tables_from_toml(&higher_network).expect("higher layer should deserialize"),
+    )
+    .expect("higher layer should apply");
+
+    assert_eq!(config.network.mode, codex_network_proxy::NetworkMode::Full);
+    assert!(config.network.mitm);
+    assert_eq!(
+        config.network.allowed_domains(),
+        Some(vec![
+            "lower.example.com".to_string(),
+            "higher.example.com".to_string()
+        ])
+    );
+    assert_eq!(config.network.mitm_hooks.len(), 1);
+    assert_eq!(config.network.mitm_hooks[0].host, "api.github.com");
+    assert_eq!(config.network.mitm_hooks[0].matcher.methods, vec!["PUT"]);
+}
+
+#[test]
 fn execpolicy_network_rules_overlay_network_lists() {
     let mut config = NetworkProxyConfig::default();
     config
