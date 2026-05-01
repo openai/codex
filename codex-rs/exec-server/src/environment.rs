@@ -73,12 +73,14 @@ impl EnvironmentManager {
 
     /// Builds a test-only manager with environment access disabled.
     pub fn disabled_for_tests(local_runtime_paths: ExecServerRuntimePaths) -> Self {
-        Self::from_environments(
+        match Self::from_environments(
             HashMap::new(),
             local_runtime_paths,
             DefaultEnvironmentSelection::Disabled,
-        )
-        .expect("disabled test environment manager")
+        ) {
+            Ok(manager) => manager,
+            Err(err) => panic!("disabled test environment manager: {err}"),
+        }
     }
 
     /// Builds a test-only manager from a raw exec-server URL value.
@@ -105,12 +107,14 @@ impl EnvironmentManager {
     ) -> Self {
         let provider = DefaultEnvironmentProvider::new(exec_server_url);
         let provider_environments = provider.environments(&local_runtime_paths);
-        Self::from_environments(
+        match Self::from_environments(
             provider_environments,
             local_runtime_paths,
             provider.default_environment_selection(),
-        )
-        .expect("default provider should create valid environments")
+        ) {
+            Ok(manager) => manager,
+            Err(err) => panic!("default provider should create valid environments: {err}"),
+        }
     }
 
     /// Builds a manager from a provider-supplied startup snapshot.
