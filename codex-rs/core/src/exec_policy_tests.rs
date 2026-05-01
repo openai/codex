@@ -1151,13 +1151,18 @@ fn known_safe_on_request_still_prompts_for_restricted_sandbox_escalation() {
     assert_eq!(
         Decision::Prompt,
         render_decision_for_unmatched_command(
-            AskForApproval::OnRequest,
-            &permission_profile_from_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
-            &workspace_write_file_system_sandbox_policy(),
-            Path::new("/tmp"),
             &command,
-            SandboxPermissions::RequireEscalated,
-            /*used_complex_parsing*/ false,
+            UnmatchedCommandContext {
+                approval_policy: AskForApproval::OnRequest,
+                permission_profile: &permission_profile_from_sandbox_policy(
+                    &SandboxPolicy::new_workspace_write_policy(),
+                ),
+                file_system_sandbox_policy: &workspace_write_file_system_sandbox_policy(),
+                sandbox_cwd: Path::new("/tmp"),
+                sandbox_permissions: SandboxPermissions::RequireEscalated,
+                used_complex_parsing: false,
+                command_origin: ExecPolicyCommandOrigin::Generic,
+            },
         )
     );
 }

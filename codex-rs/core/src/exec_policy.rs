@@ -659,7 +659,7 @@ pub(crate) fn render_decision_for_unmatched_command(
             sandbox_cwd,
         );
 
-    if is_known_safe_command(command)
+    if is_known_safe
         && !used_complex_parsing
         && (approval_policy == AskForApproval::UnlessTrusted
             || environment_lacks_sandbox_protections)
