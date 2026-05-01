@@ -124,8 +124,8 @@ $HOME/.codex/packages/standalone/current/codex app-server bootstrap --remote-con
 `bootstrap` also prints one JSON object. It requires the standalone managed
 install, persists the launch settings used by later lifecycle commands, and
 starts app-server with `remote_control` enabled when requested. On systems with
-user-scoped `systemd`, it installs `codex-app-server.service` plus an hourly
-update timer that refreshes the standalone install and then reloads the service.
+user-scoped `systemd`, it installs home-scoped app-server and hourly update
+timer units that refresh the standalone install and then reload the service.
 Reloads keep an unbounded app-server graceful drain, while ordinary systemd
 restarts wait up to one minute for active work before forcing completion. Without
 user-scoped `systemd`, `bootstrap` falls back to the pidfile backend; that keeps

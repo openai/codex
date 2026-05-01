@@ -4,26 +4,33 @@ use std::path::PathBuf;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use sha2::Digest;
+use sha2::Sha256;
 use tokio::fs;
 use tokio::process::Command;
 
-const APP_SERVER_UNIT_NAME: &str = "codex-app-server.service";
-const UPDATE_UNIT_NAME: &str = "codex-app-server-update.service";
-const UPDATE_TIMER_NAME: &str = "codex-app-server-update.timer";
-const RESTART_GRACE_PERIOD_SECONDS: u32 = 60;
-const RESTART_TIMEOUT_SECONDS: u32 = 70;
+const RESTART_TIMEOUT_SECONDS: u32 = 60;
 
 #[derive(Debug)]
 pub(crate) struct SystemdBackend {
+    codex_home: PathBuf,
     codex_bin: PathBuf,
     remote_control_enabled: bool,
+    unit_names: SystemdUnitNames,
 }
 
 impl SystemdBackend {
-    pub(crate) fn new(codex_bin: PathBuf, remote_control_enabled: bool) -> Self {
+    pub(crate) fn new(
+        codex_home: PathBuf,
+        codex_bin: PathBuf,
+        remote_control_enabled: bool,
+    ) -> Self {
+        let unit_names = SystemdUnitNames::for_codex_home(&codex_home);
         Self {
+            codex_home,
             codex_bin,
             remote_control_enabled,
+            unit_names,
         }
     }
 
@@ -31,9 +38,16 @@ impl SystemdBackend {
         systemctl_user_available().await && command_succeeds("systemd-run", &["--version"]).await
     }
 
-    pub(crate) async fn is_running(&self) -> Result<bool> {
+    pub(crate) async fn is_starting_or_running(&self) -> Result<bool> {
         let output = match Command::new("systemctl")
-            .args(["--user", "is-active", APP_SERVER_UNIT_NAME])
+            .args([
+                "--user",
+                "show",
+                "--property",
+                "ActiveState",
+                "--value",
+                &self.unit_names.app_server,
+            ])
             .output()
             .await
         {
@@ -43,12 +57,19 @@ impl SystemdBackend {
                 return Err(err).context("failed to inspect user systemd app-server unit");
             }
         };
-        Ok(output.status.success() && !is_chroot_stub_response(&output))
+        if !output.status.success() || is_chroot_stub_response(&output) {
+            return Ok(false);
+        }
+
+        Ok(matches!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "active" | "activating" | "deactivating" | "reloading"
+        ))
     }
 
     pub(crate) async fn start(&self) -> Result<Option<u32>> {
         if self.persistent_service_exists() {
-            run_systemctl(&["--user", "start", APP_SERVER_UNIT_NAME]).await?;
+            run_systemctl(&["--user", "start", &self.unit_names.app_server]).await?;
             return Ok(None);
         }
 
@@ -56,8 +77,10 @@ impl SystemdBackend {
             .args([
                 "--user",
                 "--unit",
-                APP_SERVER_UNIT_NAME,
+                &self.unit_names.app_server,
                 "--collect",
+                "--setenv",
+                &format!("CODEX_HOME={}", self.codex_home.display()),
                 "--property",
                 "Restart=on-failure",
             ])
@@ -78,7 +101,7 @@ impl SystemdBackend {
     }
 
     pub(crate) async fn stop(&self) -> Result<()> {
-        run_systemctl(&["--user", "stop", APP_SERVER_UNIT_NAME]).await
+        run_systemctl(&["--user", "stop", &self.unit_names.app_server]).await
     }
 
     pub(crate) async fn bootstrap(
@@ -87,27 +110,31 @@ impl SystemdBackend {
         remote_control_enabled: bool,
     ) -> Result<()> {
         let unit_dir = user_unit_dir()?;
+        let unit_names = SystemdUnitNames::for_codex_home(codex_home);
         fs::create_dir_all(&unit_dir)
             .await
             .with_context(|| format!("failed to create user systemd dir {}", unit_dir.display()))?;
 
         let service =
             render_app_server_service(codex_home, managed_codex_bin, remote_control_enabled);
-        let update_service = render_update_service(codex_home);
-        fs::write(unit_dir.join(APP_SERVER_UNIT_NAME), service)
+        let update_service = render_update_service(codex_home, &unit_names);
+        fs::write(unit_dir.join(&unit_names.app_server), service)
             .await
-            .with_context(|| format!("failed to write {APP_SERVER_UNIT_NAME}"))?;
-        fs::write(unit_dir.join(UPDATE_UNIT_NAME), update_service)
+            .with_context(|| format!("failed to write {}", unit_names.app_server))?;
+        fs::write(unit_dir.join(&unit_names.update_service), update_service)
             .await
-            .with_context(|| format!("failed to write {UPDATE_UNIT_NAME}"))?;
-        fs::write(unit_dir.join(UPDATE_TIMER_NAME), render_update_timer())
-            .await
-            .with_context(|| format!("failed to write {UPDATE_TIMER_NAME}"))?;
+            .with_context(|| format!("failed to write {}", unit_names.update_service))?;
+        fs::write(
+            unit_dir.join(&unit_names.update_timer),
+            render_update_timer(&unit_names),
+        )
+        .await
+        .with_context(|| format!("failed to write {}", unit_names.update_timer))?;
 
         run_systemctl(&["--user", "daemon-reload"]).await?;
-        run_systemctl(&["--user", "enable", "--now", UPDATE_TIMER_NAME]).await?;
-        run_systemctl(&["--user", "enable", APP_SERVER_UNIT_NAME]).await?;
-        run_systemctl(&["--user", "restart", APP_SERVER_UNIT_NAME]).await?;
+        run_systemctl(&["--user", "enable", "--now", &unit_names.update_timer]).await?;
+        run_systemctl(&["--user", "enable", &unit_names.app_server]).await?;
+        run_systemctl(&["--user", "restart", &unit_names.app_server]).await?;
         Ok(())
     }
 
@@ -128,7 +155,27 @@ impl SystemdBackend {
     fn persistent_service_exists(&self) -> bool {
         user_unit_dir()
             .ok()
-            .is_some_and(|unit_dir| unit_dir.join(APP_SERVER_UNIT_NAME).is_file())
+            .is_some_and(|unit_dir| unit_dir.join(&self.unit_names.app_server).is_file())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SystemdUnitNames {
+    app_server: String,
+    update_service: String,
+    update_timer: String,
+}
+
+impl SystemdUnitNames {
+    fn for_codex_home(codex_home: &Path) -> Self {
+        let digest = Sha256::digest(codex_home.as_os_str().as_encoded_bytes());
+        let suffix = format!("{digest:x}");
+        let suffix = &suffix[..16];
+        Self {
+            app_server: format!("codex-app-server-{suffix}.service"),
+            update_service: format!("codex-app-server-update-{suffix}.service"),
+            update_timer: format!("codex-app-server-update-{suffix}.timer"),
+        }
     }
 }
 
@@ -142,28 +189,31 @@ fn render_app_server_service(
     } else {
         ""
     };
-    let exec_stop = quote_systemd_arg(render_exec_stop_command());
     format!(
-        "[Unit]\nDescription=Codex app-server\n\n[Service]\nType=simple\nEnvironment={}\nExecStart={}{} app-server --listen unix://\nExecReload=/bin/kill -TERM $MAINPID\nExecStop=/bin/sh -lc {}\nRestart=always\nTimeoutStopSec={}s\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=Codex app-server\n\n[Service]\nType=simple\nEnvironment={}\nExecStart={}{} app-server --listen unix://\nExecReload=/bin/kill -HUP $MAINPID\nRestart=always\nTimeoutStopSec={}s\n\n[Install]\nWantedBy=default.target\n",
         quote_systemd_env("CODEX_HOME", codex_home),
         quote_systemd_path(managed_codex_bin),
         remote_control_args,
-        exec_stop,
         RESTART_TIMEOUT_SECONDS,
     )
 }
 
-fn render_update_service(codex_home: &Path) -> String {
+fn render_update_service(codex_home: &Path, unit_names: &SystemdUnitNames) -> String {
     format!(
-        "[Unit]\nDescription=Update standalone Codex install\n\n[Service]\nType=oneshot\nEnvironment={}\nExecStart=/bin/sh -lc {}\nExecStartPost=systemctl --user reload {}\n",
+        "[Unit]\nDescription=Update standalone Codex install\n\n[Service]\nType=oneshot\nEnvironment={}\nExecStart=/bin/sh -c {}\nExecStartPost=systemctl --user reload {}\n",
         quote_systemd_env("CODEX_HOME", codex_home),
-        quote_systemd_arg("curl -fsSL https://chatgpt.com/codex/install.sh | sh"),
-        APP_SERVER_UNIT_NAME,
+        quote_systemd_arg(
+            "tmp=$$(mktemp) && trap 'rm -f \"$$tmp\"' EXIT && curl -fsSL https://chatgpt.com/codex/install.sh -o \"$$tmp\" && sh \"$$tmp\"",
+        ),
+        unit_names.app_server,
     )
 }
 
-fn render_update_timer() -> &'static str {
-    "[Unit]\nDescription=Periodically update standalone Codex install\n\n[Timer]\nOnBootSec=5m\nOnUnitActiveSec=1h\nRandomizedDelaySec=15m\nPersistent=true\nUnit=codex-app-server-update.service\n\n[Install]\nWantedBy=timers.target\n"
+fn render_update_timer(unit_names: &SystemdUnitNames) -> String {
+    format!(
+        "[Unit]\nDescription=Periodically update standalone Codex install\n\n[Timer]\nOnActiveSec=5m\nOnUnitActiveSec=1h\nRandomizedDelaySec=15m\nPersistent=true\nUnit={}\n\n[Install]\nWantedBy=timers.target\n",
+        unit_names.update_service
+    )
 }
 
 fn quote_systemd_env(key: &str, value: &Path) -> String {
@@ -172,18 +222,16 @@ fn quote_systemd_env(key: &str, value: &Path) -> String {
 }
 
 fn quote_systemd_path(value: &Path) -> String {
-    quote_systemd_arg(value.to_string_lossy())
+    quote_systemd_arg(value.to_string_lossy().replace('$', "$$"))
 }
 
 fn quote_systemd_arg(value: impl AsRef<str>) -> String {
-    let escaped = value.as_ref().replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped = value
+        .as_ref()
+        .replace('%', "%%")
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
     format!("\"{escaped}\"")
-}
-
-fn render_exec_stop_command() -> String {
-    format!(
-        "pid=$MAINPID; kill -TERM \"$pid\"; i=0; while kill -0 \"$pid\" 2>/dev/null; do if [ \"$i\" -ge {RESTART_GRACE_PERIOD_SECONDS} ]; then kill -TERM \"$pid\"; fi; i=$((i + 1)); sleep 1; done"
-    )
 }
 
 fn user_unit_dir() -> Result<PathBuf> {
@@ -255,9 +303,11 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
+    use super::SystemdUnitNames;
     use super::is_chroot_stub_response;
+    use super::quote_systemd_arg;
+    use super::quote_systemd_path;
     use super::render_app_server_service;
-    use super::render_exec_stop_command;
     use super::render_update_service;
     use super::render_update_timer;
 
@@ -269,31 +319,46 @@ mod tests {
                 Path::new("/home/codex/.codex/packages/standalone/current/codex"),
                 true,
             ),
-            "[Unit]\nDescription=Codex app-server\n\n[Service]\nType=simple\nEnvironment=\"CODEX_HOME=/home/codex/.codex\"\nExecStart=\"/home/codex/.codex/packages/standalone/current/codex\" --enable remote_control app-server --listen unix://\nExecReload=/bin/kill -TERM $MAINPID\nExecStop=/bin/sh -lc \"pid=$MAINPID; kill -TERM \\\"$pid\\\"; i=0; while kill -0 \\\"$pid\\\" 2>/dev/null; do if [ \\\"$i\\\" -ge 60 ]; then kill -TERM \\\"$pid\\\"; fi; i=$((i + 1)); sleep 1; done\"\nRestart=always\nTimeoutStopSec=70s\n\n[Install]\nWantedBy=default.target\n"
+            "[Unit]\nDescription=Codex app-server\n\n[Service]\nType=simple\nEnvironment=\"CODEX_HOME=/home/codex/.codex\"\nExecStart=\"/home/codex/.codex/packages/standalone/current/codex\" --enable remote_control app-server --listen unix://\nExecReload=/bin/kill -HUP $MAINPID\nRestart=always\nTimeoutStopSec=60s\n\n[Install]\nWantedBy=default.target\n"
         );
     }
 
     #[test]
     fn update_service_reinstalls_then_restarts_app_server() {
+        let unit_names = test_unit_names();
         assert_eq!(
-            render_update_service(Path::new("/home/codex/.codex")),
-            "[Unit]\nDescription=Update standalone Codex install\n\n[Service]\nType=oneshot\nEnvironment=\"CODEX_HOME=/home/codex/.codex\"\nExecStart=/bin/sh -lc \"curl -fsSL https://chatgpt.com/codex/install.sh | sh\"\nExecStartPost=systemctl --user reload codex-app-server.service\n"
-        );
-    }
-
-    #[test]
-    fn exec_stop_waits_then_forces_restart() {
-        assert_eq!(
-            render_exec_stop_command(),
-            "pid=$MAINPID; kill -TERM \"$pid\"; i=0; while kill -0 \"$pid\" 2>/dev/null; do if [ \"$i\" -ge 60 ]; then kill -TERM \"$pid\"; fi; i=$((i + 1)); sleep 1; done"
+            render_update_service(Path::new("/home/codex/.codex"), &unit_names),
+            "[Unit]\nDescription=Update standalone Codex install\n\n[Service]\nType=oneshot\nEnvironment=\"CODEX_HOME=/home/codex/.codex\"\nExecStart=/bin/sh -c \"tmp=$$(mktemp) && trap 'rm -f \\\"$$tmp\\\"' EXIT && curl -fsSL https://chatgpt.com/codex/install.sh -o \\\"$$tmp\\\" && sh \\\"$$tmp\\\"\"\nExecStartPost=systemctl --user reload codex-app-server-test.service\n"
         );
     }
 
     #[test]
     fn update_timer_uses_jitter_and_persistence() {
+        let unit_names = test_unit_names();
         assert_eq!(
-            render_update_timer(),
-            "[Unit]\nDescription=Periodically update standalone Codex install\n\n[Timer]\nOnBootSec=5m\nOnUnitActiveSec=1h\nRandomizedDelaySec=15m\nPersistent=true\nUnit=codex-app-server-update.service\n\n[Install]\nWantedBy=timers.target\n"
+            render_update_timer(&unit_names),
+            "[Unit]\nDescription=Periodically update standalone Codex install\n\n[Timer]\nOnActiveSec=5m\nOnUnitActiveSec=1h\nRandomizedDelaySec=15m\nPersistent=true\nUnit=codex-app-server-update-test.service\n\n[Install]\nWantedBy=timers.target\n"
+        );
+    }
+
+    fn test_unit_names() -> SystemdUnitNames {
+        SystemdUnitNames {
+            app_server: "codex-app-server-test.service".to_string(),
+            update_service: "codex-app-server-update-test.service".to_string(),
+            update_timer: "codex-app-server-update-test.timer".to_string(),
+        }
+    }
+
+    #[test]
+    fn quote_systemd_arg_escapes_specifiers() {
+        assert_eq!(quote_systemd_arg("/tmp/codex%h"), "\"/tmp/codex%%h\"");
+    }
+
+    #[test]
+    fn quote_systemd_path_escapes_exec_start_variables() {
+        assert_eq!(
+            quote_systemd_path(Path::new("/tmp/codex$dev")),
+            "\"/tmp/codex$$dev\""
         );
     }
 

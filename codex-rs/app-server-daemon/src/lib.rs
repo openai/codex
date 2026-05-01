@@ -22,7 +22,9 @@ use tokio::time::sleep;
 
 const START_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const START_TIMEOUT: Duration = Duration::from_secs(10);
+const OPERATION_LOCK_TIMEOUT: Duration = Duration::from_secs(75);
 const PID_FILE_NAME: &str = "app-server.pid";
+const OPERATION_LOCK_FILE_NAME: &str = "daemon.lock";
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const STATE_DIR_NAME: &str = "app-server-daemon";
 
@@ -97,6 +99,7 @@ struct Daemon {
     socket_path: PathBuf,
     current_exe: PathBuf,
     pid_file: PathBuf,
+    operation_lock_file: PathBuf,
     settings_file: PathBuf,
     managed_codex_bin: PathBuf,
 }
@@ -115,6 +118,7 @@ impl Daemon {
             socket_path,
             current_exe,
             pid_file: state_dir.join(PID_FILE_NAME),
+            operation_lock_file: state_dir.join(OPERATION_LOCK_FILE_NAME),
             settings_file: state_dir.join(SETTINGS_FILE_NAME),
             managed_codex_bin: managed_codex_bin(codex_home.as_path()),
         })
@@ -122,9 +126,18 @@ impl Daemon {
 
     async fn run(&self, command: LifecycleCommand) -> Result<LifecycleOutput> {
         match command {
-            LifecycleCommand::Start => self.start().await,
-            LifecycleCommand::Restart => self.restart().await,
-            LifecycleCommand::Stop => self.stop().await,
+            LifecycleCommand::Start => {
+                let _operation_lock = self.acquire_operation_lock().await?;
+                self.start().await
+            }
+            LifecycleCommand::Restart => {
+                let _operation_lock = self.acquire_operation_lock().await?;
+                self.restart().await
+            }
+            LifecycleCommand::Stop => {
+                let _operation_lock = self.acquire_operation_lock().await?;
+                self.stop().await
+            }
             LifecycleCommand::Version => self.version().await,
         }
     }
@@ -234,6 +247,11 @@ impl Daemon {
     }
 
     async fn bootstrap(&self, options: BootstrapOptions) -> Result<BootstrapOutput> {
+        let _operation_lock = self.acquire_operation_lock().await?;
+        self.bootstrap_locked(options).await
+    }
+
+    async fn bootstrap_locked(&self, options: BootstrapOptions) -> Result<BootstrapOutput> {
         if !self.managed_codex_bin.is_file() {
             return Err(anyhow!(
                 "managed standalone Codex install not found at {}; install Codex first",
@@ -253,6 +271,10 @@ impl Daemon {
         }
         settings.save(&self.settings_file).await?;
 
+        if let Some(backend) = self.running_backend_instance(&settings).await? {
+            backend.stop().await?;
+        }
+
         let (backend, auto_update_enabled) = if backend::SystemdBackend::is_available().await {
             backend::SystemdBackend::bootstrap(
                 &self.codex_home,
@@ -262,15 +284,13 @@ impl Daemon {
             .await?;
             (
                 Backend::Systemd(backend::SystemdBackend::new(
+                    self.codex_home.clone(),
                     self.managed_codex_bin.clone(),
                     settings.remote_control_enabled,
                 )),
                 true,
             )
         } else {
-            if let Some(backend) = self.running_backend_instance(&settings).await? {
-                backend.stop().await?;
-            }
             let fallback = backend::pid_backend(self.backend_paths(&settings));
             fallback.start().await?;
             (fallback, false)
@@ -298,7 +318,7 @@ impl Daemon {
 
     async fn running_backend_instance(&self, settings: &DaemonSettings) -> Result<Option<Backend>> {
         for backend in backend::managed_backends(self.backend_paths(settings)) {
-            if backend.is_running().await? {
+            if backend.is_starting_or_running().await? {
                 return Ok(Some(backend));
             }
         }
@@ -313,6 +333,10 @@ impl Daemon {
         match backend.start().await {
             Ok(pid) => Ok((backend, pid)),
             Err(systemd_err) if backend.kind() == BackendKind::SystemdUser => {
+                if backend.is_starting_or_running().await? {
+                    self.wait_until_ready().await?;
+                    return Ok((backend, None));
+                }
                 let fallback = backend::pid_backend(self.backend_paths(settings));
                 let pid = fallback.start().await.with_context(|| {
                     format!(
@@ -327,6 +351,7 @@ impl Daemon {
 
     fn backend_paths(&self, settings: &DaemonSettings) -> BackendPaths {
         BackendPaths {
+            codex_home: self.codex_home.clone(),
             codex_bin: preferred_codex_bin(&self.codex_home, self.current_exe.clone()),
             pid_file: self.pid_file.clone(),
             remote_control_enabled: settings.remote_control_enabled,
@@ -335,6 +360,40 @@ impl Daemon {
 
     async fn load_settings(&self) -> Result<DaemonSettings> {
         DaemonSettings::load(&self.settings_file).await
+    }
+
+    async fn acquire_operation_lock(&self) -> Result<tokio::fs::File> {
+        if let Some(parent) = self.operation_lock_file.parent() {
+            tokio::fs::create_dir_all(parent).await.with_context(|| {
+                format!(
+                    "failed to create daemon state directory {}",
+                    parent.display()
+                )
+            })?;
+        }
+        let operation_lock = tokio::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&self.operation_lock_file)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to open daemon operation lock {}",
+                    self.operation_lock_file.display()
+                )
+            })?;
+        let deadline = tokio::time::Instant::now() + OPERATION_LOCK_TIMEOUT;
+        while !try_lock_file(&operation_lock)? {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(anyhow!(
+                    "timed out waiting for daemon operation lock {}",
+                    self.operation_lock_file.display()
+                ));
+            }
+            sleep(START_POLL_INTERVAL).await;
+        }
+        Ok(operation_lock)
     }
 
     fn output(
@@ -353,6 +412,27 @@ impl Daemon {
             app_server_version,
         }
     }
+}
+
+#[cfg(unix)]
+fn try_lock_file(file: &tokio::fs::File) -> Result<bool> {
+    use std::os::fd::AsRawFd;
+
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result == 0 {
+        return Ok(true);
+    }
+
+    let err = std::io::Error::last_os_error();
+    if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
+        return Ok(false);
+    }
+    Err(err).context("failed to lock daemon operation")
+}
+
+#[cfg(not(unix))]
+fn try_lock_file(_file: &tokio::fs::File) -> Result<bool> {
+    Ok(true)
 }
 
 #[cfg(test)]

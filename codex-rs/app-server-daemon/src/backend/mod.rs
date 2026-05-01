@@ -30,10 +30,10 @@ impl Backend {
         }
     }
 
-    pub(crate) async fn is_running(&self) -> Result<bool> {
+    pub(crate) async fn is_starting_or_running(&self) -> Result<bool> {
         match self {
-            Self::Systemd(backend) => backend.is_running().await,
-            Self::Pid(backend) => backend.is_running().await,
+            Self::Systemd(backend) => backend.is_starting_or_running().await,
+            Self::Pid(backend) => backend.is_starting_or_running().await,
         }
     }
 
@@ -54,6 +54,7 @@ impl Backend {
 
 #[derive(Debug, Clone)]
 pub(crate) struct BackendPaths {
+    pub(crate) codex_home: PathBuf,
     pub(crate) codex_bin: PathBuf,
     pub(crate) pid_file: PathBuf,
     pub(crate) remote_control_enabled: bool,
@@ -62,6 +63,7 @@ pub(crate) struct BackendPaths {
 pub(crate) async fn preferred_backend(paths: BackendPaths) -> Backend {
     if SystemdBackend::is_available().await {
         Backend::Systemd(SystemdBackend::new(
+            paths.codex_home,
             paths.codex_bin,
             paths.remote_control_enabled,
         ))
@@ -77,6 +79,7 @@ pub(crate) async fn preferred_backend(paths: BackendPaths) -> Backend {
 pub(crate) fn managed_backends(paths: BackendPaths) -> [Backend; 2] {
     [
         Backend::Systemd(SystemdBackend::new(
+            paths.codex_home.clone(),
             paths.codex_bin.clone(),
             paths.remote_control_enabled,
         )),
