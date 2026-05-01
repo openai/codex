@@ -26,6 +26,9 @@ use codex_config::permissions_toml::FilesystemPermissionToml;
 use codex_config::permissions_toml::FilesystemPermissionsToml;
 use codex_config::permissions_toml::NetworkDomainPermissionToml;
 use codex_config::permissions_toml::NetworkDomainPermissionsToml;
+use codex_config::permissions_toml::NetworkMitmActionToml;
+use codex_config::permissions_toml::NetworkMitmHookToml;
+use codex_config::permissions_toml::NetworkMitmToml;
 use codex_config::permissions_toml::NetworkToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
@@ -755,6 +758,15 @@ mode = "full"
 
 [permissions.workspace.network.domains]
 "openai.com" = "allow"
+
+[permissions.workspace.network.mitm.hooks.github_write]
+host = "api.github.com"
+methods = ["POST", "PUT"]
+path_prefixes = ["/repos/openai/"]
+action = ["strip_auth"]
+
+[permissions.workspace.network.mitm.actions.strip_auth]
+strip_request_headers = ["authorization"]
 "#;
     let cfg: ConfigToml =
         toml::from_str(toml).expect("TOML deserialization should succeed for permissions profiles");
@@ -806,10 +818,122 @@ mode = "full"
                         }),
                         unix_sockets: None,
                         allow_local_binding: None,
+                        mitm: Some(NetworkMitmToml {
+                            hooks: Some(BTreeMap::from([(
+                                "github_write".to_string(),
+                                NetworkMitmHookToml {
+                                    host: "api.github.com".to_string(),
+                                    methods: vec!["POST".to_string(), "PUT".to_string()],
+                                    path_prefixes: vec!["/repos/openai/".to_string()],
+                                    query: BTreeMap::new(),
+                                    headers: BTreeMap::new(),
+                                    body: None,
+                                    action: vec!["strip_auth".to_string()],
+                                },
+                            )])),
+                            actions: Some(BTreeMap::from([(
+                                "strip_auth".to_string(),
+                                NetworkMitmActionToml {
+                                    strip_request_headers: vec!["authorization".to_string()],
+                                    inject_request_headers: Vec::new(),
+                                },
+                            )])),
+                        }),
                     }),
                 },
             )]),
         }
+    );
+}
+
+#[test]
+fn config_toml_rejects_empty_mitm_action_reference_list() {
+    let toml = r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network.mitm.hooks.github_write]
+host = "api.github.com"
+methods = ["POST"]
+path_prefixes = ["/repos/openai/"]
+action = []
+
+[permissions.workspace.network.mitm.actions.strip_auth]
+strip_request_headers = ["authorization"]
+"#;
+
+    let err =
+        toml::from_str::<ConfigToml>(toml).expect_err("empty MITM action refs should fail closed");
+
+    assert!(
+        err.to_string()
+            .contains("network.mitm.hooks.github_write.action must not be empty"),
+        "{err}"
+    );
+}
+
+#[test]
+fn config_toml_rejects_empty_mitm_action_definition() {
+    let toml = r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network.mitm.hooks.github_write]
+host = "api.github.com"
+methods = ["POST"]
+path_prefixes = ["/repos/openai/"]
+action = ["strip_auth"]
+
+[permissions.workspace.network.mitm.actions.strip_auth]
+"#;
+
+    let err = toml::from_str::<ConfigToml>(toml)
+        .expect_err("empty MITM action definitions should fail closed");
+
+    assert!(
+        err.to_string()
+            .contains("network.mitm.actions.strip_auth must define at least one operation"),
+        "{err}"
+    );
+}
+
+#[test]
+fn permissions_profile_network_to_proxy_config_preserves_mitm_hooks() {
+    let network = NetworkToml {
+        mode: Some(NetworkMode::Full),
+        mitm: Some(NetworkMitmToml {
+            hooks: Some(BTreeMap::from([(
+                "github_write".to_string(),
+                NetworkMitmHookToml {
+                    host: "api.github.com".to_string(),
+                    methods: vec!["POST".to_string()],
+                    path_prefixes: vec!["/repos/openai/".to_string()],
+                    action: vec!["strip_auth".to_string()],
+                    ..NetworkMitmHookToml::default()
+                },
+            )])),
+            actions: Some(BTreeMap::from([(
+                "strip_auth".to_string(),
+                NetworkMitmActionToml {
+                    strip_request_headers: vec!["authorization".to_string()],
+                    inject_request_headers: Vec::new(),
+                },
+            )])),
+        }),
+        ..NetworkToml::default()
+    };
+
+    let config = network.to_network_proxy_config();
+
+    assert_eq!(config.network.mode, NetworkMode::Full);
+    assert!(config.network.mitm);
+    assert_eq!(config.network.mitm_hooks.len(), 1);
+    assert_eq!(config.network.mitm_hooks[0].host, "api.github.com");
+    assert_eq!(
+        config.network.mitm_hooks[0].matcher.methods,
+        vec!["POST".to_string()]
+    );
+    assert_eq!(
+        config.network.mitm_hooks[0].actions.strip_request_headers,
+        vec!["authorization".to_string()]
     );
 }
 

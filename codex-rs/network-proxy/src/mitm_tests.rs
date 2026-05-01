@@ -186,7 +186,7 @@ async fn mitm_policy_allows_matching_hooked_write_in_full_mode() {
 
     assert!(
         response.is_none(),
-        "matching hook should be allowed in full mode"
+        "matching hook should bypass method clamp"
     );
     assert_eq!(app_state.blocked_snapshot().await.unwrap().len(), 0);
 }

@@ -105,6 +105,76 @@ default_permissions = "workspace"
 }
 
 #[test]
+fn higher_precedence_profile_network_overrides_named_mitm_actions() {
+    let lower_network: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+mode = "full"
+
+[permissions.workspace.network.domains]
+"lower.example.com" = "allow"
+
+[permissions.workspace.network.mitm.hooks.github_write]
+host = "api.github.com"
+methods = ["POST"]
+path_prefixes = ["/repos/openai/"]
+action = ["strip_auth"]
+
+[permissions.workspace.network.mitm.actions.strip_auth]
+strip_request_headers = ["authorization"]
+"#,
+    )
+    .expect("lower layer should parse");
+    let higher_network: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+mode = "full"
+
+[permissions.workspace.network.domains]
+"higher.example.com" = "allow"
+
+[permissions.workspace.network.mitm.actions.strip_auth]
+strip_request_headers = ["x-api-key"]
+"#,
+    )
+    .expect("higher layer should parse");
+
+    let mut accumulator = NetworkConfigAccumulator::default();
+    accumulator
+        .apply_network_tables(
+            network_tables_from_toml(&lower_network).expect("lower layer should deserialize"),
+        )
+        .expect("lower layer should apply");
+    accumulator
+        .apply_network_tables(
+            network_tables_from_toml(&higher_network).expect("higher layer should deserialize"),
+        )
+        .expect("higher layer should apply");
+    let config = accumulator.finish().expect("merged config should build");
+
+    assert_eq!(config.network.mode, codex_network_proxy::NetworkMode::Full);
+    assert!(config.network.mitm);
+    assert_eq!(
+        config.network.allowed_domains(),
+        Some(vec![
+            "lower.example.com".to_string(),
+            "higher.example.com".to_string()
+        ])
+    );
+    assert_eq!(config.network.mitm_hooks.len(), 1);
+    assert_eq!(config.network.mitm_hooks[0].host, "api.github.com");
+    assert_eq!(config.network.mitm_hooks[0].matcher.methods, vec!["POST"]);
+    assert_eq!(
+        config.network.mitm_hooks[0].actions.strip_request_headers,
+        vec!["x-api-key"]
+    );
+}
+
+#[test]
 fn execpolicy_network_rules_overlay_network_lists() {
     let mut config = NetworkProxyConfig::default();
     config
