@@ -23,7 +23,7 @@ use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
-use codex_app_server_protocol::PluginAvailabilityStatus;
+use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::RequestId;
@@ -424,7 +424,7 @@ async fn plugin_install_rejects_remote_plugin_disabled_by_admin_before_download(
         REMOTE_PLUGIN_ID,
         "1.2.3",
         Some(&bundle_url),
-        PluginAvailabilityStatus::DisabledByAdmin,
+        PluginAvailability::DisabledByAdmin,
     )
     .await;
     mount_empty_remote_installed_plugins(&server).await;
@@ -1269,7 +1269,7 @@ async fn mount_remote_plugin_detail(
         remote_plugin_id,
         release_version,
         bundle_download_url,
-        PluginAvailabilityStatus::Available,
+        PluginAvailability::Available,
     )
     .await;
 }
@@ -1279,11 +1279,11 @@ async fn mount_remote_plugin_detail_with_status(
     remote_plugin_id: &str,
     release_version: &str,
     bundle_download_url: Option<&str>,
-    status: PluginAvailabilityStatus,
+    status: PluginAvailability,
 ) {
     let status = match status {
-        PluginAvailabilityStatus::Available => "ENABLED",
-        PluginAvailabilityStatus::DisabledByAdmin => "DISABLED_BY_ADMIN",
+        PluginAvailability::Available => "ENABLED",
+        PluginAvailability::DisabledByAdmin => "DISABLED_BY_ADMIN",
     };
     let bundle_download_url_field = bundle_download_url
         .map(|url| format!(r#"    "bundle_download_url": "{url}","#))

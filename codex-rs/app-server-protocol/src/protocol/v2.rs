@@ -4827,7 +4827,7 @@ pub enum PluginAuthPolicy {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[ts(export_to = "v2/")]
-pub enum PluginAvailabilityStatus {
+pub enum PluginAvailability {
     /// Plugin-service currently sends `"ENABLED"` for available remote plugins.
     /// Codex app-server exposes `"AVAILABLE"` in its API; the alias keeps
     /// decoding compatible with that upstream response.
@@ -4839,7 +4839,7 @@ pub enum PluginAvailabilityStatus {
     DisabledByAdmin,
 }
 
-impl Default for PluginAvailabilityStatus {
+impl Default for PluginAvailability {
     fn default() -> Self {
         Self::Available
     }
@@ -4858,7 +4858,7 @@ pub struct PluginSummary {
     pub auth_policy: PluginAuthPolicy,
     /// Availability state for installing and using the plugin.
     #[serde(default)]
-    pub availability: PluginAvailabilityStatus,
+    pub availability: PluginAvailability,
     pub interface: Option<PluginInterface>,
 }
 
@@ -10746,7 +10746,7 @@ mod tests {
                     enabled: false,
                     install_policy: PluginInstallPolicy::Available,
                     auth_policy: PluginAuthPolicy::OnUse,
-                    availability: PluginAvailabilityStatus::Available,
+                    availability: PluginAvailability::Available,
                     interface: None,
                 }],
             })
@@ -10781,15 +10781,14 @@ mod tests {
         }))
         .unwrap();
 
-        assert_eq!(summary.availability, PluginAvailabilityStatus::Available);
+        assert_eq!(summary.availability, PluginAvailability::Available);
     }
 
     #[test]
     fn plugin_availability_deserializes_enabled_alias() {
-        let availability: PluginAvailabilityStatus =
-            serde_json::from_value(json!("ENABLED")).unwrap();
+        let availability: PluginAvailability = serde_json::from_value(json!("ENABLED")).unwrap();
 
-        assert_eq!(availability, PluginAvailabilityStatus::Available);
+        assert_eq!(availability, PluginAvailability::Available);
         assert_eq!(
             serde_json::to_value(availability).unwrap(),
             json!("AVAILABLE")

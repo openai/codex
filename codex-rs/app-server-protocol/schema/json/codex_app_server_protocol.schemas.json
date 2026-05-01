@@ -11956,7 +11956,7 @@
         ],
         "type": "string"
       },
-      "PluginAvailabilityStatus": {
+      "PluginAvailability": {
         "oneOf": [
           {
             "enum": [
@@ -12502,7 +12502,7 @@
           "availability": {
             "allOf": [
               {
-                "$ref": "#/definitions/v2/PluginAvailabilityStatus"
+                "$ref": "#/definitions/v2/PluginAvailability"
               }
             ],
             "default": "AVAILABLE",

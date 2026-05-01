@@ -381,7 +381,7 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
                 enabled: false,
                 install_policy: PluginInstallPolicy::Available,
                 auth_policy: PluginAuthPolicy::OnUse,
-                availability: PluginAvailabilityStatus::Available,
+                availability: PluginAvailability::Available,
                 interface: Some(expected_plugin_interface()),
             },
             RemotePluginSummary {
@@ -391,7 +391,7 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
                 enabled: true,
                 install_policy: PluginInstallPolicy::Available,
                 auth_policy: PluginAuthPolicy::OnUse,
-                availability: PluginAvailabilityStatus::Available,
+                availability: PluginAvailability::Available,
                 interface: Some(expected_plugin_interface()),
             }
         ]

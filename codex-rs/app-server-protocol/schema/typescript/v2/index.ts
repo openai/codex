@@ -270,7 +270,7 @@ export type { PermissionsRequestApprovalParams } from "./PermissionsRequestAppro
 export type { PermissionsRequestApprovalResponse } from "./PermissionsRequestApprovalResponse";
 export type { PlanDeltaNotification } from "./PlanDeltaNotification";
 export type { PluginAuthPolicy } from "./PluginAuthPolicy";
-export type { PluginAvailabilityStatus } from "./PluginAvailabilityStatus";
+export type { PluginAvailability } from "./PluginAvailability";
 export type { PluginDetail } from "./PluginDetail";
 export type { PluginInstallParams } from "./PluginInstallParams";
 export type { PluginInstallPolicy } from "./PluginInstallPolicy";

@@ -44,7 +44,7 @@
       ],
       "type": "string"
     },
-    "PluginAvailabilityStatus": {
+    "PluginAvailability": {
       "oneOf": [
         {
           "enum": [
@@ -338,7 +338,7 @@
         "availability": {
           "allOf": [
             {
-              "$ref": "#/definitions/PluginAvailabilityStatus"
+              "$ref": "#/definitions/PluginAvailability"
             }
           ],
           "default": "AVAILABLE",
