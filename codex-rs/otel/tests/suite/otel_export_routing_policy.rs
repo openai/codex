@@ -139,9 +139,11 @@ fn otel_export_routing_policy_routes_user_prompt_log_and_trace_events() {
             },
             UserInput::Image {
                 image_url: "https://example.com/image.png".to_string(),
+                detail: None,
             },
             UserInput::LocalImage {
                 path: PathBuf::from("/tmp/secret.png"),
+                detail: None,
             },
         ]);
     });

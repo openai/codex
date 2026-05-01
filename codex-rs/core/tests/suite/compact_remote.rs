@@ -556,7 +556,10 @@ async fn assert_remote_manual_compact_request_parity(
         .submit(Op::UserInput {
             environments: None,
             items: vec![
-                UserInput::Image { image_url },
+                UserInput::Image {
+                    image_url,
+                    detail: None,
+                },
                 UserInput::Text {
                     text: "TURN_FOUR_IMAGE_USER".to_string(),
                     text_elements: Vec::new(),

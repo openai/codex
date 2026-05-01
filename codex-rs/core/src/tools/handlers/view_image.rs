@@ -60,6 +60,7 @@ struct ViewImageArgs {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum ViewImageDetail {
+    High,
     Original,
 }
 
@@ -114,16 +115,15 @@ impl ToolExecutor<ToolInvocation> for ViewImageHandler {
             environment_id,
             detail,
         } = parse_arguments(&arguments)?;
-        // `view_image` accepts only its documented detail values: omit
-        // `detail` for the default path or set it to `original`.
-        // Other string values remain invalid rather than being silently
-        // reinterpreted.
+        // `high` is the explicit spelling of the default resized path.
+        // Other string values remain invalid rather than being silently reinterpreted.
         let detail = match detail.as_deref() {
             None => None,
+            Some("high") => Some(ViewImageDetail::High),
             Some("original") => Some(ViewImageDetail::Original),
             Some(detail) => {
                 return Err(FunctionCallError::RespondToModel(format!(
-                    "view_image.detail only supports `original`; omit `detail` for default resized behavior, got `{detail}`"
+                    "view_image.detail only supports `high` or `original`; omit `detail` for default high resized behavior, got `{detail}`"
                 )));
             }
         };
@@ -175,11 +175,11 @@ impl ToolExecutor<ToolInvocation> for ViewImageHandler {
         } else {
             PromptImageMode::ResizeToFit
         };
-        let image_detail = Some(if use_original_detail {
+        let image_detail = if use_original_detail {
             ImageDetail::Original
         } else {
             DEFAULT_IMAGE_DETAIL
-        });
+        };
 
         let image =
             load_for_prompt_bytes(abs_path.as_path(), file_bytes, image_mode).map_err(|error| {
@@ -208,7 +208,7 @@ impl CoreToolRuntime for ViewImageHandler {}
 
 pub struct ViewImageOutput {
     image_url: String,
-    image_detail: Option<ImageDetail>,
+    image_detail: ImageDetail,
 }
 
 impl ToolOutput for ViewImageOutput {
@@ -224,7 +224,7 @@ impl ToolOutput for ViewImageOutput {
         let body =
             FunctionCallOutputBody::ContentItems(vec![FunctionCallOutputContentItem::InputImage {
                 image_url: self.image_url.clone(),
-                detail: self.image_detail,
+                detail: Some(self.image_detail),
             }]);
         let output = FunctionCallOutputPayload {
             body,
@@ -263,7 +263,7 @@ mod tests {
     fn code_mode_result_returns_image_url_object() {
         let output = ViewImageOutput {
             image_url: "data:image/png;base64,AAA".to_string(),
-            image_detail: Some(DEFAULT_IMAGE_DETAIL),
+            image_detail: DEFAULT_IMAGE_DETAIL,
         };
 
         let result = output.code_mode_result(&ToolPayload::Function {
@@ -316,5 +316,69 @@ mod tests {
             message.contains("sandboxed filesystem operations require configured runtime paths"),
             "{message}"
         );
+    }
+
+    #[tokio::test]
+    async fn handle_rejects_unsupported_detail() {
+        let (session, turn) = make_session_and_context().await;
+
+        let result = ViewImageHandler::default()
+            .handle(ToolInvocation {
+                session: Arc::new(session),
+                turn: Arc::new(turn),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
+                tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+                call_id: "call-view-image".to_string(),
+                tool_name: codex_tools::ToolName::plain("view_image"),
+                source: ToolCallSource::Direct,
+                payload: ToolPayload::Function {
+                    arguments: json!({ "path": "image.png", "detail": "low" }).to_string(),
+                },
+            })
+            .await;
+
+        let Err(FunctionCallError::RespondToModel(message)) = result else {
+            panic!("expected unsupported detail error");
+        };
+        assert_eq!(
+            message,
+            "view_image.detail only supports `high` or `original`; omit `detail` for default high resized behavior, got `low`"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn handle_accepts_explicit_high_detail() {
+        let (session, mut turn) = make_session_and_context().await;
+        let image_dir = tempfile::tempdir().expect("create image temp dir");
+        let image_cwd = image_dir.abs();
+
+        turn.environments
+            .turn_environments
+            .first_mut()
+            .expect("default local turn environment")
+            .cwd = image_cwd.clone();
+        let image_path = image_cwd.join("image.png");
+        std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
+        turn.permission_profile = PermissionProfile::Disabled;
+
+        let result = ViewImageHandler::default()
+            .handle(ToolInvocation {
+                session: Arc::new(session),
+                turn: Arc::new(turn),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
+                tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+                call_id: "call-view-image".to_string(),
+                tool_name: codex_tools::ToolName::plain("view_image"),
+                source: ToolCallSource::Direct,
+                payload: ToolPayload::Function {
+                    arguments: json!({ "path": "image.png", "detail": "high" }).to_string(),
+                },
+            })
+            .await;
+
+        let Err(FunctionCallError::RespondToModel(message)) = result else {
+            panic!("expected image processing error");
+        };
+        assert!(message.contains("unable to process image"), "{message}");
     }
 }

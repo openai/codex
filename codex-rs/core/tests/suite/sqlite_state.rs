@@ -168,6 +168,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                         images: None,
                         local_images: Vec::new(),
                         text_elements: Vec::new(),
+                        ..Default::default()
                     })),
                 },
             ];

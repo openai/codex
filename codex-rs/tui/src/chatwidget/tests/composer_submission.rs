@@ -58,7 +58,8 @@ async fn submission_preserves_text_elements_and_local_images() {
     assert_eq!(
         items[0],
         UserInput::LocalImage {
-            path: local_images[0].clone()
+            path: local_images[0].clone(),
+            detail: None,
         }
     );
     assert_eq!(
@@ -259,12 +260,14 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
         items[0],
         UserInput::Image {
             url: remote_url.clone(),
+            detail: None,
         }
     );
     assert_eq!(
         items[1],
         UserInput::LocalImage {
             path: local_images[0].clone(),
+            detail: None,
         }
     );
     assert_eq!(
@@ -342,6 +345,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
         items,
         vec![UserInput::Image {
             url: remote_url.clone(),
+            detail: None,
         }]
     );
     assert_eq!(summary, None);
@@ -1157,9 +1161,11 @@ fn user_message_display_from_inputs_matches_flattened_user_message_shape() {
         },
         UserInput::Image {
             url: "https://example.com/remote.png".to_string(),
+            detail: None,
         },
         UserInput::LocalImage {
             path: local_image.clone(),
+            detail: None,
         },
         UserInput::Skill {
             name: "demo".to_string(),
@@ -1232,6 +1238,7 @@ async fn committed_user_message_with_hidden_prompt_context_renders_local_images(
             },
             UserInput::LocalImage {
                 path: local_image.clone(),
+                detail: None,
             },
         ],
     );

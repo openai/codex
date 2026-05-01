@@ -4727,7 +4727,7 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
     assert!(items.iter().any(|item| {
         matches!(
             item,
-            UserInput::Image { url } if url == &data_image_url
+            UserInput::Image { url, .. } if url == &data_image_url
         )
     }));
 }
