@@ -53,15 +53,14 @@ pub(crate) enum EnvironmentContextEnvironments {
 
 impl EnvironmentContextEnvironments {
     fn from_vec(environments: Vec<EnvironmentContextEnvironment>) -> Self {
-        match environments.len() {
-            0 => Self::None,
-            1 => Self::Single(
-                environments
-                    .into_iter()
-                    .next()
-                    .expect("single environment must exist"),
-            ),
-            _ => Self::Multiple(environments),
+        let mut environments = environments;
+        match environments.pop() {
+            None => Self::None,
+            Some(environment) if environments.is_empty() => Self::Single(environment),
+            Some(environment) => {
+                environments.push(environment);
+                Self::Multiple(environments)
+            }
         }
     }
 
@@ -189,12 +188,12 @@ impl EnvironmentContext {
         turn_context_item: &TurnContextItem,
         shell: String,
     ) -> Self {
+        let cwd = match AbsolutePathBuf::try_from(turn_context_item.cwd.clone()) {
+            Ok(cwd) => cwd,
+            Err(_) => AbsolutePathBuf::resolve_path_against_base(&turn_context_item.cwd, "/"),
+        };
         Self::new(
-            vec![EnvironmentContextEnvironment::legacy(
-                AbsolutePathBuf::try_from(turn_context_item.cwd.clone())
-                    .expect("turn context item cwd must be absolute"),
-                shell,
-            )],
+            vec![EnvironmentContextEnvironment::legacy(cwd, shell)],
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),

@@ -1,6 +1,5 @@
 use std::env;
 use std::ffi::OsStr;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use pretty_assertions::assert_eq;

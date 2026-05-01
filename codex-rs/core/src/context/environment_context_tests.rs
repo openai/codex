@@ -21,7 +21,7 @@ fn serialize_workspace_write_environment_context() {
     let context = EnvironmentContext::new(
         vec![EnvironmentContextEnvironment {
             id: "local".to_string(),
-            cwd: cwd.clone().abs(),
+            cwd: cwd.abs(),
             shell: fake_shell_name(),
         }],
         Some("2026-02-26".to_string()),
