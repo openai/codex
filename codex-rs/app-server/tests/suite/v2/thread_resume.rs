@@ -71,6 +71,7 @@ use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::fs::FileTimes;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -1669,7 +1670,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Result<()> {
+async fn thread_resume_uses_path_over_thread_id_when_thread_is_running() -> Result<()> {
     let server = responses::start_mock_server().await;
     let first_body = responses::sse(vec![
         responses::ev_response_created("resp-1"),
@@ -1749,23 +1750,70 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
     )
     .await??;
 
-    let resume_id = primary
+    let other_thread_id = ThreadId::new().to_string();
+    let stale_path = rollout_path(codex_home.path(), "2025-01-01T00-00-00", &thread_id);
+    std::fs::create_dir_all(stale_path.parent().expect("stale path parent"))?;
+    let thread_uuid = Uuid::parse_str(&thread_id)?;
+    let mut stale_file = std::fs::File::create(&stale_path)?;
+    let stale_meta = json!({
+        "timestamp": "2025-01-01T00:00:00Z",
+        "type": "session_meta",
+        "payload": {
+            "id": thread_uuid,
+            "timestamp": "2025-01-01T00:00:00Z",
+            "cwd": codex_home.path(),
+            "originator": "test_originator",
+            "cli_version": "test_version",
+            "source": "cli",
+            "model_provider": "test-provider",
+        },
+    });
+    writeln!(stale_file, "{stale_meta}")?;
+    let stale_user_event = json!({
+        "timestamp": "2025-01-01T00:00:00Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "user_message",
+            "message": "stale history",
+            "kind": "plain",
+        },
+    });
+    writeln!(stale_file, "{stale_user_event}")?;
+
+    let stale_resume_id = primary
         .send_thread_resume_request(ThreadResumeParams {
-            thread_id: thread_id.clone(),
-            path: Some(PathBuf::from("/tmp/does-not-match-running-rollout.jsonl")),
+            thread_id: other_thread_id.clone(),
+            path: Some(stale_path),
             ..Default::default()
         })
         .await?;
-    let resume_err: JSONRPCError = timeout(
+    let stale_resume_err: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_error_message(RequestId::Integer(resume_id)),
+        primary.read_stream_until_error_message(RequestId::Integer(stale_resume_id)),
     )
     .await??;
     assert!(
-        resume_err.error.message.contains("mismatched path"),
+        stale_resume_err.error.message.contains("stale path"),
         "unexpected resume error: {}",
-        resume_err.error.message
+        stale_resume_err.error.message
     );
+
+    let resume_by_path_id = primary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: other_thread_id.clone(),
+            path: thread.path,
+            ..Default::default()
+        })
+        .await?;
+    let resume_by_path_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(resume_by_path_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed, ..
+    } = to_response::<ThreadResumeResponse>(resume_by_path_resp)?;
+    assert_eq!(resumed.id, thread_id);
 
     primary
         .interrupt_turn_and_wait_for_aborted(thread_id, running_turn.id, DEFAULT_READ_TIMEOUT)
@@ -2463,7 +2511,7 @@ async fn thread_resume_surfaces_cloud_requirements_load_errors() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
+async fn thread_resume_uses_path_over_invalid_thread_id() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -2523,13 +2571,6 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(resumed.id, thread.id);
-    let resumed_path = resumed.path.as_ref().expect("resumed thread path");
-    let original_path = thread.path.as_ref().expect("original thread path");
-    assert_eq!(
-        normalized_existing_path(resumed_path)?,
-        normalized_existing_path(original_path)?
-    );
-    assert_eq!(resumed.status, ThreadStatus::Idle);
 
     Ok(())
 }

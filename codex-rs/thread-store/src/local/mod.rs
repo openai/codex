@@ -12,7 +12,6 @@ mod test_support;
 
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
-use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::StateDbHandle;
 use std::collections::HashMap;
@@ -41,9 +40,31 @@ use crate::UpdateThreadMetadataParams;
 /// Local filesystem/SQLite-backed implementation of [`ThreadStore`].
 #[derive(Clone)]
 pub struct LocalThreadStore {
-    pub(super) config: RolloutConfig,
+    pub(super) config: LocalThreadStoreConfig,
     live_recorders: Arc<Mutex<HashMap<ThreadId, RolloutRecorder>>>,
     state_db: Arc<OnceCell<StateDbHandle>>,
+}
+
+/// Process-scoped configuration for local thread storage.
+///
+/// This describes where local storage lives. New-thread rollout metadata such
+/// as cwd, provider, and memory mode is supplied when live persistence is opened.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalThreadStoreConfig {
+    pub codex_home: PathBuf,
+    pub sqlite_home: PathBuf,
+    /// Provider used only when older local metadata does not contain one.
+    pub default_model_provider_id: String,
+}
+
+impl LocalThreadStoreConfig {
+    pub fn from_config(config: &impl codex_rollout::RolloutConfigView) -> Self {
+        Self {
+            codex_home: config.codex_home().to_path_buf(),
+            sqlite_home: config.sqlite_home().to_path_buf(),
+            default_model_provider_id: config.model_provider_id().to_string(),
+        }
+    }
 }
 
 impl std::fmt::Debug for LocalThreadStore {
@@ -55,8 +76,8 @@ impl std::fmt::Debug for LocalThreadStore {
 }
 
 impl LocalThreadStore {
-    /// Create a local store from the rollout configuration used by existing local persistence.
-    pub fn new(config: RolloutConfig) -> Self {
+    /// Create a local store from process-scoped local storage configuration.
+    pub fn new(config: LocalThreadStoreConfig) -> Self {
         Self {
             config,
             live_recorders: Arc::new(Mutex::new(HashMap::new())),
@@ -68,7 +89,13 @@ impl LocalThreadStore {
     pub async fn state_db(&self) -> Option<StateDbHandle> {
         self.state_db
             .get_or_try_init(|| async {
-                codex_rollout::state_db::init(&self.config).await.ok_or(())
+                codex_rollout::state_db::init_with_roots(
+                    self.config.codex_home.clone(),
+                    self.config.sqlite_home.clone(),
+                    self.config.default_model_provider_id.clone(),
+                )
+                .await
+                .ok_or(())
             })
             .await
             .ok()
@@ -176,6 +203,16 @@ impl ThreadStore for LocalThreadStore {
         params: LoadThreadHistoryParams,
     ) -> ThreadStoreResult<StoredThreadHistory> {
         if let Ok(rollout_path) = live_writer::rollout_path(self, params.thread_id).await {
+            if !params.include_archived
+                && helpers::rollout_path_is_archived(
+                    self.config.codex_home.as_path(),
+                    rollout_path.as_path(),
+                )
+            {
+                return Err(ThreadStoreError::InvalidRequest {
+                    message: format!("thread {} is archived", params.thread_id),
+                });
+            }
             return read_thread::read_thread_by_rollout_path(
                 self,
                 rollout_path,
@@ -251,11 +288,13 @@ mod tests {
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::ThreadMemoryMode;
     use codex_protocol::protocol::UserMessageEvent;
     use tempfile::TempDir;
 
     use super::*;
     use crate::ThreadEventPersistenceMode;
+    use crate::ThreadPersistenceMetadata;
     use crate::local::test_support::test_config;
     use crate::local::test_support::write_archived_session_file;
     use crate::local::test_support::write_session_file;
@@ -307,6 +346,26 @@ mod tests {
         assert!(
             matches!(err, ThreadStoreError::ThreadNotFound { thread_id: missing } if missing == thread_id)
         );
+    }
+
+    #[tokio::test]
+    async fn create_thread_rejects_missing_cwd() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let thread_id = ThreadId::default();
+        let mut params = create_thread_params(thread_id);
+        params.metadata.cwd = None;
+
+        let err = store
+            .create_thread(params)
+            .await
+            .expect_err("local thread store should require cwd");
+
+        assert!(matches!(
+            err,
+            ThreadStoreError::InvalidRequest { message }
+                if message == "local thread store requires a cwd"
+        ));
     }
 
     #[tokio::test]
@@ -387,6 +446,7 @@ mod tests {
                 rollout_path: None,
                 history: None,
                 include_archived: true,
+                metadata: thread_metadata(),
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -428,6 +488,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resume_thread_rejects_duplicate_live_writer() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let thread_id = ThreadId::default();
+
+        store
+            .create_thread(create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+        let rollout_path = store
+            .live_rollout_path(thread_id)
+            .await
+            .expect("live rollout path");
+        let err = store
+            .resume_thread(ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(rollout_path),
+                history: None,
+                include_archived: true,
+                metadata: thread_metadata(),
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            })
+            .await
+            .expect_err("duplicate live resume should fail");
+        assert!(matches!(err, ThreadStoreError::InvalidRequest { .. }));
+        assert!(err.to_string().contains("already has a live local writer"));
+    }
+
+    #[tokio::test]
+    async fn resume_thread_rejects_missing_cwd() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let uuid = uuid::Uuid::from_u128(407);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path =
+            write_session_file(home.path(), "2025-01-04T11-30-00", uuid).expect("session file");
+        let err = store
+            .resume_thread(ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(rollout_path),
+                history: None,
+                include_archived: true,
+                metadata: ThreadPersistenceMetadata {
+                    cwd: None,
+                    model_provider: "test-provider".to_string(),
+                    memory_mode: ThreadMemoryMode::Enabled,
+                },
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            })
+            .await
+            .expect_err("missing cwd should fail");
+
+        assert!(matches!(err, ThreadStoreError::InvalidRequest { .. }));
+        assert!(err.to_string().contains("requires a cwd"));
+    }
+
+    #[tokio::test]
     async fn load_history_uses_live_writer_rollout_path() {
         let home = TempDir::new().expect("temp dir");
         let external_home = TempDir::new().expect("external temp dir");
@@ -443,6 +560,7 @@ mod tests {
                 rollout_path: Some(rollout_path),
                 history: None,
                 include_archived: true,
+                metadata: thread_metadata(),
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -476,6 +594,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_thread_uses_live_writer_rollout_path_for_external_resume() {
+        let home = TempDir::new().expect("temp dir");
+        let external_home = TempDir::new().expect("external temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let uuid = uuid::Uuid::from_u128(406);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path = write_session_file(external_home.path(), "2025-01-04T11-00-00", uuid)
+            .expect("external session file");
+
+        store
+            .resume_thread(ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(rollout_path.clone()),
+                history: None,
+                include_archived: true,
+                metadata: thread_metadata(),
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            })
+            .await
+            .expect("resume live thread");
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: true,
+            })
+            .await
+            .expect("read external live thread");
+
+        assert_eq!(thread.rollout_path, Some(rollout_path));
+        assert!(thread.history.expect("history").items.iter().any(|item| {
+            matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::UserMessage(event)) if event.message == "Hello from user"
+            )
+        }));
+    }
+
+    #[tokio::test]
     async fn load_history_uses_live_writer_rollout_path_for_archived_source() {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()));
@@ -490,6 +648,7 @@ mod tests {
                 rollout_path: Some(rollout_path),
                 history: None,
                 include_archived: true,
+                metadata: thread_metadata(),
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -506,10 +665,30 @@ mod tests {
             .await
             .expect("flush live thread");
 
-        let history = store
+        let err = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect_err("active-only read should reject archived live thread");
+        assert!(matches!(err, ThreadStoreError::InvalidRequest { .. }));
+
+        let err = store
             .load_history(LoadThreadHistoryParams {
                 thread_id,
                 include_archived: false,
+            })
+            .await
+            .expect_err("active-only history should reject archived live thread");
+        assert!(matches!(err, ThreadStoreError::InvalidRequest { .. }));
+        assert!(err.to_string().contains("archived"));
+
+        let history = store
+            .load_history(LoadThreadHistoryParams {
+                thread_id,
+                include_archived: true,
             })
             .await
             .expect("load archived live history");
@@ -574,7 +753,16 @@ mod tests {
             source: SessionSource::Exec,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            metadata: thread_metadata(),
             event_persistence_mode: ThreadEventPersistenceMode::Limited,
+        }
+    }
+
+    fn thread_metadata() -> ThreadPersistenceMetadata {
+        ThreadPersistenceMetadata {
+            cwd: Some(std::env::current_dir().expect("cwd")),
+            model_provider: "test-provider".to_string(),
+            memory_mode: ThreadMemoryMode::Enabled,
         }
     }
 

@@ -243,6 +243,9 @@ impl ChatWidget {
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
             }
+            SlashCommand::Vim => {
+                self.toggle_vim_mode_and_notify();
+            }
             SlashCommand::Keymap => {
                 self.open_keymap_picker();
             }
@@ -316,9 +319,6 @@ impl ChatWidget {
             SlashCommand::Logout => {
                 self.app_event_tx.send(AppEvent::Logout);
             }
-            // SlashCommand::Undo => {
-            //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
-            // }
             SlashCommand::Copy => {
                 self.copy_last_agent_markdown();
             }
@@ -846,6 +846,7 @@ impl ChatWidget {
             | SlashCommand::Plugins
             | SlashCommand::Rollout
             | SlashCommand::Copy
+            | SlashCommand::Vim
             | SlashCommand::Diff
             | SlashCommand::Rename
             | SlashCommand::TestApproval => QueueDrain::Continue,

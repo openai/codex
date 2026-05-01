@@ -65,6 +65,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::connectors;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core::thread_store_from_config;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_feedback::CodexFeedback;
@@ -285,12 +286,17 @@ impl MessageProcessor {
         auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));
+        // The thread store is intentionally process-scoped. Config reloads can
+        // affect per-thread behavior, but they must not move newly started,
+        // resumed, or forked threads to a different persistence backend/root.
+        let thread_store = thread_store_from_config(config.as_ref());
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
             session_source,
             environment_manager,
             Some(analytics_events_client.clone()),
+            Arc::clone(&thread_store),
         ));
         thread_manager
             .plugins_manager()
@@ -304,6 +310,7 @@ impl MessageProcessor {
             arg0_paths,
             config: Arc::clone(&config),
             config_manager: config_manager.clone(),
+            thread_store,
             feedback,
             log_db,
         });

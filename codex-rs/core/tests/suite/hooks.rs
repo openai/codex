@@ -315,7 +315,7 @@ elif mode == "exit_2":
         .unwrap_or_default();
     let config_toml = format!(
         r#"[features]
-codex_hooks = true
+hooks = true
 
 [hooks]
 

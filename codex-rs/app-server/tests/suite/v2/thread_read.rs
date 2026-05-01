@@ -48,6 +48,7 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource as ProtocolSessionSource;
+use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
@@ -56,6 +57,7 @@ use codex_thread_store::CreateThreadParams;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::ThreadEventPersistenceMode;
 use codex_thread_store::ThreadMetadataPatch;
+use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::UpdateThreadMetadataParams;
 use core_test_support::responses;
@@ -1028,6 +1030,11 @@ async fn seed_pathless_store_thread(
             source: ProtocolSessionSource::Cli,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            metadata: ThreadPersistenceMetadata {
+                cwd: None,
+                model_provider: "test-provider".to_string(),
+                memory_mode: ThreadMemoryMode::Disabled,
+            },
             event_persistence_mode: ThreadEventPersistenceMode::default(),
         })
         .await?;

@@ -387,8 +387,6 @@ pub struct PluginsManager {
     configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
     cached_enabled_outcome: RwLock<Option<CachedPluginLoadOutcome>>,
-    // TODO(remote plugins): reset this cache when ChatGPT auth/account state changes so stale
-    // remote installed state cannot remain effective for a different account.
     remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     remote_sync_lock: Semaphore,
@@ -668,6 +666,35 @@ impl PluginsManager {
         );
     }
 
+    fn maybe_start_remote_installed_plugin_bundle_sync(
+        self: &Arc<Self>,
+        config: &PluginsConfigInput,
+        auth: Option<CodexAuth>,
+        on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+    ) {
+        if !config.plugins_enabled || !config.remote_plugin_enabled {
+            return;
+        }
+
+        let manager = Arc::clone(self);
+        let config_for_refresh = config.clone();
+        let auth_for_refresh = auth.clone();
+        let on_local_cache_changed = Arc::new(move || {
+            manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
+                &config_for_refresh,
+                auth_for_refresh.clone(),
+                on_effective_plugins_changed.clone(),
+            );
+        });
+
+        crate::remote::maybe_start_remote_installed_plugin_bundle_sync(
+            self.codex_home.clone(),
+            remote_plugin_service_config(config),
+            auth,
+            Some(on_local_cache_changed),
+        );
+    }
+
     pub fn maybe_start_plugin_list_background_tasks_for_config(
         self: &Arc<Self>,
         config: &PluginsConfigInput,
@@ -677,6 +704,11 @@ impl PluginsManager {
     ) {
         self.maybe_start_non_curated_plugin_cache_refresh(roots);
         self.maybe_start_remote_installed_plugins_cache_refresh(
+            config,
+            auth.clone(),
+            on_effective_plugins_changed.clone(),
+        );
+        self.maybe_start_remote_installed_plugin_bundle_sync(
             config,
             auth,
             on_effective_plugins_changed,
@@ -1413,6 +1445,11 @@ impl PluginsManager {
                 tokio::spawn(async move {
                     let auth = auth_manager.auth().await;
                     manager.maybe_start_remote_installed_plugins_cache_refresh(
+                        &config,
+                        auth.clone(),
+                        on_effective_plugins_changed.clone(),
+                    );
+                    manager.maybe_start_remote_installed_plugin_bundle_sync(
                         &config,
                         auth,
                         on_effective_plugins_changed,

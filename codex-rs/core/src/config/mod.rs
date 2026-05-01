@@ -23,7 +23,9 @@ use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
 use codex_config::ThreadConfigLoader;
+use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
@@ -100,6 +102,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -115,6 +118,9 @@ use crate::config::permissions::default_builtin_permission_profile_name;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
 use crate::config::permissions::network_proxy_config_for_profile_selection;
 use crate::config::permissions::validate_user_permission_profile_names;
+use crate::config_lock::config_without_lock_controls;
+use crate::config_lock::lock_layer_from_config;
+use crate::config_lock::read_config_lock_from_path;
 use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
@@ -162,7 +168,7 @@ impl Default for GhostSnapshotConfig {
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
-pub(crate) const AGENTS_MD_MAX_BYTES: usize = 32 * 1024; // 32 KiB
+pub(crate) const AGENTS_MD_MAX_BYTES: usize = DEFAULT_PROJECT_DOC_MAX_BYTES; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usize = 4;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
@@ -507,6 +513,9 @@ pub struct Config {
     /// Persisted startup availability NUX state for model tooltips.
     pub model_availability_nux: ModelAvailabilityNuxConfig,
 
+    /// Start the composer in Vim mode (`Normal`) by default.
+    pub tui_vim_mode_default: bool,
+
     /// Start the TUI in the specified collaboration mode (plan/default).
 
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
@@ -520,6 +529,9 @@ pub struct Config {
     ///
     /// When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.
     pub tui_status_line: Option<Vec<String>>,
+
+    /// Whether to color status line items with colors from the active syntax theme.
+    pub tui_status_line_use_colors: bool,
 
     /// Ordered list of terminal title item identifiers for the TUI.
     ///
@@ -616,6 +628,20 @@ pub struct Config {
 
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
+
+    /// Directory where Codex writes effective session config lock files.
+    pub config_lock_export_dir: Option<AbsolutePathBuf>,
+
+    /// Whether config lock replay ignores Codex version drift between the
+    /// lock metadata and the regenerated lock.
+    pub config_lock_allow_codex_version_mismatch: bool,
+
+    /// Whether config lock creation saves values resolved from the model
+    /// catalog/session configuration.
+    pub config_lock_save_fields_resolved_from_model_catalog: bool,
+
+    /// Effective config lock used for strict replay validation.
+    pub config_lock_toml: Option<Arc<ConfigLockfileToml>>,
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
@@ -786,7 +812,7 @@ pub struct Config {
     pub otel: codex_config::types::OtelConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MultiAgentV2Config {
     pub max_concurrent_threads_per_session: usize,
     pub min_wait_timeout_ms: i64,
@@ -955,6 +981,42 @@ impl ConfigBuilder {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, err));
             }
         };
+        let config_lock_settings = config_toml
+            .debug
+            .as_ref()
+            .and_then(|debug| debug.config_lockfile.as_ref());
+        if let Some(config_lock_load_path) =
+            config_lock_settings.and_then(|config_lock| config_lock.load_path.as_ref())
+        {
+            let allow_codex_version_mismatch = config_lock_settings
+                .and_then(|config_lock| config_lock.allow_codex_version_mismatch)
+                .unwrap_or(false);
+            let save_fields_resolved_from_model_catalog = config_lock_settings
+                .and_then(|config_lock| config_lock.save_fields_resolved_from_model_catalog)
+                .unwrap_or(true);
+            let lockfile_toml = read_config_lock_from_path(config_lock_load_path).await?;
+            let expected_lock_config = lockfile_toml.clone();
+            let lock_layer = lock_layer_from_config(config_lock_load_path, &lockfile_toml)?;
+            let lock_config_toml = config_without_lock_controls(&lockfile_toml.config);
+            let lock_config_layer_stack = ConfigLayerStack::new(
+                vec![lock_layer],
+                config_layer_stack.requirements().clone(),
+                config_layer_stack.requirements_toml().clone(),
+            )?;
+            let mut config = Config::load_config_with_layer_stack(
+                LOCAL_FS.as_ref(),
+                lock_config_toml,
+                harness_overrides,
+                codex_home,
+                lock_config_layer_stack,
+            )
+            .await?;
+            config.config_lock_toml = Some(Arc::new(expected_lock_config));
+            config.config_lock_allow_codex_version_mismatch = allow_codex_version_mismatch;
+            config.config_lock_save_fields_resolved_from_model_catalog =
+                save_fields_resolved_from_model_catalog;
+            return Ok(config);
+        }
         Config::load_config_with_layer_stack(
             LOCAL_FS.as_ref(),
             config_toml,
@@ -1973,7 +2035,10 @@ impl Config {
 
         let user_instructions = AgentsMdManager::load_global_instructions(Some(&codex_home))
             .map(|loaded| loaded.contents);
-        let mut startup_warnings = Vec::new();
+        let mut startup_warnings = config_layer_stack
+            .startup_warnings()
+            .unwrap_or_default()
+            .to_vec();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
@@ -2621,7 +2686,9 @@ impl Config {
             "model instructions file",
         )
         .await?;
-        let base_instructions = base_instructions.or(file_base_instructions);
+        let base_instructions = base_instructions
+            .or(file_base_instructions)
+            .or(cfg.instructions.clone());
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
         let include_permissions_instructions = config_profile
             .include_permissions_instructions
@@ -2893,6 +2960,24 @@ impl Config {
             codex_home,
             sqlite_home,
             log_dir,
+            config_lock_export_dir: cfg
+                .debug
+                .as_ref()
+                .and_then(|debug| debug.config_lockfile.as_ref())
+                .and_then(|config_lock| config_lock.export_dir.clone()),
+            config_lock_allow_codex_version_mismatch: cfg
+                .debug
+                .as_ref()
+                .and_then(|debug| debug.config_lockfile.as_ref())
+                .and_then(|config_lock| config_lock.allow_codex_version_mismatch)
+                .unwrap_or(false),
+            config_lock_save_fields_resolved_from_model_catalog: cfg
+                .debug
+                .as_ref()
+                .and_then(|debug| debug.config_lockfile.as_ref())
+                .and_then(|config_lock| config_lock.save_fields_resolved_from_model_catalog)
+                .unwrap_or(true),
+            config_lock_toml: None,
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
@@ -2994,12 +3079,22 @@ impl Config {
                 .as_ref()
                 .map(|t| t.model_availability_nux.clone())
                 .unwrap_or_default(),
+            tui_vim_mode_default: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.vim_mode_default)
+                .unwrap_or(false),
             tui_alternate_screen: cfg
                 .tui
                 .as_ref()
                 .map(|t| t.alternate_screen)
                 .unwrap_or_default(),
             tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
+            tui_status_line_use_colors: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.status_line_use_colors)
+                .unwrap_or(true),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
             terminal_resize_reflow,

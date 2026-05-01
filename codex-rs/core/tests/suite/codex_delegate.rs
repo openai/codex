@@ -229,21 +229,15 @@ async fn codex_delegate_ignores_legacy_deltas() {
         .expect("submit review");
 
     let mut reasoning_delta_count = 0;
-    let mut legacy_reasoning_delta_count = 0;
 
     loop {
         let ev = wait_for_event(&test.codex, |_| true).await;
         match ev {
             EventMsg::ReasoningContentDelta(_) => reasoning_delta_count += 1,
-            EventMsg::AgentReasoningDelta(_) => legacy_reasoning_delta_count += 1,
             EventMsg::TurnComplete(_) => break,
             _ => {}
         }
     }
 
     assert_eq!(reasoning_delta_count, 1, "expected one new reasoning delta");
-    assert_eq!(
-        legacy_reasoning_delta_count, 1,
-        "expected one legacy reasoning delta"
-    );
 }

@@ -2217,6 +2217,25 @@
       ],
       "type": "object"
     },
+    "PluginSkillReadParams": {
+      "properties": {
+        "remoteMarketplaceName": {
+          "type": "string"
+        },
+        "remotePluginId": {
+          "type": "string"
+        },
+        "skillName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "remoteMarketplaceName",
+        "remotePluginId",
+        "skillName"
+      ],
+      "type": "object"
+    },
     "PluginUninstallParams": {
       "properties": {
         "pluginId": {
@@ -3453,10 +3472,6 @@
         "ephemeral": {
           "type": "boolean"
         },
-        "excludeTurns": {
-          "description": "When true, return only thread metadata and live fork state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after forking.",
-          "type": "boolean"
-        },
         "model": {
           "description": "Configuration overrides for the forked thread, if any.",
           "type": [
@@ -3858,10 +3873,6 @@
             "null"
           ]
         },
-        "excludeTurns": {
-          "description": "When true, return only thread metadata and live-resume state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after resuming.",
-          "type": "boolean"
-        },
         "model": {
           "description": "Configuration overrides for the resumed thread, if any.",
           "type": [
@@ -4120,44 +4131,6 @@
         "clear"
       ],
       "type": "string"
-    },
-    "ThreadTurnsListParams": {
-      "properties": {
-        "cursor": {
-          "description": "Opaque cursor to pass to the next call to continue after the last turn.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "limit": {
-          "description": "Optional turn page size.",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "sortDirection": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SortDirection"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional turn pagination direction; defaults to descending."
-        },
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "threadId"
-      ],
-      "type": "object"
     },
     "ThreadUnarchiveParams": {
       "properties": {
@@ -4890,30 +4863,6 @@
       "type": "object"
     },
     {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "thread/turns/list"
-          ],
-          "title": "Thread/turns/listRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadTurnsListParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Thread/turns/listRequest",
-      "type": "object"
-    },
-    {
       "description": "Append raw Responses API items to the thread history without starting a user turn.",
       "properties": {
         "id": {
@@ -5104,6 +5053,30 @@
         "params"
       ],
       "title": "Plugin/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/skill/read"
+          ],
+          "title": "Plugin/skill/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginSkillReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/skill/readRequest",
       "type": "object"
     },
     {

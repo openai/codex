@@ -71,7 +71,7 @@ pub(super) async fn unarchive_thread(
         message: format!("failed to update unarchived thread timestamp: {err}"),
     })?;
 
-    if let Some(ctx) = codex_rollout::state_db::get_state_db(&store.config).await {
+    if let Some(ctx) = store.state_db().await {
         let _ = ctx
             .mark_unarchived(thread_id, restored_path.as_path())
             .await;
@@ -88,7 +88,7 @@ pub(super) async fn unarchive_thread(
     stored_thread_from_rollout_item(
         item,
         /*archived*/ false,
-        store.config.model_provider_id.as_str(),
+        store.config.default_model_provider_id.as_str(),
     )
     .ok_or_else(|| ThreadStoreError::Internal {
         message: format!(
@@ -154,7 +154,7 @@ mod tests {
             .expect("archived session file");
         let runtime = codex_state::StateRuntime::init(
             home.path().to_path_buf(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
@@ -168,10 +168,10 @@ mod tests {
             Utc::now(),
             SessionSource::Cli,
         );
-        builder.model_provider = Some(config.model_provider_id.clone());
+        builder.model_provider = Some(config.default_model_provider_id.clone());
         builder.cwd = home.path().to_path_buf();
         builder.cli_version = Some("test_version".to_string());
-        let mut metadata = builder.build(config.model_provider_id.as_str());
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.archived_at = Some(metadata.updated_at);
         runtime
             .upsert_thread(&metadata)

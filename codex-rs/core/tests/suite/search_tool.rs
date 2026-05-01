@@ -793,7 +793,6 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         .thread_manager
         .start_thread_with_tools(
             base_test.config.clone(),
-            codex_core::thread_store_from_config(&base_test.config),
             vec![dynamic_tool],
             /*persist_extended_history*/ false,
         )

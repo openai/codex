@@ -1100,15 +1100,19 @@ See the Codex keymap documentation for supported actions and examples."
                         self.chat_widget.desired_height(tui.terminal.size()?.width);
                     if terminal_resize_reflow_enabled {
                         tui.draw_with_resize_reflow(desired_height, |frame| {
-                            self.chat_widget.render(frame.area(), frame.buffer);
-                            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                            let area = frame.area();
+                            self.chat_widget.render(area, frame.buffer);
+                            if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
+                                frame.set_cursor_style(self.chat_widget.cursor_style(area));
                                 frame.set_cursor_position((x, y));
                             }
                         })?;
                     } else {
                         tui.draw(desired_height, |frame| {
-                            self.chat_widget.render(frame.area(), frame.buffer);
-                            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                            let area = frame.area();
+                            self.chat_widget.render(area, frame.buffer);
+                            if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
+                                frame.set_cursor_style(self.chat_widget.cursor_style(area));
                                 frame.set_cursor_position((x, y));
                             }
                         })?;

@@ -1,7 +1,10 @@
 use super::*;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
+use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_core_plugins::remote::is_valid_remote_plugin_id;
+use codex_core_plugins::remote::validate_remote_plugin_id;
 
 impl CodexMessageProcessor {
     pub(super) async fn plugin_list(
@@ -77,6 +80,7 @@ impl CodexMessageProcessor {
                                 source: marketplace_plugin_source_to_info(plugin.source),
                                 install_policy: plugin.policy.installation.into(),
                                 auth_policy: plugin.policy.authentication.into(),
+                                availability: PluginAvailability::Available,
                                 interface: plugin.interface.map(local_plugin_interface_to_info),
                             })
                             .collect(),
@@ -243,6 +247,7 @@ impl CodexMessageProcessor {
                         enabled: outcome.plugin.enabled,
                         install_policy: outcome.plugin.policy.installation.into(),
                         auth_policy: outcome.plugin.policy.authentication.into(),
+                        availability: PluginAvailability::Available,
                         interface: outcome.plugin.interface.map(local_plugin_interface_to_info),
                     },
                     description: outcome.plugin.description,
@@ -258,15 +263,15 @@ impl CodexMessageProcessor {
                 if !config.features.enabled(Feature::Plugins)
                     || !config.features.enabled(Feature::RemotePlugin)
                 {
-                    return Err(invalid_request("remote plugin read is not enabled"));
+                    return Err(invalid_request(format!(
+                        "remote plugin read is not enabled for marketplace {remote_marketplace_name}"
+                    )));
                 }
                 let auth = self.auth_manager.auth().await;
                 let remote_plugin_service_config = RemotePluginServiceConfig {
                     chatgpt_base_url: config.chatgpt_base_url.clone(),
                 };
-                if plugin_name.is_empty() || !is_valid_remote_plugin_id(&plugin_name) {
-                    return Err(invalid_request("invalid remote plugin id"));
-                }
+                validate_remote_plugin_id(&plugin_name)?;
                 let remote_detail = codex_core_plugins::remote::fetch_remote_plugin_detail(
                     &remote_plugin_service_config,
                     auth.as_ref(),
@@ -295,6 +300,61 @@ impl CodexMessageProcessor {
         };
 
         Ok(PluginReadResponse { plugin })
+    }
+
+    pub(super) async fn plugin_skill_read(
+        &self,
+        request_id: ConnectionRequestId,
+        params: PluginSkillReadParams,
+    ) {
+        let result = self.plugin_skill_read_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn plugin_skill_read_response(
+        &self,
+        params: PluginSkillReadParams,
+    ) -> Result<PluginSkillReadResponse, JSONRPCErrorError> {
+        let PluginSkillReadParams {
+            remote_marketplace_name,
+            remote_plugin_id,
+            skill_name,
+        } = params;
+
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        if !config.features.enabled(Feature::Plugins)
+            || !config.features.enabled(Feature::RemotePlugin)
+        {
+            return Err(invalid_request(format!(
+                "remote plugin skill read is not enabled for marketplace {remote_marketplace_name}"
+            )));
+        }
+        validate_remote_plugin_id(&remote_plugin_id)?;
+        if skill_name.is_empty() {
+            return Err(invalid_request(
+                "invalid remote plugin skill name: cannot be empty",
+            ));
+        }
+
+        let auth = self.auth_manager.auth().await;
+        let remote_plugin_service_config = RemotePluginServiceConfig {
+            chatgpt_base_url: config.chatgpt_base_url.clone(),
+        };
+        let remote_skill_detail = codex_core_plugins::remote::fetch_remote_plugin_skill_detail(
+            &remote_plugin_service_config,
+            auth.as_ref(),
+            &remote_marketplace_name,
+            &remote_plugin_id,
+            &skill_name,
+        )
+        .await
+        .map_err(|err| {
+            remote_plugin_catalog_error_to_jsonrpc(err, "read remote plugin skill details")
+        })?;
+
+        Ok(PluginSkillReadResponse {
+            contents: remote_skill_detail.contents,
+        })
     }
 
     pub(super) async fn plugin_share_save(
@@ -327,14 +387,16 @@ impl CodexMessageProcessor {
         let result = codex_core_plugins::remote::save_remote_plugin_share(
             &remote_plugin_service_config,
             auth.as_ref(),
-            plugin_path.as_path(),
+            config.codex_home.as_path(),
+            &plugin_path,
             remote_plugin_id.as_deref(),
         )
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "save remote plugin share"))?;
+        let remote_plugin_id = result.remote_plugin_id;
         self.clear_plugin_related_caches();
         Ok(PluginShareSaveResponse {
-            remote_plugin_id: result.remote_plugin_id,
+            remote_plugin_id,
             share_url: result.share_url.unwrap_or_default(),
         })
     }
@@ -358,11 +420,24 @@ impl CodexMessageProcessor {
         let data = codex_core_plugins::remote::list_remote_plugin_shares(
             &remote_plugin_service_config,
             auth.as_ref(),
+            config.codex_home.as_path(),
         )
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "list remote plugin shares"))?
         .into_iter()
-        .map(remote_plugin_summary_to_info)
+        .map(|summary| {
+            let RemoteCatalogPluginShareSummary {
+                summary,
+                share_url,
+                local_plugin_path,
+            } = summary;
+            let plugin = remote_plugin_summary_to_info(summary);
+            PluginShareListItem {
+                plugin,
+                share_url: share_url.unwrap_or_default(),
+                local_plugin_path,
+            }
+        })
         .collect();
         Ok(PluginShareListResponse { data })
     }
@@ -392,6 +467,7 @@ impl CodexMessageProcessor {
         codex_core_plugins::remote::delete_remote_plugin_share(
             &remote_plugin_service_config,
             auth.as_ref(),
+            config.codex_home.as_path(),
             &remote_plugin_id,
         )
         .await
@@ -505,17 +581,17 @@ impl CodexMessageProcessor {
     async fn remote_plugin_install_response(
         &self,
         remote_marketplace_name: String,
-        plugin_name: String,
+        remote_plugin_id: String,
     ) -> Result<PluginInstallResponse, JSONRPCErrorError> {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         if !config.features.enabled(Feature::Plugins)
             || !config.features.enabled(Feature::RemotePlugin)
         {
-            return Err(invalid_request("remote plugin install is not enabled"));
+            return Err(invalid_request(format!(
+                "remote plugin install is not enabled for marketplace {remote_marketplace_name}"
+            )));
         }
-        if plugin_name.is_empty() || !is_valid_remote_plugin_id(&plugin_name) {
-            return Err(invalid_request("invalid remote plugin id"));
-        }
+        validate_remote_plugin_id(&remote_plugin_id)?;
 
         let auth = self.auth_manager.auth().await;
         let remote_plugin_service_config = RemotePluginServiceConfig {
@@ -526,7 +602,7 @@ impl CodexMessageProcessor {
                 &remote_plugin_service_config,
                 auth.as_ref(),
                 &remote_marketplace_name,
-                &plugin_name,
+                &remote_plugin_id,
             )
             .await
             .map_err(|err| {
@@ -535,14 +611,28 @@ impl CodexMessageProcessor {
                     "read remote plugin details before install",
                 )
             })?;
+        if remote_detail.summary.availability == PluginAvailability::DisabledByAdmin {
+            let remote_plugin_id = &remote_detail.summary.id;
+            return Err(invalid_request(format!(
+                "remote plugin {remote_plugin_id} is disabled by admin"
+            )));
+        }
         if remote_detail.summary.install_policy == PluginInstallPolicy::NotAvailable {
             return Err(invalid_request(format!(
-                "remote plugin {plugin_name} is not available for install"
+                "remote plugin {remote_plugin_id} is not available for install"
             )));
         }
         let actual_remote_marketplace_name = remote_detail.marketplace_name.clone();
+        // Direct install writes the same cache tree that installed-plugin sync
+        // prunes before the backend installed snapshot can include this plugin.
+        let _remote_plugin_cache_mutation =
+            codex_core_plugins::remote::mark_remote_plugin_cache_mutation_in_flight(
+                config.codex_home.as_path(),
+                &actual_remote_marketplace_name,
+                &remote_detail.summary.name,
+            );
         let validated_bundle = codex_core_plugins::remote_bundle::validate_remote_plugin_bundle(
-            &plugin_name,
+            &remote_plugin_id,
             &actual_remote_marketplace_name,
             &remote_detail.summary.name,
             remote_detail.release_version.as_deref(),
@@ -564,7 +654,7 @@ impl CodexMessageProcessor {
             &remote_plugin_service_config,
             auth.as_ref(),
             &actual_remote_marketplace_name,
-            &plugin_name,
+            &remote_plugin_id,
         )
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "install remote plugin"))?;
@@ -576,6 +666,12 @@ impl CodexMessageProcessor {
                 auth.clone(),
                 Some(self.effective_plugins_changed_callback(config.clone())),
             );
+
+        let mut plugin_metadata =
+            plugin_telemetry_metadata_from_root(&result.plugin_id, &result.installed_path).await;
+        plugin_metadata.remote_plugin_id = Some(remote_plugin_id);
+        self.analytics_events_client
+            .track_plugin_installed(plugin_metadata);
 
         let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
         if !plugin_mcp_servers.is_empty() {
@@ -678,13 +774,13 @@ impl CodexMessageProcessor {
     ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
         let PluginUninstallParams { plugin_id } = params;
         if codex_plugin::PluginId::parse(&plugin_id).is_err()
-            && (plugin_id.is_empty() || !is_valid_remote_plugin_id(&plugin_id))
+            && !is_valid_remote_uninstall_plugin_id(&plugin_id)
         {
             return Err(invalid_request(
-                "invalid plugin id: expected a local plugin id or remote plugin id",
+                "invalid plugin id: expected a local plugin id in the form `plugin@marketplace` or a remote plugin id starting with `plugins~`, `plugins_`, `app_`, `asdk_app_`, or `connector_`",
             ));
         }
-        if !plugin_id.is_empty() && is_valid_remote_plugin_id(&plugin_id) {
+        if is_valid_remote_uninstall_plugin_id(&plugin_id) {
             return self.remote_plugin_uninstall_response(plugin_id).await;
         }
         let plugins_manager = self.thread_manager.plugins_manager();
@@ -775,9 +871,7 @@ impl CodexMessageProcessor {
         {
             return Err(invalid_request("remote plugin uninstall is not enabled"));
         }
-        if plugin_id.is_empty() || !is_valid_remote_plugin_id(&plugin_id) {
-            return Err(invalid_request("invalid remote plugin id"));
-        }
+        validate_remote_plugin_id(&plugin_id)?;
 
         let auth = self.auth_manager.auth().await;
         let remote_plugin_service_config = RemotePluginServiceConfig {
@@ -813,10 +907,13 @@ impl CodexMessageProcessor {
     }
 }
 
-fn is_valid_remote_plugin_id(plugin_name: &str) -> bool {
-    plugin_name
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '~')
+fn is_valid_remote_uninstall_plugin_id(plugin_name: &str) -> bool {
+    is_valid_remote_plugin_id(plugin_name)
+        && (plugin_name.starts_with("plugins~")
+            || plugin_name.starts_with("plugins_")
+            || plugin_name.starts_with("app_")
+            || plugin_name.starts_with("asdk_app_")
+            || plugin_name.starts_with("connector_"))
 }
 
 fn remote_marketplace_to_info(marketplace: RemoteMarketplace) -> PluginMarketplaceEntry {
@@ -843,6 +940,7 @@ fn remote_plugin_summary_to_info(summary: RemoteCatalogPluginSummary) -> PluginS
         enabled: summary.enabled,
         install_policy: summary.install_policy,
         auth_policy: summary.auth_policy,
+        availability: summary.availability,
         interface: summary.interface,
     }
 }
@@ -893,7 +991,8 @@ fn remote_plugin_catalog_error_to_jsonrpc(
             }
         }
         RemotePluginCatalogError::InvalidPluginPath { .. }
-        | RemotePluginCatalogError::ArchiveTooLarge { .. } => JSONRPCErrorError {
+        | RemotePluginCatalogError::ArchiveTooLarge { .. }
+        | RemotePluginCatalogError::UnknownMarketplace { .. } => JSONRPCErrorError {
             code: INVALID_REQUEST_ERROR_CODE,
             message: format!("{context}: {err}"),
             data: None,
@@ -902,7 +1001,10 @@ fn remote_plugin_catalog_error_to_jsonrpc(
         | RemotePluginCatalogError::Request { .. }
         | RemotePluginCatalogError::UnexpectedStatus { .. }
         | RemotePluginCatalogError::Decode { .. }
+        | RemotePluginCatalogError::InvalidBaseUrl(_)
+        | RemotePluginCatalogError::InvalidBaseUrlPath
         | RemotePluginCatalogError::UnexpectedPluginId { .. }
+        | RemotePluginCatalogError::UnexpectedSkillName { .. }
         | RemotePluginCatalogError::UnexpectedEnabledState { .. }
         | RemotePluginCatalogError::Archive { .. }
         | RemotePluginCatalogError::ArchiveJoin(_)

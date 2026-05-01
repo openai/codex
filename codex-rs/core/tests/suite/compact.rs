@@ -2149,16 +2149,6 @@ async fn manual_compact_retries_after_context_window_error() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex.submit(Op::Compact).await.unwrap();
-    let EventMsg::BackgroundEvent(event) =
-        wait_for_event(&codex, |ev| matches!(ev, EventMsg::BackgroundEvent(_))).await
-    else {
-        panic!("expected background event after compact retry");
-    };
-    assert!(
-        event.message.contains("Trimmed 1 older thread item"),
-        "background event should mention trimmed item count: {}",
-        event.message
-    );
     let warning_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
     let EventMsg::Warning(WarningEvent { message }) = warning_event else {
         panic!("expected warning event after compact retry");

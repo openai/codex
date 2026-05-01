@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
+use crossterm::cursor::SetCursorStyle;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
@@ -187,7 +188,13 @@ fn restore_common(
     {
         first_error.get_or_insert(err);
     }
-    let _ = execute!(stdout(), crossterm::cursor::Show);
+    if let Err(err) = execute!(
+        stdout(),
+        SetCursorStyle::DefaultUserShape,
+        crossterm::cursor::Show
+    ) {
+        first_error.get_or_insert(err);
+    }
     match first_error {
         Some(err) => Err(err),
         None => Ok(()),

@@ -3,6 +3,7 @@ use codex_config::config_toml::ConfigToml;
 use codex_protocol::config_types::Personality;
 use codex_thread_store::ListThreadsParams;
 use codex_thread_store::LocalThreadStore;
+use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::ThreadSortKey;
 use codex_thread_store::ThreadStore;
 use std::io;
@@ -60,12 +61,10 @@ pub async fn maybe_migrate_personality(
 }
 
 async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io::Result<bool> {
-    let store = LocalThreadStore::new(codex_rollout::RolloutConfig {
+    let store = LocalThreadStore::new(LocalThreadStoreConfig {
         codex_home: codex_home.to_path_buf(),
         sqlite_home: codex_home.to_path_buf(),
-        cwd: codex_home.to_path_buf(),
-        model_provider_id: default_provider.to_string(),
-        generate_memories: false,
+        default_model_provider_id: default_provider.to_string(),
     });
     if has_threads(&store, /*archived*/ false).await? {
         return Ok(true);
