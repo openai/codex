@@ -99,6 +99,7 @@ use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::TempDirExt;
 use core_test_support::test_absolute_path;
+use indexmap::IndexMap;
 use pretty_assertions::assert_eq;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::FormElicitationCapability;
@@ -830,7 +831,7 @@ strip_request_headers = ["authorization"]
                         unix_sockets: None,
                         allow_local_binding: None,
                         mitm: Some(NetworkMitmToml {
-                            hooks: Some(BTreeMap::from([(
+                            hooks: Some(IndexMap::from([(
                                 "github_write".to_string(),
                                 NetworkMitmHookToml {
                                     host: "api.github.com".to_string(),
@@ -842,7 +843,7 @@ strip_request_headers = ["authorization"]
                                     action: vec!["strip_auth".to_string()],
                                 },
                             )])),
-                            actions: Some(BTreeMap::from([(
+                            actions: Some(IndexMap::from([(
                                 "strip_auth".to_string(),
                                 NetworkMitmActionToml {
                                     strip_request_headers: vec!["authorization".to_string()],
@@ -911,7 +912,7 @@ fn permissions_profile_network_to_proxy_config_preserves_mitm_hooks() {
     let network = NetworkToml {
         mode: Some(NetworkMode::Full),
         mitm: Some(NetworkMitmToml {
-            hooks: Some(BTreeMap::from([(
+            hooks: Some(IndexMap::from([(
                 "github_write".to_string(),
                 NetworkMitmHookToml {
                     host: "api.github.com".to_string(),
@@ -921,7 +922,7 @@ fn permissions_profile_network_to_proxy_config_preserves_mitm_hooks() {
                     ..NetworkMitmHookToml::default()
                 },
             )])),
-            actions: Some(BTreeMap::from([(
+            actions: Some(IndexMap::from([(
                 "strip_auth".to_string(),
                 NetworkMitmActionToml {
                     strip_request_headers: vec!["authorization".to_string()],
@@ -945,6 +946,49 @@ fn permissions_profile_network_to_proxy_config_preserves_mitm_hooks() {
     assert_eq!(
         config.network.mitm_hooks[0].actions.strip_request_headers,
         vec!["authorization".to_string()]
+    );
+}
+
+#[test]
+fn permissions_profile_network_to_proxy_config_preserves_mitm_hook_declaration_order() {
+    let toml = r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network.mitm.actions.noop]
+strip_request_headers = ["authorization"]
+
+[permissions.workspace.network.mitm.hooks.z_first]
+host = "api.github.com"
+methods = ["POST"]
+path_prefixes = ["/repos/openai/"]
+action = ["noop"]
+
+[permissions.workspace.network.mitm.hooks.a_second]
+host = "api.github.com"
+methods = ["POST"]
+path_prefixes = ["/repos/"]
+action = ["noop"]
+"#;
+    let cfg: ConfigToml = toml::from_str(toml).expect("permissions profile should deserialize");
+    let permissions = cfg.permissions.expect("permissions should deserialize");
+    let network = permissions
+        .entries
+        .get("workspace")
+        .expect("workspace profile should exist")
+        .network
+        .as_ref()
+        .expect("network profile should exist");
+
+    let config = network.to_network_proxy_config();
+
+    assert_eq!(config.network.mitm_hooks.len(), 2);
+    assert_eq!(
+        config.network.mitm_hooks[0].matcher.path_prefixes,
+        vec!["/repos/openai/".to_string()]
+    );
+    assert_eq!(
+        config.network.mitm_hooks[1].matcher.path_prefixes,
+        vec!["/repos/".to_string()]
     );
 }
 
