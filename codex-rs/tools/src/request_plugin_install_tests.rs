@@ -47,8 +47,8 @@ fn build_request_plugin_install_elicitation_request_uses_expected_shape() {
             server_name: "codex-apps".to_string(),
             request: McpServerElicitationRequest::Form {
                 meta: Some(json!(RequestPluginInstallMeta {
-                    codex_approval_kind: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
-                    persist: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE,
+                    codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
+                    persist: REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE,
                     tool_type: DiscoverableToolType::Connector,
                     suggest_type: DiscoverableToolAction::Install,
                     suggest_reason: "Plan and reference events from your calendar",
@@ -104,8 +104,8 @@ fn build_request_plugin_install_elicitation_request_for_plugin_omits_install_url
             server_name: "codex-apps".to_string(),
             request: McpServerElicitationRequest::Form {
                 meta: Some(json!(RequestPluginInstallMeta {
-                    codex_approval_kind: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
-                    persist: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE,
+                    codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
+                    persist: REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE,
                     tool_type: DiscoverableToolType::Plugin,
                     suggest_type: DiscoverableToolAction::Install,
                     suggest_reason: "Use the sample plugin's skills and MCP server",
@@ -139,8 +139,8 @@ fn build_request_plugin_install_meta_uses_expected_shape() {
     assert_eq!(
         meta,
         RequestPluginInstallMeta {
-            codex_approval_kind: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
-            persist: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE,
+            codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
+            persist: REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE,
             tool_type: DiscoverableToolType::Connector,
             suggest_type: DiscoverableToolAction::Install,
             suggest_reason: "Find and reference emails from your inbox",

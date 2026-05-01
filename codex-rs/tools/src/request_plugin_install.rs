@@ -13,9 +13,9 @@ use crate::DiscoverableTool;
 use crate::DiscoverableToolAction;
 use crate::DiscoverableToolType;
 
-pub const TOOL_SUGGEST_APPROVAL_KIND_VALUE: &str = "tool_suggestion";
-pub const TOOL_SUGGEST_PERSIST_KEY: &str = "persist";
-pub const TOOL_SUGGEST_PERSIST_ALWAYS_VALUE: &str = "always";
+pub const REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE: &str = "tool_suggestion";
+pub const REQUEST_PLUGIN_INSTALL_PERSIST_KEY: &str = "persist";
+pub const REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE: &str = "always";
 
 #[derive(Debug, Deserialize)]
 pub struct RequestPluginInstallArgs {
@@ -113,8 +113,8 @@ fn build_request_plugin_install_meta<'a>(
     install_url: Option<&'a str>,
 ) -> RequestPluginInstallMeta<'a> {
     RequestPluginInstallMeta {
-        codex_approval_kind: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
-        persist: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE,
+        codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
+        persist: REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE,
         tool_type,
         suggest_type: action_type,
         suggest_reason,

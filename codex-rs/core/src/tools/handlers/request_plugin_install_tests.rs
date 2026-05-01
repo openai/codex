@@ -63,21 +63,25 @@ fn request_plugin_install_response_persists_only_decline_always_mode() {
         &ElicitationResponse {
             action: ElicitationAction::Decline,
             content: None,
-            meta: Some(json!({ TOOL_SUGGEST_PERSIST_KEY: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE })),
+            meta: Some(json!({
+                REQUEST_PLUGIN_INSTALL_PERSIST_KEY: REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE
+            })),
         }
     ));
     assert!(
         !request_plugin_install_response_requests_persistent_disable(&ElicitationResponse {
             action: ElicitationAction::Accept,
             content: None,
-            meta: Some(json!({ TOOL_SUGGEST_PERSIST_KEY: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE })),
+            meta: Some(json!({
+                REQUEST_PLUGIN_INSTALL_PERSIST_KEY: REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE
+            })),
         })
     );
     assert!(
         !request_plugin_install_response_requests_persistent_disable(&ElicitationResponse {
             action: ElicitationAction::Decline,
             content: None,
-            meta: Some(json!({ TOOL_SUGGEST_PERSIST_KEY: "session" })),
+            meta: Some(json!({ REQUEST_PLUGIN_INSTALL_PERSIST_KEY: "session" })),
         })
     );
     assert!(

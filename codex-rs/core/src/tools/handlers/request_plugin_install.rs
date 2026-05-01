@@ -8,11 +8,11 @@ use codex_rmcp_client::ElicitationResponse;
 use codex_tools::DiscoverableTool;
 use codex_tools::DiscoverableToolAction;
 use codex_tools::DiscoverableToolType;
+use codex_tools::REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE;
+use codex_tools::REQUEST_PLUGIN_INSTALL_PERSIST_KEY;
 use codex_tools::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 use codex_tools::RequestPluginInstallArgs;
 use codex_tools::RequestPluginInstallResult;
-use codex_tools::TOOL_SUGGEST_PERSIST_ALWAYS_VALUE;
-use codex_tools::TOOL_SUGGEST_PERSIST_KEY;
 use codex_tools::all_requested_connectors_picked_up;
 use codex_tools::build_request_plugin_install_elicitation_request;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
@@ -202,9 +202,9 @@ fn request_plugin_install_response_requests_persistent_disable(
         .meta
         .as_ref()
         .and_then(Value::as_object)
-        .and_then(|meta| meta.get(TOOL_SUGGEST_PERSIST_KEY))
+        .and_then(|meta| meta.get(REQUEST_PLUGIN_INSTALL_PERSIST_KEY))
         .and_then(Value::as_str)
-        == Some(TOOL_SUGGEST_PERSIST_ALWAYS_VALUE)
+        == Some(REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE)
 }
 
 async fn persist_disabled_tool_suggestion(
