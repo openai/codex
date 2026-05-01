@@ -4825,7 +4825,7 @@ pub enum PluginAuthPolicy {
     OnUse,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema, TS)]
 #[ts(export_to = "v2/")]
 pub enum PluginAvailability {
     /// Plugin-service currently sends `"ENABLED"` for available remote plugins.
@@ -4833,16 +4833,11 @@ pub enum PluginAvailability {
     /// decoding compatible with that upstream response.
     #[serde(rename = "AVAILABLE", alias = "ENABLED")]
     #[ts(rename = "AVAILABLE")]
+    #[default]
     Available,
     #[serde(rename = "DISABLED_BY_ADMIN")]
     #[ts(rename = "DISABLED_BY_ADMIN")]
     DisabledByAdmin,
-}
-
-impl Default for PluginAvailability {
-    fn default() -> Self {
-        Self::Available
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

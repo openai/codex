@@ -539,8 +539,9 @@ impl CodexMessageProcessor {
                 )
             })?;
         if remote_detail.summary.availability == PluginAvailability::DisabledByAdmin {
+            let remote_plugin_id = &remote_detail.summary.id;
             return Err(invalid_request(format!(
-                "remote plugin {plugin_name} is disabled by admin"
+                "remote plugin {remote_plugin_id} is disabled by admin"
             )));
         }
         if remote_detail.summary.install_policy == PluginInstallPolicy::NotAvailable {
