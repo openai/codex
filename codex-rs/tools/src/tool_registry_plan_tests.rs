@@ -1855,14 +1855,14 @@ fn tool_suggest_description_lists_discoverable_tools() {
     );
     assert!(
         description.contains(
-            "The user explicitly wants a specific plugin or connector that is not already available in the current context or active `tools` list."
+            "The user explicitly asks to use a specific plugin or connector that is not already available in the current context or active `tools` list."
         )
     );
     assert!(description.contains(
         "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
     ));
     assert!(description.contains(
-        "The tool is one of the known installable plugins or connectors listed below. Only ask to install tools from this list."
+        "The plugin or connector is one of the known installable plugins or connectors listed below. Only ask to install plugins or connectors from this list."
     ));
     assert!(description.contains(
         "Do not use tool suggestion for adjacent capabilities, broad recommendations, or tools that merely seem useful."

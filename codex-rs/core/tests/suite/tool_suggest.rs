@@ -137,6 +137,9 @@ async fn tool_suggest_is_available_without_search_tool_after_discovery_attempts(
     assert!(description.contains(
         "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
     ));
+    assert!(description.contains(
+        "Only use when the user explicitly asks to use that exact listed plugin or connector."
+    ));
     assert!(description.contains("IMPORTANT: DO NOT call this tool in parallel with other tools."));
     assert!(!description.contains("tool_search fails to find a good match"));
 
