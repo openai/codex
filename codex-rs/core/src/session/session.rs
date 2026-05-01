@@ -571,7 +571,7 @@ impl Session {
                             "`notify` is deprecated and will be removed in a future release."
                                 .to_string(),
                         details: Some(
-                            "Use lifecycle hooks for new automation instead of adding new `notify` configurations."
+                            "Switch to a `Stop` hook for end-of-turn automation. See https://developers.openai.com/codex/hooks."
                                 .to_string(),
                         ),
                     }),
