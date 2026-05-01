@@ -1242,10 +1242,9 @@ async fn find_thread_path_by_id_str_in_subdir(
     state_db_ctx: Option<&codex_state::StateRuntime>,
 ) -> io::Result<Option<PathBuf>> {
     // Validate UUID format early.
-    let Ok(uuid) = Uuid::parse_str(id_str) else {
+    if Uuid::parse_str(id_str).is_err() {
         return Ok(None);
-    };
-    let canonical_id = uuid.to_string();
+    }
 
     // Prefer DB lookup, then fall back to rollout file search.
     // TODO(jif): sqlite migration phase 1
@@ -1254,7 +1253,7 @@ async fn find_thread_path_by_id_str_in_subdir(
         ARCHIVED_SESSIONS_SUBDIR => Some(true),
         _ => None,
     };
-    let thread_id = ThreadId::from_string(&canonical_id).ok();
+    let thread_id = ThreadId::from_string(id_str).ok();
     if let Some(state_db_ctx) = state_db_ctx
         && let Some(thread_id) = thread_id
         && let Some(db_path) = state_db::find_rollout_path_by_id(
@@ -1292,13 +1291,8 @@ async fn find_thread_path_by_id_str_in_subdir(
         ..Default::default()
     };
 
-    let results = file_search::run(
-        canonical_id.as_str(),
-        vec![root],
-        options,
-        /*cancel_flag*/ None,
-    )
-    .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+    let results = file_search::run(id_str, vec![root], options, /*cancel_flag*/ None)
+        .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 
     let found = results.matches.into_iter().next().map(|m| m.full_path());
     if let Some(found_path) = found.as_ref() {

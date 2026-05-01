@@ -79,7 +79,6 @@ pub struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
     writer_task: Arc<RolloutWriterTask>,
     pub(crate) rollout_path: PathBuf,
-    state_db: Option<StateDbHandle>,
     event_persistence_mode: EventPersistenceMode,
 }
 
@@ -778,17 +777,12 @@ impl RolloutRecorder {
             tx,
             writer_task,
             rollout_path,
-            state_db: state_db_ctx,
             event_persistence_mode,
         })
     }
 
     pub fn rollout_path(&self) -> &Path {
         self.rollout_path.as_path()
-    }
-
-    pub fn state_db(&self) -> Option<StateDbHandle> {
-        self.state_db.clone()
     }
 
     pub async fn record_items(&self, items: &[RolloutItem]) -> std::io::Result<()> {

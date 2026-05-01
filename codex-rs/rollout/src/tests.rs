@@ -286,40 +286,6 @@ async fn find_thread_path_repairs_missing_db_row_after_filesystem_fallback() {
 }
 
 #[tokio::test]
-async fn find_thread_path_accepts_uppercase_uuid_with_state_db() {
-    let temp = TempDir::new().unwrap();
-    let home = temp.path();
-    let uuid = Uuid::from_u128(304);
-    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
-    let ts = "2025-01-03T13-00-00";
-    write_session_file(
-        home,
-        ts,
-        uuid,
-        /*num_records*/ 1,
-        Some(SessionSource::Cli),
-    )
-    .unwrap();
-    let fs_rollout_path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
-    let runtime = insert_state_db_thread(
-        home,
-        thread_id,
-        fs_rollout_path.as_path(),
-        /*archived*/ false,
-    )
-    .await;
-
-    let found = find_thread_path_by_id_str(
-        home,
-        uuid.to_string().to_uppercase().as_str(),
-        Some(runtime.as_ref()),
-    )
-    .await
-    .expect("lookup should succeed");
-    assert_eq!(found, Some(fs_rollout_path));
-}
-
-#[tokio::test]
 async fn find_thread_path_accepts_existing_state_db_path_without_canonical_filename() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
