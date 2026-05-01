@@ -31,8 +31,8 @@ use codex_network_proxy::build_config_state;
 use codex_network_proxy::normalize_host;
 use codex_network_proxy::validate_policy_against_constraints;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use indexmap::IndexMap;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -214,8 +214,8 @@ fn apply_network_tables(config: &mut NetworkProxyConfig, parsed: NetworkTablesTo
 #[derive(Default)]
 struct NetworkConfigAccumulator {
     config: NetworkProxyConfig,
-    mitm_hooks: BTreeMap<String, NetworkMitmHookToml>,
-    mitm_actions: BTreeMap<String, NetworkMitmActionToml>,
+    mitm_hooks: IndexMap<String, NetworkMitmHookToml>,
+    mitm_actions: IndexMap<String, NetworkMitmActionToml>,
 }
 
 impl NetworkConfigAccumulator {
@@ -242,17 +242,14 @@ impl NetworkConfigAccumulator {
 
     fn finish(mut self) -> Result<NetworkProxyConfig> {
         if !self.mitm_hooks.is_empty() {
+            let actions = self.mitm_actions;
             let mitm = NetworkMitmToml {
                 hooks: Some(self.mitm_hooks),
-                actions: Some(self.mitm_actions),
+                actions: Some(actions.clone()),
             };
-            let actions = mitm
-                .actions
-                .as_ref()
-                .expect("effective MITM actions should be present");
-            mitm.validate_action_references(actions)
+            mitm.validate_action_references(&actions)
                 .map_err(anyhow::Error::msg)?;
-            self.config.network.mitm_hooks = mitm.to_runtime_hooks(Some(actions));
+            self.config.network.mitm_hooks = mitm.to_runtime_hooks(Some(&actions));
         }
 
         self.config.network.mitm = self.config.network.mode == NetworkMode::Limited
