@@ -328,24 +328,6 @@
       },
       "type": "object"
     },
-    "ConfigLockToml": {
-      "additionalProperties": false,
-      "properties": {
-        "codex_version": {
-          "type": "string"
-        },
-        "version": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "codex_version",
-        "version"
-      ],
-      "type": "object"
-    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -727,6 +709,10 @@
             }
           ],
           "description": "Lockfile to replay as the authoritative effective config."
+        },
+        "save_fields_resolved_from_model_catalog": {
+          "description": "Save fields resolved from the model catalog/session configuration.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -734,11 +720,7 @@
     "DebugToml": {
       "additionalProperties": false,
       "properties": {
-        "allow_dynamic_catalog": {
-          "description": "Allow live catalog/session-derived values instead of storing them in the lock.",
-          "type": "boolean"
-        },
-        "config_lock": {
+        "config_lockfile": {
           "$ref": "#/definitions/DebugConfigLockToml"
         }
       },
@@ -3368,15 +3350,6 @@
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
       "type": "string"
-    },
-    "config_lock": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/ConfigLockToml"
-        }
-      ],
-      "default": null,
-      "description": "Metadata for generated config lock files."
     },
     "debug": {
       "allOf": [

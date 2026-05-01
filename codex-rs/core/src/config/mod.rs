@@ -23,6 +23,7 @@ use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
 use codex_config::ThreadConfigLoader;
+use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
 use codex_config::config_toml::ProjectConfig;
@@ -629,12 +630,12 @@ pub struct Config {
     /// lock metadata and the regenerated lock.
     pub config_lock_allow_codex_version_mismatch: bool,
 
-    /// Whether config lock creation skips values resolved from the dynamic
-    /// model catalog/session configuration.
-    pub config_lock_allow_dynamic_catalog: bool,
+    /// Whether config lock creation saves values resolved from the model
+    /// catalog/session configuration.
+    pub config_lock_save_fields_resolved_from_model_catalog: bool,
 
     /// Effective config lock used for strict replay validation.
-    pub config_lock_toml: Option<Arc<ConfigToml>>,
+    pub config_lock_toml: Option<Arc<ConfigLockfileToml>>,
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
@@ -977,22 +978,20 @@ impl ConfigBuilder {
         let config_lock_settings = config_toml
             .debug
             .as_ref()
-            .and_then(|debug| debug.config_lock.as_ref());
+            .and_then(|debug| debug.config_lockfile.as_ref());
         if let Some(config_lock_load_path) =
             config_lock_settings.and_then(|config_lock| config_lock.load_path.as_ref())
         {
             let allow_codex_version_mismatch = config_lock_settings
                 .and_then(|config_lock| config_lock.allow_codex_version_mismatch)
                 .unwrap_or(false);
-            let allow_dynamic_catalog = config_toml
-                .debug
-                .as_ref()
-                .and_then(|debug| debug.allow_dynamic_catalog)
-                .unwrap_or(false);
-            let lock_config_toml = read_config_lock_from_path(config_lock_load_path).await?;
-            let expected_lock_config = lock_config_toml.clone();
-            let lock_layer = lock_layer_from_config(config_lock_load_path, &lock_config_toml)?;
-            let lock_config_toml = config_without_lock_controls(&lock_config_toml);
+            let save_fields_resolved_from_model_catalog = config_lock_settings
+                .and_then(|config_lock| config_lock.save_fields_resolved_from_model_catalog)
+                .unwrap_or(true);
+            let lockfile_toml = read_config_lock_from_path(config_lock_load_path).await?;
+            let expected_lock_config = lockfile_toml.clone();
+            let lock_layer = lock_layer_from_config(config_lock_load_path, &lockfile_toml)?;
+            let lock_config_toml = config_without_lock_controls(&lockfile_toml.config);
             let lock_config_layer_stack = ConfigLayerStack::new(
                 vec![lock_layer],
                 config_layer_stack.requirements().clone(),
@@ -1008,7 +1007,8 @@ impl ConfigBuilder {
             .await?;
             config.config_lock_toml = Some(Arc::new(expected_lock_config));
             config.config_lock_allow_codex_version_mismatch = allow_codex_version_mismatch;
-            config.config_lock_allow_dynamic_catalog = allow_dynamic_catalog;
+            config.config_lock_save_fields_resolved_from_model_catalog =
+                save_fields_resolved_from_model_catalog;
             return Ok(config);
         }
         Config::load_config_with_layer_stack(
@@ -2943,19 +2943,20 @@ impl Config {
             config_lock_export_dir: cfg
                 .debug
                 .as_ref()
-                .and_then(|debug| debug.config_lock.as_ref())
+                .and_then(|debug| debug.config_lockfile.as_ref())
                 .and_then(|config_lock| config_lock.export_dir.clone()),
             config_lock_allow_codex_version_mismatch: cfg
                 .debug
                 .as_ref()
-                .and_then(|debug| debug.config_lock.as_ref())
+                .and_then(|debug| debug.config_lockfile.as_ref())
                 .and_then(|config_lock| config_lock.allow_codex_version_mismatch)
                 .unwrap_or(false),
-            config_lock_allow_dynamic_catalog: cfg
+            config_lock_save_fields_resolved_from_model_catalog: cfg
                 .debug
                 .as_ref()
-                .and_then(|debug| debug.allow_dynamic_catalog)
-                .unwrap_or(false),
+                .and_then(|debug| debug.config_lockfile.as_ref())
+                .and_then(|config_lock| config_lock.save_fields_resolved_from_model_catalog)
+                .unwrap_or(true),
             config_lock_toml: None,
             config_layer_stack,
             history,
