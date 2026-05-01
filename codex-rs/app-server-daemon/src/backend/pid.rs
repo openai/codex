@@ -16,13 +16,15 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) struct PidBackend {
     codex_bin: PathBuf,
     pid_file: PathBuf,
+    remote_control_enabled: bool,
 }
 
 impl PidBackend {
-    pub(crate) fn new(codex_bin: PathBuf, pid_file: PathBuf) -> Self {
+    pub(crate) fn new(codex_bin: PathBuf, pid_file: PathBuf, remote_control_enabled: bool) -> Self {
         Self {
             codex_bin,
             pid_file,
+            remote_control_enabled,
         }
     }
 
@@ -45,10 +47,11 @@ impl PidBackend {
         }
 
         let mut command = Command::new(&self.codex_bin);
+        if self.remote_control_enabled {
+            command.args(["--enable", "remote_control"]);
+        }
         command
-            .arg("app-server")
-            .arg("--listen")
-            .arg("unix://")
+            .args(["app-server", "--listen", "unix://"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());

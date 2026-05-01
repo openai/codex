@@ -3,6 +3,7 @@ use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
 use clap_complete::generate;
+use codex_app_server_daemon::BootstrapOptions as AppServerBootstrapOptions;
 use codex_app_server_daemon::LifecycleCommand as AppServerLifecycleCommand;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
@@ -470,6 +471,9 @@ struct ExecServerCommand {
 #[derive(Debug, clap::Subcommand)]
 #[allow(clippy::enum_variant_names)]
 enum AppServerSubcommand {
+    /// Install durable local app-server management for SSH-driven use.
+    Bootstrap(AppServerBootstrapCommand),
+
     /// Start the local app server daemon if it is not already running.
     Start,
 
@@ -501,6 +505,13 @@ struct AppServerProxyCommand {
     /// Path to the app-server Unix domain socket to connect to.
     #[arg(long = "sock", value_name = "SOCKET_PATH", value_parser = parse_socket_path)]
     socket_path: Option<AbsolutePathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct AppServerBootstrapCommand {
+    /// Launch the managed app-server with remote_control enabled.
+    #[arg(long = "remote-control")]
+    remote_control: bool,
 }
 
 #[derive(Debug, Args)]
@@ -890,6 +901,13 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 }
                 Some(AppServerSubcommand::Start) => {
                     print_app_server_daemon_output(AppServerLifecycleCommand::Start).await?;
+                }
+                Some(AppServerSubcommand::Bootstrap(bootstrap_cli)) => {
+                    let output = codex_app_server_daemon::bootstrap(AppServerBootstrapOptions {
+                        remote_control_enabled: bootstrap_cli.remote_control,
+                    })
+                    .await?;
+                    println!("{}", serde_json::to_string(&output)?);
                 }
                 Some(AppServerSubcommand::Restart) => {
                     print_app_server_daemon_output(AppServerLifecycleCommand::Restart).await?;
@@ -1572,6 +1590,7 @@ fn reject_remote_mode_for_app_server_subcommand(
 ) -> anyhow::Result<()> {
     let subcommand_name = match subcommand {
         None => "app-server",
+        Some(AppServerSubcommand::Bootstrap(_)) => "app-server bootstrap",
         Some(AppServerSubcommand::Start) => "app-server start",
         Some(AppServerSubcommand::Restart) => "app-server restart",
         Some(AppServerSubcommand::Stop) => "app-server stop",
@@ -2561,6 +2580,13 @@ mod tests {
 
     #[test]
     fn app_server_daemon_subcommands_parse() {
+        assert!(matches!(
+            app_server_from_args(["codex", "app-server", "bootstrap", "--remote-control"].as_ref())
+                .subcommand,
+            Some(AppServerSubcommand::Bootstrap(AppServerBootstrapCommand {
+                remote_control: true
+            }))
+        ));
         assert!(matches!(
             app_server_from_args(["codex", "app-server", "start"].as_ref()).subcommand,
             Some(AppServerSubcommand::Start)

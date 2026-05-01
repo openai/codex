@@ -56,23 +56,42 @@ impl Backend {
 pub(crate) struct BackendPaths {
     pub(crate) codex_bin: PathBuf,
     pub(crate) pid_file: PathBuf,
+    pub(crate) remote_control_enabled: bool,
 }
 
 pub(crate) async fn preferred_backend(paths: BackendPaths) -> Backend {
     if SystemdBackend::is_available().await {
-        Backend::Systemd(SystemdBackend::new(paths.codex_bin))
+        Backend::Systemd(SystemdBackend::new(
+            paths.codex_bin,
+            paths.remote_control_enabled,
+        ))
     } else {
-        Backend::Pid(PidBackend::new(paths.codex_bin, paths.pid_file))
+        Backend::Pid(PidBackend::new(
+            paths.codex_bin,
+            paths.pid_file,
+            paths.remote_control_enabled,
+        ))
     }
 }
 
 pub(crate) fn managed_backends(paths: BackendPaths) -> [Backend; 2] {
     [
-        Backend::Systemd(SystemdBackend::new(paths.codex_bin.clone())),
-        Backend::Pid(PidBackend::new(paths.codex_bin, paths.pid_file)),
+        Backend::Systemd(SystemdBackend::new(
+            paths.codex_bin.clone(),
+            paths.remote_control_enabled,
+        )),
+        Backend::Pid(PidBackend::new(
+            paths.codex_bin,
+            paths.pid_file,
+            paths.remote_control_enabled,
+        )),
     ]
 }
 
 pub(crate) fn pid_backend(paths: BackendPaths) -> Backend {
-    Backend::Pid(PidBackend::new(paths.codex_bin, paths.pid_file))
+    Backend::Pid(PidBackend::new(
+        paths.codex_bin,
+        paths.pid_file,
+        paths.remote_control_enabled,
+    ))
 }

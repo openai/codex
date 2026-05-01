@@ -113,6 +113,24 @@ reporting success. `version` connects through that same control socket and
 reports both the local CLI version and the version reported by the running
 app-server.
 
+For a fresh remote machine, first install the standalone CLI, then bootstrap the
+durable app-server service:
+
+```sh
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
+$HOME/.codex/packages/standalone/current/codex app-server bootstrap --remote-control
+```
+
+`bootstrap` also prints one JSON object. It requires the standalone managed
+install, persists the launch settings used by later lifecycle commands, and
+starts app-server with `remote_control` enabled when requested. On systems with
+user-scoped `systemd`, it installs `codex-app-server.service` plus an hourly
+update timer that refreshes the standalone install and then reloads the service.
+Reloads keep an unbounded app-server graceful drain, while ordinary systemd
+restarts wait up to one minute for active work before forcing completion. Without
+user-scoped `systemd`, `bootstrap` falls back to the pidfile backend; that keeps
+the launch settings but does not provide periodic auto-update.
+
 ## Initialization
 
 Clients must send a single `initialize` request per transport connection before invoking any other method on that connection, then acknowledge with an `initialized` notification. The server returns the user agent string it will present to upstream services, `codexHome` for the server's Codex home directory, and `platformFamily` and `platformOs` strings describing the app-server runtime target; subsequent requests issued before initialization receive a `"Not initialized"` error, and repeated `initialize` calls on the same connection receive an `"Already initialized"` error.
