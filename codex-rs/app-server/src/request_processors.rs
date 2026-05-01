@@ -367,8 +367,6 @@ use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
 use codex_rollout::EventPersistenceMode;
-use codex_rollout::find_archived_thread_path_by_id_str_with_state_db;
-use codex_rollout::find_thread_path_by_id_str_with_state_db;
 use codex_rollout::is_persisted_rollout_item;
 use codex_rollout::state_db::StateDbHandle;
 use codex_rollout::state_db::get_state_db;

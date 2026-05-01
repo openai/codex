@@ -1389,7 +1389,8 @@ async fn resolve_resume_thread_id(
             return Ok(Some(thread.id.to_string()));
         }
         if let Some((_, session_meta)) =
-            find_thread_meta_by_name_str(&config.codex_home, session_id).await?
+            find_thread_meta_by_name_str(&config.codex_home, session_id, Some(state_db.as_ref()))
+                .await?
             && (args.all || cwds_match(config.cwd.as_path(), &session_meta.meta.cwd))
         {
             return Ok(Some(session_meta.meta.id.to_string()));

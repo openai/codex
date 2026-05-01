@@ -1,5 +1,5 @@
 use chrono::Utc;
-use codex_rollout::find_thread_path_by_id_str_with_state_db;
+use codex_rollout::find_thread_path_by_id_str;
 
 use super::LocalThreadStore;
 use super::helpers::matching_rollout_file_name;
@@ -14,7 +14,7 @@ pub(super) async fn archive_thread(
 ) -> ThreadStoreResult<()> {
     let thread_id = params.thread_id;
     let state_db_ctx = store.state_db().await;
-    let rollout_path = find_thread_path_by_id_str_with_state_db(
+    let rollout_path = find_thread_path_by_id_str(
         store.config.codex_home.as_path(),
         &thread_id.to_string(),
         state_db_ctx.as_deref(),

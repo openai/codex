@@ -1582,7 +1582,7 @@ impl ThreadRequestProcessor {
             return Ok(());
         }
 
-        let rollout_path = match find_thread_path_by_id_str_with_state_db(
+        let rollout_path = match find_thread_path_by_id_str(
             &self.config.codex_home,
             &thread_uuid.to_string(),
             self.state_db.as_deref(),
@@ -1590,7 +1590,7 @@ impl ThreadRequestProcessor {
         .await
         {
                 Ok(Some(path)) => path,
-                Ok(None) => match find_archived_thread_path_by_id_str_with_state_db(
+                Ok(None) => match find_archived_thread_path_by_id_str(
                     &self.config.codex_home,
                     &thread_uuid.to_string(),
                     self.state_db.as_deref(),

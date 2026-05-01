@@ -8,8 +8,8 @@ use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::append_thread_name;
-use codex_rollout::find_archived_thread_path_by_id_str_with_state_db;
-use codex_rollout::find_thread_path_by_id_str_with_state_db;
+use codex_rollout::find_archived_thread_path_by_id_str;
+use codex_rollout::find_thread_path_by_id_str;
 use codex_rollout::read_session_meta_line;
 
 use super::LocalThreadStore;
@@ -158,7 +158,7 @@ async fn resolve_rollout_path(
     }
 
     let state_db_ctx = store.state_db().await;
-    let active_path = find_thread_path_by_id_str_with_state_db(
+    let active_path = find_thread_path_by_id_str(
         store.config.codex_home.as_path(),
         &thread_id.to_string(),
         state_db_ctx.as_deref(),
@@ -178,7 +178,7 @@ async fn resolve_rollout_path(
             message: format!("thread not found: {thread_id}"),
         });
     }
-    find_archived_thread_path_by_id_str_with_state_db(
+    find_archived_thread_path_by_id_str(
         store.config.codex_home.as_path(),
         &thread_id.to_string(),
         state_db_ctx.as_deref(),

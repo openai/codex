@@ -894,7 +894,7 @@ impl TurnRequestProcessor {
         let rollout_path = if let Some(path) = parent_thread.rollout_path() {
             path
         } else {
-            find_thread_path_by_id_str_with_state_db(
+            find_thread_path_by_id_str(
                 &self.config.codex_home,
                 &parent_thread_id.to_string(),
                 self.state_db.as_deref(),

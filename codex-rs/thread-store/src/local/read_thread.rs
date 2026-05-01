@@ -5,9 +5,9 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout::RolloutRecorder;
-use codex_rollout::find_archived_thread_path_by_id_str_with_state_db;
+use codex_rollout::find_archived_thread_path_by_id_str;
 use codex_rollout::find_thread_name_by_id;
-use codex_rollout::find_thread_path_by_id_str_with_state_db;
+use codex_rollout::find_thread_path_by_id_str;
 use codex_rollout::read_session_meta_line;
 use codex_rollout::read_thread_item_from_rollout;
 use codex_state::ThreadMetadata;
@@ -173,7 +173,7 @@ async fn resolve_rollout_path(
 
     let state_db_ctx = store.state_db().await;
     if include_archived {
-        match find_thread_path_by_id_str_with_state_db(
+        match find_thread_path_by_id_str(
             store.config.codex_home.as_path(),
             &thread_id.to_string(),
             state_db_ctx.as_deref(),
@@ -183,7 +183,7 @@ async fn resolve_rollout_path(
             message: format!("failed to locate thread id {thread_id}: {err}"),
         })? {
             Some(path) => Ok(Some(path)),
-            None => find_archived_thread_path_by_id_str_with_state_db(
+            None => find_archived_thread_path_by_id_str(
                 store.config.codex_home.as_path(),
                 &thread_id.to_string(),
                 state_db_ctx.as_deref(),
@@ -194,7 +194,7 @@ async fn resolve_rollout_path(
             }),
         }
     } else {
-        find_thread_path_by_id_str_with_state_db(
+        find_thread_path_by_id_str(
             store.config.codex_home.as_path(),
             &thread_id.to_string(),
             state_db_ctx.as_deref(),

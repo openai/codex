@@ -230,35 +230,6 @@ impl RolloutRecorder {
     /// List threads (rollout files) under the provided Codex home directory.
     #[allow(clippy::too_many_arguments)]
     pub async fn list_threads(
-        config: &impl RolloutConfigView,
-        page_size: usize,
-        cursor: Option<&Cursor>,
-        sort_key: ThreadSortKey,
-        sort_direction: SortDirection,
-        allowed_sources: &[SessionSource],
-        model_providers: Option<&[String]>,
-        cwd_filters: Option<&[PathBuf]>,
-        default_provider: &str,
-        search_term: Option<&str>,
-    ) -> std::io::Result<ThreadsPage> {
-        Self::list_threads_with_state_db(
-            /*state_db_ctx*/ None,
-            config,
-            page_size,
-            cursor,
-            sort_key,
-            sort_direction,
-            allowed_sources,
-            model_providers,
-            cwd_filters,
-            default_provider,
-            search_term,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn list_threads_with_state_db(
         state_db_ctx: Option<StateDbHandle>,
         config: &impl RolloutConfigView,
         page_size: usize,
@@ -290,7 +261,7 @@ impl RolloutRecorder {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn list_threads_from_state_db_with_state_db(
+    pub async fn list_threads_from_state_db(
         state_db_ctx: Option<StateDbHandle>,
         config: &impl RolloutConfigView,
         page_size: usize,
@@ -324,35 +295,6 @@ impl RolloutRecorder {
     /// List archived threads (rollout files) under the archived sessions directory.
     #[allow(clippy::too_many_arguments)]
     pub async fn list_archived_threads(
-        config: &impl RolloutConfigView,
-        page_size: usize,
-        cursor: Option<&Cursor>,
-        sort_key: ThreadSortKey,
-        sort_direction: SortDirection,
-        allowed_sources: &[SessionSource],
-        model_providers: Option<&[String]>,
-        cwd_filters: Option<&[PathBuf]>,
-        default_provider: &str,
-        search_term: Option<&str>,
-    ) -> std::io::Result<ThreadsPage> {
-        Self::list_archived_threads_with_state_db(
-            /*state_db_ctx*/ None,
-            config,
-            page_size,
-            cursor,
-            sort_key,
-            sort_direction,
-            allowed_sources,
-            model_providers,
-            cwd_filters,
-            default_provider,
-            search_term,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn list_archived_threads_with_state_db(
         state_db_ctx: Option<StateDbHandle>,
         config: &impl RolloutConfigView,
         page_size: usize,
@@ -384,7 +326,7 @@ impl RolloutRecorder {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn list_archived_threads_from_state_db_with_state_db(
+    pub async fn list_archived_threads_from_state_db(
         state_db_ctx: Option<StateDbHandle>,
         config: &impl RolloutConfigView,
         page_size: usize,
@@ -641,6 +583,7 @@ impl RolloutRecorder {
     /// Find the newest recorded thread path, optionally filtering to a matching cwd.
     #[allow(clippy::too_many_arguments)]
     pub async fn find_latest_thread_path(
+        state_db_ctx: Option<StateDbHandle>,
         config: &impl RolloutConfigView,
         page_size: usize,
         cursor: Option<&Cursor>,
@@ -651,7 +594,6 @@ impl RolloutRecorder {
         filter_cwd: Option<&Path>,
     ) -> std::io::Result<Option<PathBuf>> {
         let codex_home = config.codex_home();
-        let state_db_ctx: Option<StateDbHandle> = None;
         let cwd_filter = filter_cwd.map(Path::to_path_buf);
         if state_db_ctx.is_some() {
             let mut db_cursor = cursor.cloned();

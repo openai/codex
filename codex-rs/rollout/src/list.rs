@@ -1239,17 +1239,6 @@ async fn find_thread_path_by_id_str_in_subdir(
     codex_home: &Path,
     subdir: &str,
     id_str: &str,
-) -> io::Result<Option<PathBuf>> {
-    find_thread_path_by_id_str_in_subdir_with_state_db(
-        codex_home, subdir, id_str, /*state_db_ctx*/ None,
-    )
-    .await
-}
-
-async fn find_thread_path_by_id_str_in_subdir_with_state_db(
-    codex_home: &Path,
-    subdir: &str,
-    id_str: &str,
     state_db_ctx: Option<&codex_state::StateRuntime>,
 ) -> io::Result<Option<PathBuf>> {
     // Validate UUID format early.
@@ -1343,46 +1332,19 @@ fn rollout_path_matches_id_str(path: &Path, id_str: &str) -> bool {
 pub async fn find_thread_path_by_id_str(
     codex_home: &Path,
     id_str: &str,
-) -> io::Result<Option<PathBuf>> {
-    find_thread_path_by_id_str_in_subdir(codex_home, SESSIONS_SUBDIR, id_str).await
-}
-
-/// Locate a recorded active thread rollout file by UUID using the provided state DB handle first.
-pub async fn find_thread_path_by_id_str_with_state_db(
-    codex_home: &Path,
-    id_str: &str,
     state_db_ctx: Option<&codex_state::StateRuntime>,
 ) -> io::Result<Option<PathBuf>> {
-    find_thread_path_by_id_str_in_subdir_with_state_db(
-        codex_home,
-        SESSIONS_SUBDIR,
-        id_str,
-        state_db_ctx,
-    )
-    .await
+    find_thread_path_by_id_str_in_subdir(codex_home, SESSIONS_SUBDIR, id_str, state_db_ctx).await
 }
 
 /// Locate an archived thread rollout file by its UUID string.
 pub async fn find_archived_thread_path_by_id_str(
     codex_home: &Path,
     id_str: &str,
-) -> io::Result<Option<PathBuf>> {
-    find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, id_str).await
-}
-
-/// Locate an archived thread rollout file by UUID using the provided state DB handle first.
-pub async fn find_archived_thread_path_by_id_str_with_state_db(
-    codex_home: &Path,
-    id_str: &str,
     state_db_ctx: Option<&codex_state::StateRuntime>,
 ) -> io::Result<Option<PathBuf>> {
-    find_thread_path_by_id_str_in_subdir_with_state_db(
-        codex_home,
-        ARCHIVED_SESSIONS_SUBDIR,
-        id_str,
-        state_db_ctx,
-    )
-    .await
+    find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, id_str, state_db_ctx)
+        .await
 }
 
 /// Extract the `YYYY/MM/DD` directory components from a rollout filename.

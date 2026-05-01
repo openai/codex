@@ -117,7 +117,7 @@ async fn list_rollout_threads(
     sort_direction: codex_rollout::SortDirection,
 ) -> ThreadStoreResult<codex_rollout::ThreadsPage> {
     let page = if params.use_state_db_only && params.archived {
-        RolloutRecorder::list_archived_threads_from_state_db_with_state_db(
+        RolloutRecorder::list_archived_threads_from_state_db(
             state_db,
             config,
             params.page_size,
@@ -132,7 +132,7 @@ async fn list_rollout_threads(
         )
         .await
     } else if params.use_state_db_only {
-        RolloutRecorder::list_threads_from_state_db_with_state_db(
+        RolloutRecorder::list_threads_from_state_db(
             state_db,
             config,
             params.page_size,
@@ -147,7 +147,7 @@ async fn list_rollout_threads(
         )
         .await
     } else if params.archived {
-        RolloutRecorder::list_archived_threads_with_state_db(
+        RolloutRecorder::list_archived_threads(
             state_db,
             config,
             params.page_size,
@@ -162,7 +162,7 @@ async fn list_rollout_threads(
         )
         .await
     } else {
-        RolloutRecorder::list_threads_with_state_db(
+        RolloutRecorder::list_threads(
             state_db,
             config,
             params.page_size,

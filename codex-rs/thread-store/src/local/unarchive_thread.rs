@@ -1,4 +1,4 @@
-use codex_rollout::find_archived_thread_path_by_id_str_with_state_db;
+use codex_rollout::find_archived_thread_path_by_id_str;
 use codex_rollout::read_thread_item_from_rollout;
 use codex_rollout::rollout_date_parts;
 
@@ -18,7 +18,7 @@ pub(super) async fn unarchive_thread(
 ) -> ThreadStoreResult<StoredThread> {
     let thread_id = params.thread_id;
     let state_db_ctx = store.state_db().await;
-    let archived_path = find_archived_thread_path_by_id_str_with_state_db(
+    let archived_path = find_archived_thread_path_by_id_str(
         store.config.codex_home.as_path(),
         &thread_id.to_string(),
         state_db_ctx.as_deref(),

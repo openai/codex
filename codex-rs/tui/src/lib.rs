@@ -798,16 +798,6 @@ pub async fn run_main(
         }
     };
 
-    if let Err(err) = crate::legacy_core::personality_migration::maybe_migrate_personality(
-        &codex_home,
-        &config_toml,
-        /*state_db*/ None,
-    )
-    .await
-    {
-        tracing::warn!(error = %err, "failed to run personality migration");
-    }
-
     let chatgpt_base_url = config_toml
         .chatgpt_base_url
         .clone()
@@ -877,12 +867,52 @@ pub async fn run_main(
         ..Default::default()
     };
 
-    let config = load_config_or_exit(
+    let mut config = load_config_or_exit(
         cli_kv_overrides.clone(),
         overrides.clone(),
         cloud_requirements.clone(),
     )
     .await;
+
+    let state_db = match &app_server_target {
+        AppServerTarget::Embedded => state_db::init(&config).await,
+        AppServerTarget::Remote { .. } => state_db::get_state_db(&config).await,
+    };
+
+    let effective_toml = config.config_layer_stack.effective_config();
+    match effective_toml.try_into() {
+        Ok(config_toml) => {
+            match crate::legacy_core::personality_migration::maybe_migrate_personality(
+                &config.codex_home,
+                &config_toml,
+                state_db.clone(),
+            )
+            .await
+            {
+                Ok(
+                    crate::legacy_core::personality_migration::PersonalityMigrationStatus::Applied,
+                ) => {
+                    config = load_config_or_exit(
+                        cli_kv_overrides.clone(),
+                        overrides.clone(),
+                        cloud_requirements.clone(),
+                    )
+                    .await;
+                }
+                Ok(
+                    crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedMarker
+                    | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedExplicitPersonality
+                    | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedNoSessions,
+                ) => {}
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to run personality migration");
+                }
+            }
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to deserialize config for personality migration");
+        }
+    }
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
@@ -1015,10 +1045,6 @@ pub async fn run_main(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let state_db = match &app_server_target {
-        AppServerTarget::Embedded => state_db::init(&config).await,
-        AppServerTarget::Remote { .. } => state_db::get_state_db(&config).await,
-    };
     let log_db = state_db.clone().map(log_db::start);
     let log_db_layer = log_db
         .clone()

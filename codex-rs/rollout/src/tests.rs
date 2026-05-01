@@ -20,7 +20,6 @@ use uuid::Uuid;
 
 use crate::INTERACTIVE_SESSION_SOURCES;
 use crate::find_thread_path_by_id_str;
-use crate::find_thread_path_by_id_str_with_state_db;
 use crate::list::Cursor;
 use crate::list::ThreadItem;
 use crate::list::ThreadSortKey;
@@ -246,10 +245,9 @@ async fn find_thread_path_falls_back_when_db_path_is_stale() {
     )
     .await;
 
-    let found =
-        find_thread_path_by_id_str_with_state_db(home, &uuid.to_string(), Some(runtime.as_ref()))
-            .await
-            .expect("lookup should succeed");
+    let found = find_thread_path_by_id_str(home, &uuid.to_string(), Some(runtime.as_ref()))
+        .await
+        .expect("lookup should succeed");
     assert_eq!(found, Some(fs_rollout_path.clone()));
     assert_state_db_rollout_path(home, thread_id, Some(fs_rollout_path.as_path())).await;
 }
@@ -280,10 +278,9 @@ async fn find_thread_path_repairs_missing_db_row_after_filesystem_fallback() {
         .await
         .expect("backfill should be complete");
 
-    let found =
-        find_thread_path_by_id_str_with_state_db(home, &uuid.to_string(), Some(runtime.as_ref()))
-            .await
-            .expect("lookup should succeed");
+    let found = find_thread_path_by_id_str(home, &uuid.to_string(), Some(runtime.as_ref()))
+        .await
+        .expect("lookup should succeed");
     assert_eq!(found, Some(fs_rollout_path.clone()));
     assert_state_db_rollout_path(home, thread_id, Some(fs_rollout_path.as_path())).await;
 }
@@ -312,7 +309,7 @@ async fn find_thread_path_accepts_uppercase_uuid_with_state_db() {
     )
     .await;
 
-    let found = find_thread_path_by_id_str_with_state_db(
+    let found = find_thread_path_by_id_str(
         home,
         uuid.to_string().to_uppercase().as_str(),
         Some(runtime.as_ref()),

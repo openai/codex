@@ -726,6 +726,7 @@ impl Session {
                         session_configuration.cwd.clone(),
                         &mut default_shell,
                         session_telemetry.clone(),
+                        state_db_ctx.clone(),
                     )
                 }
             } else {
