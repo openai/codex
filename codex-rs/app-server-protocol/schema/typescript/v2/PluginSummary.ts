@@ -9,6 +9,6 @@ import type { PluginSource } from "./PluginSource";
 
 export type PluginSummary = { id: string, name: string, source: PluginSource, installed: boolean, enabled: boolean, installPolicy: PluginInstallPolicy, authPolicy: PluginAuthPolicy,
 /**
- * Remote-only availability status. Local plugins leave this unset.
+ * Availability state for installing and using the plugin.
  */
-status?: PluginAvailabilityStatus, interface: PluginInterface | null, };
+availability: PluginAvailabilityStatus, interface: PluginInterface | null, };

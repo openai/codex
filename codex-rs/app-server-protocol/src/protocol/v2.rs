@@ -4828,12 +4828,21 @@ pub enum PluginAuthPolicy {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[ts(export_to = "v2/")]
 pub enum PluginAvailabilityStatus {
+    /// Plugin-service currently sends `"ENABLED"` for available remote plugins.
+    /// Codex app-server exposes `"AVAILABLE"` in its API; the alias keeps
+    /// decoding compatible with that upstream response.
     #[serde(rename = "AVAILABLE", alias = "ENABLED")]
     #[ts(rename = "AVAILABLE")]
     Available,
     #[serde(rename = "DISABLED_BY_ADMIN")]
     #[ts(rename = "DISABLED_BY_ADMIN")]
     DisabledByAdmin,
+}
+
+impl Default for PluginAvailabilityStatus {
+    fn default() -> Self {
+        Self::Available
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4847,10 +4856,9 @@ pub struct PluginSummary {
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
     pub auth_policy: PluginAuthPolicy,
-    /// Remote-only availability status. Local plugins leave this unset.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub status: Option<PluginAvailabilityStatus>,
+    /// Availability state for installing and using the plugin.
+    #[serde(default)]
+    pub availability: PluginAvailabilityStatus,
     pub interface: Option<PluginInterface>,
 }
 
@@ -10738,7 +10746,7 @@ mod tests {
                     enabled: false,
                     install_policy: PluginInstallPolicy::Available,
                     auth_policy: PluginAuthPolicy::OnUse,
-                    status: Some(PluginAvailabilityStatus::Available),
+                    availability: PluginAvailabilityStatus::Available,
                     interface: None,
                 }],
             })
@@ -10752,10 +10760,39 @@ mod tests {
                     "enabled": false,
                     "installPolicy": "AVAILABLE",
                     "authPolicy": "ON_USE",
-                    "status": "AVAILABLE",
+                    "availability": "AVAILABLE",
                     "interface": null,
                 }],
             }),
+        );
+    }
+
+    #[test]
+    fn plugin_summary_defaults_missing_availability_to_available() {
+        let summary: PluginSummary = serde_json::from_value(json!({
+            "id": "plugins~Plugin_00000000000000000000000000000000",
+            "name": "gmail",
+            "source": { "type": "remote" },
+            "installed": false,
+            "enabled": false,
+            "installPolicy": "AVAILABLE",
+            "authPolicy": "ON_USE",
+            "interface": null,
+        }))
+        .unwrap();
+
+        assert_eq!(summary.availability, PluginAvailabilityStatus::Available);
+    }
+
+    #[test]
+    fn plugin_availability_deserializes_enabled_alias() {
+        let availability: PluginAvailabilityStatus =
+            serde_json::from_value(json!("ENABLED")).unwrap();
+
+        assert_eq!(availability, PluginAvailabilityStatus::Available);
+        assert_eq!(
+            serde_json::to_value(availability).unwrap(),
+            json!("AVAILABLE")
         );
     }
 

@@ -1,4 +1,5 @@
 use super::*;
+use codex_app_server_protocol::PluginAvailabilityStatus;
 use pretty_assertions::assert_eq;
 
 pub(super) async fn test_config() -> Config {
@@ -1422,7 +1423,7 @@ pub(super) fn plugins_test_summary(
         enabled,
         install_policy,
         auth_policy: PluginAuthPolicy::OnInstall,
-        status: None,
+        availability: PluginAvailabilityStatus::Available,
         interface: Some(plugins_test_interface(
             display_name,
             description,

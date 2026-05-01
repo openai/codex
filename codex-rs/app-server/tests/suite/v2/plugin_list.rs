@@ -240,7 +240,7 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
                 enabled: false,
                 install_policy: PluginInstallPolicy::Available,
                 auth_policy: PluginAuthPolicy::OnInstall,
-                status: None,
+                availability: codex_app_server_protocol::PluginAvailabilityStatus::Available,
                 interface: None,
             }],
         }]
@@ -524,7 +524,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
                     enabled: false,
                     install_policy: PluginInstallPolicy::Available,
                     auth_policy: PluginAuthPolicy::OnInstall,
-                    status: None,
+                    availability: codex_app_server_protocol::PluginAvailabilityStatus::Available,
                     interface: Some(codex_app_server_protocol::PluginInterface {
                         display_name: Some("Valid Plugin".to_string()),
                         short_description: None,
@@ -557,7 +557,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
                     enabled: false,
                     install_policy: PluginInstallPolicy::Available,
                     auth_policy: PluginAuthPolicy::OnInstall,
-                    status: None,
+                    availability: codex_app_server_protocol::PluginAvailabilityStatus::Available,
                     interface: None,
                 },
             ],
@@ -1287,8 +1287,8 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     assert_eq!(remote_marketplace.plugins[0].installed, true);
     assert_eq!(remote_marketplace.plugins[0].enabled, true);
     assert_eq!(
-        remote_marketplace.plugins[0].status,
-        Some(codex_app_server_protocol::PluginAvailabilityStatus::Available)
+        remote_marketplace.plugins[0].availability,
+        codex_app_server_protocol::PluginAvailabilityStatus::Available
     );
     assert_eq!(
         remote_marketplace.plugins[0]
@@ -1427,8 +1427,8 @@ async fn plugin_list_marks_remote_plugin_disabled_by_admin() -> Result<()> {
     assert_eq!(plugin.installed, true);
     assert_eq!(plugin.enabled, true);
     assert_eq!(
-        plugin.status,
-        Some(codex_app_server_protocol::PluginAvailabilityStatus::DisabledByAdmin)
+        plugin.availability,
+        codex_app_server_protocol::PluginAvailabilityStatus::DisabledByAdmin
     );
     Ok(())
 }

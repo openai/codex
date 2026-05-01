@@ -11957,11 +11957,21 @@
         "type": "string"
       },
       "PluginAvailabilityStatus": {
-        "enum": [
-          "AVAILABLE",
-          "DISABLED_BY_ADMIN"
-        ],
-        "type": "string"
+        "oneOf": [
+          {
+            "enum": [
+              "DISABLED_BY_ADMIN"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Plugin-service currently sends `\"ENABLED\"` for available remote plugins. Codex app-server exposes `\"AVAILABLE\"` in its API; the alias keeps decoding compatible with that upstream response.",
+            "enum": [
+              "AVAILABLE"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "PluginDetail": {
         "properties": {
@@ -12489,6 +12499,15 @@
           "authPolicy": {
             "$ref": "#/definitions/v2/PluginAuthPolicy"
           },
+          "availability": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/PluginAvailabilityStatus"
+              }
+            ],
+            "default": "AVAILABLE",
+            "description": "Availability state for installing and using the plugin."
+          },
           "enabled": {
             "type": "boolean"
           },
@@ -12516,17 +12535,6 @@
           },
           "source": {
             "$ref": "#/definitions/v2/PluginSource"
-          },
-          "status": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/PluginAvailabilityStatus"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Remote-only availability status. Local plugins leave this unset."
           }
         },
         "required": [

@@ -61,7 +61,7 @@ pub struct RemotePluginSummary {
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
     pub auth_policy: PluginAuthPolicy,
-    pub status: PluginAvailabilityStatus,
+    pub availability: PluginAvailabilityStatus,
     pub interface: Option<PluginInterface>,
 }
 
@@ -260,8 +260,8 @@ struct RemotePluginDirectoryItem {
     scope: RemotePluginScope,
     installation_policy: PluginInstallPolicy,
     authentication_policy: PluginAuthPolicy,
-    #[serde(default = "default_plugin_availability_status")]
-    status: PluginAvailabilityStatus,
+    #[serde(rename = "status", default)]
+    availability: PluginAvailabilityStatus,
     release: RemotePluginReleaseResponse,
 }
 
@@ -658,13 +658,9 @@ fn build_remote_plugin_summary(
         enabled: installed_plugin.is_some_and(|plugin| plugin.enabled),
         install_policy: plugin.installation_policy,
         auth_policy: plugin.authentication_policy,
-        status: plugin.status,
+        availability: plugin.availability,
         interface: remote_plugin_interface_to_info(plugin),
     }
-}
-
-fn default_plugin_availability_status() -> PluginAvailabilityStatus {
-    PluginAvailabilityStatus::Available
 }
 
 fn remote_installed_plugin_to_info(

@@ -78,7 +78,7 @@ impl CodexMessageProcessor {
                                 source: marketplace_plugin_source_to_info(plugin.source),
                                 install_policy: plugin.policy.installation.into(),
                                 auth_policy: plugin.policy.authentication.into(),
-                                status: None,
+                                availability: PluginAvailabilityStatus::Available,
                                 interface: plugin.interface.map(local_plugin_interface_to_info),
                             })
                             .collect(),
@@ -245,7 +245,7 @@ impl CodexMessageProcessor {
                         enabled: outcome.plugin.enabled,
                         install_policy: outcome.plugin.policy.installation.into(),
                         auth_policy: outcome.plugin.policy.authentication.into(),
-                        status: None,
+                        availability: PluginAvailabilityStatus::Available,
                         interface: outcome.plugin.interface.map(local_plugin_interface_to_info),
                     },
                     description: outcome.plugin.description,
@@ -538,7 +538,7 @@ impl CodexMessageProcessor {
                     "read remote plugin details before install",
                 )
             })?;
-        if remote_detail.summary.status == PluginAvailabilityStatus::DisabledByAdmin {
+        if remote_detail.summary.availability == PluginAvailabilityStatus::DisabledByAdmin {
             return Err(invalid_request(format!(
                 "remote plugin {plugin_name} is disabled by admin"
             )));
@@ -851,7 +851,7 @@ fn remote_plugin_summary_to_info(summary: RemoteCatalogPluginSummary) -> PluginS
         enabled: summary.enabled,
         install_policy: summary.install_policy,
         auth_policy: summary.auth_policy,
-        status: Some(summary.status),
+        availability: summary.availability,
         interface: summary.interface,
     }
 }
