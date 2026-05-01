@@ -50,6 +50,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_rollout::state_db::StateDbHandle;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
@@ -248,6 +249,7 @@ pub(crate) struct ThreadManagerState {
     thread_store: Arc<dyn ThreadStore>,
     session_source: SessionSource,
     analytics_events_client: Option<AnalyticsEventsClient>,
+    state_db: Option<StateDbHandle>,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
 }
@@ -263,10 +265,14 @@ pub fn build_models_manager(
     )
 }
 
-pub fn thread_store_from_config(config: &Config) -> Arc<dyn ThreadStore> {
+pub fn thread_store_from_config(
+    config: &Config,
+    state_db: Option<StateDbHandle>,
+) -> Arc<dyn ThreadStore> {
     match &config.experimental_thread_store {
         ThreadStoreConfig::Local => Arc::new(LocalThreadStore::new(
             LocalThreadStoreConfig::from_config(config),
+            state_db,
         )),
         ThreadStoreConfig::Remote { endpoint } => Arc::new(RemoteThreadStore::new(endpoint)),
         ThreadStoreConfig::InMemory { id } => InMemoryThreadStore::for_id(id),
@@ -281,6 +287,7 @@ impl ThreadManager {
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
+        state_db: Option<StateDbHandle>,
     ) -> Self {
         let codex_home = config.codex_home.clone();
         let restriction_product = session_source.restriction_product();
@@ -310,6 +317,7 @@ impl ThreadManager {
                 auth_manager,
                 session_source,
                 analytics_events_client,
+                state_db,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -348,6 +356,22 @@ impl ThreadManager {
         codex_home: PathBuf,
         environment_manager: Arc<EnvironmentManager>,
     ) -> Self {
+        Self::with_models_provider_home_and_state_for_tests(
+            auth,
+            provider,
+            codex_home,
+            environment_manager,
+            None,
+        )
+    }
+
+    pub(crate) fn with_models_provider_home_and_state_for_tests(
+        auth: CodexAuth,
+        provider: ModelProviderInfo,
+        codex_home: PathBuf,
+        environment_manager: Arc<EnvironmentManager>,
+        state_db: Option<StateDbHandle>,
+    ) -> Self {
         set_thread_manager_test_mode_for_tests(/*enabled*/ true);
         let auth_manager = AuthManager::from_auth_for_testing(auth);
         let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
@@ -369,12 +393,14 @@ impl ThreadManager {
         let skills_watcher = build_skills_watcher(Arc::clone(&skills_manager));
         // This test constructor has no Config input. Tests that need a non-local
         // process store should construct ThreadManager::new with an explicit store.
-        let thread_store: Arc<dyn ThreadStore> =
-            Arc::new(LocalThreadStore::new(LocalThreadStoreConfig {
+        let thread_store: Arc<dyn ThreadStore> = Arc::new(LocalThreadStore::new(
+            LocalThreadStoreConfig {
                 codex_home: codex_home.clone(),
                 sqlite_home: codex_home.clone(),
                 default_model_provider_id: OPENAI_PROVIDER_ID.to_string(),
-            }));
+            },
+            state_db.clone(),
+        ));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -390,6 +416,7 @@ impl ThreadManager {
                 auth_manager,
                 session_source: SessionSource::Exec,
                 analytics_events_client: None,
+                state_db,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -837,6 +864,10 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
+    pub(crate) fn state_db(&self) -> Option<StateDbHandle> {
+        self.state_db.clone()
+    }
+
     pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {
         self.threads
             .read()

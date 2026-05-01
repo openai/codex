@@ -20,6 +20,7 @@ pub(super) async fn make_test_app() -> App {
         app_event_tx,
         chat_widget,
         config,
+        state_db: None,
         active_profile: None,
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),

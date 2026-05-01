@@ -613,7 +613,8 @@ sqlite = true
         model_provider_id: "mock_provider".to_string(),
         generate_memories: false,
     };
-    let repaired_page = codex_core::RolloutRecorder::list_threads(
+    let repaired_page = codex_core::RolloutRecorder::list_threads_with_state_db(
+        Some(state_db.clone()),
         &rollout_config,
         /*page_size*/ 10,
         /*cursor*/ None,

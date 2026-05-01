@@ -259,6 +259,7 @@ pub(crate) struct ThreadRequestProcessor {
     pub(super) thread_watch_manager: ThreadWatchManager,
     pub(super) thread_list_state_permit: Arc<Semaphore>,
     pub(super) thread_goal_processor: ThreadGoalRequestProcessor,
+    pub(super) state_db: Option<StateDbHandle>,
     pub(super) background_tasks: TaskTracker,
 }
 
@@ -278,6 +279,7 @@ impl ThreadRequestProcessor {
         thread_watch_manager: ThreadWatchManager,
         thread_list_state_permit: Arc<Semaphore>,
         thread_goal_processor: ThreadGoalRequestProcessor,
+        state_db: Option<StateDbHandle>,
     ) -> Self {
         Self {
             auth_manager,
@@ -293,6 +295,7 @@ impl ThreadRequestProcessor {
             thread_watch_manager,
             thread_list_state_permit,
             thread_goal_processor,
+            state_db,
             background_tasks: TaskTracker::new(),
         }
     }
@@ -1170,7 +1173,7 @@ impl ThreadRequestProcessor {
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         let mut thread_ids = vec![thread_id];
-        if let Some(state_db_ctx) = get_state_db(&self.config).await {
+        if let Some(state_db_ctx) = self.state_db.as_ref() {
             let descendants = state_db_ctx
                 .list_thread_spawn_descendants(thread_id)
                 .await
@@ -1391,14 +1394,10 @@ impl ThreadRequestProcessor {
     }
 
     async fn memory_reset_response_inner(&self) -> Result<MemoryResetResponse, JSONRPCErrorError> {
-        let state_db = StateRuntime::init(
-            self.config.sqlite_home.clone(),
-            self.config.model_provider_id.clone(),
-        )
-        .await
-        .map_err(|err| {
-            internal_error(format!("failed to open state db for memory reset: {err}"))
-        })?;
+        let state_db = self
+            .state_db
+            .clone()
+            .ok_or_else(|| internal_error("sqlite state db unavailable for memory reset"))?;
 
         state_db.clear_memory_data().await.map_err(|err| {
             internal_error(format!("failed to clear memory rows in state db: {err}"))
@@ -1445,7 +1444,7 @@ impl ThreadRequestProcessor {
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
         let mut state_db_ctx = loaded_thread.as_ref().and_then(|thread| thread.state_db());
         if state_db_ctx.is_none() {
-            state_db_ctx = get_state_db(&self.config).await;
+            state_db_ctx = self.state_db.clone();
         }
         let Some(state_db_ctx) = state_db_ctx else {
             return Err(internal_error(format!(
@@ -1583,14 +1582,18 @@ impl ThreadRequestProcessor {
             return Ok(());
         }
 
-        let rollout_path =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
-                .await
-            {
+        let rollout_path = match find_thread_path_by_id_str_with_state_db(
+            &self.config.codex_home,
+            &thread_uuid.to_string(),
+            self.state_db.as_deref(),
+        )
+        .await
+        {
                 Ok(Some(path)) => path,
-                Ok(None) => match find_archived_thread_path_by_id_str(
+                Ok(None) => match find_archived_thread_path_by_id_str_with_state_db(
                     &self.config.codex_home,
                     &thread_uuid.to_string(),
+                    self.state_db.as_deref(),
                 )
                 .await
                 {
@@ -2555,7 +2558,7 @@ impl ThreadRequestProcessor {
         let InitialHistory::Resumed(resumed_history) = thread_history else {
             return None;
         };
-        let state_db_ctx = get_state_db(&self.config).await?;
+        let state_db_ctx = self.state_db.clone()?;
         let persisted_metadata = state_db_ctx
             .get_thread(resumed_history.conversation_id)
             .await
@@ -2922,7 +2925,7 @@ impl ThreadRequestProcessor {
     }
 
     async fn attach_thread_name(&self, thread_id: ThreadId, thread: &mut Thread) {
-        if let Some(title) = title_from_state_db(&self.config, thread_id).await {
+        if let Some(title) = title_from_state_db(&self.config, self.state_db.as_ref(), thread_id).await {
             set_thread_name_from_title(thread, title);
         }
     }
@@ -3683,8 +3686,12 @@ async fn read_summary_from_state_db_context_by_thread_id(
     Some(summary_from_thread_metadata(&metadata))
 }
 
-async fn title_from_state_db(config: &Config, thread_id: ThreadId) -> Option<String> {
-    if let Some(state_db_ctx) = open_state_db_for_direct_thread_lookup(config).await
+async fn title_from_state_db(
+    config: &Config,
+    state_db_ctx: Option<&StateDbHandle>,
+    thread_id: ThreadId,
+) -> Option<String> {
+    if let Some(state_db_ctx) = state_db_ctx
         && let Some(metadata) = state_db_ctx.get_thread(thread_id).await.ok().flatten()
         && let Some(title) = distinct_title(&metadata)
     {

@@ -1048,6 +1048,7 @@ mod tests {
             .await,
             feedback: codex_feedback::CodexFeedback::new(),
             log_db: None,
+            state_db: None,
             environment_manager: Arc::new(
                 codex_app_server_client::EnvironmentManager::default_for_tests(),
             ),

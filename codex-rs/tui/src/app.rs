@@ -144,6 +144,7 @@ use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 #[cfg(target_os = "windows")]
 use codex_protocol::permissions::FileSystemSandboxKind;
+use codex_rollout::StateDbHandle;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
@@ -433,6 +434,7 @@ pub(crate) struct App {
     pub(crate) chat_widget: ChatWidget,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
+    pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) active_profile: Option<String>,
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
@@ -609,6 +611,7 @@ impl App {
         should_prompt_windows_sandbox_nux_at_startup: bool,
         remote_app_server_url: Option<String>,
         remote_app_server_auth_token: Option<String>,
+        state_db: Option<StateDbHandle>,
         environment_manager: Arc<EnvironmentManager>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
@@ -854,6 +857,7 @@ See the Codex keymap documentation for supported actions and examples."
             app_event_tx,
             chat_widget,
             config,
+            state_db,
             active_profile,
             cli_kv_overrides,
             harness_overrides,

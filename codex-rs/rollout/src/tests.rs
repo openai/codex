@@ -20,12 +20,14 @@ use uuid::Uuid;
 
 use crate::INTERACTIVE_SESSION_SOURCES;
 use crate::find_thread_path_by_id_str;
+use crate::find_thread_path_by_id_str_with_state_db;
 use crate::list::Cursor;
 use crate::list::ThreadItem;
 use crate::list::ThreadSortKey;
 use crate::list::ThreadsPage;
 use crate::list::get_threads;
 use crate::list::read_head_for_summary;
+use crate::list::read_thread_item_from_rollout;
 use crate::rollout_date_parts;
 use anyhow::Result;
 use codex_protocol::ThreadId;
@@ -58,7 +60,7 @@ async fn insert_state_db_thread(
     thread_id: ThreadId,
     rollout_path: &Path,
     archived: bool,
-) {
+) -> crate::state_db::StateDbHandle {
     let runtime = codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string())
         .await
         .expect("state db should initialize");
@@ -87,6 +89,7 @@ async fn insert_state_db_thread(
         .upsert_thread(&metadata)
         .await
         .expect("state db upsert should succeed");
+    runtime
 }
 
 // TODO(jif) fix
@@ -236,7 +239,7 @@ async fn find_thread_path_falls_back_when_db_path_is_stale() {
     let stale_db_path = home.join(format!(
         "sessions/2099/01/01/rollout-2099-01-01T00-00-00-{uuid}.jsonl"
     ));
-    insert_state_db_thread(
+    let runtime = insert_state_db_thread(
         home,
         thread_id,
         stale_db_path.as_path(),
@@ -244,9 +247,10 @@ async fn find_thread_path_falls_back_when_db_path_is_stale() {
     )
     .await;
 
-    let found = find_thread_path_by_id_str(home, &uuid.to_string())
-        .await
-        .expect("lookup should succeed");
+    let found =
+        find_thread_path_by_id_str_with_state_db(home, &uuid.to_string(), Some(runtime.as_ref()))
+            .await
+            .expect("lookup should succeed");
     assert_eq!(found, Some(fs_rollout_path.clone()));
     assert_state_db_rollout_path(home, thread_id, Some(fs_rollout_path.as_path())).await;
 }
@@ -269,17 +273,18 @@ async fn find_thread_path_repairs_missing_db_row_after_filesystem_fallback() {
     let fs_rollout_path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
 
     // Create an empty state DB so lookup takes the DB-first path and then falls back to files.
-    let _runtime = codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string())
+    let runtime = codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string())
         .await
         .expect("state db should initialize");
-    _runtime
+    runtime
         .mark_backfill_complete(/*last_watermark*/ None)
         .await
         .expect("backfill should be complete");
 
-    let found = find_thread_path_by_id_str(home, &uuid.to_string())
-        .await
-        .expect("lookup should succeed");
+    let found =
+        find_thread_path_by_id_str_with_state_db(home, &uuid.to_string(), Some(runtime.as_ref()))
+            .await
+            .expect("lookup should succeed");
     assert_eq!(found, Some(fs_rollout_path.clone()));
     assert_state_db_rollout_path(home, thread_id, Some(fs_rollout_path.as_path())).await;
 }
@@ -1115,6 +1120,50 @@ async fn test_created_at_sort_uses_file_mtime_for_updated_at() -> Result<()> {
     .await?;
 
     let item = page.items.first().expect("conversation item");
+    assert_eq!(item.created_at.as_deref(), Some(ts));
+    assert_eq!(item.updated_at.as_deref(), Some(expected_updated.as_str()));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_thread_item_from_rollout_uses_file_mtime_for_updated_at() -> Result<()> {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let ts = "2025-06-01T08-00-00";
+    let uuid = Uuid::from_u128(44);
+    write_session_file(
+        home,
+        ts,
+        uuid,
+        /*num_records*/ 0,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
+
+    let created = PrimitiveDateTime::parse(
+        ts,
+        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]"),
+    )?
+    .assume_utc();
+    let updated = created + Duration::hours(3);
+    let expected_updated = updated.format(&time::format_description::well_known::Rfc3339)?;
+
+    let file_path = home
+        .join("sessions")
+        .join("2025")
+        .join("06")
+        .join("01")
+        .join(format!("rollout-{ts}-{uuid}.jsonl"));
+    let file = std::fs::OpenOptions::new().write(true).open(&file_path)?;
+    let times = FileTimes::new().set_modified(updated.into());
+    file.set_times(times)?;
+
+    let item = read_thread_item_from_rollout(file_path)
+        .await
+        .expect("thread item should load");
+
     assert_eq!(item.created_at.as_deref(), Some(ts));
     assert_eq!(item.updated_at.as_deref(), Some(expected_updated.as_str()));
 

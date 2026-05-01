@@ -601,7 +601,8 @@ async fn list_threads_db_enabled_drops_missing_rollout_paths() -> std::io::Resul
         .expect("state db upsert should succeed");
 
     let default_provider = config.model_provider_id.clone();
-    let page = RolloutRecorder::list_threads(
+    let page = RolloutRecorder::list_threads_with_state_db(
+        Some(runtime.clone()),
         &config,
         /*page_size*/ 10,
         /*cursor*/ None,
@@ -665,7 +666,8 @@ async fn list_threads_db_enabled_repairs_stale_rollout_paths() -> std::io::Resul
         .expect("state db upsert should succeed");
 
     let default_provider = config.model_provider_id.clone();
-    let page = RolloutRecorder::list_threads(
+    let page = RolloutRecorder::list_threads_with_state_db(
+        Some(runtime.clone()),
         &config,
         /*page_size*/ 1,
         /*cursor*/ None,
@@ -737,7 +739,8 @@ async fn list_threads_state_db_only_skips_jsonl_repair_scan() -> std::io::Result
     writeln!(file, "{user_event}")?;
 
     let cwd_filters = [home.path().to_path_buf()];
-    let state_db_only_page = RolloutRecorder::list_threads_from_state_db(
+    let state_db_only_page = RolloutRecorder::list_threads_from_state_db_with_state_db(
+        Some(runtime.clone()),
         &config,
         /*page_size*/ 10,
         /*cursor*/ None,
@@ -752,7 +755,8 @@ async fn list_threads_state_db_only_skips_jsonl_repair_scan() -> std::io::Result
     .await?;
     assert_eq!(state_db_only_page.items.len(), 0);
 
-    let repaired_page = RolloutRecorder::list_threads(
+    let repaired_page = RolloutRecorder::list_threads_with_state_db(
+        Some(runtime.clone()),
         &config,
         /*page_size*/ 10,
         /*cursor*/ None,
@@ -767,7 +771,8 @@ async fn list_threads_state_db_only_skips_jsonl_repair_scan() -> std::io::Result
     .await?;
     assert_eq!(repaired_page.items.len(), 1);
 
-    let repaired_state_db_only_page = RolloutRecorder::list_threads_from_state_db(
+    let repaired_state_db_only_page = RolloutRecorder::list_threads_from_state_db_with_state_db(
+        Some(runtime.clone()),
         &config,
         /*page_size*/ 10,
         /*cursor*/ None,
@@ -824,7 +829,8 @@ async fn list_threads_default_filter_returns_filesystem_scan_results() -> std::i
         .expect("state db upsert should succeed");
 
     let cwd_filters = [stale_cwd];
-    let state_db_only_page = RolloutRecorder::list_threads_from_state_db(
+    let state_db_only_page = RolloutRecorder::list_threads_from_state_db_with_state_db(
+        Some(runtime.clone()),
         &config,
         /*page_size*/ 10,
         /*cursor*/ None,
@@ -839,7 +845,8 @@ async fn list_threads_default_filter_returns_filesystem_scan_results() -> std::i
     .await?;
     assert_eq!(state_db_only_page.items.len(), 1);
 
-    let scanned_page = RolloutRecorder::list_threads(
+    let scanned_page = RolloutRecorder::list_threads_with_state_db(
+        Some(runtime.clone()),
         &config,
         /*page_size*/ 10,
         /*cursor*/ None,
@@ -854,7 +861,8 @@ async fn list_threads_default_filter_returns_filesystem_scan_results() -> std::i
     .await?;
     assert_eq!(scanned_page.items.len(), 0);
 
-    let repaired_state_db_only_page = RolloutRecorder::list_threads_from_state_db(
+    let repaired_state_db_only_page = RolloutRecorder::list_threads_from_state_db_with_state_db(
+        Some(runtime.clone()),
         &config,
         /*page_size*/ 10,
         /*cursor*/ None,
@@ -912,7 +920,8 @@ async fn list_threads_metadata_filter_overlays_state_db_list_metadata() -> std::
         .await
         .expect("state db upsert should succeed");
 
-    let page = RolloutRecorder::list_threads(
+    let page = RolloutRecorder::list_threads_with_state_db(
+        Some(runtime.clone()),
         &config,
         /*page_size*/ 10,
         /*cursor*/ None,
@@ -1038,7 +1047,8 @@ async fn list_threads_search_repairs_stale_state_db_hits_before_returning() -> s
         .await
         .expect("state db upsert should succeed");
 
-    let stale_state_db_only_page = RolloutRecorder::list_threads_from_state_db(
+    let stale_state_db_only_page = RolloutRecorder::list_threads_from_state_db_with_state_db(
+        Some(runtime.clone()),
         &config,
         /*page_size*/ 10,
         /*cursor*/ None,
@@ -1053,7 +1063,8 @@ async fn list_threads_search_repairs_stale_state_db_hits_before_returning() -> s
     .await?;
     assert_eq!(stale_state_db_only_page.items.len(), 1);
 
-    let scanned_page = RolloutRecorder::list_threads(
+    let scanned_page = RolloutRecorder::list_threads_with_state_db(
+        Some(runtime.clone()),
         &config,
         /*page_size*/ 10,
         /*cursor*/ None,
@@ -1068,7 +1079,8 @@ async fn list_threads_search_repairs_stale_state_db_hits_before_returning() -> s
     .await?;
     assert_eq!(scanned_page.items.len(), 0);
 
-    let repaired_state_db_only_page = RolloutRecorder::list_threads_from_state_db(
+    let repaired_state_db_only_page = RolloutRecorder::list_threads_from_state_db_with_state_db(
+        Some(runtime.clone()),
         &config,
         /*page_size*/ 10,
         /*cursor*/ None,

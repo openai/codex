@@ -72,6 +72,7 @@ use codex_login::auth::ExternalAuthTokens;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_rollout::StateDbHandle;
 use codex_state::log_db::LogDbLayer;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
@@ -251,6 +252,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
+    pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
@@ -272,6 +274,7 @@ impl MessageProcessor {
             environment_manager,
             feedback,
             log_db,
+            state_db,
             config_warnings,
             session_source,
             auth_manager,
@@ -285,7 +288,7 @@ impl MessageProcessor {
         // The thread store is intentionally process-scoped. Config reloads can
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
-        let thread_store = thread_store_from_config(config.as_ref());
+        let thread_store = thread_store_from_config(config.as_ref(), state_db.clone());
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
@@ -293,6 +296,7 @@ impl MessageProcessor {
             environment_manager,
             Some(analytics_events_client.clone()),
             Arc::clone(&thread_store),
+            state_db.clone(),
         ));
         thread_manager
             .plugins_manager()
@@ -337,6 +341,7 @@ impl MessageProcessor {
             Arc::clone(&config),
             feedback,
             log_db,
+            state_db.clone(),
         );
         let git_processor = GitRequestProcessor::new();
         let initialize_processor = InitializeRequestProcessor::new(
@@ -371,6 +376,7 @@ impl MessageProcessor {
             outgoing.clone(),
             Arc::clone(&config),
             thread_state_manager.clone(),
+            state_db.clone(),
         );
         let thread_processor = ThreadRequestProcessor::new(
             auth_manager.clone(),
@@ -386,6 +392,7 @@ impl MessageProcessor {
             thread_watch_manager.clone(),
             Arc::clone(&thread_list_state_permit),
             thread_goal_processor.clone(),
+            state_db.clone(),
         );
         let turn_processor = TurnRequestProcessor::new(
             auth_manager.clone(),
@@ -399,6 +406,7 @@ impl MessageProcessor {
             thread_state_manager,
             thread_watch_manager,
             thread_list_state_permit,
+            state_db.clone(),
         );
         if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
             // Keep plugin startup warmups aligned at app-server startup.
@@ -429,11 +437,7 @@ impl MessageProcessor {
             arg0_paths,
             config.codex_home.to_path_buf(),
         );
-        let device_key_processor = DeviceKeyRequestProcessor::new(
-            outgoing.clone(),
-            config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
-        );
+        let device_key_processor = DeviceKeyRequestProcessor::new(outgoing.clone(), state_db);
         let fs_processor = FsRequestProcessor::new(
             thread_manager
                 .environment_manager()

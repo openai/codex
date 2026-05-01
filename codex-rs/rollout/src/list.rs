@@ -811,12 +811,17 @@ async fn build_thread_item(
 /// metadata/preview extraction as list operations without scanning the whole
 /// sessions tree.
 pub async fn read_thread_item_from_rollout(path: PathBuf) -> Option<ThreadItem> {
+    let updated_at = file_modified_time(&path)
+        .await
+        .ok()
+        .flatten()
+        .and_then(format_rfc3339);
     build_thread_item(
         path,
         &[],
         /*provider_matcher*/ None,
         /*cwd_filters*/ None,
-        /*updated_at*/ None,
+        updated_at,
     )
     .await
 }
@@ -1240,6 +1245,18 @@ async fn find_thread_path_by_id_str_in_subdir(
     subdir: &str,
     id_str: &str,
 ) -> io::Result<Option<PathBuf>> {
+    find_thread_path_by_id_str_in_subdir_with_state_db(
+        codex_home, subdir, id_str, /*state_db_ctx*/ None,
+    )
+    .await
+}
+
+async fn find_thread_path_by_id_str_in_subdir_with_state_db(
+    codex_home: &Path,
+    subdir: &str,
+    id_str: &str,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
+) -> io::Result<Option<PathBuf>> {
     // Validate UUID format early.
     if Uuid::parse_str(id_str).is_err() {
         return Ok(None);
@@ -1253,8 +1270,7 @@ async fn find_thread_path_by_id_str_in_subdir(
         _ => None,
     };
     let thread_id = ThreadId::from_string(id_str).ok();
-    let state_db_ctx = state_db::open_if_present(codex_home, "").await;
-    if let Some(state_db_ctx) = state_db_ctx.as_deref()
+    if let Some(state_db_ctx) = state_db_ctx
         && let Some(thread_id) = thread_id
         && let Some(db_path) = state_db::find_rollout_path_by_id(
             Some(state_db_ctx),
@@ -1264,7 +1280,9 @@ async fn find_thread_path_by_id_str_in_subdir(
         )
         .await
     {
-        if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
+        if tokio::fs::try_exists(&db_path).await.unwrap_or(false)
+            && rollout_path_matches_id_str(db_path.as_path(), id_str)
+        {
             return Ok(Some(db_path));
         }
         tracing::error!(
@@ -1301,7 +1319,7 @@ async fn find_thread_path_by_id_str_in_subdir(
             "state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back"
         );
         state_db::read_repair_rollout_path(
-            state_db_ctx.as_deref(),
+            state_db_ctx,
             thread_id,
             archived_only,
             found_path.as_path(),
@@ -1310,6 +1328,12 @@ async fn find_thread_path_by_id_str_in_subdir(
     }
 
     Ok(found)
+}
+
+fn rollout_path_matches_id_str(path: &Path, id_str: &str) -> bool {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|file_name| file_name.ends_with(format!("{id_str}.jsonl").as_str()))
 }
 
 /// Locate a recorded thread rollout file by its UUID string using the existing
@@ -1322,12 +1346,42 @@ pub async fn find_thread_path_by_id_str(
     find_thread_path_by_id_str_in_subdir(codex_home, SESSIONS_SUBDIR, id_str).await
 }
 
+/// Locate a recorded active thread rollout file by UUID using the provided state DB handle first.
+pub async fn find_thread_path_by_id_str_with_state_db(
+    codex_home: &Path,
+    id_str: &str,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
+) -> io::Result<Option<PathBuf>> {
+    find_thread_path_by_id_str_in_subdir_with_state_db(
+        codex_home,
+        SESSIONS_SUBDIR,
+        id_str,
+        state_db_ctx,
+    )
+    .await
+}
+
 /// Locate an archived thread rollout file by its UUID string.
 pub async fn find_archived_thread_path_by_id_str(
     codex_home: &Path,
     id_str: &str,
 ) -> io::Result<Option<PathBuf>> {
     find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, id_str).await
+}
+
+/// Locate an archived thread rollout file by UUID using the provided state DB handle first.
+pub async fn find_archived_thread_path_by_id_str_with_state_db(
+    codex_home: &Path,
+    id_str: &str,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
+) -> io::Result<Option<PathBuf>> {
+    find_thread_path_by_id_str_in_subdir_with_state_db(
+        codex_home,
+        ARCHIVED_SESSIONS_SUBDIR,
+        id_str,
+        state_db_ctx,
+    )
+    .await
 }
 
 /// Extract the `YYYY/MM/DD` directory components from a rollout filename.

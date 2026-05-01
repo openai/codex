@@ -241,7 +241,38 @@ impl RolloutRecorder {
         default_provider: &str,
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
+        Self::list_threads_with_state_db(
+            /*state_db_ctx*/ None,
+            config,
+            page_size,
+            cursor,
+            sort_key,
+            sort_direction,
+            allowed_sources,
+            model_providers,
+            cwd_filters,
+            default_provider,
+            search_term,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn list_threads_with_state_db(
+        state_db_ctx: Option<StateDbHandle>,
+        config: &impl RolloutConfigView,
+        page_size: usize,
+        cursor: Option<&Cursor>,
+        sort_key: ThreadSortKey,
+        sort_direction: SortDirection,
+        allowed_sources: &[SessionSource],
+        model_providers: Option<&[String]>,
+        cwd_filters: Option<&[PathBuf]>,
+        default_provider: &str,
+        search_term: Option<&str>,
+    ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
+            state_db_ctx,
             config,
             page_size,
             cursor,
@@ -259,7 +290,8 @@ impl RolloutRecorder {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn list_threads_from_state_db(
+    pub async fn list_threads_from_state_db_with_state_db(
+        state_db_ctx: Option<StateDbHandle>,
         config: &impl RolloutConfigView,
         page_size: usize,
         cursor: Option<&Cursor>,
@@ -272,6 +304,7 @@ impl RolloutRecorder {
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
+            state_db_ctx,
             config,
             page_size,
             cursor,
@@ -302,7 +335,38 @@ impl RolloutRecorder {
         default_provider: &str,
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
+        Self::list_archived_threads_with_state_db(
+            /*state_db_ctx*/ None,
+            config,
+            page_size,
+            cursor,
+            sort_key,
+            sort_direction,
+            allowed_sources,
+            model_providers,
+            cwd_filters,
+            default_provider,
+            search_term,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn list_archived_threads_with_state_db(
+        state_db_ctx: Option<StateDbHandle>,
+        config: &impl RolloutConfigView,
+        page_size: usize,
+        cursor: Option<&Cursor>,
+        sort_key: ThreadSortKey,
+        sort_direction: SortDirection,
+        allowed_sources: &[SessionSource],
+        model_providers: Option<&[String]>,
+        cwd_filters: Option<&[PathBuf]>,
+        default_provider: &str,
+        search_term: Option<&str>,
+    ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
+            state_db_ctx,
             config,
             page_size,
             cursor,
@@ -320,7 +384,8 @@ impl RolloutRecorder {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn list_archived_threads_from_state_db(
+    pub async fn list_archived_threads_from_state_db_with_state_db(
+        state_db_ctx: Option<StateDbHandle>,
         config: &impl RolloutConfigView,
         page_size: usize,
         cursor: Option<&Cursor>,
@@ -333,6 +398,7 @@ impl RolloutRecorder {
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
+            state_db_ctx,
             config,
             page_size,
             cursor,
@@ -351,6 +417,7 @@ impl RolloutRecorder {
 
     #[allow(clippy::too_many_arguments)]
     async fn list_threads_with_db_fallback(
+        state_db_ctx: Option<StateDbHandle>,
         config: &impl RolloutConfigView,
         page_size: usize,
         cursor: Option<&Cursor>,
@@ -365,7 +432,6 @@ impl RolloutRecorder {
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
         let codex_home = config.codex_home();
-        let state_db_ctx = state_db::get_state_db(config).await;
         let archived = match archive_filter {
             ThreadListArchiveFilter::Active => false,
             ThreadListArchiveFilter::Archived => true,
@@ -585,7 +651,7 @@ impl RolloutRecorder {
         filter_cwd: Option<&Path>,
     ) -> std::io::Result<Option<PathBuf>> {
         let codex_home = config.codex_home();
-        let state_db_ctx = state_db::get_state_db(config).await;
+        let state_db_ctx: Option<StateDbHandle> = None;
         let cwd_filter = filter_cwd.map(Path::to_path_buf);
         if state_db_ctx.is_some() {
             let mut db_cursor = cursor.cloned();

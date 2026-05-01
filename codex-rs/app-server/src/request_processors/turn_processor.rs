@@ -13,6 +13,7 @@ pub(crate) struct TurnRequestProcessor {
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
     thread_list_state_permit: Arc<Semaphore>,
+    state_db: Option<StateDbHandle>,
 }
 
 impl TurnRequestProcessor {
@@ -29,6 +30,7 @@ impl TurnRequestProcessor {
         thread_state_manager: ThreadStateManager,
         thread_watch_manager: ThreadWatchManager,
         thread_list_state_permit: Arc<Semaphore>,
+        state_db: Option<StateDbHandle>,
     ) -> Self {
         Self {
             auth_manager,
@@ -42,6 +44,7 @@ impl TurnRequestProcessor {
             thread_state_manager,
             thread_watch_manager,
             thread_list_state_permit,
+            state_db,
         }
     }
 
@@ -891,16 +894,20 @@ impl TurnRequestProcessor {
         let rollout_path = if let Some(path) = parent_thread.rollout_path() {
             path
         } else {
-            find_thread_path_by_id_str(&self.config.codex_home, &parent_thread_id.to_string())
-                .await
-                .map_err(|err| {
-                    internal_error(format!(
-                        "failed to locate thread id {parent_thread_id}: {err}"
-                    ))
-                })?
-                .ok_or_else(|| {
-                    invalid_request(format!("no rollout found for thread id {parent_thread_id}"))
-                })?
+            find_thread_path_by_id_str_with_state_db(
+                &self.config.codex_home,
+                &parent_thread_id.to_string(),
+                self.state_db.as_deref(),
+            )
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to locate thread id {parent_thread_id}: {err}"
+                ))
+            })?
+            .ok_or_else(|| {
+                invalid_request(format!("no rollout found for thread id {parent_thread_id}"))
+            })?
         };
 
         let mut config = self.config.as_ref().clone();
