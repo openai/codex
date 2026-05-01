@@ -2,13 +2,12 @@ use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
-use std::path::PathBuf;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::ContextualUserFragment;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct EnvironmentContext {
-    pub(crate) cwd: Option<PathBuf>,
     pub(crate) shell: String,
     pub(crate) environments: Vec<EnvironmentContextEnvironment>,
     pub(crate) current_date: Option<String>,
@@ -20,19 +19,25 @@ pub(crate) struct EnvironmentContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EnvironmentContextEnvironment {
     pub(crate) id: String,
-    pub(crate) cwd: PathBuf,
+    pub(crate) cwd: AbsolutePathBuf,
 }
 
 impl EnvironmentContextEnvironment {
+    fn legacy(cwd: AbsolutePathBuf) -> Self {
+        Self {
+            id: String::new(),
+            cwd,
+        }
+    }
+
     fn from_turn_environments(
         environments: &[crate::session::turn_context::TurnEnvironment],
     ) -> Vec<Self> {
         environments
             .iter()
-            .enumerate()
-            .map(|(index, environment)| Self {
+            .map(|environment| Self {
                 id: environment.environment_id.clone(),
-                cwd: environment.cwd.to_path_buf(),
+                cwd: environment.cwd.clone(),
             })
             .collect()
     }
@@ -54,20 +59,7 @@ impl NetworkContext {
 }
 
 impl EnvironmentContext {
-    fn model_facing_environments(
-        environments: Vec<EnvironmentContextEnvironment>,
-    ) -> Vec<EnvironmentContextEnvironment> {
-        // Preserve the legacy cwd-only surface for zero- and
-        // single-environment turns; only render explicit choices for multi-env.
-        if environments.len() > 1 {
-            environments
-        } else {
-            Vec::new()
-        }
-    }
-
     pub(crate) fn new(
-        cwd: Option<PathBuf>,
         shell: String,
         environments: Vec<EnvironmentContextEnvironment>,
         current_date: Option<String>,
@@ -76,7 +68,6 @@ impl EnvironmentContext {
         subagents: Option<String>,
     ) -> Self {
         Self {
-            cwd,
             shell,
             environments,
             current_date,
@@ -91,7 +82,6 @@ impl EnvironmentContext {
     /// include the shell, and then it is not configurable from turn to turn.
     pub(crate) fn equals_except_shell(&self, other: &EnvironmentContext) -> bool {
         let EnvironmentContext {
-            cwd,
             environments,
             current_date,
             timezone,
@@ -99,8 +89,9 @@ impl EnvironmentContext {
             subagents,
             shell: _,
         } = other;
-        self.cwd == *cwd
-            && self.environments == *environments
+        self.model_facing_single_cwd() == Self::single_environment_cwd(environments)
+            && self.model_facing_multiple_environments()
+                == Self::multiple_environments(environments)
             && self.current_date == *current_date
             && self.timezone == *timezone
             && self.network == *network
@@ -111,19 +102,26 @@ impl EnvironmentContext {
         before: &TurnContextItem,
         after: &EnvironmentContext,
     ) -> Self {
+        let before_context = Self::from_turn_context_item(before, after.shell.clone());
         let before_network = Self::network_from_turn_context_item(before);
-        let environments = Self::model_facing_environments(after.environments.clone());
-        let cwd = match &after.cwd {
-            Some(cwd) if before.cwd.as_path() != cwd.as_path() => Some(cwd.clone()),
-            _ => None,
-        };
+        let environments = after
+            .model_facing_multiple_environments()
+            .map(<[_]>::to_vec)
+            .unwrap_or_else(|| {
+                after
+                    .model_facing_single_cwd()
+                    .filter(|cwd| before_context.model_facing_single_cwd() != Some(*cwd))
+                    .cloned()
+                    .map(EnvironmentContextEnvironment::legacy)
+                    .into_iter()
+                    .collect()
+            });
         let network = if before_network != after.network {
             after.network.clone()
         } else {
             before_network
         };
         EnvironmentContext::new(
-            cwd,
             after.shell.clone(),
             environments,
             after.current_date.clone(),
@@ -135,11 +133,8 @@ impl EnvironmentContext {
 
     pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
         Self::new(
-            Some(turn_context.cwd.to_path_buf()),
             shell.name().to_string(),
-            Self::model_facing_environments(EnvironmentContextEnvironment::from_turn_environments(
-                &turn_context.environments,
-            )),
+            EnvironmentContextEnvironment::from_turn_environments(&turn_context.environments),
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
             Self::network_from_turn_context(turn_context),
@@ -152,9 +147,11 @@ impl EnvironmentContext {
         shell: String,
     ) -> Self {
         Self::new(
-            Some(turn_context_item.cwd.clone()),
             shell,
-            Vec::new(),
+            vec![EnvironmentContextEnvironment::legacy(
+                AbsolutePathBuf::try_from(turn_context_item.cwd.clone())
+                    .expect("turn context item cwd must be absolute"),
+            )],
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),
@@ -203,6 +200,26 @@ impl EnvironmentContext {
             denied_domains.clone(),
         ))
     }
+
+    fn model_facing_single_cwd(&self) -> Option<&AbsolutePathBuf> {
+        Self::single_environment_cwd(&self.environments)
+    }
+
+    fn model_facing_multiple_environments(&self) -> Option<&[EnvironmentContextEnvironment]> {
+        Self::multiple_environments(&self.environments)
+    }
+
+    fn single_environment_cwd(
+        environments: &[EnvironmentContextEnvironment],
+    ) -> Option<&AbsolutePathBuf> {
+        (environments.len() == 1).then(|| &environments[0].cwd)
+    }
+
+    fn multiple_environments(
+        environments: &[EnvironmentContextEnvironment],
+    ) -> Option<&[EnvironmentContextEnvironment]> {
+        (environments.len() > 1).then_some(environments)
+    }
 }
 
 impl ContextualUserFragment for EnvironmentContext {
@@ -212,9 +229,9 @@ impl ContextualUserFragment for EnvironmentContext {
 
     fn body(&self) -> String {
         let mut lines = Vec::new();
-        if !self.environments.is_empty() {
+        if let Some(environments) = self.model_facing_multiple_environments() {
             lines.push("  <environments>".to_string());
-            for environment in &self.environments {
+            for environment in environments {
                 lines.push(format!("    <environment id=\"{}\">", environment.id));
                 lines.push(format!(
                     "      <cwd>{}</cwd>",
@@ -223,7 +240,7 @@ impl ContextualUserFragment for EnvironmentContext {
                 lines.push("    </environment>".to_string());
             }
             lines.push("  </environments>".to_string());
-        } else if let Some(cwd) = &self.cwd {
+        } else if let Some(cwd) = self.model_facing_single_cwd() {
             lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
         }
 
