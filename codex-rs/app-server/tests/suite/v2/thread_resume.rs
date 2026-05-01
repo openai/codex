@@ -2193,16 +2193,30 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
     })
     .await??;
     let expected_readme_path = workspace.join("README.md");
-    let expected_file_change = ThreadItem::FileChange {
-        id: "patch-call".to_string(),
-        changes: vec![codex_app_server_protocol::FileUpdateChange {
+    let ThreadItem::FileChange {
+        id,
+        changes,
+        status,
+        started_at_ms,
+        completed_at_ms,
+        duration_ms,
+    } = original_started
+    else {
+        unreachable!("loop ensures we break on file change items");
+    };
+    assert_eq!(id, "patch-call");
+    assert_eq!(
+        changes,
+        vec![codex_app_server_protocol::FileUpdateChange {
             path: expected_readme_path.to_string_lossy().into_owned(),
             kind: PatchChangeKind::Add,
             diff: "new line\n".to_string(),
-        }],
-        status: PatchApplyStatus::InProgress,
-    };
-    assert_eq!(original_started, expected_file_change);
+        }]
+    );
+    assert_eq!(status, PatchApplyStatus::InProgress);
+    assert!(started_at_ms.is_some());
+    assert_eq!(completed_at_ms, None);
+    assert_eq!(duration_ms, None);
 
     let original_request = timeout(
         DEFAULT_READ_TIMEOUT,

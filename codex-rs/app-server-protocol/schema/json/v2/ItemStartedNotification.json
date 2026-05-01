@@ -668,6 +668,14 @@
               },
               "type": "array"
             },
+            "completedAtMs": {
+              "description": "Unix timestamp (in milliseconds) when command execution completed, if known.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "cwd": {
               "allOf": [
                 {
@@ -710,6 +718,14 @@
               ],
               "default": "agent"
             },
+            "startedAtMs": {
+              "description": "Unix timestamp (in milliseconds) when command execution started, if known.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "status": {
               "$ref": "#/definitions/CommandExecutionStatus"
             },
@@ -740,8 +756,32 @@
               },
               "type": "array"
             },
+            "completedAtMs": {
+              "description": "Unix timestamp (in milliseconds) when patch application completed, if known.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "durationMs": {
+              "description": "The duration of patch application in milliseconds.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "id": {
               "type": "string"
+            },
+            "startedAtMs": {
+              "description": "Unix timestamp (in milliseconds) when patch application started, if known.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "status": {
               "$ref": "#/definitions/PatchApplyStatus"
@@ -766,6 +806,14 @@
         {
           "properties": {
             "arguments": true,
+            "completedAtMs": {
+              "description": "Unix timestamp (in milliseconds) when MCP tool execution completed, if known.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "durationMs": {
               "description": "The duration of the MCP tool call in milliseconds.",
               "format": "int64",
@@ -806,6 +854,14 @@
             "server": {
               "type": "string"
             },
+            "startedAtMs": {
+              "description": "Unix timestamp (in milliseconds) when MCP tool execution started, if known.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "status": {
               "$ref": "#/definitions/McpToolCallStatus"
             },
@@ -834,6 +890,14 @@
         {
           "properties": {
             "arguments": true,
+            "completedAtMs": {
+              "description": "Unix timestamp (in milliseconds) when dynamic tool execution completed, if known.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "contentItems": {
               "items": {
                 "$ref": "#/definitions/DynamicToolCallOutputContentItem"
@@ -857,6 +921,14 @@
             "namespace": {
               "type": [
                 "string",
+                "null"
+              ]
+            },
+            "startedAtMs": {
+              "description": "Unix timestamp (in milliseconds) when dynamic tool execution started, if known.",
+              "format": "int64",
+              "type": [
+                "integer",
                 "null"
               ]
             },
@@ -899,6 +971,22 @@
               "description": "Last known status of the target agents, when available.",
               "type": "object"
             },
+            "completedAtMs": {
+              "description": "Unix timestamp (in milliseconds) when collab tool execution completed, if known.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "durationMs": {
+              "description": "The duration of the collab tool execution in milliseconds.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "id": {
               "description": "Unique identifier for this collab tool call.",
               "type": "string"
@@ -938,6 +1026,14 @@
             "senderThreadId": {
               "description": "Thread ID of the agent issuing the collab request.",
               "type": "string"
+            },
+            "startedAtMs": {
+              "description": "Unix timestamp (in milliseconds) when collab tool execution started, if known.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "status": {
               "allOf": [
@@ -987,11 +1083,35 @@
                 }
               ]
             },
+            "completedAtMs": {
+              "description": "Unix timestamp (in milliseconds) when web search execution completed, if known.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "durationMs": {
+              "description": "The duration of the web search execution in milliseconds.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "id": {
               "type": "string"
             },
             "query": {
               "type": "string"
+            },
+            "startedAtMs": {
+              "description": "Unix timestamp (in milliseconds) when web search execution started, if known.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -1035,6 +1155,22 @@
         },
         {
           "properties": {
+            "completedAtMs": {
+              "description": "Unix timestamp (in milliseconds) when image generation completed, if known.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "durationMs": {
+              "description": "The duration of image generation in milliseconds.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "id": {
               "type": "string"
             },
@@ -1055,6 +1191,14 @@
                 {
                   "type": "null"
                 }
+              ]
+            },
+            "startedAtMs": {
+              "description": "Unix timestamp (in milliseconds) when image generation started, if known.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
               ]
             },
             "status": {

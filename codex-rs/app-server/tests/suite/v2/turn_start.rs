@@ -2158,6 +2158,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         ref id,
         status,
         ref changes,
+        ..
     } = started_file_change
     else {
         unreachable!("loop ensures we break on file change items");
@@ -2594,20 +2595,35 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
         }
     })
     .await??;
-    assert_eq!(
-        spawn_started,
-        ThreadItem::CollabAgentToolCall {
-            id: SPAWN_CALL_ID.to_string(),
-            tool: CollabAgentTool::SpawnAgent,
-            status: CollabAgentToolCallStatus::InProgress,
-            sender_thread_id: thread.id.clone(),
-            receiver_thread_ids: Vec::new(),
-            prompt: Some(CHILD_PROMPT.to_string()),
-            model: Some(REQUESTED_MODEL.to_string()),
-            reasoning_effort: Some(REQUESTED_REASONING_EFFORT),
-            agents_states: HashMap::new(),
-        }
-    );
+    let ThreadItem::CollabAgentToolCall {
+        id,
+        tool,
+        status,
+        sender_thread_id,
+        receiver_thread_ids,
+        prompt,
+        model,
+        reasoning_effort,
+        agents_states,
+        started_at_ms,
+        completed_at_ms,
+        duration_ms,
+    } = spawn_started
+    else {
+        panic!("expected collab agent tool call item");
+    };
+    assert_eq!(id, SPAWN_CALL_ID);
+    assert_eq!(tool, CollabAgentTool::SpawnAgent);
+    assert_eq!(status, CollabAgentToolCallStatus::InProgress);
+    assert_eq!(sender_thread_id, thread.id);
+    assert_eq!(receiver_thread_ids, Vec::<String>::new());
+    assert_eq!(prompt.as_deref(), Some(CHILD_PROMPT));
+    assert_eq!(model.as_deref(), Some(REQUESTED_MODEL));
+    assert_eq!(reasoning_effort, Some(REQUESTED_REASONING_EFFORT));
+    assert_eq!(agents_states, HashMap::new());
+    assert!(started_at_ms.is_some());
+    assert_eq!(completed_at_ms, None);
+    assert_eq!(duration_ms, None);
 
     let spawn_completed = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
@@ -2634,6 +2650,9 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
         model,
         reasoning_effort,
         agents_states,
+        started_at_ms,
+        completed_at_ms,
+        duration_ms,
     } = spawn_completed
     else {
         unreachable!("loop ensures we break on collab agent tool call items");
@@ -2645,6 +2664,9 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
     assert_eq!(id, SPAWN_CALL_ID);
     assert_eq!(tool, CollabAgentTool::SpawnAgent);
     assert_eq!(status, CollabAgentToolCallStatus::Completed);
+    assert!(started_at_ms.is_some());
+    assert!(completed_at_ms.is_some());
+    assert!(duration_ms.is_some());
     assert_eq!(sender_thread_id, thread.id);
     assert_eq!(receiver_thread_ids, vec![receiver_thread_id.clone()]);
     assert_eq!(prompt, Some(CHILD_PROMPT.to_string()));
@@ -2818,6 +2840,9 @@ config_file = "./custom-role.toml"
         model,
         reasoning_effort,
         agents_states,
+        started_at_ms,
+        completed_at_ms,
+        duration_ms,
     } = spawn_completed
     else {
         unreachable!("loop ensures we break on collab agent tool call items");
@@ -2829,6 +2854,9 @@ config_file = "./custom-role.toml"
     assert_eq!(id, SPAWN_CALL_ID);
     assert_eq!(tool, CollabAgentTool::SpawnAgent);
     assert_eq!(status, CollabAgentToolCallStatus::Completed);
+    assert!(started_at_ms.is_some());
+    assert!(completed_at_ms.is_some());
+    assert!(duration_ms.is_some());
     assert_eq!(sender_thread_id, thread.id);
     assert_eq!(receiver_thread_ids, vec![receiver_thread_id.clone()]);
     assert_eq!(prompt, Some(CHILD_PROMPT.to_string()));
@@ -3126,6 +3154,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
         ref id,
         status,
         ref changes,
+        ..
     } = started_file_change
     else {
         unreachable!("loop ensures we break on file change items");

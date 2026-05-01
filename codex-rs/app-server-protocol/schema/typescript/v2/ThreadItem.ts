@@ -51,13 +51,49 @@ aggregatedOutput: string | null,
  */
 exitCode: number | null,
 /**
+ * Unix timestamp (in milliseconds) when command execution started, if known.
+ */
+startedAtMs: number | null,
+/**
+ * Unix timestamp (in milliseconds) when command execution completed, if known.
+ */
+completedAtMs: number | null,
+/**
  * The duration of the command execution in milliseconds.
  */
-durationMs: number | null, } | { "type": "fileChange", id: string, changes: Array<FileUpdateChange>, status: PatchApplyStatus, } | { "type": "mcpToolCall", id: string, server: string, tool: string, status: McpToolCallStatus, arguments: JsonValue, mcpAppResourceUri?: string, result: McpToolCallResult | null, error: McpToolCallError | null,
+durationMs: number | null, } | { "type": "fileChange", id: string, changes: Array<FileUpdateChange>, status: PatchApplyStatus,
+/**
+ * Unix timestamp (in milliseconds) when patch application started, if known.
+ */
+startedAtMs: number | null,
+/**
+ * Unix timestamp (in milliseconds) when patch application completed, if known.
+ */
+completedAtMs: number | null,
+/**
+ * The duration of patch application in milliseconds.
+ */
+durationMs: number | null, } | { "type": "mcpToolCall", id: string, server: string, tool: string, status: McpToolCallStatus, arguments: JsonValue, mcpAppResourceUri?: string, result: McpToolCallResult | null, error: McpToolCallError | null,
+/**
+ * Unix timestamp (in milliseconds) when MCP tool execution started, if known.
+ */
+startedAtMs: number | null,
+/**
+ * Unix timestamp (in milliseconds) when MCP tool execution completed, if known.
+ */
+completedAtMs: number | null,
 /**
  * The duration of the MCP tool call in milliseconds.
  */
 durationMs: number | null, } | { "type": "dynamicToolCall", id: string, namespace: string | null, tool: string, arguments: JsonValue, status: DynamicToolCallStatus, contentItems: Array<DynamicToolCallOutputContentItem> | null, success: boolean | null,
+/**
+ * Unix timestamp (in milliseconds) when dynamic tool execution started, if known.
+ */
+startedAtMs: number | null,
+/**
+ * Unix timestamp (in milliseconds) when dynamic tool execution completed, if known.
+ */
+completedAtMs: number | null,
 /**
  * The duration of the dynamic tool call in milliseconds.
  */
@@ -98,4 +134,40 @@ reasoningEffort: ReasoningEffort | null,
 /**
  * Last known status of the target agents, when available.
  */
-agentsStates: { [key in string]?: CollabAgentState }, } | { "type": "webSearch", id: string, query: string, action: WebSearchAction | null, } | { "type": "imageView", id: string, path: AbsolutePathBuf, } | { "type": "imageGeneration", id: string, status: string, revisedPrompt: string | null, result: string, savedPath?: AbsolutePathBuf, } | { "type": "enteredReviewMode", id: string, review: string, } | { "type": "exitedReviewMode", id: string, review: string, } | { "type": "contextCompaction", id: string, };
+agentsStates: { [key in string]?: CollabAgentState },
+/**
+ * Unix timestamp (in milliseconds) when collab tool execution started, if known.
+ */
+startedAtMs: number | null,
+/**
+ * Unix timestamp (in milliseconds) when collab tool execution completed, if known.
+ */
+completedAtMs: number | null,
+/**
+ * The duration of the collab tool execution in milliseconds.
+ */
+durationMs: number | null, } | { "type": "webSearch", id: string, query: string, action: WebSearchAction | null,
+/**
+ * Unix timestamp (in milliseconds) when web search execution started, if known.
+ */
+startedAtMs: number | null,
+/**
+ * Unix timestamp (in milliseconds) when web search execution completed, if known.
+ */
+completedAtMs: number | null,
+/**
+ * The duration of the web search execution in milliseconds.
+ */
+durationMs: number | null, } | { "type": "imageView", id: string, path: AbsolutePathBuf, } | { "type": "imageGeneration", id: string, status: string, revisedPrompt: string | null, result: string, savedPath?: AbsolutePathBuf,
+/**
+ * Unix timestamp (in milliseconds) when image generation started, if known.
+ */
+startedAtMs: number | null,
+/**
+ * Unix timestamp (in milliseconds) when image generation completed, if known.
+ */
+completedAtMs: number | null,
+/**
+ * The duration of image generation in milliseconds.
+ */
+durationMs: number | null, } | { "type": "enteredReviewMode", id: string, review: string, } | { "type": "exitedReviewMode", id: string, review: string, } | { "type": "contextCompaction", id: string, };

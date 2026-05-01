@@ -841,6 +841,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 status: DynamicToolCallStatus::InProgress,
                 content_items: None,
                 success: None,
+                started_at_ms: request.started_at_ms,
+                completed_at_ms: None,
                 duration_ms: None,
             };
             let notification = ItemStartedNotification {
@@ -1483,6 +1485,8 @@ async fn start_command_execution_item(
                 command_actions,
                 aggregated_output: None,
                 exit_code: None,
+                started_at_ms: None,
+                completed_at_ms: None,
                 duration_ms: None,
             },
         };
@@ -1527,6 +1531,8 @@ async fn complete_command_execution_item(
         command_actions,
         aggregated_output: None,
         exit_code: None,
+        started_at_ms: None,
+        completed_at_ms: None,
         duration_ms: None,
     };
     let notification = ItemCompletedNotification {
@@ -2068,6 +2074,9 @@ async fn on_file_change_request_approval_response(
                 id: item_id.clone(),
                 changes,
                 status,
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             },
             event_turn_id.clone(),
             &outgoing,
@@ -2568,6 +2577,8 @@ mod tests {
                         command_actions: completion_item.command_actions.clone(),
                         aggregated_output: None,
                         exit_code: None,
+                        started_at_ms: None,
+                        completed_at_ms: None,
                         duration_ms: None,
                     }
                 );

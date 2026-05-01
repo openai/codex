@@ -286,6 +286,8 @@ url = "{mcp_server_url}/mcp"
         mcp_app_resource_uri: None,
         result: Some(result),
         error: None,
+        started_at_ms: None,
+        completed_at_ms: None,
         duration_ms: None,
     })?;
     assert!(serialized_item.len() < DEFAULT_OUTPUT_BYTES_CAP * 2 + 2048);
