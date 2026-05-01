@@ -446,7 +446,7 @@ impl Codex {
 
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
         let CodexSpawnArgs {
-            mut config,
+            config,
             auth_manager,
             models_manager,
             environment_manager,
@@ -471,13 +471,11 @@ impl Codex {
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
-        config.cwd = environment_selections.primary_cwd_or_fallback(&config.cwd);
-        let load_config = config.clone();
         let fs = environment_selections.primary_filesystem();
-        let plugins_input = load_config.plugins_config_input();
+        let plugins_input = config.plugins_config_input();
         let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
-        let skills_input = skills_load_input_from_config(&load_config, effective_skill_roots);
+        let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
         let loaded_skills = skills_manager.skills_for_config(&skills_input, fs).await;
 
         for err in &loaded_skills.errors {
@@ -497,7 +495,7 @@ impl Codex {
         }
 
         let primary_environment = environment_selections.primary_environment();
-        let user_instructions = AgentsMdManager::new(&load_config)
+        let user_instructions = AgentsMdManager::new(&config)
             .user_instructions(primary_environment.as_deref())
             .await;
 

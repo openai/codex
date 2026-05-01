@@ -1,75 +1,6 @@
 use super::*;
 
 impl Session {
-    pub(crate) fn fallback_mcp_runtime_environment(
-        &self,
-        fallback_cwd: &AbsolutePathBuf,
-        require_default_environment: bool,
-    ) -> CodexResult<McpRuntimeEnvironment> {
-        if let Some(default_environment) = self.services.environment_manager.default_environment() {
-            return Ok(McpRuntimeEnvironment::new(
-                default_environment,
-                fallback_cwd.to_path_buf(),
-            ));
-        }
-
-        if require_default_environment {
-            return Err(CodexErr::InvalidRequest(
-                "MCP runtime environment requires a default environment".to_string(),
-            ));
-        }
-
-        Ok(McpRuntimeEnvironment::new(
-            self.services.environment_manager.local_environment(),
-            fallback_cwd.to_path_buf(),
-        ))
-    }
-
-    pub(crate) fn mcp_runtime_environment_for_configuration(
-        &self,
-        session_configuration: &SessionConfiguration,
-    ) -> CodexResult<McpRuntimeEnvironment> {
-        let turn_environment = crate::environment_selection::resolve_environment_selections(
-            self.services.environment_manager.as_ref(),
-            &session_configuration.environments,
-        )
-        .map_err(|err| {
-            CodexErr::InvalidRequest(err.to_string().replace(
-                "unknown turn environment id",
-                "unknown stored MCP environment id",
-            ))
-        })?
-        .primary_turn_environment()
-        .cloned();
-
-        if let Some(turn_environment) = turn_environment {
-            return Ok(McpRuntimeEnvironment::new(
-                Arc::clone(&turn_environment.environment),
-                turn_environment.cwd.to_path_buf(),
-            ));
-        }
-
-        self.fallback_mcp_runtime_environment(
-            &session_configuration.cwd,
-            /*require_default_environment*/ true,
-        )
-    }
-
-    pub(crate) fn mcp_runtime_environment_for_turn_context(
-        &self,
-        turn_context: &TurnContext,
-        require_default_environment: bool,
-    ) -> CodexResult<McpRuntimeEnvironment> {
-        if let Some(turn_environment) = turn_context.primary_environment() {
-            return Ok(McpRuntimeEnvironment::new(
-                Arc::clone(&turn_environment.environment),
-                turn_environment.cwd.to_path_buf(),
-            ));
-        }
-
-        self.fallback_mcp_runtime_environment(&turn_context.cwd, require_default_environment)
-    }
-
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
@@ -290,15 +221,18 @@ impl Session {
         let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
         let auth_statuses =
             compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
-        let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
-        let mcp_runtime_environment = match self
-            .mcp_runtime_environment_for_turn_context(turn_context, enabled_mcp_server_count > 0)
-        {
-            Ok(runtime_environment) => runtime_environment,
-            Err(err) => {
-                warn!("failed to resolve MCP runtime environment for refresh: {err}");
-                return;
-            }
+        let mcp_runtime_environment = match turn_context.primary_environment() {
+            Some(turn_environment) => McpRuntimeEnvironment::new(
+                Arc::clone(&turn_environment.environment),
+                turn_environment.cwd.to_path_buf(),
+            ),
+            None => McpRuntimeEnvironment::new(
+                self.services
+                    .environment_manager
+                    .default_environment()
+                    .unwrap_or_else(|| self.services.environment_manager.local_environment()),
+                turn_context.cwd.to_path_buf(),
+            ),
         };
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;

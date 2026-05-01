@@ -41,15 +41,6 @@ impl ResolvedTurnEnvironments {
         self.turn_environments.first()
     }
 
-    pub(crate) fn primary_cwd_or_fallback(
-        &self,
-        fallback_cwd: &AbsolutePathBuf,
-    ) -> AbsolutePathBuf {
-        self.primary_turn_environment()
-            .map(|environment| environment.cwd.clone())
-            .unwrap_or_else(|| fallback_cwd.clone())
-    }
-
     pub(crate) fn primary_environment(&self) -> Option<Arc<codex_exec_server::Environment>> {
         self.primary_turn_environment()
             .map(|environment| Arc::clone(&environment.environment))
@@ -175,7 +166,6 @@ mod tests {
         )
         .expect("environment selections should resolve");
 
-        assert_eq!(resolved.primary_cwd_or_fallback(&cwd), selected_cwd);
         assert_eq!(
             resolved
                 .primary_turn_environment()
@@ -183,16 +173,5 @@ mod tests {
                 .environment_id,
             "local"
         );
-    }
-
-    #[tokio::test]
-    async fn resolved_environment_selections_use_fallback_without_selections() {
-        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
-        let manager = EnvironmentManager::default_for_tests();
-
-        let resolved =
-            resolve_environment_selections(&manager, &[]).expect("empty selections are valid");
-
-        assert_eq!(resolved.primary_cwd_or_fallback(&cwd), cwd);
     }
 }

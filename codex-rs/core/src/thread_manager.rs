@@ -1100,14 +1100,11 @@ impl ThreadManagerState {
         }
         let environment_selections =
             resolve_environment_selections(self.environment_manager.as_ref(), &environments)?;
-        let effective_cwd = environment_selections.primary_cwd_or_fallback(&config.cwd);
-        let mut load_config = config.clone();
-        load_config.cwd = effective_cwd;
         let watch_registration = match environment_selections.primary_turn_environment() {
             Some(turn_environment) if !turn_environment.environment.is_remote() => {
                 self.skills_watcher
                     .register_config(
-                        &load_config,
+                        &config,
                         self.skills_manager.as_ref(),
                         self.plugins_manager.as_ref(),
                         Some(turn_environment.environment.get_filesystem()),

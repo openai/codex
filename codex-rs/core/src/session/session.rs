@@ -1,6 +1,5 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
-use codex_config::ConstraintError;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -146,14 +145,6 @@ impl SessionConfiguration {
     }
 
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
-        if updates.cwd.as_ref().is_some_and(|cwd| cwd.is_relative())
-            && updates.environments.is_some()
-        {
-            return Err(ConstraintError::invalid_combination(
-                "relative `cwd` cannot be updated together with turn-local `environments`",
-            ));
-        }
-
         let mut next_configuration = self.clone();
         let current_sandbox_policy = self.sandbox_policy();
         let current_file_system_sandbox_policy = self.file_system_sandbox_policy();
@@ -201,19 +192,17 @@ impl SessionConfiguration {
             next_configuration.windows_sandbox_level = windows_sandbox_level;
         }
 
-        let effective_environments = updates
-            .environments
-            .as_deref()
-            .unwrap_or(&self.environments);
         let absolute_cwd = updates
             .cwd
             .as_ref()
             .map(|cwd| {
-                let base_cwd = effective_environments
-                    .first()
-                    .map(|environment| &environment.cwd)
-                    .unwrap_or(&self.cwd);
-                base_cwd.join(normalize_for_native_workdir(cwd.as_path()))
+                AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(
+                    cwd.as_path(),
+                ))
+                .unwrap_or_else(|e| {
+                    warn!("failed to normalize update cwd: {cwd:?}: {e}");
+                    self.cwd.clone()
+                })
             })
             .unwrap_or_else(|| self.cwd.clone());
 
@@ -946,7 +935,6 @@ impl Session {
                 .map(|(name, _)| name.clone())
                 .collect();
             required_mcp_servers.sort();
-            let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
             let required_mcp_server_count = required_mcp_servers.len();
             let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref()).await;
             {
@@ -954,15 +942,30 @@ impl Session {
                 cancel_guard.cancel();
                 *cancel_guard = CancellationToken::new();
             }
-            let mcp_runtime_environment = match sess
-                .mcp_runtime_environment_for_configuration(&session_configuration)
-            {
-                Ok(runtime_environment) => runtime_environment,
-                Err(_) if enabled_mcp_server_count == 0 => sess.fallback_mcp_runtime_environment(
-                    &session_configuration.cwd,
-                    /*require_default_environment*/ false,
-                )?,
-                Err(err) => return Err(err.into()),
+            let turn_environment = crate::environment_selection::resolve_environment_selections(
+                sess.services.environment_manager.as_ref(),
+                &session_configuration.environments,
+            )
+            .map_err(|err| {
+                CodexErr::InvalidRequest(err.to_string().replace(
+                    "unknown turn environment id",
+                    "unknown stored MCP environment id",
+                ))
+            })?
+            .primary_turn_environment()
+            .cloned();
+            let mcp_runtime_environment = match turn_environment {
+                Some(turn_environment) => McpRuntimeEnvironment::new(
+                    Arc::clone(&turn_environment.environment),
+                    turn_environment.cwd.to_path_buf(),
+                ),
+                None => McpRuntimeEnvironment::new(
+                    sess.services
+                        .environment_manager
+                        .default_environment()
+                        .unwrap_or_else(|| sess.services.environment_manager.local_environment()),
+                    session_configuration.cwd.to_path_buf(),
+                ),
             };
             let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
                 &mcp_servers,
