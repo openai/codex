@@ -49,7 +49,6 @@ use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
 pub use codex_exec_server::EnvironmentManager;
-pub use codex_exec_server::EnvironmentManagerArgs;
 pub use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
