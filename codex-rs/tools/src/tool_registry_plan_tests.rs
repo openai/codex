@@ -1865,20 +1865,17 @@ fn tool_suggest_description_lists_discoverable_tools() {
         "The plugin or connector is one of the known installable plugins or connectors listed below. Only ask to install plugins or connectors from this list."
     ));
     assert!(description.contains(
-        "Do not use tool suggestion for adjacent capabilities, broad recommendations, or tools that merely seem useful."
+        "Do not use this tool for adjacent capabilities, broad recommendations, or tools that merely seem useful."
     ));
     assert!(description.contains("IMPORTANT: DO NOT call this tool in parallel with other tools."));
     assert!(description.contains(
-        "Do not use tool suggestion if the needed tool is already available, found through `tool_search`, or callable after discovery."
-    ));
-    assert!(description.contains(
-        "If `tool_search` is available, call `tool_search` before calling `request_plugin_install`."
+        "If current active tools aren't relevant and `tool_search` is available, only call this tool after `tool_search` has already been tried and found no relevant tool."
     ));
     assert!(!description.contains("targeted lookup"));
     assert!(!description.contains("broad or speculative searches"));
     assert!(description.contains("Only proceed when one listed plugin or connector exactly fits."));
     assert!(description.contains(
-        "If we found both connectors and plugins to suggest, use plugins first, only use connectors if the corresponding plugin is installed but the connector is not."
+        "If we found both connectors and plugins to install, use plugins first, only use connectors if the corresponding plugin is installed but the connector is not."
     ));
     assert!(!description.contains("{{discoverable_tools}}"));
     assert!(!description.contains("tool_search fails to find a good match"));
