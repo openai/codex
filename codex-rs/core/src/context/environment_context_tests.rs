@@ -20,6 +20,7 @@ fn serialize_workspace_write_environment_context() {
     let context = EnvironmentContext::new(
         Some(cwd.clone()),
         fake_shell_name(),
+        Vec::new(),
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         /*network*/ None,
@@ -48,6 +49,7 @@ fn serialize_environment_context_with_network() {
     let context = EnvironmentContext::new(
         Some(test_path_buf("/repo")),
         fake_shell_name(),
+        Vec::new(),
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         Some(network),
@@ -77,6 +79,7 @@ fn serialize_read_only_environment_context() {
     let context = EnvironmentContext::new(
         /*cwd*/ None,
         fake_shell_name(),
+        Vec::new(),
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         /*network*/ None,
@@ -97,6 +100,7 @@ fn equals_except_shell_compares_cwd() {
     let context1 = EnvironmentContext::new(
         Some(PathBuf::from("/repo")),
         fake_shell_name(),
+        Vec::new(),
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
@@ -105,6 +109,7 @@ fn equals_except_shell_compares_cwd() {
     let context2 = EnvironmentContext::new(
         Some(PathBuf::from("/repo")),
         fake_shell_name(),
+        Vec::new(),
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
@@ -118,6 +123,7 @@ fn equals_except_shell_compares_cwd_differences() {
     let context1 = EnvironmentContext::new(
         Some(PathBuf::from("/repo1")),
         fake_shell_name(),
+        Vec::new(),
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
@@ -126,6 +132,7 @@ fn equals_except_shell_compares_cwd_differences() {
     let context2 = EnvironmentContext::new(
         Some(PathBuf::from("/repo2")),
         fake_shell_name(),
+        Vec::new(),
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
@@ -140,6 +147,7 @@ fn equals_except_shell_ignores_shell() {
     let context1 = EnvironmentContext::new(
         Some(PathBuf::from("/repo")),
         "bash".to_string(),
+        Vec::new(),
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
@@ -148,6 +156,7 @@ fn equals_except_shell_ignores_shell() {
     let context2 = EnvironmentContext::new(
         Some(PathBuf::from("/repo")),
         "zsh".to_string(),
+        Vec::new(),
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
@@ -162,6 +171,7 @@ fn serialize_environment_context_with_subagents() {
     let context = EnvironmentContext::new(
         Some(test_path_buf("/repo")),
         fake_shell_name(),
+        Vec::new(),
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         /*network*/ None,
@@ -181,6 +191,46 @@ fn serialize_environment_context_with_subagents() {
 </environment_context>"#,
         test_path_buf("/repo").display()
     );
+
+    assert_eq!(context.render(), expected);
+}
+
+#[test]
+fn serialize_environment_context_with_multiple_selected_environments() {
+    let context = EnvironmentContext::new(
+        Some(test_path_buf("/repo")),
+        fake_shell_name(),
+        vec![
+            EnvironmentContextEnvironment {
+                id: "local".to_string(),
+                cwd: PathBuf::from("/repo/local"),
+                default: true,
+            },
+            EnvironmentContextEnvironment {
+                id: "remote".to_string(),
+                cwd: PathBuf::from("/repo/remote"),
+                default: false,
+            },
+        ],
+        Some("2026-02-26".to_string()),
+        Some("America/Los_Angeles".to_string()),
+        /*network*/ None,
+        /*subagents*/ None,
+    );
+
+    let expected = r#"<environment_context>
+  <environments>
+    <environment id="local" default="true">
+      <cwd>/repo/local</cwd>
+    </environment>
+    <environment id="remote" default="false">
+      <cwd>/repo/remote</cwd>
+    </environment>
+  </environments>
+  <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
+</environment_context>"#;
 
     assert_eq!(context.render(), expected);
 }

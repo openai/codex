@@ -10,10 +10,34 @@ use super::ContextualUserFragment;
 pub(crate) struct EnvironmentContext {
     pub(crate) cwd: Option<PathBuf>,
     pub(crate) shell: String,
+    pub(crate) environments: Vec<EnvironmentContextEnvironment>,
     pub(crate) current_date: Option<String>,
     pub(crate) timezone: Option<String>,
     pub(crate) network: Option<NetworkContext>,
     pub(crate) subagents: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EnvironmentContextEnvironment {
+    pub(crate) id: String,
+    pub(crate) cwd: PathBuf,
+    pub(crate) default: bool,
+}
+
+impl EnvironmentContextEnvironment {
+    fn from_turn_environments(
+        environments: &[crate::session::turn_context::TurnEnvironment],
+    ) -> Vec<Self> {
+        environments
+            .iter()
+            .enumerate()
+            .map(|(index, environment)| Self {
+                id: environment.environment_id.clone(),
+                cwd: environment.cwd.to_path_buf(),
+                default: index == 0,
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -32,9 +56,24 @@ impl NetworkContext {
 }
 
 impl EnvironmentContext {
+    fn should_render_environments(environment_count: usize) -> bool {
+        environment_count > 1
+    }
+
+    fn model_facing_environments(
+        environments: Vec<EnvironmentContextEnvironment>,
+    ) -> Vec<EnvironmentContextEnvironment> {
+        if Self::should_render_environments(environments.len()) {
+            environments
+        } else {
+            Vec::new()
+        }
+    }
+
     pub(crate) fn new(
         cwd: Option<PathBuf>,
         shell: String,
+        environments: Vec<EnvironmentContextEnvironment>,
         current_date: Option<String>,
         timezone: Option<String>,
         network: Option<NetworkContext>,
@@ -43,6 +82,7 @@ impl EnvironmentContext {
         Self {
             cwd,
             shell,
+            environments,
             current_date,
             timezone,
             network,
@@ -56,6 +96,7 @@ impl EnvironmentContext {
     pub(crate) fn equals_except_shell(&self, other: &EnvironmentContext) -> bool {
         let EnvironmentContext {
             cwd,
+            environments,
             current_date,
             timezone,
             network,
@@ -63,6 +104,7 @@ impl EnvironmentContext {
             shell: _,
         } = other;
         self.cwd == *cwd
+            && self.environments == *environments
             && self.current_date == *current_date
             && self.timezone == *timezone
             && self.network == *network
@@ -74,6 +116,7 @@ impl EnvironmentContext {
         after: &EnvironmentContext,
     ) -> Self {
         let before_network = Self::network_from_turn_context_item(before);
+        let environments = Self::model_facing_environments(after.environments.clone());
         let cwd = match &after.cwd {
             Some(cwd) if before.cwd.as_path() != cwd.as_path() => Some(cwd.clone()),
             _ => None,
@@ -86,6 +129,7 @@ impl EnvironmentContext {
         EnvironmentContext::new(
             cwd,
             after.shell.clone(),
+            environments,
             after.current_date.clone(),
             after.timezone.clone(),
             network,
@@ -94,9 +138,13 @@ impl EnvironmentContext {
     }
 
     pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
+        let environments =
+            EnvironmentContextEnvironment::from_turn_environments(&turn_context.environments);
+        let environments = Self::model_facing_environments(environments);
         Self::new(
             Some(turn_context.cwd.to_path_buf()),
             shell.name().to_string(),
+            environments,
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
             Self::network_from_turn_context(turn_context),
@@ -111,6 +159,7 @@ impl EnvironmentContext {
         Self::new(
             Some(turn_context_item.cwd.clone()),
             shell,
+            Vec::new(),
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),
@@ -168,7 +217,21 @@ impl ContextualUserFragment for EnvironmentContext {
 
     fn body(&self) -> String {
         let mut lines = Vec::new();
-        if let Some(cwd) = &self.cwd {
+        if !self.environments.is_empty() {
+            lines.push("  <environments>".to_string());
+            for environment in &self.environments {
+                lines.push(format!(
+                    "    <environment id=\"{}\" default=\"{}\">",
+                    environment.id, environment.default
+                ));
+                lines.push(format!(
+                    "      <cwd>{}</cwd>",
+                    environment.cwd.to_string_lossy()
+                ));
+                lines.push("    </environment>".to_string());
+            }
+            lines.push("  </environments>".to_string());
+        } else if let Some(cwd) = &self.cwd {
             lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
         }
 
