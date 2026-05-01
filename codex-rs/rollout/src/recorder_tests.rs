@@ -141,6 +141,32 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn state_db_try_init_errors_when_startup_backfill_does_not_complete() -> anyhow::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let runtime =
+        codex_state::StateRuntime::init(home.path().to_path_buf(), "test-provider".to_string())
+            .await?;
+    let claimed = runtime.try_claim_backfill(/*lease_seconds*/ 60).await?;
+    assert!(claimed);
+
+    let result = crate::state_db::try_init(&test_config(home.path())).await;
+    let err = match result {
+        Ok(_) => panic!("state db init should not return a handle for incomplete backfill"),
+        Err(err) => err,
+    };
+    assert!(
+        err.to_string().contains("state db backfill not complete"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        runtime.get_backfill_state().await?.status,
+        codex_state::BackfillStatus::Running
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_rollout_items_skips_legacy_ghost_snapshot_lines() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let rollout_path = home.path().join("rollout.jsonl");

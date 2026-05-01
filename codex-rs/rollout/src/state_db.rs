@@ -88,6 +88,19 @@ async fn try_init_with_roots(
             default_model_provider_id.as_str(),
         )
         .await;
+        let backfill_state = runtime.get_backfill_state().await.map_err(|err| {
+            anyhow::anyhow!(
+                "failed to read backfill state at {} after startup backfill: {err}",
+                codex_home.display()
+            )
+        })?;
+        if backfill_state.status != codex_state::BackfillStatus::Complete {
+            return Err(anyhow::anyhow!(
+                "state db backfill not complete at {} after startup backfill (status: {})",
+                codex_home.display(),
+                backfill_state.status.as_str()
+            ));
+        }
     }
     Ok(runtime)
 }
