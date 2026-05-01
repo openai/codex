@@ -2,6 +2,7 @@ use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
+use crate::request_processors::build_api_turns_from_rollout_items;
 use crate::request_processors::read_rollout_items_from_rollout;
 use crate::request_processors::read_summary_from_rollout;
 use crate::request_processors::summary_to_thread;
@@ -81,7 +82,6 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::WarningNotification;
 use codex_app_server_protocol::build_item_from_guardian_event;
-use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_app_server_protocol::guardian_auto_approval_review_notification;
 use codex_app_server_protocol::item_event_to_server_notification;
 use codex_core::CodexThread;
@@ -1179,7 +1179,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         let mut thread = summary_to_thread(summary, &fallback_cwd);
                         match read_rollout_items_from_rollout(rollout_path.as_path()).await {
                             Ok(items) => {
-                                thread.turns = build_turns_from_rollout_items(&items);
+                                thread.turns = build_api_turns_from_rollout_items(&items);
                                 thread.status = thread_watch_manager
                                     .loaded_status_for_thread(&thread.id)
                                     .await;

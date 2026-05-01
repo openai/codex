@@ -2048,7 +2048,7 @@ impl ThreadRequestProcessor {
                 let (mut thread, history) =
                     thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
                 if include_turns && let Some(history) = history {
-                    thread.turns = build_turns_from_rollout_items(&history.items);
+                    thread.turns = build_api_turns_from_rollout_items(&history.items);
                 }
                 Ok(Some(thread))
             }
@@ -2113,7 +2113,7 @@ impl ThreadRequestProcessor {
                 .load_history(/*include_archived*/ true)
                 .await
                 .map_err(|err| thread_read_history_load_error(thread_id, err))?;
-            thread.turns = build_turns_from_rollout_items(&history.items);
+            thread.turns = build_api_turns_from_rollout_items(&history.items);
         }
 
         Ok(())
@@ -2662,17 +2662,11 @@ impl ThreadRequestProcessor {
             }
             let mut summary_source_thread = source_thread;
             summary_source_thread.history = None;
-            let thread_summary = match self
-                .stored_thread_to_api_thread(
-                    summary_source_thread,
-                    config_snapshot.model_provider_id.as_str(),
-                    /*include_turns*/ false,
-                )
-                .await
-            {
-                Ok(thread) => thread,
-                Err(message) => return Err(internal_error(message)),
-            };
+            let thread_summary = self.stored_thread_to_api_thread(
+                summary_source_thread,
+                config_snapshot.model_provider_id.as_str(),
+                /*include_turns*/ false,
+            );
             let mut config_for_instruction_sources = self.config.as_ref().clone();
             config_for_instruction_sources.cwd = config_snapshot.cwd.clone();
             let instruction_sources =
@@ -2798,12 +2792,12 @@ impl ThreadRequestProcessor {
         }))
     }
 
-    async fn stored_thread_to_api_thread(
+    fn stored_thread_to_api_thread(
         &self,
         stored_thread: StoredThread,
         fallback_provider: &str,
         include_turns: bool,
-    ) -> std::result::Result<Thread, String> {
+    ) -> Thread {
         let (mut thread, history) =
             thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
         if include_turns && let Some(history) = history {
@@ -2811,9 +2805,9 @@ impl ThreadRequestProcessor {
                 &mut thread,
                 &history.items,
                 /*active_turn*/ None,
-            )?;
+            );
         }
-        Ok(thread)
+        thread
     }
 
     async fn read_stored_thread_for_new_fork(
@@ -2921,7 +2915,7 @@ impl ThreadRequestProcessor {
                 &mut thread,
                 &history_items,
                 /*active_turn*/ None,
-            )?;
+            );
         }
         self.attach_thread_name(thread_id, &mut thread).await;
         Ok(thread)
@@ -3066,7 +3060,7 @@ impl ThreadRequestProcessor {
 
         // Persistent forks materialize their own rollout immediately. Ephemeral forks stay
         // pathless, so they rebuild their visible history from the copied source history instead.
-        let mut thread = if let Some(fork_rollout_path) = session_configured.rollout_path.as_ref() {
+        let mut thread = if session_configured.rollout_path.is_some() {
             let stored_thread = self
                 .read_stored_thread_for_new_fork(thread_id, include_turns)
                 .await?;
@@ -3075,13 +3069,6 @@ impl ThreadRequestProcessor {
                 fallback_model_provider.as_str(),
                 include_turns,
             )
-            .await
-            .map_err(|message| {
-                internal_error(format!(
-                    "failed to load rollout `{}` for thread {thread_id}: {message}",
-                    fork_rollout_path.display()
-                ))
-            })?
         } else {
             let config_snapshot = forked_thread.config_snapshot().await;
             // forked thread names do not inherit the source thread name
@@ -3094,8 +3081,7 @@ impl ThreadRequestProcessor {
                     &mut thread,
                     &history_items,
                     /*active_turn*/ None,
-                )
-                .map_err(internal_error)?;
+                );
             }
             thread
         };
@@ -3466,16 +3452,6 @@ fn parse_thread_turns_cursor(cursor: &str) -> Result<ThreadTurnsCursor, JSONRPCE
     })
 }
 
-fn reconstruct_thread_turns_from_rollout_items(
-    items: &[RolloutItem],
-    loaded_status: ThreadStatus,
-    has_live_in_progress_turn: bool,
-) -> Vec<Turn> {
-    let mut turns = build_turns_from_rollout_items(items);
-    normalize_thread_turns_status(&mut turns, loaded_status, has_live_in_progress_turn);
-    turns
-}
-
 fn reconstruct_thread_turns_for_turns_list(
     items: &[RolloutItem],
     loaded_status: ThreadStatus,
@@ -3486,11 +3462,8 @@ fn reconstruct_thread_turns_for_turns_list(
         || active_turn
             .as_ref()
             .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
-    let mut turns = reconstruct_thread_turns_from_rollout_items(
-        items,
-        loaded_status,
-        has_live_in_progress_turn,
-    );
+    let mut turns = build_api_turns_from_rollout_items(items);
+    normalize_thread_turns_status(&mut turns, loaded_status, has_live_in_progress_turn);
     if let Some(active_turn) = active_turn {
         merge_turn_history_with_active_turn(&mut turns, active_turn);
     }

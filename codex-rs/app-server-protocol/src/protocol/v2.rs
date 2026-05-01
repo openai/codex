@@ -3631,8 +3631,9 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.experimentalRawEvents")]
     #[serde(default)]
     pub experimental_raw_events: bool,
-    /// If true, persist additional rollout EventMsg variants required to
-    /// reconstruct a richer thread history on resume/fork/read.
+    /// If true, persist additional EventMsg variants to the rollout file.
+    /// However, `thread/read`, `thread/resume`, and `thread/fork` still only
+    /// return the limited form of thread history for scalability reasons.
     #[experimental("thread/start.persistFullHistory")]
     #[serde(default)]
     pub persist_extended_history: bool,
@@ -3762,8 +3763,9 @@ pub struct ThreadResumeParams {
     #[experimental("thread/resume.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
-    /// If true, persist additional rollout EventMsg variants required to
-    /// reconstruct a richer thread history on subsequent resume/fork/read.
+    /// If true, persist additional EventMsg variants to the rollout file.
+    /// However, `thread/read`, `thread/resume`, and `thread/fork` still only
+    /// return the limited form of thread history for scalability reasons.
     #[experimental("thread/resume.persistFullHistory")]
     #[serde(default)]
     pub persist_extended_history: bool,
@@ -3867,8 +3869,9 @@ pub struct ThreadForkParams {
     #[experimental("thread/fork.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
-    /// If true, persist additional rollout EventMsg variants required to
-    /// reconstruct a richer thread history on subsequent resume/fork/read.
+    /// If true, persist additional EventMsg variants to the rollout file.
+    /// However, `thread/read`, `thread/resume`, and `thread/fork` still only
+    /// return the limited form of thread history for scalability reasons.
     #[experimental("thread/fork.persistFullHistory")]
     #[serde(default)]
     pub persist_extended_history: bool,
