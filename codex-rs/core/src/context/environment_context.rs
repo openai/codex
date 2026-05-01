@@ -56,14 +56,12 @@ impl NetworkContext {
 }
 
 impl EnvironmentContext {
-    fn should_render_environments(environment_count: usize) -> bool {
-        environment_count > 1
-    }
-
     fn model_facing_environments(
         environments: Vec<EnvironmentContextEnvironment>,
     ) -> Vec<EnvironmentContextEnvironment> {
-        if Self::should_render_environments(environments.len()) {
+        // Preserve the legacy cwd-only surface for zero- and
+        // single-environment turns; only render explicit choices for multi-env.
+        if environments.len() > 1 {
             environments
         } else {
             Vec::new()
