@@ -27,7 +27,6 @@ use crate::list::ThreadSortKey;
 use crate::list::ThreadsPage;
 use crate::list::get_threads;
 use crate::list::read_head_for_summary;
-use crate::list::read_thread_item_from_rollout;
 use crate::rollout_date_parts;
 use anyhow::Result;
 use codex_protocol::ThreadId;
@@ -287,6 +286,40 @@ async fn find_thread_path_repairs_missing_db_row_after_filesystem_fallback() {
             .expect("lookup should succeed");
     assert_eq!(found, Some(fs_rollout_path.clone()));
     assert_state_db_rollout_path(home, thread_id, Some(fs_rollout_path.as_path())).await;
+}
+
+#[tokio::test]
+async fn find_thread_path_accepts_uppercase_uuid_with_state_db() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let uuid = Uuid::from_u128(304);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let ts = "2025-01-03T13-00-00";
+    write_session_file(
+        home,
+        ts,
+        uuid,
+        /*num_records*/ 1,
+        Some(SessionSource::Cli),
+    )
+    .unwrap();
+    let fs_rollout_path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
+    let runtime = insert_state_db_thread(
+        home,
+        thread_id,
+        fs_rollout_path.as_path(),
+        /*archived*/ false,
+    )
+    .await;
+
+    let found = find_thread_path_by_id_str_with_state_db(
+        home,
+        uuid.to_string().to_uppercase().as_str(),
+        Some(runtime.as_ref()),
+    )
+    .await
+    .expect("lookup should succeed");
+    assert_eq!(found, Some(fs_rollout_path));
 }
 
 #[test]
@@ -1120,50 +1153,6 @@ async fn test_created_at_sort_uses_file_mtime_for_updated_at() -> Result<()> {
     .await?;
 
     let item = page.items.first().expect("conversation item");
-    assert_eq!(item.created_at.as_deref(), Some(ts));
-    assert_eq!(item.updated_at.as_deref(), Some(expected_updated.as_str()));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn read_thread_item_from_rollout_uses_file_mtime_for_updated_at() -> Result<()> {
-    let temp = TempDir::new().unwrap();
-    let home = temp.path();
-
-    let ts = "2025-06-01T08-00-00";
-    let uuid = Uuid::from_u128(44);
-    write_session_file(
-        home,
-        ts,
-        uuid,
-        /*num_records*/ 0,
-        Some(SessionSource::VSCode),
-    )
-    .unwrap();
-
-    let created = PrimitiveDateTime::parse(
-        ts,
-        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]"),
-    )?
-    .assume_utc();
-    let updated = created + Duration::hours(3);
-    let expected_updated = updated.format(&time::format_description::well_known::Rfc3339)?;
-
-    let file_path = home
-        .join("sessions")
-        .join("2025")
-        .join("06")
-        .join("01")
-        .join(format!("rollout-{ts}-{uuid}.jsonl"));
-    let file = std::fs::OpenOptions::new().write(true).open(&file_path)?;
-    let times = FileTimes::new().set_modified(updated.into());
-    file.set_times(times)?;
-
-    let item = read_thread_item_from_rollout(file_path)
-        .await
-        .expect("thread item should load");
-
     assert_eq!(item.created_at.as_deref(), Some(ts));
     assert_eq!(item.updated_at.as_deref(), Some(expected_updated.as_str()));
 

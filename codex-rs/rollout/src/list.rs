@@ -811,17 +811,12 @@ async fn build_thread_item(
 /// metadata/preview extraction as list operations without scanning the whole
 /// sessions tree.
 pub async fn read_thread_item_from_rollout(path: PathBuf) -> Option<ThreadItem> {
-    let updated_at = file_modified_time(&path)
-        .await
-        .ok()
-        .flatten()
-        .and_then(format_rfc3339);
     build_thread_item(
         path,
         &[],
         /*provider_matcher*/ None,
         /*cwd_filters*/ None,
-        updated_at,
+        /*updated_at*/ None,
     )
     .await
 }
@@ -1258,9 +1253,10 @@ async fn find_thread_path_by_id_str_in_subdir_with_state_db(
     state_db_ctx: Option<&codex_state::StateRuntime>,
 ) -> io::Result<Option<PathBuf>> {
     // Validate UUID format early.
-    if Uuid::parse_str(id_str).is_err() {
+    let Ok(uuid) = Uuid::parse_str(id_str) else {
         return Ok(None);
-    }
+    };
+    let canonical_id = uuid.to_string();
 
     // Prefer DB lookup, then fall back to rollout file search.
     // TODO(jif): sqlite migration phase 1
@@ -1269,7 +1265,7 @@ async fn find_thread_path_by_id_str_in_subdir_with_state_db(
         ARCHIVED_SESSIONS_SUBDIR => Some(true),
         _ => None,
     };
-    let thread_id = ThreadId::from_string(id_str).ok();
+    let thread_id = ThreadId::from_string(&canonical_id).ok();
     if let Some(state_db_ctx) = state_db_ctx
         && let Some(thread_id) = thread_id
         && let Some(db_path) = state_db::find_rollout_path_by_id(
@@ -1281,7 +1277,7 @@ async fn find_thread_path_by_id_str_in_subdir_with_state_db(
         .await
     {
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false)
-            && rollout_path_matches_id_str(db_path.as_path(), id_str)
+            && rollout_path_matches_id_str(db_path.as_path(), canonical_id.as_str())
         {
             return Ok(Some(db_path));
         }
@@ -1309,8 +1305,13 @@ async fn find_thread_path_by_id_str_in_subdir_with_state_db(
         ..Default::default()
     };
 
-    let results = file_search::run(id_str, vec![root], options, /*cancel_flag*/ None)
-        .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+    let results = file_search::run(
+        canonical_id.as_str(),
+        vec![root],
+        options,
+        /*cancel_flag*/ None,
+    )
+    .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 
     let found = results.matches.into_iter().next().map(|m| m.full_path());
     if let Some(found_path) = found.as_ref() {
