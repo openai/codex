@@ -32,6 +32,7 @@ async fn try_init_errors_when_startup_backfill_does_not_complete() -> anyhow::Re
             .await?;
     let claimed = runtime.try_claim_backfill(/*lease_seconds*/ 60).await?;
     assert!(claimed);
+    drop(runtime);
 
     let result = try_init_with_roots_and_backfill_lease(
         home.path().to_path_buf(),
@@ -48,6 +49,9 @@ async fn try_init_errors_when_startup_backfill_does_not_complete() -> anyhow::Re
         err.to_string().contains("state db backfill not complete"),
         "unexpected error: {err}"
     );
+    let runtime =
+        codex_state::StateRuntime::init(home.path().to_path_buf(), "test-provider".to_string())
+            .await?;
     assert_eq!(
         runtime.get_backfill_state().await?.status,
         codex_state::BackfillStatus::Running
