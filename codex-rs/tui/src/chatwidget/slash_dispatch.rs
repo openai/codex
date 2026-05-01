@@ -363,6 +363,9 @@ impl ChatWidget {
                     );
                 }
             }
+            SlashCommand::Ide => {
+                self.handle_ide_command();
+            }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
             }
@@ -571,6 +574,9 @@ impl ChatWidget {
                         self.add_error_message("Usage: /fast [on|off|status]".to_string());
                     }
                 }
+            }
+            SlashCommand::Ide => {
+                self.handle_ide_command_args(trimmed);
             }
             SlashCommand::Mcp => match trimmed.to_ascii_lowercase().as_str() {
                 "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
@@ -835,6 +841,7 @@ impl ChatWidget {
         }
         match cmd {
             SlashCommand::Fast
+            | SlashCommand::Ide
             | SlashCommand::Status
             | SlashCommand::DebugConfig
             | SlashCommand::Ps

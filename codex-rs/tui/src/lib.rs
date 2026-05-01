@@ -125,6 +125,7 @@ mod frames;
 mod get_git_diff;
 mod goal_display;
 mod history_cell;
+mod ide_context;
 pub(crate) mod insert_history;
 pub use insert_history::insert_history_lines;
 mod key_hint;
@@ -140,6 +141,7 @@ mod markdown_stream;
 mod mention_codec;
 mod model_catalog;
 mod model_migration;
+mod motion;
 mod multi_agents;
 mod notifications;
 #[cfg(any(not(debug_assertions), test))]

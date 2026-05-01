@@ -380,6 +380,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_ide_context_active(&mut self, active: bool) {
+        self.composer.set_ide_context_active(active);
+        self.request_redraw();
+    }
+
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.composer.set_personality_command_enabled(enabled);
         self.request_redraw();

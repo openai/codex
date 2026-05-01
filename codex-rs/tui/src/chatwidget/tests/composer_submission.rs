@@ -931,6 +931,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         composer: None,
         pending_steers: VecDeque::new(),
         pending_steer_history_records: VecDeque::new(),
+        pending_steer_compare_keys: VecDeque::new(),
         rejected_steers_queue: VecDeque::new(),
         rejected_steer_history_records: VecDeque::new(),
         queued_user_messages: VecDeque::new(),
@@ -1178,6 +1179,68 @@ fn user_message_display_from_inputs_matches_flattened_user_message_shape() {
             vec!["https://example.com/remote.png".to_string()],
         )
     );
+}
+
+#[test]
+fn user_message_display_from_inputs_hides_prompt_context() {
+    let raw_message = "# Context from my IDE setup:\n\n## Active file: src/lib.rs\n\n## My request for Codex:\nAsk $figma";
+    let mention_start = raw_message.find("$figma").expect("mention in raw message");
+    let rendered = ChatWidget::user_message_display_from_inputs(&[UserInput::Text {
+        text: raw_message.to_string(),
+        text_elements: vec![
+            TextElement::new(
+                (mention_start..mention_start + "$figma".len()).into(),
+                Some("$figma".to_string()),
+            )
+            .into(),
+        ],
+    }]);
+
+    assert_eq!(
+        rendered,
+        ChatWidget::user_message_display_from_parts(
+            "Ask $figma".to_string(),
+            vec![TextElement::new((4..10).into(), Some("$figma".to_string()))],
+            Vec::new(),
+            Vec::new(),
+        )
+    );
+}
+
+#[tokio::test]
+async fn committed_user_message_with_hidden_prompt_context_renders_local_images() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let local_image = PathBuf::from("/tmp/context-image.png");
+    let raw_message =
+        "# Context from my IDE setup:\n\n## Active file: src/lib.rs\n\n## My request for Codex:\n";
+
+    complete_user_message_for_inputs(
+        &mut chat,
+        "user-1",
+        vec![
+            UserInput::Text {
+                text: raw_message.to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::LocalImage {
+                path: local_image.clone(),
+            },
+        ],
+    );
+
+    let mut user_cell = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_cell = Some((cell.message.clone(), cell.local_image_paths.clone()));
+            break;
+        }
+    }
+
+    let (message, local_images) = user_cell.expect("expected user history cell");
+    assert_eq!(message, "");
+    assert_eq!(local_images, vec![local_image]);
 }
 
 #[tokio::test]

@@ -14,6 +14,7 @@ pub enum SlashCommand {
     // more frequently used commands should be listed first.
     Model,
     Fast,
+    Ide,
     Approvals,
     Permissions,
     Keymap,
@@ -105,6 +106,9 @@ impl SlashCommand {
             SlashCommand::Fast => {
                 "toggle Fast mode to enable fastest inference with increased plan usage"
             }
+            SlashCommand::Ide => {
+                "include current selection, open files, and other context from your IDE"
+            }
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
             SlashCommand::Settings => "configure realtime microphone/speaker",
@@ -148,6 +152,7 @@ impl SlashCommand {
                 | SlashCommand::Plan
                 | SlashCommand::Goal
                 | SlashCommand::Fast
+                | SlashCommand::Ide
                 | SlashCommand::Mcp
                 | SlashCommand::Side
                 | SlashCommand::Resume
@@ -159,7 +164,11 @@ impl SlashCommand {
     pub fn available_in_side_conversation(self) -> bool {
         matches!(
             self,
-            SlashCommand::Copy | SlashCommand::Diff | SlashCommand::Mention | SlashCommand::Status
+            SlashCommand::Copy
+                | SlashCommand::Diff
+                | SlashCommand::Mention
+                | SlashCommand::Status
+                | SlashCommand::Ide
         )
     }
 
@@ -206,6 +215,7 @@ impl SlashCommand {
             | SlashCommand::Statusline
             | SlashCommand::AutoReview
             | SlashCommand::Feedback
+            | SlashCommand::Ide
             | SlashCommand::Quit
             | SlashCommand::Exit
             | SlashCommand::Side => true,
@@ -257,6 +267,7 @@ mod tests {
     #[test]
     fn certain_commands_are_available_during_task() {
         assert!(SlashCommand::Goal.available_during_task());
+        assert!(SlashCommand::Ide.available_during_task());
         assert!(SlashCommand::Title.available_during_task());
         assert!(SlashCommand::Statusline.available_during_task());
     }
