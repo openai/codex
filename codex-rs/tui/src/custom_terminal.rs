@@ -201,16 +201,48 @@ where
             tracing::warn!("failed to read initial cursor position; defaulting to origin: {err}");
             Position { x: 0, y: 0 }
         });
-        Ok(Self {
+        Ok(Self::with_screen_size_and_cursor_position(
+            backend,
+            screen_size,
+            cursor_pos,
+        ))
+    }
+
+    /// Creates a new [`Terminal`] from a caller-provided initial cursor position.
+    ///
+    /// Startup code uses this when cursor probing has already happened outside the backend, for
+    /// example through a bounded terminal probe. Supplying a stale or synthetic position changes
+    /// the inline viewport anchor, so callers should only use this after they have chosen the same
+    /// fallback they want the first render to honor.
+    pub fn with_options_and_cursor_position(backend: B, cursor_pos: Position) -> io::Result<Self> {
+        let screen_size = backend.size()?;
+        Ok(Self::with_screen_size_and_cursor_position(
+            backend,
+            screen_size,
+            cursor_pos,
+        ))
+    }
+
+    fn with_screen_size_and_cursor_position(
+        backend: B,
+        screen_size: Size,
+        cursor_pos: Position,
+    ) -> Self {
+        Self {
             backend,
             buffers: [Buffer::empty(Rect::ZERO), Buffer::empty(Rect::ZERO)],
             current: 0,
             hidden_cursor: false,
-            viewport_area: Rect::new(0, cursor_pos.y, 0, 0),
+            viewport_area: Rect::new(
+                /*x*/ 0,
+                cursor_pos.y,
+                /*width*/ 0,
+                /*height*/ 0,
+            ),
             last_known_screen_size: screen_size,
             last_known_cursor_pos: cursor_pos,
             visible_history_rows: 0,
-        })
+        }
     }
 
     /// Get a Frame object which provides a consistent view into the terminal state for rendering.
