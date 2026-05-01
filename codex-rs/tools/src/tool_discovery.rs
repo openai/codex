@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 const TUI_CLIENT_NAME: &str = "codex-tui";
 pub const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
 pub const TOOL_SEARCH_DEFAULT_LIMIT: usize = 8;
-pub const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
+pub const TOOL_SUGGEST_TOOL_NAME: &str = "request_plugin_install";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolSearchSourceInfo {

@@ -1872,7 +1872,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
         "Do not use tool suggestion if the needed tool is already available, found through `tool_search`, or callable after discovery."
     ));
     assert!(description.contains(
-        "If `tool_search` is available, call `tool_search` before calling `tool_suggest`."
+        "If `tool_search` is available, call `tool_search` before calling `request_plugin_install`."
     ));
     assert!(!description.contains("targeted lookup"));
     assert!(!description.contains("broad or speculative searches"));

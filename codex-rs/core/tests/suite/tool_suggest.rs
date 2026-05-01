@@ -22,7 +22,7 @@ use core_test_support::test_codex::test_codex;
 use serde_json::Value;
 
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
-const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
+const TOOL_SUGGEST_TOOL_NAME: &str = "request_plugin_install";
 const DISCOVERABLE_GMAIL_ID: &str = "connector_68df038e0ba48191908c8434991bbac2";
 
 fn tool_names(body: &Value) -> Vec<String> {
