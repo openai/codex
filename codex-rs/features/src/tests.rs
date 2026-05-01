@@ -491,6 +491,54 @@ usage_hint_enabled = false
 }
 
 #[test]
+fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config() {
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::MultiAgentV2);
+    features.disable(Feature::ToolSearch);
+
+    let mut features_toml = FeaturesToml {
+        multi_agent_v2: Some(FeatureToml::Config(crate::MultiAgentV2ConfigToml {
+            enabled: Some(false),
+            min_wait_timeout_ms: Some(2500),
+            ..Default::default()
+        })),
+        entries: BTreeMap::from([("include_apply_patch_tool".to_string(), true)]),
+        ..Default::default()
+    };
+
+    features_toml.materialize_resolved_enabled(&features);
+
+    let entries = features_toml.entries();
+    assert_eq!(entries.get("include_apply_patch_tool"), None);
+    for spec in crate::FEATURES {
+        assert_eq!(
+            entries.get(spec.key),
+            Some(&features.enabled(spec.id)),
+            "{}",
+            spec.key
+        );
+    }
+    assert_eq!(
+        features_toml.multi_agent_v2,
+        Some(FeatureToml::Config(crate::MultiAgentV2ConfigToml {
+            enabled: Some(true),
+            min_wait_timeout_ms: Some(2500),
+            ..Default::default()
+        }))
+    );
+    let replayed = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+    assert_eq!(replayed.enabled(Feature::ApplyPatchFreeform), false);
+}
+
+#[test]
 fn unstable_warning_event_only_mentions_enabled_under_development_features() {
     let mut configured_features = Table::new();
     configured_features.insert("child_agents_md".to_string(), TomlValue::Boolean(true));

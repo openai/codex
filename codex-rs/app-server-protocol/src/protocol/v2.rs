@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use crate::RequestId;
 use crate::protocol::common::AuthMode;
+use crate::protocol::item_builders::convert_patch_changes;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::account::PlanType;
 use codex_protocol::account::ProviderAccount;
@@ -6469,6 +6470,15 @@ impl From<CoreTurnItem> for ThreadItem {
                 result: image.result,
                 saved_path: image.saved_path,
             },
+            CoreTurnItem::FileChange(file_change) => ThreadItem::FileChange {
+                id: file_change.id,
+                changes: convert_patch_changes(&file_change.changes),
+                status: file_change
+                    .status
+                    .as_ref()
+                    .map(PatchApplyStatus::from)
+                    .unwrap_or(PatchApplyStatus::InProgress),
+            },
             CoreTurnItem::ContextCompaction(compaction) => {
                 ThreadItem::ContextCompaction { id: compaction.id }
             }
@@ -8078,6 +8088,7 @@ mod tests {
     use super::*;
     use codex_protocol::items::AgentMessageContent;
     use codex_protocol::items::AgentMessageItem;
+    use codex_protocol::items::FileChangeItem;
     use codex_protocol::items::ReasoningItem;
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
@@ -10356,6 +10367,35 @@ mod tests {
                     query: Some("docs".to_string()),
                     queries: None,
                 }),
+            }
+        );
+
+        let file_change_item = TurnItem::FileChange(FileChangeItem {
+            id: "patch-1".to_string(),
+            changes: [(
+                PathBuf::from("README.md"),
+                codex_protocol::protocol::FileChange::Add {
+                    content: "hello\n".to_string(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            status: Some(codex_protocol::protocol::PatchApplyStatus::Completed),
+            auto_approved: None,
+            stdout: Some("Done!".to_string()),
+            stderr: Some(String::new()),
+        });
+
+        assert_eq!(
+            ThreadItem::from(file_change_item),
+            ThreadItem::FileChange {
+                id: "patch-1".to_string(),
+                changes: vec![FileUpdateChange {
+                    path: "README.md".to_string(),
+                    kind: PatchChangeKind::Add,
+                    diff: "hello\n".to_string(),
+                }],
+                status: PatchApplyStatus::Completed,
             }
         );
     }

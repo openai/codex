@@ -1841,6 +1841,7 @@ impl HasLegacyEvent for ItemStartedEvent {
                     call_id: item.id.clone(),
                 })]
             }
+            TurnItem::FileChange(item) => vec![item.as_legacy_begin_event(self.turn_id.clone())],
             _ => Vec::new(),
         }
     }
@@ -1859,7 +1860,13 @@ pub trait HasLegacyEvent {
 
 impl HasLegacyEvent for ItemCompletedEvent {
     fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
-        self.item.as_legacy_events(show_raw_agent_reasoning)
+        match &self.item {
+            TurnItem::FileChange(item) => item
+                .as_legacy_end_event(self.turn_id.clone())
+                .into_iter()
+                .collect(),
+            _ => self.item.as_legacy_events(show_raw_agent_reasoning),
+        }
     }
 }
 
@@ -3928,6 +3935,7 @@ pub struct CollabResumeEndEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::items::FileChangeItem;
     use crate::items::ImageGenerationItem;
     use crate::items::UserMessageItem;
     use crate::items::WebSearchItem;
@@ -4631,6 +4639,41 @@ mod tests {
     }
 
     #[test]
+    fn item_started_event_from_file_change_emits_patch_begin_event() {
+        let event = ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            item: TurnItem::FileChange(FileChangeItem {
+                id: "patch-1".into(),
+                changes: [(
+                    PathBuf::from("new.txt"),
+                    FileChange::Add {
+                        content: "hello".into(),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                status: None,
+                auto_approved: Some(true),
+                stdout: None,
+                stderr: None,
+            }),
+        };
+
+        let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
+        assert_eq!(legacy_events.len(), 1);
+        match &legacy_events[0] {
+            EventMsg::PatchApplyBegin(event) => {
+                assert_eq!(event.call_id, "patch-1");
+                assert_eq!(event.turn_id, "turn-1");
+                assert!(event.auto_approved);
+                assert!(event.changes.contains_key(&PathBuf::from("new.txt")));
+            }
+            _ => panic!("expected PatchApplyBegin event"),
+        }
+    }
+
+    #[test]
     fn item_completed_event_from_image_generation_emits_end_event() {
         let event = ItemCompletedEvent {
             thread_id: ThreadId::new(),
@@ -4658,6 +4701,43 @@ mod tests {
                 );
             }
             _ => panic!("expected ImageGenerationEnd event"),
+        }
+    }
+
+    #[test]
+    fn item_completed_event_from_file_change_emits_patch_end_event() {
+        let event = ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            item: TurnItem::FileChange(FileChangeItem {
+                id: "patch-1".into(),
+                changes: [(
+                    PathBuf::from("new.txt"),
+                    FileChange::Add {
+                        content: "hello".into(),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                status: Some(PatchApplyStatus::Completed),
+                auto_approved: None,
+                stdout: Some("Done!".into()),
+                stderr: Some(String::new()),
+            }),
+        };
+
+        let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
+        assert_eq!(legacy_events.len(), 1);
+        match &legacy_events[0] {
+            EventMsg::PatchApplyEnd(event) => {
+                assert_eq!(event.call_id, "patch-1");
+                assert_eq!(event.turn_id, "turn-1");
+                assert_eq!(event.stdout, "Done!");
+                assert!(event.success);
+                assert_eq!(event.status, PatchApplyStatus::Completed);
+                assert!(event.changes.contains_key(&PathBuf::from("new.txt")));
+            }
+            _ => panic!("expected PatchApplyEnd event"),
         }
     }
 

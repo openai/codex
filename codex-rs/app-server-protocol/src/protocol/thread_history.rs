@@ -357,6 +357,7 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::Reasoning(_)
             | codex_protocol::items::TurnItem::WebSearch(_)
             | codex_protocol::items::TurnItem::ImageGeneration(_)
+            | codex_protocol::items::TurnItem::FileChange(_)
             | codex_protocol::items::TurnItem::ContextCompaction(_) => {}
         }
     }
@@ -378,6 +379,7 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::Reasoning(_)
             | codex_protocol::items::TurnItem::WebSearch(_)
             | codex_protocol::items::TurnItem::ImageGeneration(_)
+            | codex_protocol::items::TurnItem::FileChange(_)
             | codex_protocol::items::TurnItem::ContextCompaction(_) => {}
         }
     }

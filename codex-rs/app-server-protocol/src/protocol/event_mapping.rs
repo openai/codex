@@ -1,7 +1,6 @@
 use crate::protocol::common::ServerNotification;
 use crate::protocol::item_builders::build_command_execution_begin_item;
 use crate::protocol::item_builders::build_command_execution_end_item;
-use crate::protocol::item_builders::build_file_change_begin_item;
 use crate::protocol::item_builders::convert_patch_changes;
 use crate::protocol::v2::AgentMessageDeltaNotification;
 use crate::protocol::v2::CollabAgentState;
@@ -448,13 +447,6 @@ pub fn item_event_to_server_notification(
                 thread_id,
                 turn_id,
                 item: item_completed_event.item.into(),
-            })
-        }
-        EventMsg::PatchApplyBegin(patch_begin_event) => {
-            ServerNotification::ItemStarted(ItemStartedNotification {
-                thread_id,
-                turn_id,
-                item: build_file_change_begin_item(&patch_begin_event),
             })
         }
         EventMsg::PatchApplyUpdated(event) => {
