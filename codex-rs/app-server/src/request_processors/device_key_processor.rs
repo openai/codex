@@ -45,7 +45,7 @@ pub(crate) struct DeviceKeyRequestProcessor {
 impl DeviceKeyRequestProcessor {
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
-        state_db: Option<Arc<StateRuntime>>,
+        state_db: Arc<StateRuntime>,
     ) -> Self {
         Self {
             outgoing,
@@ -170,25 +170,22 @@ async fn sign_device_key(
 }
 
 struct StateDeviceKeyBindingStore {
-    state_db: Option<Arc<StateRuntime>>,
+    state_db: Arc<StateRuntime>,
 }
 
 impl StateDeviceKeyBindingStore {
-    fn new(state_db: Option<Arc<StateRuntime>>) -> Self {
+    fn new(state_db: Arc<StateRuntime>) -> Self {
         Self { state_db }
     }
 
     async fn state_db(&self) -> Result<Arc<StateRuntime>, DeviceKeyError> {
-        self.state_db
-            .clone()
-            .ok_or_else(|| DeviceKeyError::Platform("sqlite state db unavailable".to_string()))
+        Ok(self.state_db.clone())
     }
 }
 
 impl fmt::Debug for StateDeviceKeyBindingStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StateDeviceKeyBindingStore")
-            .field("has_state_db", &self.state_db.is_some())
             .finish_non_exhaustive()
     }
 }

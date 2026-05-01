@@ -442,8 +442,7 @@ impl MessageProcessor {
             arg0_paths,
             config.codex_home.to_path_buf(),
         );
-        let device_key_processor =
-            DeviceKeyRequestProcessor::new(outgoing.clone(), Some(state_db));
+        let device_key_processor = DeviceKeyRequestProcessor::new(outgoing.clone(), state_db);
         let fs_processor = FsRequestProcessor::new(
             thread_manager
                 .environment_manager()
