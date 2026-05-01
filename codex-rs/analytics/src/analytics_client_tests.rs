@@ -303,10 +303,10 @@ fn sample_turn_completed_notification(
     })
 }
 
-fn sample_turn_resolved_config(turn_id: &str) -> TurnResolvedConfigFact {
+fn sample_turn_resolved_config(thread_id: &str, turn_id: &str) -> TurnResolvedConfigFact {
     TurnResolvedConfigFact {
         turn_id: turn_id.to_string(),
-        thread_id: "thread-2".to_string(),
+        thread_id: thread_id.to_string(),
         num_input_images: 1,
         submission_type: None,
         ephemeral: false,
@@ -421,6 +421,38 @@ async fn ingest_rejected_turn_steer(
     .await;
     reducer
         .ingest(
+            AnalyticsFact::Initialize {
+                connection_id: 8,
+                params: InitializeParams {
+                    client_info: ClientInfo {
+                        name: "codex-web".to_string(),
+                        title: None,
+                        version: "1.0.0".to_string(),
+                    },
+                    capabilities: None,
+                },
+                product_client_id: "codex-web".to_string(),
+                runtime: sample_runtime_metadata(),
+                rpc_transport: AppServerRpcTransport::Stdio,
+            },
+            out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 8,
+                request_id: RequestId::Integer(6),
+                response: Box::new(sample_thread_resume_response(
+                    "thread-2", /*ephemeral*/ false, "gpt-5",
+                )),
+            },
+            out,
+        )
+        .await;
+    out.clear();
+    reducer
+        .ingest(
             AnalyticsFact::ClientRequest {
                 connection_id: 7,
                 request_id: RequestId::Integer(4),
@@ -519,7 +551,7 @@ async fn ingest_turn_prerequisites(
         reducer
             .ingest(
                 AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(
-                    sample_turn_resolved_config("turn-2"),
+                    sample_turn_resolved_config("thread-2", "turn-2"),
                 ))),
                 out,
             )
@@ -1436,6 +1468,110 @@ async fn subagent_thread_started_publishes_without_initialize() {
     assert_eq!(payload[0]["event_params"]["subagent_source"], "review");
 }
 
+#[tokio::test]
+async fn subagent_thread_started_inherits_parent_connection_for_new_thread() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    let parent_thread_id =
+        codex_protocol::ThreadId::from_string("44444444-4444-4444-4444-444444444444")
+            .expect("valid parent thread id");
+    let parent_thread_id_string = parent_thread_id.to_string();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Initialize {
+                connection_id: 7,
+                params: InitializeParams {
+                    client_info: ClientInfo {
+                        name: "parent-client".to_string(),
+                        title: None,
+                        version: "1.0.0".to_string(),
+                    },
+                    capabilities: None,
+                },
+                product_client_id: "parent-client".to_string(),
+                runtime: sample_runtime_metadata(),
+                rpc_transport: AppServerRpcTransport::Stdio,
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(1),
+                response: Box::new(sample_thread_start_response(
+                    &parent_thread_id_string,
+                    /*ephemeral*/ false,
+                    "gpt-5",
+                )),
+            },
+            &mut events,
+        )
+        .await;
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::SubAgentThreadStarted(
+                SubAgentThreadStartedInput {
+                    thread_id: "thread-review".to_string(),
+                    parent_thread_id: None,
+                    product_client_id: "parent-client".to_string(),
+                    client_name: "parent-client".to_string(),
+                    client_version: "1.0.0".to_string(),
+                    model: "gpt-5".to_string(),
+                    ephemeral: false,
+                    subagent_source: SubAgentSource::ThreadSpawn {
+                        parent_thread_id,
+                        depth: 1,
+                        agent_path: None,
+                        agent_nickname: None,
+                        agent_role: None,
+                    },
+                    created_at: 130,
+                },
+            )),
+            &mut events,
+        )
+        .await;
+
+    events.clear();
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(Box::new(
+                CodexCompactionEvent {
+                    thread_id: "thread-review".to_string(),
+                    turn_id: "turn-compact".to_string(),
+                    trigger: CompactionTrigger::Manual,
+                    reason: CompactionReason::UserRequested,
+                    implementation: CompactionImplementation::Responses,
+                    phase: CompactionPhase::StandaloneTurn,
+                    strategy: CompactionStrategy::Memento,
+                    status: CompactionStatus::Completed,
+                    error: None,
+                    active_context_tokens_before: 131_000,
+                    active_context_tokens_after: 64_000,
+                    started_at: 100,
+                    completed_at: 101,
+                    duration_ms: Some(1200),
+                },
+            ))),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["product_client_id"],
+        "parent-client"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["parent_thread_id"],
+        "44444444-4444-4444-4444-444444444444"
+    );
+}
+
 #[test]
 fn plugin_used_event_serializes_expected_shape() {
     let tracking = TrackEventsContext {
@@ -1494,6 +1630,25 @@ fn plugin_management_event_serializes_expected_shape() {
             }
         })
     );
+}
+
+#[test]
+fn plugin_management_event_can_use_remote_plugin_id_override() {
+    let mut plugin = sample_plugin_metadata();
+    plugin.remote_plugin_id = Some("plugins~Plugin_remote".to_string());
+    let event = TrackEventRequest::PluginInstalled(CodexPluginEventRequest {
+        event_type: "codex_plugin_installed",
+        event_params: codex_plugin_metadata(plugin),
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize plugin installed event");
+
+    assert_eq!(
+        payload["event_params"]["plugin_id"],
+        "plugins~Plugin_remote"
+    );
+    assert_eq!(payload["event_params"]["plugin_name"], "sample");
+    assert_eq!(payload["event_params"]["marketplace_name"], "test");
 }
 
 #[test]
@@ -2130,7 +2285,7 @@ async fn turn_start_error_response_discards_pending_start_request() {
     reducer
         .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(
-                sample_turn_resolved_config("turn-2"),
+                sample_turn_resolved_config("thread-2", "turn-2"),
             ))),
             &mut out,
         )
@@ -2482,6 +2637,7 @@ async fn turn_completed_without_started_notification_emits_null_started_at() {
 fn sample_plugin_metadata() -> PluginTelemetryMetadata {
     PluginTelemetryMetadata {
         plugin_id: PluginId::parse("sample@test").expect("valid plugin id"),
+        remote_plugin_id: None,
         capability_summary: Some(PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
             display_name: "sample".to_string(),

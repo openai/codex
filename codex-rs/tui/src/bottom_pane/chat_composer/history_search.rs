@@ -573,6 +573,32 @@ mod tests {
     }
 
     #[test]
+    fn vim_normal_history_search_preview_places_cursor_on_last_char() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer
+            .history
+            .record_local_submission(HistoryEntry::new("git status".to_string()));
+        composer.set_vim_enabled(/*enabled*/ true);
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        for ch in ['g', 'i', 't'] {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+
+        assert_eq!(composer.textarea.text(), "git status");
+        assert_eq!(composer.textarea.cursor(), "git status".len() - 1);
+        assert_eq!(composer.footer_mode(), FooterMode::HistorySearch);
+    }
+
+    #[test]
     fn history_search_stays_on_single_match_at_boundaries() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);

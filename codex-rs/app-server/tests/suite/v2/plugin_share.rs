@@ -177,6 +177,7 @@ async fn plugin_share_list_returns_created_workspace_plugins() -> Result<()> {
                 enabled: true,
                 install_policy: PluginInstallPolicy::Available,
                 auth_policy: PluginAuthPolicy::OnUse,
+                availability: codex_app_server_protocol::PluginAvailability::Available,
                 interface: Some(expected_plugin_interface()),
             }],
         }

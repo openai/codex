@@ -1,6 +1,7 @@
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
 use codex_app_server_protocol::PluginAuthPolicy;
+use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInterface;
 use codex_app_server_protocol::SkillInterface;
@@ -16,8 +17,15 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
+mod remote_installed_plugin_sync;
 mod share;
 
+pub use remote_installed_plugin_sync::RemoteInstalledPluginBundleSyncError;
+pub use remote_installed_plugin_sync::RemoteInstalledPluginBundleSyncOutcome;
+pub use remote_installed_plugin_sync::RemotePluginCacheMutationGuard;
+pub use remote_installed_plugin_sync::mark_remote_plugin_cache_mutation_in_flight;
+pub use remote_installed_plugin_sync::maybe_start_remote_installed_plugin_bundle_sync;
+pub use remote_installed_plugin_sync::sync_remote_installed_plugin_bundles_once;
 pub use share::RemotePluginShareSaveResult;
 pub use share::delete_remote_plugin_share;
 pub use share::list_remote_plugin_shares;
@@ -60,6 +68,7 @@ pub struct RemotePluginSummary {
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
     pub auth_policy: PluginAuthPolicy,
+    pub availability: PluginAvailability,
     pub interface: Option<PluginInterface>,
 }
 
@@ -258,6 +267,8 @@ struct RemotePluginDirectoryItem {
     scope: RemotePluginScope,
     installation_policy: PluginInstallPolicy,
     authentication_policy: PluginAuthPolicy,
+    #[serde(rename = "status", default)]
+    availability: PluginAvailability,
     release: RemotePluginReleaseResponse,
 }
 
@@ -654,6 +665,7 @@ fn build_remote_plugin_summary(
         enabled: installed_plugin.is_some_and(|plugin| plugin.enabled),
         install_policy: plugin.installation_policy,
         auth_policy: plugin.authentication_policy,
+        availability: plugin.availability,
         interface: remote_plugin_interface_to_info(plugin),
     }
 }
@@ -784,11 +796,29 @@ async fn fetch_installed_plugins_for_scope(
     auth: &CodexAuth,
     scope: RemotePluginScope,
 ) -> Result<Vec<RemotePluginInstalledItem>, RemotePluginCatalogError> {
+    fetch_installed_plugins_for_scope_with_download_url(
+        config, auth, scope, /*include_download_urls*/ false,
+    )
+    .await
+}
+
+async fn fetch_installed_plugins_for_scope_with_download_url(
+    config: &RemotePluginServiceConfig,
+    auth: &CodexAuth,
+    scope: RemotePluginScope,
+    include_download_urls: bool,
+) -> Result<Vec<RemotePluginInstalledItem>, RemotePluginCatalogError> {
     let mut plugins = Vec::new();
     let mut page_token = None;
     loop {
-        let response =
-            get_remote_plugin_installed_page(config, auth, scope, page_token.as_deref()).await?;
+        let response = get_remote_plugin_installed_page(
+            config,
+            auth,
+            scope,
+            page_token.as_deref(),
+            include_download_urls,
+        )
+        .await?;
         plugins.extend(response.plugins);
         let Some(next_page_token) = response.pagination.next_page_token else {
             break;
@@ -821,12 +851,16 @@ async fn get_remote_plugin_installed_page(
     auth: &CodexAuth,
     scope: RemotePluginScope,
     page_token: Option<&str>,
+    include_download_urls: bool,
 ) -> Result<RemotePluginInstalledResponse, RemotePluginCatalogError> {
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/installed");
     let client = build_reqwest_client();
     let mut request = authenticated_request(client.get(&url), auth)?;
     request = request.query(&[("scope", scope.api_value())]);
+    if include_download_urls {
+        request = request.query(&[("includeDownloadUrls", true)]);
+    }
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
     }

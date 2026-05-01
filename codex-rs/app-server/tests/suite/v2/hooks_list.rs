@@ -63,7 +63,7 @@ fn write_plugin_hook_config(codex_home: &std::path::Path, hooks_json: &str) -> R
         r#"[features]
 plugins = true
 plugin_hooks = true
-codex_hooks = true
+hooks = true
 
 [plugins."demo@test"]
 enabled = true
@@ -230,7 +230,7 @@ async fn hooks_list_uses_each_cwds_effective_feature_enablement() -> Result<()> 
     std::fs::write(
         codex_home.path().join("config.toml"),
         r#"[features]
-codex_hooks = false
+hooks = false
 "#,
     )?;
     std::fs::create_dir_all(workspace.path().join(".git"))?;
@@ -238,7 +238,7 @@ codex_hooks = false
     std::fs::write(
         workspace.path().join(".codex/config.toml"),
         r#"[features]
-codex_hooks = true
+hooks = true
 
 [hooks]
 

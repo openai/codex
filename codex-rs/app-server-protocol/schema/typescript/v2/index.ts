@@ -270,6 +270,7 @@ export type { PermissionsRequestApprovalParams } from "./PermissionsRequestAppro
 export type { PermissionsRequestApprovalResponse } from "./PermissionsRequestApprovalResponse";
 export type { PlanDeltaNotification } from "./PlanDeltaNotification";
 export type { PluginAuthPolicy } from "./PluginAuthPolicy";
+export type { PluginAvailability } from "./PluginAvailability";
 export type { PluginDetail } from "./PluginDetail";
 export type { PluginInstallParams } from "./PluginInstallParams";
 export type { PluginInstallPolicy } from "./PluginInstallPolicy";
@@ -395,8 +396,6 @@ export type { ThreadStatus } from "./ThreadStatus";
 export type { ThreadStatusChangedNotification } from "./ThreadStatusChangedNotification";
 export type { ThreadTokenUsage } from "./ThreadTokenUsage";
 export type { ThreadTokenUsageUpdatedNotification } from "./ThreadTokenUsageUpdatedNotification";
-export type { ThreadTurnsListParams } from "./ThreadTurnsListParams";
-export type { ThreadTurnsListResponse } from "./ThreadTurnsListResponse";
 export type { ThreadUnarchiveParams } from "./ThreadUnarchiveParams";
 export type { ThreadUnarchiveResponse } from "./ThreadUnarchiveResponse";
 export type { ThreadUnarchivedNotification } from "./ThreadUnarchivedNotification";

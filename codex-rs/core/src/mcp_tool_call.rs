@@ -40,6 +40,7 @@ use codex_config::types::AppToolApproval;
 use codex_features::Feature;
 use codex_hooks::PermissionRequestDecision;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::McpPermissionPromptAutoApproveContext;
 use codex_mcp::SandboxState;
 use codex_mcp::declared_openai_file_input_param_names;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
@@ -956,6 +957,10 @@ async fn maybe_request_mcp_tool_approval(
     if mcp_permission_prompt_is_auto_approved(
         turn_context.approval_policy.value(),
         &turn_context.permission_profile(),
+        McpPermissionPromptAutoApproveContext {
+            approvals_reviewer: Some(turn_context.config.approvals_reviewer),
+            tool_approval_mode: Some(approval_mode),
+        },
     ) {
         return None;
     }

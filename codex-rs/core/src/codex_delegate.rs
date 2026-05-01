@@ -262,11 +262,6 @@ async fn forward_events(
                     Err(_) => break,
                 };
                 match event {
-                    // ignore all legacy delta events
-                    Event {
-                        id: _,
-                        msg: EventMsg::AgentMessageDelta(_) | EventMsg::AgentReasoningDelta(_),
-                    } => {}
                     Event {
                         id: _,
                         msg: EventMsg::TokenCount(_),

@@ -96,6 +96,14 @@ enum ActionKind {
     RunCommand {
         command: &'static str,
     },
+    RunCommandWithPolicy {
+        command: &'static str,
+        policy_src: &'static str,
+    },
+    RunCommandWithPrefixRule {
+        command: &'static str,
+        prefix_rule: &'static [&'static str],
+    },
     RunUnifiedExecCommand {
         command: &'static str,
         justification: Option<&'static str>,
@@ -114,6 +122,20 @@ const DEFAULT_UNIFIED_EXEC_JUSTIFICATION: &str =
     "Requires escalated permissions to bypass the sandbox in tests.";
 
 impl ActionKind {
+    fn policy_src(&self) -> Option<&'static str> {
+        match self {
+            ActionKind::RunCommandWithPolicy { policy_src, .. } => Some(*policy_src),
+            ActionKind::WriteFile { .. }
+            | ActionKind::FetchUrlNoProxy { .. }
+            | ActionKind::FetchUrl { .. }
+            | ActionKind::RunCommand { .. }
+            | ActionKind::RunCommandWithPrefixRule { .. }
+            | ActionKind::RunUnifiedExecCommand { .. }
+            | ActionKind::ApplyPatchFunction { .. }
+            | ActionKind::ApplyPatchShell { .. } => None,
+        }
+    }
+
     async fn prepare(
         &self,
         test: &TestCodex,
@@ -201,6 +223,31 @@ impl ActionKind {
                     command,
                     /*timeout_ms*/ 30_000,
                     sandbox_permissions,
+                )?;
+                Ok((event, Some(command.to_string())))
+            }
+            ActionKind::RunCommandWithPolicy { command, .. } => {
+                // Bazel Linux runners can be heavily oversubscribed while this
+                // matrix runs, so avoid making scheduling latency look like an
+                // approval behavior failure.
+                let event = shell_event(
+                    call_id,
+                    command,
+                    /*timeout_ms*/ 30_000,
+                    sandbox_permissions,
+                )?;
+                Ok((event, Some(command.to_string())))
+            }
+            ActionKind::RunCommandWithPrefixRule {
+                command,
+                prefix_rule,
+            } => {
+                let event = shell_event_with_prefix_rule(
+                    call_id,
+                    command,
+                    /*timeout_ms*/ 30_000,
+                    sandbox_permissions,
+                    Some(prefix_rule.iter().map(|part| (*part).to_string()).collect()),
                 )?;
                 Ok((event, Some(command.to_string())))
             }
@@ -548,6 +595,11 @@ enum Outcome {
     ExecApproval {
         decision: ReviewDecision,
         expected_reason: Option<&'static str>,
+    },
+    ExecApprovalWithAmendment {
+        decision: ReviewDecision,
+        expected_reason: Option<&'static str>,
+        expected_execpolicy_amendment: Option<&'static [&'static str]>,
     },
     PatchApproval {
         decision: ReviewDecision,
@@ -908,6 +960,70 @@ fn scenarios() -> Vec<ScenarioSpec> {
             outcome: Outcome::ExecApproval {
                 decision: ReviewDecision::Denied,
                 expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
+            },
+        },
+        ScenarioSpec {
+            name: "cat_heredoc_file_redirect_prefix_rule_requires_escalation_approval",
+            approval_policy: OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommandWithPrefixRule {
+                command: r#"cat <<'EOF' > /tmp/out.txt
+                hello
+                EOF"#,
+                prefix_rule: &["cat"],
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::Denied,
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
+            },
+        },
+        ScenarioSpec {
+            name: "cat_heredoc_variable_assignment_policy_requires_escalation_approval",
+            approval_policy: OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommandWithPolicy {
+                command: r#"PATH=/tmp/evil:$PATH cat <<'EOF'
+                hello
+                EOF"#,
+                policy_src: r#"prefix_rule(pattern=["cat"], decision="allow")"#,
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::Denied,
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
+            },
+        },
+        ScenarioSpec {
+            name: "python_heredoc_requested_prefix_rule_omits_amendment",
+            approval_policy: OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommandWithPrefixRule {
+                command: r#"python3 <<'PY'
+                print('hello')
+                PY"#,
+                prefix_rule: &["python3"],
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApprovalWithAmendment {
+                decision: ReviewDecision::Denied,
+                expected_reason: None,
+                expected_execpolicy_amendment: None,
             },
             expectation: Expectation::CommandFailure {
                 output_contains: "rejected by user",
@@ -1703,7 +1819,9 @@ fn scenario_group(scenario: &ScenarioSpec) -> ScenarioGroup {
         ActionKind::WriteFile { .. }
         | ActionKind::FetchUrlNoProxy { .. }
         | ActionKind::FetchUrl { .. }
-        | ActionKind::RunCommand { .. } => match &scenario.sandbox_policy {
+        | ActionKind::RunCommand { .. }
+        | ActionKind::RunCommandWithPolicy { .. }
+        | ActionKind::RunCommandWithPrefixRule { .. } => match &scenario.sandbox_policy {
             SandboxPolicy::DangerFullAccess => ScenarioGroup::DangerFullAccess,
             SandboxPolicy::ReadOnly { .. } => ScenarioGroup::ReadOnly,
             SandboxPolicy::WorkspaceWrite { .. } => ScenarioGroup::WorkspaceWrite,
@@ -1720,6 +1838,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     let features = scenario.features.clone();
     let model_override = scenario.model_override;
     let model = model_override.unwrap_or("gpt-5.4");
+    let policy_src = scenario.action.policy_src();
 
     let mut builder = test_codex().with_model(model).with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
@@ -1733,6 +1852,13 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
                 .expect("test config should allow feature update");
         }
     });
+    if let Some(policy_src) = policy_src {
+        builder = builder.with_pre_build_hook(move |home| {
+            let rules_dir = home.join("rules");
+            fs::create_dir_all(&rules_dir).expect("create rules dir");
+            fs::write(rules_dir.join("default.rules"), policy_src).expect("write policy");
+        });
+    }
     let test = builder.build(&server).await?;
 
     let call_id = scenario.name;
@@ -1790,6 +1916,40 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
                     scenario.name
                 );
             }
+            test.codex
+                .submit(Op::ExecApproval {
+                    id: approval.effective_approval_id(),
+                    turn_id: None,
+                    decision: decision.clone(),
+                })
+                .await?;
+            wait_for_completion(&test).await;
+        }
+        Outcome::ExecApprovalWithAmendment {
+            decision,
+            expected_reason,
+            expected_execpolicy_amendment,
+        } => {
+            let command = expected_command
+                .as_deref()
+                .expect("exec approval requires shell command");
+            let approval = expect_exec_approval(&test, command).await;
+            if let Some(expected_reason) = expected_reason {
+                assert_eq!(
+                    approval.reason.as_deref(),
+                    Some(*expected_reason),
+                    "unexpected approval reason for {}",
+                    scenario.name
+                );
+            }
+            let expected_execpolicy_amendment = expected_execpolicy_amendment.map(|command| {
+                ExecPolicyAmendment::new(command.iter().map(|part| (*part).to_string()).collect())
+            });
+            assert_eq!(
+                approval.proposed_execpolicy_amendment, expected_execpolicy_amendment,
+                "unexpected execpolicy amendment for {}",
+                scenario.name
+            );
             test.codex
                 .submit(Op::ExecApproval {
                     id: approval.effective_approval_id(),

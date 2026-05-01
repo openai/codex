@@ -4966,6 +4966,9 @@ impl ChatWidget {
         }
         widget
             .bottom_pane
+            .set_vim_enabled(widget.config.tui_vim_mode_default);
+        widget
+            .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
         widget
             .bottom_pane
@@ -5114,6 +5117,7 @@ impl ChatWidget {
             && !self.pending_steers.is_empty()
             && self.bottom_pane.is_task_running()
             && self.bottom_pane.no_modal_or_popup_active()
+            && !self.should_handle_vim_insert_escape(key_event)
         {
             self.submit_pending_steers_after_interrupt = true;
             if !self.submit_op(AppCommand::interrupt()) {
@@ -10265,6 +10269,16 @@ impl ChatWidget {
         self.bottom_pane.is_task_running()
     }
 
+    pub(crate) fn toggle_vim_mode_and_notify(&mut self) {
+        let enabled = self.bottom_pane.toggle_vim_enabled();
+        let message = if enabled {
+            "Vim mode enabled."
+        } else {
+            "Vim mode disabled."
+        };
+        self.add_info_message(message.to_string(), /*hint*/ None);
+    }
+
     pub(crate) fn submit_user_message_with_mode(
         &mut self,
         text: String,
@@ -10304,6 +10318,11 @@ impl ChatWidget {
     /// In this state Esc-Esc backtracking is enabled.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
         self.bottom_pane.is_normal_backtrack_mode()
+    }
+
+    pub(crate) fn should_handle_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
+        self.bottom_pane
+            .composer_should_handle_vim_insert_escape(key_event)
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {
@@ -10839,6 +10858,10 @@ impl Renderable for ChatWidget {
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.as_renderable().cursor_pos(area)
+    }
+
+    fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
+        self.as_renderable().cursor_style(area)
     }
 }
 

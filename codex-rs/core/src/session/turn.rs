@@ -336,7 +336,7 @@ pub(crate) async fn run_turn(
     record_additional_contexts(&sess, &turn_context, additional_contexts).await;
     if !input.is_empty() {
         // Track the previous-turn baseline from the regular user-turn path only so
-        // standalone tasks (compact/shell/review/undo) cannot suppress future
+        // standalone tasks (compact/shell/review) cannot suppress future
         // model/realtime injections.
         sess.set_previous_turn_settings(Some(PreviousTurnSettings {
             model: turn_context.model_info.slug.clone(),
@@ -1443,11 +1443,8 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::TurnComplete(_)
         | EventMsg::TokenCount(_)
         | EventMsg::UserMessage(_)
-        | EventMsg::AgentMessageDelta(_)
         | EventMsg::AgentReasoning(_)
-        | EventMsg::AgentReasoningDelta(_)
         | EventMsg::AgentReasoningRawContent(_)
-        | EventMsg::AgentReasoningRawContentDelta(_)
         | EventMsg::AgentReasoningSectionBreak(_)
         | EventMsg::SessionConfigured(_)
         | EventMsg::ThreadNameUpdated(_)
@@ -1477,9 +1474,6 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::ElicitationRequest(_)
         | EventMsg::ApplyPatchApprovalRequest(_)
         | EventMsg::DeprecationNotice(_)
-        | EventMsg::BackgroundEvent(_)
-        | EventMsg::UndoStarted(_)
-        | EventMsg::UndoCompleted(_)
         | EventMsg::StreamError(_)
         | EventMsg::TurnDiff(_)
         | EventMsg::GetHistoryEntryResponse(_)

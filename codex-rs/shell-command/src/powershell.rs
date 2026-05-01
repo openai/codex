@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+use crate::command_safety::try_parse_powershell_ast_commands;
 use crate::shell_detect::ShellType;
 use crate::shell_detect::detect_shell_type;
 
@@ -66,6 +67,18 @@ pub fn extract_powershell_command(command: &[String]) -> Option<(&str, &str)> {
         i += 1;
     }
     None
+}
+
+/// Parse the script body from a top-level PowerShell wrapper into argv-like commands.
+///
+/// This is intentionally narrower than the Windows safe-command parser: it only unwraps the
+/// `-Command`/`-c` body from a PowerShell invocation we already recognize, then delegates the
+/// script itself to the PowerShell AST parser.
+pub fn parse_powershell_command_into_plain_commands(
+    command: &[String],
+) -> Option<Vec<Vec<String>>> {
+    let (executable, script) = extract_powershell_command(command)?;
+    try_parse_powershell_ast_commands(executable, script)
 }
 
 /// This function attempts to find a powershell.exe executable on the system.
@@ -139,6 +152,8 @@ fn is_powershellish_executable_available(powershell_or_pwsh_exe: &std::path::Pat
 #[cfg(test)]
 mod tests {
     use super::extract_powershell_command;
+    #[cfg(windows)]
+    use super::parse_powershell_command_into_plain_commands;
 
     #[test]
     fn extracts_basic_powershell_command() {
@@ -185,5 +200,39 @@ mod tests {
         ];
         let (_shell, script) = extract_powershell_command(&cmd).expect("extract");
         assert_eq!(script, "Get-ChildItem | Select-String foo");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parses_plain_powershell_commands() {
+        let commands = parse_powershell_command_into_plain_commands(&[
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "echo hi".to_string(),
+        ])
+        .expect("parse");
+
+        assert_eq!(commands, vec![vec!["echo".to_string(), "hi".to_string()]]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parses_multiple_plain_powershell_commands() {
+        let commands = parse_powershell_command_into_plain_commands(&[
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Write-Output foo | Measure-Object".to_string(),
+        ])
+        .expect("parse");
+
+        assert_eq!(
+            commands,
+            vec![
+                vec!["Write-Output".to_string(), "foo".to_string()],
+                vec!["Measure-Object".to_string()],
+            ]
+        );
     }
 }

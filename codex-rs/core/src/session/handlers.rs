@@ -27,7 +27,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::review_prompts::resolve_review_request;
 use crate::tasks::CompactTask;
-use crate::tasks::UndoTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
@@ -649,12 +648,6 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
     sess.send_event_raw(event).await;
 }
 
-pub async fn undo(sess: &Arc<Session>, sub_id: String) {
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-    sess.spawn_task(turn_context, Vec::new(), UndoTask::new())
-        .await;
-}
-
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
@@ -1116,10 +1109,6 @@ pub(super) async fn submission_loop(
                 }
                 Op::ListSkills { cwds, force_reload } => {
                     list_skills(&sess, sub.id.clone(), cwds, force_reload).await;
-                    false
-                }
-                Op::Undo => {
-                    undo(&sess, sub.id.clone()).await;
                     false
                 }
                 Op::Compact => {

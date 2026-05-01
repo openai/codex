@@ -34,6 +34,7 @@ pub use mcp::resolve_oauth_scopes;
 pub use mcp::should_retry_without_scopes;
 
 pub use codex_apps::filter_non_codex_apps_mcp_tools_only;
+pub use mcp::McpPermissionPromptAutoApproveContext;
 pub use mcp::mcp_permission_prompt_is_auto_approved;
 pub use mcp::qualified_mcp_tool_name_prefix;
 pub use tools::declared_openai_file_input_param_names;

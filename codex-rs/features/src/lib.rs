@@ -782,7 +782,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::CodexHooks,
-        key: "codex_hooks",
+        key: "hooks",
         stage: Stage::Stable,
         default_enabled: true,
     },

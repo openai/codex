@@ -133,6 +133,13 @@ impl McpProcess {
         Self::new_with_env_and_args(codex_home, &[], &[]).await
     }
 
+    pub async fn new_with_env_and_plugin_startup_tasks(
+        codex_home: &Path,
+        env_overrides: &[(&str, Option<&str>)],
+    ) -> anyhow::Result<Self> {
+        Self::new_with_env_and_args(codex_home, env_overrides, &[]).await
+    }
+
     pub async fn new_with_args(codex_home: &Path, args: &[&str]) -> anyhow::Result<Self> {
         let mut all_args = vec![DISABLE_PLUGIN_STARTUP_TASKS_ARG];
         all_args.extend_from_slice(args);
