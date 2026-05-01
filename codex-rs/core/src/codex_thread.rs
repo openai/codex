@@ -25,6 +25,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
@@ -93,6 +94,7 @@ pub struct CodexThreadTurnContextOverrides {
 pub struct CodexThread {
     pub(crate) codex: Codex,
     pub(crate) session_source: SessionSource,
+    session_configured: SessionConfiguredEvent,
     rollout_path: Option<PathBuf>,
     out_of_band_elicitation_count: Mutex<u64>,
     _watch_registration: WatchRegistration,
@@ -103,6 +105,7 @@ pub struct CodexThread {
 impl CodexThread {
     pub(crate) fn new(
         codex: Codex,
+        session_configured: SessionConfiguredEvent,
         rollout_path: Option<PathBuf>,
         session_source: SessionSource,
         watch_registration: WatchRegistration,
@@ -110,6 +113,7 @@ impl CodexThread {
         Self {
             codex,
             session_source,
+            session_configured,
             rollout_path,
             out_of_band_elicitation_count: Mutex::new(0),
             _watch_registration: watch_registration,
@@ -375,6 +379,14 @@ impl CodexThread {
 
     pub fn rollout_path(&self) -> Option<PathBuf> {
         self.rollout_path.clone()
+    }
+
+    pub(crate) fn session_configured(&self) -> SessionConfiguredEvent {
+        self.session_configured.clone()
+    }
+
+    pub(crate) fn is_running(&self) -> bool {
+        !self.codex.tx_sub.is_closed()
     }
 
     pub async fn guardian_trunk_rollout_path(&self) -> Option<PathBuf> {

@@ -32,7 +32,12 @@ pub(super) async fn read_thread(
 ) -> ThreadStoreResult<StoredThread> {
     let thread_id = params.thread_id;
     if let Some(metadata) = read_sqlite_metadata(store, thread_id).await
-        && (params.include_archived || metadata.archived_at.is_none())
+        && (params.include_archived
+            || (metadata.archived_at.is_none()
+                && !rollout_path_is_archived(
+                    store.config.codex_home.as_path(),
+                    metadata.rollout_path.as_path(),
+                )))
         && (!params.include_history
             || sqlite_rollout_path_can_load_history_for_thread(
                 store,

@@ -1077,17 +1077,26 @@ impl ThreadManagerState {
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
-        if let InitialHistory::Resumed(resumed) = &initial_history
-            && self
-                .threads
-                .read()
-                .await
-                .contains_key(&resumed.conversation_id)
-        {
-            return Err(CodexErr::InvalidRequest(format!(
-                "thread {} is already running",
-                resumed.conversation_id
-            )));
+        if let InitialHistory::Resumed(resumed) = &initial_history {
+            let mut threads = self.threads.write().await;
+            if let Some(thread) = threads.get(&resumed.conversation_id).cloned() {
+                if thread.is_running() {
+                    if let Some(requested_rollout_path) = resumed.rollout_path.as_deref()
+                        && thread.rollout_path().as_deref() != Some(requested_rollout_path)
+                    {
+                        return Err(CodexErr::InvalidRequest(format!(
+                            "thread {} is already running with a different rollout path",
+                            resumed.conversation_id
+                        )));
+                    }
+                    return Ok(NewThread {
+                        thread_id: resumed.conversation_id,
+                        session_configured: thread.session_configured(),
+                        thread,
+                    });
+                }
+                threads.remove(&resumed.conversation_id);
+            }
         }
         let environment =
             selected_primary_environment(self.environment_manager.as_ref(), &environments)?;
@@ -1164,25 +1173,31 @@ impl ThreadManagerState {
             }
         };
 
-        let thread = Arc::new(CodexThread::new(
-            codex,
-            session_configured.rollout_path.clone(),
-            session_source,
-            watch_registration,
-        ));
-        let mut threads = self.threads.write().await;
-        if threads.contains_key(&thread_id) {
-            return Err(CodexErr::InvalidRequest(format!(
-                "thread {thread_id} is already running"
-            )));
+        {
+            let mut threads = self.threads.write().await;
+            if let std::collections::hash_map::Entry::Vacant(e) = threads.entry(thread_id) {
+                let thread = Arc::new(CodexThread::new(
+                    codex,
+                    session_configured.clone(),
+                    session_configured.rollout_path.clone(),
+                    session_source,
+                    watch_registration,
+                ));
+                e.insert(thread.clone());
+                return Ok(NewThread {
+                    thread_id,
+                    thread,
+                    session_configured,
+                });
+            }
         }
-        threads.insert(thread_id, thread.clone());
 
-        Ok(NewThread {
-            thread_id,
-            thread,
-            session_configured,
-        })
+        if let Err(err) = codex.shutdown_and_wait().await {
+            warn!("failed to shut down duplicate thread {thread_id}: {err}");
+        }
+        Err(CodexErr::InvalidRequest(format!(
+            "thread {thread_id} is already running"
+        )))
     }
 
     pub(crate) fn notify_thread_created(&self, thread_id: ThreadId) {
