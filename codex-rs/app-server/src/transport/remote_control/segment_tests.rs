@@ -49,7 +49,7 @@ fn reassembles_client_message_chunks() {
         raw.len(),
         &raw[split..],
     )) {
-        ClientSegmentObservation::Forward(reassembled) => reassembled,
+        ClientSegmentObservation::Forward(reassembled) => *reassembled,
         ClientSegmentObservation::Pending | ClientSegmentObservation::Dropped => {
             panic!("message should reassemble")
         }
@@ -189,7 +189,7 @@ fn resets_incomplete_client_assembly_when_stream_changes() {
         raw.len(),
         &raw[split..],
     )) {
-        ClientSegmentObservation::Forward(reassembled) => reassembled,
+        ClientSegmentObservation::Forward(reassembled) => *reassembled,
         ClientSegmentObservation::Pending | ClientSegmentObservation::Dropped => {
             panic!("replacement stream should reassemble")
         }

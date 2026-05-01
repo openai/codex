@@ -42,7 +42,7 @@ pub(super) struct ClientSegmentReassembler {
 }
 
 pub(super) enum ClientSegmentObservation {
-    Forward(ClientEnvelope),
+    Forward(Box<ClientEnvelope>),
     Pending,
     Dropped,
 }
@@ -56,7 +56,7 @@ impl ClientSegmentReassembler {
             message_chunk_base64,
         } = &envelope.event
         else {
-            return ClientSegmentObservation::Forward(envelope);
+            return ClientSegmentObservation::Forward(Box::new(envelope));
         };
         let segment_id = *segment_id;
         let segment_count = *segment_count;
@@ -215,10 +215,10 @@ impl ClientSegmentReassembler {
             }
             AssemblyUpdate::Complete(message) => {
                 self.remove_assembly(&envelope.client_id, &stream_id);
-                ClientSegmentObservation::Forward(ClientEnvelope {
+                ClientSegmentObservation::Forward(Box::new(ClientEnvelope {
                     event: ClientEvent::ClientMessage { message },
                     ..envelope
-                })
+                }))
             }
         }
     }

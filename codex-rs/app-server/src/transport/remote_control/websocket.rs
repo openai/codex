@@ -746,11 +746,12 @@ impl RemoteControlWebsocket {
                 }
             };
 
-            let client_envelope = match {
+            let observation = {
                 let mut websocket_state = state.lock().await;
                 websocket_state.observe_client_message(client_envelope, wire_size_bytes)
-            } {
-                ClientSegmentObservation::Forward(client_envelope) => client_envelope,
+            };
+            let client_envelope = match observation {
+                ClientSegmentObservation::Forward(client_envelope) => *client_envelope,
                 ClientSegmentObservation::Pending | ClientSegmentObservation::Dropped => continue,
             };
 
@@ -1783,11 +1784,11 @@ mod tests {
 
         assert!(matches!(
             observe_client_message(&mut state, first_chunk.clone()),
-            ClientSegmentObservation::Dropped
+            ClientSegmentObservation::Pending
         ));
         assert!(matches!(
             observe_client_message(&mut state, first_chunk.clone()),
-            ClientSegmentObservation::Pending
+            ClientSegmentObservation::Dropped
         ));
         assert!(matches!(
             observe_client_message(&mut state, second_chunk),
