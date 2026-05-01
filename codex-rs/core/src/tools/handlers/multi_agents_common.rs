@@ -8,6 +8,7 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::turn_timing::now_unix_timestamp_ms;
 use codex_features::Feature;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::AgentPath;
@@ -31,6 +32,32 @@ use std::collections::HashMap;
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
 pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS;
+
+#[derive(Clone, Copy)]
+pub(crate) struct CollabToolExecutionTiming {
+    started_at_ms: i64,
+}
+
+impl CollabToolExecutionTiming {
+    pub(crate) fn start() -> Self {
+        Self {
+            started_at_ms: now_unix_timestamp_ms(),
+        }
+    }
+
+    pub(crate) fn started_at_ms(self) -> Option<i64> {
+        Some(self.started_at_ms)
+    }
+
+    pub(crate) fn finish(self) -> (Option<i64>, Option<i64>, Option<i64>) {
+        let completed_at_ms = now_unix_timestamp_ms();
+        (
+            Some(self.started_at_ms),
+            Some(completed_at_ms),
+            completed_at_ms.checked_sub(self.started_at_ms),
+        )
+    }
+}
 
 pub(crate) fn function_arguments(payload: ToolPayload) -> Result<String, FunctionCallError> {
     match payload {

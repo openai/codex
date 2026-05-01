@@ -117,7 +117,7 @@ async fn user_shell_cmd_can_be_interrupted() {
         .unwrap();
 
     // Wait until it has started (ExecCommandBegin), then interrupt.
-    let _begin = wait_for_event_match(codex, |ev| match ev {
+    let begin = wait_for_event_match(codex, |ev| match ev {
         EventMsg::ExecCommandBegin(event) if event.source == ExecCommandSource::UserShell => {
             Some(event.clone())
         }
@@ -125,6 +125,16 @@ async fn user_shell_cmd_can_be_interrupted() {
     })
     .await;
     codex.submit(Op::Interrupt).await.unwrap();
+
+    let end = wait_for_event_match(codex, |ev| match ev {
+        EventMsg::ExecCommandEnd(event) if event.source == ExecCommandSource::UserShell => {
+            Some(event.clone())
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(end.started_at_ms, begin.started_at_ms);
+    assert!(end.completed_at_ms.is_some());
 
     // Expect a TurnAborted(Interrupted) notification.
     let msg = wait_for_event_with_timeout(

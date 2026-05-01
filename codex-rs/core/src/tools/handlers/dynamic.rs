@@ -7,6 +7,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -102,16 +103,19 @@ async fn request_dynamic_tool(
     }
 
     let started_at = Instant::now();
+    let started_at_ms = now_unix_timestamp_ms();
     let event = EventMsg::DynamicToolCallRequest(DynamicToolCallRequest {
         call_id: call_id.clone(),
         turn_id: turn_id.clone(),
         namespace: namespace.clone(),
         tool: tool.clone(),
         arguments: arguments.clone(),
+        started_at_ms: Some(started_at_ms),
     });
     session.send_event(turn_context, event).await;
     let response = rx_response.await.ok();
 
+    let completed_at_ms = now_unix_timestamp_ms();
     let response_event = match &response {
         Some(response) => EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
             call_id,
@@ -122,6 +126,8 @@ async fn request_dynamic_tool(
             content_items: response.content_items.clone(),
             success: response.success,
             error: None,
+            started_at_ms: Some(started_at_ms),
+            completed_at_ms: Some(completed_at_ms),
             duration: started_at.elapsed(),
         }),
         None => EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
@@ -133,6 +139,8 @@ async fn request_dynamic_tool(
             content_items: Vec::new(),
             success: false,
             error: Some("dynamic tool call was cancelled before receiving a response".to_string()),
+            started_at_ms: Some(started_at_ms),
+            completed_at_ms: Some(completed_at_ms),
             duration: started_at.elapsed(),
         }),
     };

@@ -560,6 +560,7 @@ mod tests {
             receiver_thread_id: ThreadId::new(),
             receiver_agent_nickname: None,
             receiver_agent_role: None,
+            started_at_ms: None,
         };
 
         let notification = item_event_to_server_notification(
@@ -596,6 +597,9 @@ mod tests {
             receiver_agent_nickname: None,
             receiver_agent_role: None,
             status: codex_protocol::protocol::AgentStatus::NotFound,
+            started_at_ms: None,
+            completed_at_ms: None,
+            duration_ms: None,
         };
 
         let receiver_id = event.receiver_thread_id.to_string();
@@ -639,6 +643,7 @@ mod tests {
                 arguments: Some(serde_json::json!({"server": ""})),
             },
             mcp_app_resource_uri: Some("ui://widget/list-resources.html".to_string()),
+            started_at_ms: None,
         };
 
         let notification = item_event_to_server_notification(
@@ -676,6 +681,7 @@ mod tests {
                 arguments: None,
             },
             mcp_app_resource_uri: None,
+            started_at_ms: None,
         };
 
         let notification = item_event_to_server_notification(
@@ -726,6 +732,8 @@ mod tests {
                 arguments: Some(serde_json::json!({"server": ""})),
             },
             mcp_app_resource_uri: Some("ui://widget/list-resources.html".to_string()),
+            started_at_ms: None,
+            completed_at_ms: None,
             duration: Duration::from_nanos(92708),
             result: Ok(result),
         };
@@ -771,6 +779,8 @@ mod tests {
                 arguments: None,
             },
             mcp_app_resource_uri: None,
+            started_at_ms: None,
+            completed_at_ms: None,
             duration: Duration::from_millis(1),
             result: Err("boom".to_string()),
         };

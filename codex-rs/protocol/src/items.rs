@@ -112,6 +112,15 @@ pub struct WebSearchItem {
     pub id: String,
     pub query: String,
     pub action: WebSearchAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub started_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub completed_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub duration_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
@@ -125,6 +134,15 @@ pub struct ImageGenerationItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub saved_path: Option<AbsolutePathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub started_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub completed_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub duration_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -365,6 +383,9 @@ impl WebSearchItem {
             call_id: self.id.clone(),
             query: self.query.clone(),
             action: self.action.clone(),
+            started_at_ms: self.started_at_ms,
+            completed_at_ms: self.completed_at_ms,
+            duration_ms: self.duration_ms,
         })
     }
 }
@@ -377,11 +398,43 @@ impl ImageGenerationItem {
             revised_prompt: self.revised_prompt.clone(),
             result: self.result.clone(),
             saved_path: self.saved_path.clone(),
+            started_at_ms: self.started_at_ms,
+            completed_at_ms: self.completed_at_ms,
+            duration_ms: self.duration_ms,
         })
     }
 }
 
 impl TurnItem {
+    pub fn set_started_at_ms(&mut self, started_at_ms: i64) {
+        match self {
+            TurnItem::WebSearch(item) => item.started_at_ms = Some(started_at_ms),
+            TurnItem::ImageGeneration(item) => item.started_at_ms = Some(started_at_ms),
+            _ => {}
+        }
+    }
+
+    pub fn set_completed_timing_ms(
+        &mut self,
+        started_at_ms: Option<i64>,
+        completed_at_ms: i64,
+        duration_ms: Option<i64>,
+    ) {
+        match self {
+            TurnItem::WebSearch(item) => {
+                item.started_at_ms = started_at_ms;
+                item.completed_at_ms = Some(completed_at_ms);
+                item.duration_ms = duration_ms;
+            }
+            TurnItem::ImageGeneration(item) => {
+                item.started_at_ms = started_at_ms;
+                item.completed_at_ms = Some(completed_at_ms);
+                item.duration_ms = duration_ms;
+            }
+            _ => {}
+        }
+    }
+
     pub fn id(&self) -> String {
         match self {
             TurnItem::UserMessage(item) => item.id.clone(),

@@ -40,6 +40,7 @@ impl ToolHandler for Handler {
                 .await
                 .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
         }
+        let timing = CollabToolExecutionTiming::start();
         session
             .send_event(
                 &turn,
@@ -48,6 +49,7 @@ impl ToolHandler for Handler {
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
                     prompt: prompt.clone(),
+                    started_at_ms: timing.started_at_ms(),
                 }
                 .into(),
             )
@@ -62,6 +64,7 @@ impl ToolHandler for Handler {
             .agent_control
             .get_status(receiver_thread_id)
             .await;
+        let (started_at_ms, completed_at_ms, duration_ms) = timing.finish();
         session
             .send_event(
                 &turn,
@@ -73,6 +76,9 @@ impl ToolHandler for Handler {
                     receiver_agent_role: receiver_agent.agent_role,
                     prompt,
                     status,
+                    started_at_ms,
+                    completed_at_ms,
+                    duration_ms,
                 }
                 .into(),
             )

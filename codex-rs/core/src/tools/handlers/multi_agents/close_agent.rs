@@ -29,6 +29,7 @@ impl ToolHandler for Handler {
             .agent_control
             .get_agent_metadata(agent_id)
             .unwrap_or_default();
+        let timing = CollabToolExecutionTiming::start();
         session
             .send_event(
                 &turn,
@@ -36,6 +37,7 @@ impl ToolHandler for Handler {
                     call_id: call_id.clone(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id: agent_id,
+                    started_at_ms: timing.started_at_ms(),
                 }
                 .into(),
             )
@@ -49,6 +51,7 @@ impl ToolHandler for Handler {
             Ok(mut status_rx) => status_rx.borrow_and_update().clone(),
             Err(err) => {
                 let status = session.services.agent_control.get_status(agent_id).await;
+                let (started_at_ms, completed_at_ms, duration_ms) = timing.finish();
                 session
                     .send_event(
                         &turn,
@@ -59,6 +62,9 @@ impl ToolHandler for Handler {
                             receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
                             receiver_agent_role: receiver_agent.agent_role.clone(),
                             status,
+                            started_at_ms,
+                            completed_at_ms,
+                            duration_ms,
                         }
                         .into(),
                     )
@@ -70,6 +76,7 @@ impl ToolHandler for Handler {
             .await
             .map_err(|err| collab_agent_error(agent_id, err))
             .map(|_| ());
+        let (started_at_ms, completed_at_ms, duration_ms) = timing.finish();
         session
             .send_event(
                 &turn,
@@ -80,6 +87,9 @@ impl ToolHandler for Handler {
                     receiver_agent_nickname: receiver_agent.agent_nickname,
                     receiver_agent_role: receiver_agent.agent_role,
                     status: status.clone(),
+                    started_at_ms,
+                    completed_at_ms,
+                    duration_ms,
                 }
                 .into(),
             )

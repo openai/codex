@@ -44,6 +44,7 @@ impl ToolHandler for Handler {
 
         let mut mailbox_seq_rx = session.subscribe_mailbox_seq();
 
+        let timing = CollabToolExecutionTiming::start();
         session
             .send_event(
                 &turn,
@@ -52,6 +53,7 @@ impl ToolHandler for Handler {
                     receiver_thread_ids: Vec::new(),
                     receiver_agents: Vec::new(),
                     call_id: call_id.clone(),
+                    started_at_ms: timing.started_at_ms(),
                 }
                 .into(),
             )
@@ -65,6 +67,7 @@ impl ToolHandler for Handler {
         };
         let result = WaitAgentResult::from_timed_out(timed_out);
 
+        let (started_at_ms, completed_at_ms, duration_ms) = timing.finish();
         session
             .send_event(
                 &turn,
@@ -73,6 +76,9 @@ impl ToolHandler for Handler {
                     call_id,
                     agent_statuses: Vec::new(),
                     statuses: HashMap::new(),
+                    started_at_ms,
+                    completed_at_ms,
+                    duration_ms,
                 }
                 .into(),
             )

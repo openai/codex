@@ -3,6 +3,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::sandboxing::ToolError;
+use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -82,6 +83,7 @@ pub(crate) async fn emit_exec_command_begin(
                 parsed_cmd: parsed_cmd.to_vec(),
                 source,
                 interaction_input,
+                started_at_ms: Some(now_unix_timestamp_ms()),
             }),
         )
         .await;
@@ -190,6 +192,7 @@ impl ToolEmitter {
                             turn_id: ctx.turn.sub_id.clone(),
                             auto_approved: *auto_approved,
                             changes: changes.clone(),
+                            started_at_ms: Some(now_unix_timestamp_ms()),
                         }),
                     )
                     .await;
@@ -206,6 +209,7 @@ impl ToolEmitter {
                     } else {
                         PatchApplyStatus::Failed
                     },
+                    output.duration,
                 )
                 .await;
             }
@@ -224,6 +228,7 @@ impl ToolEmitter {
                     } else {
                         PatchApplyStatus::Failed
                     },
+                    output.duration,
                 )
                 .await;
             }
@@ -238,6 +243,7 @@ impl ToolEmitter {
                     (*message).to_string(),
                     /*success*/ false,
                     PatchApplyStatus::Failed,
+                    Duration::ZERO,
                 )
                 .await;
             }
@@ -252,6 +258,7 @@ impl ToolEmitter {
                     (*message).to_string(),
                     /*success*/ false,
                     PatchApplyStatus::Declined,
+                    Duration::ZERO,
                 )
                 .await;
             }
@@ -467,6 +474,9 @@ async fn emit_exec_end(
     exec_input: ExecCommandInput<'_>,
     exec_result: ExecCommandResult,
 ) {
+    let completed_at_ms = now_unix_timestamp_ms();
+    let duration_ms = i64::try_from(exec_result.duration.as_millis()).unwrap_or(i64::MAX);
+    let started_at_ms = completed_at_ms.checked_sub(duration_ms);
     ctx.session
         .send_event(
             ctx.turn,
@@ -479,6 +489,8 @@ async fn emit_exec_end(
                 parsed_cmd: exec_input.parsed_cmd.to_vec(),
                 source: exec_input.source,
                 interaction_input: exec_input.interaction_input.map(str::to_owned),
+                started_at_ms,
+                completed_at_ms: Some(completed_at_ms),
                 stdout: exec_result.stdout,
                 stderr: exec_result.stderr,
                 aggregated_output: exec_result.aggregated_output,
@@ -498,7 +510,12 @@ async fn emit_patch_end(
     stderr: String,
     success: bool,
     status: PatchApplyStatus,
+    duration: Duration,
 ) {
+    let completed_at_ms = now_unix_timestamp_ms();
+    let duration_ms = i64::try_from(duration.as_millis()).ok();
+    let started_at_ms =
+        duration_ms.and_then(|duration_ms| completed_at_ms.checked_sub(duration_ms));
     ctx.session
         .send_event(
             ctx.turn,
@@ -510,6 +527,9 @@ async fn emit_patch_end(
                 success,
                 changes,
                 status,
+                started_at_ms,
+                completed_at_ms: Some(completed_at_ms),
+                duration_ms,
             }),
         )
         .await;

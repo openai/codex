@@ -21,6 +21,7 @@ use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
+use crate::turn_timing::now_unix_timestamp_ms;
 use crate::user_shell_command::user_shell_command_record_item;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
@@ -157,6 +158,7 @@ pub(crate) async fn execute_user_shell_command(
     let cwd = turn_context.cwd.clone();
 
     let parsed_cmd = parse_command(&display_command);
+    let started_at_ms = now_unix_timestamp_ms();
     session
         .send_event(
             turn_context.as_ref(),
@@ -169,6 +171,7 @@ pub(crate) async fn execute_user_shell_command(
                 parsed_cmd: parsed_cmd.clone(),
                 source: ExecCommandSource::UserShell,
                 interaction_input: None,
+                started_at_ms: Some(started_at_ms),
             }),
         )
         .await;
@@ -212,6 +215,7 @@ pub(crate) async fn execute_user_shell_command(
 
     match exec_result {
         Err(CancelErr::Cancelled) => {
+            let completed_at_ms = now_unix_timestamp_ms();
             let aborted_message = "command aborted by user".to_string();
             let exec_output = ExecToolCallOutput {
                 exit_code: -1,
@@ -241,6 +245,8 @@ pub(crate) async fn execute_user_shell_command(
                         parsed_cmd: parsed_cmd.clone(),
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
+                        started_at_ms: Some(started_at_ms),
+                        completed_at_ms: Some(completed_at_ms),
                         stdout: String::new(),
                         stderr: aborted_message.clone(),
                         aggregated_output: aborted_message.clone(),
@@ -253,6 +259,7 @@ pub(crate) async fn execute_user_shell_command(
                 .await;
         }
         Ok(Ok(output)) => {
+            let completed_at_ms = now_unix_timestamp_ms();
             session
                 .send_event(
                     turn_context.as_ref(),
@@ -265,6 +272,8 @@ pub(crate) async fn execute_user_shell_command(
                         parsed_cmd: parsed_cmd.clone(),
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
+                        started_at_ms: Some(started_at_ms),
+                        completed_at_ms: Some(completed_at_ms),
                         stdout: output.stdout.text.clone(),
                         stderr: output.stderr.text.clone(),
                         aggregated_output: output.aggregated_output.text.clone(),
@@ -297,6 +306,7 @@ pub(crate) async fn execute_user_shell_command(
                 duration: Duration::ZERO,
                 timed_out: false,
             };
+            let completed_at_ms = now_unix_timestamp_ms();
             session
                 .send_event(
                     turn_context.as_ref(),
@@ -309,6 +319,8 @@ pub(crate) async fn execute_user_shell_command(
                         parsed_cmd,
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
+                        started_at_ms: Some(started_at_ms),
+                        completed_at_ms: Some(completed_at_ms),
                         stdout: exec_output.stdout.text.clone(),
                         stderr: exec_output.stderr.text.clone(),
                         aggregated_output: exec_output.aggregated_output.text.clone(),

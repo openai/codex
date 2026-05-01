@@ -303,6 +303,14 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
         })
         .await?;
 
+    let started = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::WebSearch(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
     let begin = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::WebSearchBegin(event) => Some(event.clone()),
         _ => None,
@@ -317,8 +325,15 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
     })
     .await;
 
+    assert_eq!(started.id, "web-search-1");
+    assert!(started.started_at_ms.is_some());
+    assert_eq!(started.completed_at_ms, None);
+    assert_eq!(started.duration_ms, None);
     assert_eq!(begin.call_id, "web-search-1");
     assert_eq!(completed.id, begin.call_id);
+    assert_eq!(completed.started_at_ms, started.started_at_ms);
+    assert!(completed.completed_at_ms.is_some());
+    assert!(completed.duration_ms.is_some());
     assert_eq!(
         completed.action,
         WebSearchAction::Search {
@@ -369,8 +384,24 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
         })
         .await?;
 
+    let started = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::ImageGeneration(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
     let begin = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ImageGenerationBegin(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    let completed = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::ImageGeneration(item),
+            ..
+        }) => Some(item.clone()),
         _ => None,
     })
     .await;
@@ -381,7 +412,15 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
     .await;
 
     assert_eq!(begin.call_id, call_id);
+    assert_eq!(started.id, call_id);
+    assert!(started.started_at_ms.is_some());
+    assert_eq!(started.completed_at_ms, None);
+    assert_eq!(started.duration_ms, None);
     assert_eq!(end.call_id, call_id);
+    assert_eq!(completed.id, call_id);
+    assert_eq!(completed.started_at_ms, started.started_at_ms);
+    assert!(completed.completed_at_ms.is_some());
+    assert!(completed.duration_ms.is_some());
     assert_eq!(end.status, "completed");
     assert_eq!(end.revised_prompt, Some("A tiny blue square".to_string()));
     assert_eq!(end.result, "Zm9v");

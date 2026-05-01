@@ -25,6 +25,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::McpToolCallBeginEvent;
@@ -261,8 +262,16 @@ async fn handle_list_resources(
         arguments: arguments.clone(),
     };
 
-    emit_tool_call_begin(&session, turn.as_ref(), &call_id, invocation.clone()).await;
     let start = Instant::now();
+    let started_at_ms = now_unix_timestamp_ms();
+    emit_tool_call_begin(
+        &session,
+        turn.as_ref(),
+        &call_id,
+        invocation.clone(),
+        started_at_ms,
+    )
+    .await;
 
     let payload_result: Result<ListResourcesPayload, FunctionCallError> = async {
         if let Some(server_name) = server.clone() {
@@ -310,6 +319,7 @@ async fn handle_list_resources(
                     turn.as_ref(),
                     &call_id,
                     invocation,
+                    started_at_ms,
                     duration,
                     Ok(call_tool_result_from_content(&content, output.success)),
                 )
@@ -324,6 +334,7 @@ async fn handle_list_resources(
                     turn.as_ref(),
                     &call_id,
                     invocation,
+                    started_at_ms,
                     duration,
                     Err(message.clone()),
                 )
@@ -339,6 +350,7 @@ async fn handle_list_resources(
                 turn.as_ref(),
                 &call_id,
                 invocation,
+                started_at_ms,
                 duration,
                 Err(message.clone()),
             )
@@ -369,8 +381,16 @@ async fn handle_list_resource_templates(
         arguments: arguments.clone(),
     };
 
-    emit_tool_call_begin(&session, turn.as_ref(), &call_id, invocation.clone()).await;
     let start = Instant::now();
+    let started_at_ms = now_unix_timestamp_ms();
+    emit_tool_call_begin(
+        &session,
+        turn.as_ref(),
+        &call_id,
+        invocation.clone(),
+        started_at_ms,
+    )
+    .await;
 
     let payload_result: Result<ListResourceTemplatesPayload, FunctionCallError> = async {
         if let Some(server_name) = server.clone() {
@@ -420,6 +440,7 @@ async fn handle_list_resource_templates(
                     turn.as_ref(),
                     &call_id,
                     invocation,
+                    started_at_ms,
                     duration,
                     Ok(call_tool_result_from_content(&content, output.success)),
                 )
@@ -434,6 +455,7 @@ async fn handle_list_resource_templates(
                     turn.as_ref(),
                     &call_id,
                     invocation,
+                    started_at_ms,
                     duration,
                     Err(message.clone()),
                 )
@@ -449,6 +471,7 @@ async fn handle_list_resource_templates(
                 turn.as_ref(),
                 &call_id,
                 invocation,
+                started_at_ms,
                 duration,
                 Err(message.clone()),
             )
@@ -475,8 +498,16 @@ async fn handle_read_resource(
         arguments: arguments.clone(),
     };
 
-    emit_tool_call_begin(&session, turn.as_ref(), &call_id, invocation.clone()).await;
     let start = Instant::now();
+    let started_at_ms = now_unix_timestamp_ms();
+    emit_tool_call_begin(
+        &session,
+        turn.as_ref(),
+        &call_id,
+        invocation.clone(),
+        started_at_ms,
+    )
+    .await;
 
     let payload_result: Result<ReadResourcePayload, FunctionCallError> = async {
         let result = session
@@ -511,6 +542,7 @@ async fn handle_read_resource(
                     turn.as_ref(),
                     &call_id,
                     invocation,
+                    started_at_ms,
                     duration,
                     Ok(call_tool_result_from_content(&content, output.success)),
                 )
@@ -525,6 +557,7 @@ async fn handle_read_resource(
                     turn.as_ref(),
                     &call_id,
                     invocation,
+                    started_at_ms,
                     duration,
                     Err(message.clone()),
                 )
@@ -540,6 +573,7 @@ async fn handle_read_resource(
                 turn.as_ref(),
                 &call_id,
                 invocation,
+                started_at_ms,
                 duration,
                 Err(message.clone()),
             )
@@ -563,6 +597,7 @@ async fn emit_tool_call_begin(
     turn: &TurnContext,
     call_id: &str,
     invocation: McpInvocation,
+    started_at_ms: i64,
 ) {
     session
         .send_event(
@@ -571,6 +606,7 @@ async fn emit_tool_call_begin(
                 call_id: call_id.to_string(),
                 invocation,
                 mcp_app_resource_uri: None,
+                started_at_ms: Some(started_at_ms),
             }),
         )
         .await;
@@ -581,9 +617,11 @@ async fn emit_tool_call_end(
     turn: &TurnContext,
     call_id: &str,
     invocation: McpInvocation,
+    started_at_ms: i64,
     duration: Duration,
     result: Result<CallToolResult, String>,
 ) {
+    let completed_at_ms = now_unix_timestamp_ms();
     session
         .send_event(
             turn,
@@ -591,6 +629,8 @@ async fn emit_tool_call_end(
                 call_id: call_id.to_string(),
                 invocation,
                 mcp_app_resource_uri: None,
+                started_at_ms: Some(started_at_ms),
+                completed_at_ms: Some(completed_at_ms),
                 duration,
                 result,
             }),

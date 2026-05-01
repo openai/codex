@@ -46,6 +46,7 @@ impl ToolHandler for Handler {
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
             ));
         }
+        let timing = CollabToolExecutionTiming::start();
         session
             .send_event(
                 &turn,
@@ -55,6 +56,7 @@ impl ToolHandler for Handler {
                     prompt: prompt.clone(),
                     model: args.model.clone().unwrap_or_default(),
                     reasoning_effort: args.reasoning_effort.unwrap_or_default(),
+                    started_at_ms: timing.started_at_ms(),
                 }
                 .into(),
             )
@@ -149,6 +151,7 @@ impl ToolHandler for Handler {
             .and_then(|snapshot| snapshot.reasoning_effort)
             .unwrap_or(args.reasoning_effort.unwrap_or_default());
         let nickname = new_agent_nickname.clone();
+        let (started_at_ms, completed_at_ms, duration_ms) = timing.finish();
         session
             .send_event(
                 &turn,
@@ -162,6 +165,9 @@ impl ToolHandler for Handler {
                     model: effective_model,
                     reasoning_effort: effective_reasoning_effort,
                     status,
+                    started_at_ms,
+                    completed_at_ms,
+                    duration_ms,
                 }
                 .into(),
             )

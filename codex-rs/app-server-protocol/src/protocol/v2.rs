@@ -10302,6 +10302,9 @@ mod tests {
                 query: Some("docs".to_string()),
                 queries: None,
             },
+            started_at_ms: None,
+            completed_at_ms: None,
+            duration_ms: None,
         });
 
         assert_eq!(

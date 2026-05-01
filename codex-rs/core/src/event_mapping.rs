@@ -188,6 +188,9 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
                 id: id.clone().unwrap_or_default(),
                 query,
                 action,
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             }))
         }
         ResponseItem::ImageGenerationCall {
@@ -202,6 +205,9 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
                 revised_prompt: revised_prompt.clone(),
                 result: result.clone(),
                 saved_path: None,
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             },
         )),
         _ => None,

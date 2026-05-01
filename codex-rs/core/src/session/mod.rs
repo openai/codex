@@ -297,6 +297,7 @@ use crate::tools::network_approval::build_network_policy_decider;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::turn_timing::TurnTimingState;
+use crate::turn_timing::now_unix_timestamp_ms;
 use crate::turn_timing::record_turn_ttfm_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
@@ -1637,12 +1638,19 @@ impl Session {
     }
 
     pub(crate) async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
+        let started_at_ms = now_unix_timestamp_ms();
+        self.turn_item_timings
+            .lock()
+            .await
+            .insert(item.id(), (started_at_ms, std::time::Instant::now()));
+        let mut item = item.clone();
+        item.set_started_at_ms(started_at_ms);
         self.send_event(
             turn_context,
             EventMsg::ItemStarted(ItemStartedEvent {
                 thread_id: self.conversation_id,
                 turn_id: turn_context.sub_id.clone(),
-                item: item.clone(),
+                item,
             }),
         )
         .await;
@@ -1651,9 +1659,15 @@ impl Session {
     pub(crate) async fn emit_turn_item_completed(
         &self,
         turn_context: &TurnContext,
-        item: TurnItem,
+        mut item: TurnItem,
     ) {
         record_turn_ttfm_metric(turn_context, &item).await;
+        let timing = self.turn_item_timings.lock().await.remove(&item.id());
+        let completed_at_ms = now_unix_timestamp_ms();
+        let started_at_ms = timing.as_ref().map(|(started_at_ms, _)| *started_at_ms);
+        let duration_ms =
+            timing.and_then(|(_, started_at)| i64::try_from(started_at.elapsed().as_millis()).ok());
+        item.set_completed_timing_ms(started_at_ms, completed_at_ms, duration_ms);
         self.send_event(
             turn_context,
             EventMsg::ItemCompleted(ItemCompletedEvent {

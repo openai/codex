@@ -26,6 +26,9 @@ pub struct DynamicToolCallRequest {
     pub namespace: Option<String>,
     pub tool: String,
     pub arguments: JsonValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub started_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]

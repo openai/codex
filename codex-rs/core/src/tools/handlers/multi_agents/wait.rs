@@ -69,6 +69,7 @@ impl ToolHandler for Handler {
             ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
         };
 
+        let timing = CollabToolExecutionTiming::start();
         session
             .send_event(
                 &turn,
@@ -77,6 +78,7 @@ impl ToolHandler for Handler {
                     receiver_thread_ids: receiver_thread_ids.clone(),
                     receiver_agents: receiver_agents.clone(),
                     call_id: call_id.clone(),
+                    started_at_ms: timing.started_at_ms(),
                 }
                 .into(),
             )
@@ -99,6 +101,7 @@ impl ToolHandler for Handler {
                 Err(err) => {
                     let mut statuses = HashMap::with_capacity(1);
                     statuses.insert(*id, session.services.agent_control.get_status(*id).await);
+                    let (started_at_ms, completed_at_ms, duration_ms) = timing.finish();
                     session
                         .send_event(
                             &turn,
@@ -110,6 +113,9 @@ impl ToolHandler for Handler {
                                     &receiver_agents,
                                 ),
                                 statuses,
+                                started_at_ms,
+                                completed_at_ms,
+                                duration_ms,
                             }
                             .into(),
                         )
@@ -167,6 +173,7 @@ impl ToolHandler for Handler {
             timed_out,
         };
 
+        let (started_at_ms, completed_at_ms, duration_ms) = timing.finish();
         session
             .send_event(
                 &turn,
@@ -175,6 +182,9 @@ impl ToolHandler for Handler {
                     call_id,
                     agent_statuses,
                     statuses: statuses_by_id,
+                    started_at_ms,
+                    completed_at_ms,
+                    duration_ms,
                 }
                 .into(),
             )
