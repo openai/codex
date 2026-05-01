@@ -161,7 +161,7 @@ mod tests {
             &manager,
             &[TurnEnvironmentSelection {
                 environment_id: "local".to_string(),
-                cwd: selected_cwd.clone(),
+                cwd: selected_cwd,
             }],
         )
         .expect("environment selections should resolve");

@@ -3290,7 +3290,7 @@ async fn session_configuration_apply_preserves_absolute_cwd_write_root_on_cwd_up
 }
 
 #[tokio::test]
-async fn session_update_settings_keeps_runtime_cwds_absolute() {
+async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
     let (session, turn_context) = make_session_and_context().await;
     let updated_cwd = turn_context.cwd.join("project");
     std::fs::create_dir_all(updated_cwd.as_path()).expect("create project dir");
@@ -3312,8 +3312,8 @@ async fn session_update_settings_keeps_runtime_cwds_absolute() {
 
     assert_eq!(session_cwd, updated_cwd);
     assert_eq!(config.cwd, turn_context.cwd);
-    assert_eq!(next_turn.cwd, updated_cwd);
-    assert_eq!(next_turn.config.cwd, updated_cwd);
+    assert_eq!(next_turn.cwd, turn_context.cwd);
+    assert_eq!(next_turn.config.cwd, turn_context.cwd);
 }
 
 #[tokio::test]
