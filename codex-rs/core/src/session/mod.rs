@@ -2534,7 +2534,6 @@ impl Session {
     ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
-        let shell = self.user_shell();
         let (
             reference_context_item,
             previous_turn_settings,
@@ -2695,7 +2694,7 @@ impl Session {
                 .format_environment_context_subagents(self.conversation_id)
                 .await;
             contextual_user_sections.push(
-                crate::context::EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
+                crate::context::EnvironmentContext::from_turn_context(turn_context)
                     .with_subagents(subagents)
                     .render(),
             );
