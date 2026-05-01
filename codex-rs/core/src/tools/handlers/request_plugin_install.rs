@@ -132,7 +132,7 @@ impl ToolHandler for RequestPluginInstallHandler {
             .request_mcp_server_elicitation(turn.as_ref(), request_id, params)
             .await;
         if let Some(response) = response.as_ref() {
-            maybe_persist_disabled_tool_suggestion(&session, &turn, &tool, response).await;
+            maybe_persist_disabled_install_request(&session, &turn, &tool, response).await;
         }
         let user_confirmed = response
             .as_ref()
@@ -169,7 +169,7 @@ impl ToolHandler for RequestPluginInstallHandler {
     }
 }
 
-async fn maybe_persist_disabled_tool_suggestion(
+async fn maybe_persist_disabled_install_request(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
     tool: &DiscoverableTool,
@@ -179,7 +179,7 @@ async fn maybe_persist_disabled_tool_suggestion(
         return;
     }
 
-    if let Err(err) = persist_disabled_tool_suggestion(&turn.config.codex_home, tool).await {
+    if let Err(err) = persist_disabled_install_request(&turn.config.codex_home, tool).await {
         warn!(
             error = %err,
             tool_id = tool.id(),
@@ -207,19 +207,19 @@ fn request_plugin_install_response_requests_persistent_disable(
         == Some(REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE)
 }
 
-async fn persist_disabled_tool_suggestion(
+async fn persist_disabled_install_request(
     codex_home: &codex_utils_absolute_path::AbsolutePathBuf,
     tool: &DiscoverableTool,
 ) -> anyhow::Result<()> {
     ConfigEditsBuilder::new(codex_home)
         .with_edits([ConfigEdit::AddToolSuggestDisabledTool(
-            disabled_tool_suggestion(tool),
+            disabled_install_request(tool),
         )])
         .apply()
         .await
 }
 
-fn disabled_tool_suggestion(tool: &DiscoverableTool) -> ToolSuggestDisabledTool {
+fn disabled_install_request(tool: &DiscoverableTool) -> ToolSuggestDisabledTool {
     match tool {
         DiscoverableTool::Connector(connector) => {
             ToolSuggestDisabledTool::connector(connector.id.as_str())

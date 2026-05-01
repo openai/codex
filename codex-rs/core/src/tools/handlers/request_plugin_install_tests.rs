@@ -94,11 +94,11 @@ fn request_plugin_install_response_persists_only_decline_always_mode() {
 }
 
 #[tokio::test]
-async fn persist_disabled_tool_suggestion_writes_connector_config() {
+async fn persist_disabled_install_request_writes_connector_config() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let tool = connector_tool("connector_calendar", "Google Calendar");
 
-    persist_disabled_tool_suggestion(&codex_home.path().abs(), &tool)
+    persist_disabled_install_request(&codex_home.path().abs(), &tool)
         .await
         .expect("persist connector disable");
 
@@ -115,7 +115,7 @@ async fn persist_disabled_tool_suggestion_writes_connector_config() {
 }
 
 #[tokio::test]
-async fn persist_disabled_tool_suggestion_writes_plugin_config() {
+async fn persist_disabled_install_request_writes_plugin_config() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let tool = DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
         id: "slack@openai-curated".to_string(),
@@ -126,7 +126,7 @@ async fn persist_disabled_tool_suggestion_writes_plugin_config() {
         app_connector_ids: Vec::new(),
     }));
 
-    persist_disabled_tool_suggestion(&codex_home.path().abs(), &tool)
+    persist_disabled_install_request(&codex_home.path().abs(), &tool)
         .await
         .expect("persist plugin disable");
 
@@ -143,7 +143,7 @@ async fn persist_disabled_tool_suggestion_writes_plugin_config() {
 }
 
 #[tokio::test]
-async fn persist_disabled_tool_suggestion_dedupes_existing_disabled_tools() {
+async fn persist_disabled_install_request_dedupes_existing_disabled_tools() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let tool = connector_tool("connector_calendar", "Google Calendar");
     std::fs::write(
@@ -173,7 +173,7 @@ id = "slack@openai-curated"
     )
     .expect("write config");
 
-    persist_disabled_tool_suggestion(&codex_home.path().abs(), &tool)
+    persist_disabled_install_request(&codex_home.path().abs(), &tool)
         .await
         .expect("persist connector disable");
 
