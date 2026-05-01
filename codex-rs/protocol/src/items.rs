@@ -47,7 +47,7 @@ pub enum TurnItem {
     ImageView(ImageViewItem),
     ImageGeneration(ImageGenerationItem),
     FileChange(FileChangeItem),
-    McpToolCall(McpToolCallItem),
+    McpToolCall(Box<McpToolCallItem>),
     ContextCompaction(ContextCompactionItem),
 }
 

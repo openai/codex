@@ -570,7 +570,7 @@ async fn emit_tool_call_begin(
         tool,
         arguments,
     } = invocation;
-    let item = TurnItem::McpToolCall(McpToolCallItem {
+    let item = TurnItem::McpToolCall(Box::new(McpToolCallItem {
         id: call_id.to_string(),
         server,
         tool,
@@ -580,7 +580,7 @@ async fn emit_tool_call_begin(
         result: None,
         error: None,
         duration: None,
-    });
+    }));
     session.emit_turn_item_started(turn, &item).await;
 }
 
@@ -608,7 +608,7 @@ async fn emit_tool_call_end(
         tool,
         arguments,
     } = invocation;
-    let item = TurnItem::McpToolCall(McpToolCallItem {
+    let item = TurnItem::McpToolCall(Box::new(McpToolCallItem {
         id: call_id.to_string(),
         server,
         tool,
@@ -618,7 +618,7 @@ async fn emit_tool_call_end(
         result,
         error,
         duration: Some(duration),
-    });
+    }));
     session.emit_turn_item_completed(turn, item).await;
 }
 

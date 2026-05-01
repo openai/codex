@@ -10468,7 +10468,7 @@ mod tests {
             }
         );
 
-        let mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
+        let mcp_tool_call_item = TurnItem::McpToolCall(Box::new(McpToolCallItem {
             id: "mcp-1".to_string(),
             server: "server".to_string(),
             tool: "tool".to_string(),
@@ -10478,7 +10478,7 @@ mod tests {
             result: None,
             error: None,
             duration: None,
-        });
+        }));
 
         assert_eq!(
             ThreadItem::from(mcp_tool_call_item),
@@ -10495,7 +10495,7 @@ mod tests {
             }
         );
 
-        let completed_mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
+        let completed_mcp_tool_call_item = TurnItem::McpToolCall(Box::new(McpToolCallItem {
             id: "mcp-2".to_string(),
             server: "server".to_string(),
             tool: "tool".to_string(),
@@ -10510,7 +10510,7 @@ mod tests {
             }),
             error: None,
             duration: Some(Duration::from_millis(42)),
-        });
+        }));
 
         assert_eq!(
             ThreadItem::from(completed_mcp_tool_call_item),

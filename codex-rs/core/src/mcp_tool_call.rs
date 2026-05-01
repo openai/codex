@@ -714,7 +714,7 @@ async fn notify_mcp_tool_call_started(
         tool,
         arguments,
     } = invocation;
-    let item = TurnItem::McpToolCall(McpToolCallItem {
+    let item = TurnItem::McpToolCall(Box::new(McpToolCallItem {
         id: call_id.to_string(),
         server,
         tool,
@@ -724,7 +724,7 @@ async fn notify_mcp_tool_call_started(
         result: None,
         error: None,
         duration: None,
-    });
+    }));
     sess.emit_turn_item_started(turn_context, &item).await;
 }
 
@@ -753,7 +753,7 @@ async fn notify_mcp_tool_call_completed(
         tool,
         arguments,
     } = invocation;
-    let item = TurnItem::McpToolCall(McpToolCallItem {
+    let item = TurnItem::McpToolCall(Box::new(McpToolCallItem {
         id: call_id.to_string(),
         server,
         tool,
@@ -763,7 +763,7 @@ async fn notify_mcp_tool_call_completed(
         result,
         error,
         duration: Some(duration),
-    });
+    }));
     sess.emit_turn_item_completed(turn_context, item).await;
 }
 
