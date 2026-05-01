@@ -63,6 +63,21 @@ async fn try_init_with_roots(
     sqlite_home: PathBuf,
     default_model_provider_id: String,
 ) -> anyhow::Result<StateDbHandle> {
+    try_init_with_roots_and_backfill_lease(
+        codex_home,
+        sqlite_home,
+        default_model_provider_id,
+        metadata::BACKFILL_LEASE_SECONDS,
+    )
+    .await
+}
+
+async fn try_init_with_roots_and_backfill_lease(
+    codex_home: PathBuf,
+    sqlite_home: PathBuf,
+    default_model_provider_id: String,
+    backfill_lease_seconds: i64,
+) -> anyhow::Result<StateDbHandle> {
     let runtime =
         codex_state::StateRuntime::init(sqlite_home.clone(), default_model_provider_id.clone())
             .await
@@ -82,10 +97,11 @@ async fn try_init_with_roots(
         }
     };
     if backfill_state.status != codex_state::BackfillStatus::Complete {
-        metadata::backfill_sessions(
+        metadata::backfill_sessions_with_lease(
             runtime.as_ref(),
             codex_home.as_path(),
             default_model_provider_id.as_str(),
+            backfill_lease_seconds,
         )
         .await;
         let backfill_state = runtime.get_backfill_state().await.map_err(|err| {
