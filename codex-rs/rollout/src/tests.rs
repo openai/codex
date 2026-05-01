@@ -319,6 +319,29 @@ async fn find_thread_path_accepts_uppercase_uuid_with_state_db() {
     assert_eq!(found, Some(fs_rollout_path));
 }
 
+#[tokio::test]
+async fn find_thread_path_accepts_existing_state_db_path_without_canonical_filename() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let uuid = Uuid::from_u128(305);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let db_rollout_path = home.join("sessions/2025/01/03/custom-rollout-name.jsonl");
+    fs::create_dir_all(db_rollout_path.parent().expect("rollout parent")).unwrap();
+    fs::write(&db_rollout_path, "").unwrap();
+    let runtime = insert_state_db_thread(
+        home,
+        thread_id,
+        db_rollout_path.as_path(),
+        /*archived*/ false,
+    )
+    .await;
+
+    let found = find_thread_path_by_id_str(home, &uuid.to_string(), Some(runtime.as_ref()))
+        .await
+        .expect("lookup should succeed");
+    assert_eq!(found, Some(db_rollout_path));
+}
+
 #[test]
 fn rollout_date_parts_extracts_directory_components() {
     let file_name = OsStr::new("rollout-2025-03-01T09-00-00-123.jsonl");
