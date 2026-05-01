@@ -2783,6 +2783,16 @@ impl From<CoreMcpCallToolResult> for McpServerToolCallResponse {
     }
 }
 
+impl From<CoreMcpCallToolResult> for McpToolCallResult {
+    fn from(result: CoreMcpCallToolResult) -> Self {
+        Self {
+            content: result.content,
+            structured_content: result.structured_content,
+            meta: result.meta,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -6483,6 +6493,35 @@ impl From<CoreTurnItem> for ThreadItem {
                     .map(PatchApplyStatus::from)
                     .unwrap_or(PatchApplyStatus::InProgress),
             },
+            CoreTurnItem::McpToolCall(mcp) => {
+                let status = match &mcp.result {
+                    None => McpToolCallStatus::InProgress,
+                    Some(Ok(result)) if !result.is_error.unwrap_or(false) => {
+                        McpToolCallStatus::Completed
+                    }
+                    Some(Ok(_)) | Some(Err(_)) => McpToolCallStatus::Failed,
+                };
+                let duration_ms = mcp
+                    .duration
+                    .and_then(|duration| i64::try_from(duration.as_millis()).ok());
+                let (result, error) = match mcp.result {
+                    None => (None, None),
+                    Some(Ok(result)) => (Some(Box::new(McpToolCallResult::from(result))), None),
+                    Some(Err(message)) => (None, Some(McpToolCallError { message })),
+                };
+
+                ThreadItem::McpToolCall {
+                    id: mcp.id,
+                    server: mcp.invocation.server,
+                    tool: mcp.invocation.tool,
+                    status,
+                    arguments: mcp.invocation.arguments.unwrap_or(JsonValue::Null),
+                    mcp_app_resource_uri: mcp.mcp_app_resource_uri,
+                    result,
+                    error,
+                    duration_ms,
+                }
+            }
             CoreTurnItem::ContextCompaction(compaction) => {
                 ThreadItem::ContextCompaction { id: compaction.id }
             }
@@ -8094,11 +8133,14 @@ mod tests {
     use codex_protocol::items::AgentMessageItem;
     use codex_protocol::items::FileChangeItem;
     use codex_protocol::items::ImageViewItem;
+    use codex_protocol::items::McpToolCallItem;
     use codex_protocol::items::ReasoningItem;
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
     use codex_protocol::items::WebSearchItem;
+    use codex_protocol::mcp::CallToolResult;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
+    use codex_protocol::protocol::McpInvocation;
     use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
     use codex_protocol::user_input::UserInput as CoreUserInput;
     use codex_utils_absolute_path::test_support::PathBufExt;
@@ -8107,6 +8149,7 @@ mod tests {
     use serde_json::json;
     use std::num::NonZeroUsize;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     fn absolute_path_string(path: &str) -> String {
         let path = format!("/{}", path.trim_start_matches('/'));
@@ -10414,6 +10457,69 @@ mod tests {
                     diff: "hello\n".to_string(),
                 }],
                 status: PatchApplyStatus::Completed,
+            }
+        );
+
+        let mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
+            id: "mcp-1".to_string(),
+            invocation: McpInvocation {
+                server: "server".to_string(),
+                tool: "tool".to_string(),
+                arguments: Some(json!({"arg": "value"})),
+            },
+            mcp_app_resource_uri: Some("app://connector".to_string()),
+            result: None,
+            duration: None,
+        });
+
+        assert_eq!(
+            ThreadItem::from(mcp_tool_call_item),
+            ThreadItem::McpToolCall {
+                id: "mcp-1".to_string(),
+                server: "server".to_string(),
+                tool: "tool".to_string(),
+                status: McpToolCallStatus::InProgress,
+                arguments: json!({"arg": "value"}),
+                mcp_app_resource_uri: Some("app://connector".to_string()),
+                result: None,
+                error: None,
+                duration_ms: None,
+            }
+        );
+
+        let completed_mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
+            id: "mcp-2".to_string(),
+            invocation: McpInvocation {
+                server: "server".to_string(),
+                tool: "tool".to_string(),
+                arguments: None,
+            },
+            mcp_app_resource_uri: None,
+            result: Some(Ok(CallToolResult {
+                content: vec![json!({"type": "text", "text": "ok"})],
+                structured_content: Some(json!({"ok": true})),
+                is_error: Some(false),
+                meta: Some(json!({"trace": "1"})),
+            })),
+            duration: Some(Duration::from_millis(42)),
+        });
+
+        assert_eq!(
+            ThreadItem::from(completed_mcp_tool_call_item),
+            ThreadItem::McpToolCall {
+                id: "mcp-2".to_string(),
+                server: "server".to_string(),
+                tool: "tool".to_string(),
+                status: McpToolCallStatus::Completed,
+                arguments: JsonValue::Null,
+                mcp_app_resource_uri: None,
+                result: Some(Box::new(McpToolCallResult {
+                    content: vec![json!({"type": "text", "text": "ok"})],
+                    structured_content: Some(json!({"ok": true})),
+                    meta: Some(json!({"trace": "1"})),
+                })),
+                error: None,
+                duration_ms: Some(42),
             }
         );
     }

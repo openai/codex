@@ -1,3 +1,4 @@
+use crate::mcp::CallToolResult;
 use crate::memory_citation::MemoryCitation;
 use crate::models::ContentItem;
 use crate::models::MessagePhase;
@@ -10,6 +11,9 @@ use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::FileChange;
 use crate::protocol::ImageGenerationEndEvent;
+use crate::protocol::McpInvocation;
+use crate::protocol::McpToolCallBeginEvent;
+use crate::protocol::McpToolCallEndEvent;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::PatchApplyStatus;
@@ -27,6 +31,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 use ts_rs::TS;
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -42,6 +47,7 @@ pub enum TurnItem {
     ImageView(ImageViewItem),
     ImageGeneration(ImageGenerationItem),
     FileChange(FileChangeItem),
+    McpToolCall(McpToolCallItem),
     ContextCompaction(ContextCompactionItem),
 }
 
@@ -158,6 +164,21 @@ pub struct FileChangeItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub stderr: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
+pub struct McpToolCallItem {
+    pub id: String,
+    pub invocation: McpInvocation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mcp_app_resource_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub result: Option<Result<CallToolResult, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "string", optional)]
+    pub duration: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -438,6 +459,26 @@ impl FileChangeItem {
     }
 }
 
+impl McpToolCallItem {
+    pub fn as_legacy_begin_event(&self) -> EventMsg {
+        EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+            call_id: self.id.clone(),
+            invocation: self.invocation.clone(),
+            mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
+        })
+    }
+
+    pub fn as_legacy_end_event(&self) -> Option<EventMsg> {
+        Some(EventMsg::McpToolCallEnd(McpToolCallEndEvent {
+            call_id: self.id.clone(),
+            invocation: self.invocation.clone(),
+            mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
+            duration: self.duration?,
+            result: self.result.clone()?,
+        }))
+    }
+}
+
 impl TurnItem {
     pub fn id(&self) -> String {
         match self {
@@ -450,6 +491,7 @@ impl TurnItem {
             TurnItem::ImageView(item) => item.id.clone(),
             TurnItem::ImageGeneration(item) => item.id.clone(),
             TurnItem::FileChange(item) => item.id.clone(),
+            TurnItem::McpToolCall(item) => item.id.clone(),
             TurnItem::ContextCompaction(item) => item.id.clone(),
         }
     }
@@ -472,6 +514,7 @@ impl TurnItem {
                 .as_legacy_end_event(String::new())
                 .into_iter()
                 .collect(),
+            TurnItem::McpToolCall(item) => item.as_legacy_end_event().into_iter().collect(),
             TurnItem::Reasoning(item) => item.as_legacy_events(show_raw_agent_reasoning),
             TurnItem::ContextCompaction(item) => vec![item.as_legacy_event()],
         }

@@ -3,6 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_protocol::items::McpToolCallItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use rmcp::model::ListResourceTemplatesResult;
@@ -25,10 +27,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
-use codex_protocol::protocol::McpToolCallBeginEvent;
-use codex_protocol::protocol::McpToolCallEndEvent;
 
 pub struct McpResourceHandler;
 
@@ -564,16 +563,14 @@ async fn emit_tool_call_begin(
     call_id: &str,
     invocation: McpInvocation,
 ) {
-    session
-        .send_event(
-            turn,
-            EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
-                call_id: call_id.to_string(),
-                invocation,
-                mcp_app_resource_uri: None,
-            }),
-        )
-        .await;
+    let item = TurnItem::McpToolCall(McpToolCallItem {
+        id: call_id.to_string(),
+        invocation,
+        mcp_app_resource_uri: None,
+        result: None,
+        duration: None,
+    });
+    session.emit_turn_item_started(turn, &item).await;
 }
 
 async fn emit_tool_call_end(
@@ -584,18 +581,14 @@ async fn emit_tool_call_end(
     duration: Duration,
     result: Result<CallToolResult, String>,
 ) {
-    session
-        .send_event(
-            turn,
-            EventMsg::McpToolCallEnd(McpToolCallEndEvent {
-                call_id: call_id.to_string(),
-                invocation,
-                mcp_app_resource_uri: None,
-                duration,
-                result,
-            }),
-        )
-        .await;
+    let item = TurnItem::McpToolCall(McpToolCallItem {
+        id: call_id.to_string(),
+        invocation,
+        mcp_app_resource_uri: None,
+        result: Some(result),
+        duration: Some(duration),
+    });
+    session.emit_turn_item_completed(turn, item).await;
 }
 
 fn normalize_optional_string(input: Option<String>) -> Option<String> {

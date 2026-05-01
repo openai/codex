@@ -836,9 +836,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 crate::dynamic_tools::on_call_response(call_id, rx, conversation).await;
             });
         }
+        EventMsg::McpToolCallBegin(_) | EventMsg::McpToolCallEnd(_) => {
+            // Deprecated MCP tool-call events are still fanned out for legacy clients.
+            // App-server v2 receives the canonical TurnItem::McpToolCall lifecycle instead.
+        }
         msg @ (EventMsg::DynamicToolCallResponse(_)
-        | EventMsg::McpToolCallBegin(_)
-        | EventMsg::McpToolCallEnd(_)
         | EventMsg::CollabAgentSpawnBegin(_)
         | EventMsg::CollabAgentSpawnEnd(_)
         | EventMsg::CollabAgentInteractionBegin(_)
