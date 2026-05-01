@@ -1,0 +1,308 @@
+use crate::backend::DEFAULT_READ_MAX_TOKENS;
+use crate::backend::ListMemoriesRequest;
+use crate::backend::ListMemoriesResponse;
+use crate::backend::MAX_LIST_RESULTS;
+use crate::backend::MAX_SEARCH_RESULTS;
+use crate::backend::MemoriesBackend;
+use crate::backend::MemoriesBackendError;
+use crate::backend::MemoryEntry;
+use crate::backend::MemoryEntryType;
+use crate::backend::MemorySearchMatch;
+use crate::backend::ReadMemoryRequest;
+use crate::backend::ReadMemoryResponse;
+use crate::backend::SearchMemoriesRequest;
+use crate::backend::SearchMemoriesResponse;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
+use std::path::Component;
+use std::path::Path;
+use std::path::PathBuf;
+
+#[derive(Debug, Clone)]
+pub struct LocalMemoriesBackend {
+    root: PathBuf,
+}
+
+impl LocalMemoriesBackend {
+    pub fn from_codex_home(codex_home: &AbsolutePathBuf) -> Self {
+        Self::from_memory_root(codex_home.join("memories").to_path_buf())
+    }
+
+    pub fn from_memory_root(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    fn resolve_scoped_path(
+        &self,
+        relative_path: Option<&str>,
+    ) -> Result<PathBuf, MemoriesBackendError> {
+        let Some(relative_path) = relative_path else {
+            return Ok(self.root.clone());
+        };
+        let relative = Path::new(relative_path);
+        if relative.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        }) {
+            return Err(MemoriesBackendError::invalid_path(
+                relative_path,
+                "must stay within the memories root",
+            ));
+        }
+        Ok(self.root.join(relative))
+    }
+
+    async fn metadata_or_none(
+        path: &Path,
+    ) -> Result<Option<std::fs::Metadata>, MemoriesBackendError> {
+        match tokio::fs::symlink_metadata(path).await {
+            Ok(metadata) => Ok(Some(metadata)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+}
+
+impl MemoriesBackend for LocalMemoriesBackend {
+    async fn list(
+        &self,
+        request: ListMemoriesRequest,
+    ) -> Result<ListMemoriesResponse, MemoriesBackendError> {
+        let max_results = request.max_results.min(MAX_LIST_RESULTS);
+        let start = self.resolve_scoped_path(request.path.as_deref())?;
+        let mut entries = Vec::new();
+        let truncated = collect_entries(&self.root, &start, &mut entries, max_results).await?;
+        entries.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(ListMemoriesResponse {
+            path: request.path,
+            entries,
+            truncated,
+        })
+    }
+
+    async fn read(
+        &self,
+        request: ReadMemoryRequest,
+    ) -> Result<ReadMemoryResponse, MemoriesBackendError> {
+        let path = self.resolve_scoped_path(Some(request.path.as_str()))?;
+        let Some(metadata) = Self::metadata_or_none(&path).await? else {
+            return Err(MemoriesBackendError::NotFile { path: request.path });
+        };
+        reject_symlink(&request.path, &metadata)?;
+        if !metadata.is_file() {
+            return Err(MemoriesBackendError::NotFile { path: request.path });
+        }
+
+        let original_content = tokio::fs::read_to_string(&path).await?;
+        let max_tokens = if request.max_tokens == 0 {
+            DEFAULT_READ_MAX_TOKENS
+        } else {
+            request.max_tokens
+        };
+        let content = truncate_text(&original_content, TruncationPolicy::Tokens(max_tokens));
+        let truncated = content != original_content;
+        Ok(ReadMemoryResponse {
+            path: request.path,
+            content,
+            truncated,
+        })
+    }
+
+    async fn search(
+        &self,
+        request: SearchMemoriesRequest,
+    ) -> Result<SearchMemoriesResponse, MemoriesBackendError> {
+        let query = request.query.trim();
+        if query.is_empty() {
+            return Err(MemoriesBackendError::EmptyQuery);
+        }
+
+        let max_results = request.max_results.min(MAX_SEARCH_RESULTS);
+        let start = self.resolve_scoped_path(request.path.as_deref())?;
+        let mut matches = Vec::new();
+        let truncated =
+            search_entries(&self.root, &start, query, &mut matches, max_results).await?;
+        matches.sort_by(|left, right| {
+            left.path
+                .cmp(&right.path)
+                .then(left.line_number.cmp(&right.line_number))
+        });
+        Ok(SearchMemoriesResponse {
+            query: request.query,
+            path: request.path,
+            matches,
+            truncated,
+        })
+    }
+}
+
+async fn collect_entries(
+    root: &Path,
+    current: &Path,
+    entries: &mut Vec<MemoryEntry>,
+    max_results: usize,
+) -> Result<bool, MemoriesBackendError> {
+    if max_results == 0 {
+        return Ok(false);
+    }
+    let Some(metadata) = LocalMemoriesBackend::metadata_or_none(current).await? else {
+        return Ok(false);
+    };
+    reject_symlink(&display_relative_path(root, current), &metadata)?;
+    if metadata.is_file() {
+        entries.push(MemoryEntry {
+            path: display_relative_path(root, current),
+            entry_type: MemoryEntryType::File,
+        });
+        return Ok(entries.len() >= max_results);
+    }
+    if !metadata.is_dir() {
+        return Ok(false);
+    }
+
+    let mut pending = vec![current.to_path_buf()];
+    while let Some(dir_path) = pending.pop() {
+        for path in read_sorted_dir_paths(&dir_path).await? {
+            if entries.len() >= max_results {
+                return Ok(true);
+            }
+            let Some(metadata) = LocalMemoriesBackend::metadata_or_none(&path).await? else {
+                continue;
+            };
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+
+            let relative = display_relative_path(root, &path);
+            if metadata.is_dir() {
+                entries.push(MemoryEntry {
+                    path: relative,
+                    entry_type: MemoryEntryType::Directory,
+                });
+                pending.push(path);
+            } else if metadata.is_file() {
+                entries.push(MemoryEntry {
+                    path: relative,
+                    entry_type: MemoryEntryType::File,
+                });
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+async fn search_entries(
+    root: &Path,
+    current: &Path,
+    query: &str,
+    matches: &mut Vec<MemorySearchMatch>,
+    max_results: usize,
+) -> Result<bool, MemoriesBackendError> {
+    if max_results == 0 {
+        return Ok(false);
+    }
+    let Some(metadata) = LocalMemoriesBackend::metadata_or_none(current).await? else {
+        return Ok(false);
+    };
+    reject_symlink(&display_relative_path(root, current), &metadata)?;
+    if metadata.is_file() {
+        return search_file(root, current, query, matches, max_results).await;
+    }
+    if !metadata.is_dir() {
+        return Ok(false);
+    }
+
+    let mut pending = vec![current.to_path_buf()];
+    while let Some(dir_path) = pending.pop() {
+        for path in read_sorted_dir_paths(&dir_path).await? {
+            if matches.len() >= max_results {
+                return Ok(true);
+            }
+            let Some(metadata) = LocalMemoriesBackend::metadata_or_none(&path).await? else {
+                continue;
+            };
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if metadata.is_file()
+                && search_file(root, &path, query, matches, max_results).await?
+            {
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+async fn search_file(
+    root: &Path,
+    path: &Path,
+    query: &str,
+    matches: &mut Vec<MemorySearchMatch>,
+    max_results: usize,
+) -> Result<bool, MemoriesBackendError> {
+    let content = match tokio::fs::read_to_string(path).await {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::InvalidData => return Ok(false),
+        Err(err) => return Err(err.into()),
+    };
+    for (idx, line) in content.lines().enumerate() {
+        if matches.len() >= max_results {
+            return Ok(true);
+        }
+        if line.contains(query) {
+            matches.push(MemorySearchMatch {
+                path: display_relative_path(root, path),
+                line_number: idx + 1,
+                line: line.to_string(),
+            });
+        }
+    }
+    Ok(false)
+}
+
+async fn read_sorted_dir_paths(dir_path: &Path) -> Result<Vec<PathBuf>, MemoriesBackendError> {
+    let mut dir = match tokio::fs::read_dir(dir_path).await {
+        Ok(dir) => dir,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err.into()),
+    };
+    let mut paths = Vec::new();
+    while let Some(entry) = dir.next_entry().await? {
+        paths.push(entry.path());
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+fn reject_symlink(path: &str, metadata: &std::fs::Metadata) -> Result<(), MemoriesBackendError> {
+    if metadata.file_type().is_symlink() {
+        return Err(MemoriesBackendError::invalid_path(
+            path,
+            "must not be a symlink",
+        ));
+    }
+    Ok(())
+}
+
+fn display_relative_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+#[cfg(test)]
+#[path = "local_tests.rs"]
+mod tests;

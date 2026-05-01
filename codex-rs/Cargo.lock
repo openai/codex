@@ -3005,6 +3005,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-memories-mcp"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-utils-absolute-path",
+ "codex-utils-output-truncation",
+ "pretty_assertions",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "codex-memories-read"
 version = "0.0.0"
 dependencies = [
