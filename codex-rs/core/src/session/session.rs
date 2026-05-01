@@ -146,9 +146,11 @@ impl SessionConfiguration {
     }
 
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
-        if updates.cwd.is_some() && updates.environments.is_some() {
+        if updates.cwd.as_ref().is_some_and(|cwd| cwd.is_relative())
+            && updates.environments.is_some()
+        {
             return Err(ConstraintError::invalid_combination(
-                "`cwd` cannot be updated together with turn-local `environments`",
+                "relative `cwd` cannot be updated together with turn-local `environments`",
             ));
         }
 

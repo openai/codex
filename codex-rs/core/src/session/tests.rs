@@ -3419,6 +3419,35 @@ async fn relative_cwd_update_with_empty_turn_environments_is_rejected() {
 }
 
 #[tokio::test]
+async fn absolute_cwd_update_with_turn_environment_is_allowed() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let absolute_cwd = {
+        let state = session.state.lock().await;
+        state.session_configuration.cwd.join("absolute-turn")
+    };
+    std::fs::create_dir_all(absolute_cwd.as_path()).expect("create absolute turn dir");
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate {
+                cwd: Some(absolute_cwd.to_path_buf()),
+                environments: Some(vec![TurnEnvironmentSelection {
+                    environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                    cwd: absolute_cwd.clone(),
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("absolute cwd with explicit environments should succeed");
+
+    assert_eq!(turn_context.cwd, absolute_cwd);
+    assert_eq!(turn_context.config.cwd, absolute_cwd);
+    assert_eq!(turn_context.environments.len(), 1);
+}
+
+#[tokio::test]
 async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
