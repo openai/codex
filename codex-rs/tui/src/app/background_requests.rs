@@ -9,7 +9,11 @@ use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveParams;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
+use codex_app_server_protocol::MarketplaceUpgradeParams;
+use codex_app_server_protocol::MarketplaceUpgradeResponse;
+
 use codex_app_server_protocol::RequestId;
+
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 impl App {
@@ -163,6 +167,26 @@ impl App {
                 cwd: cwd_for_event,
                 marketplace_name: marketplace_name_for_event,
                 marketplace_display_name,
+                result,
+            });
+        });
+    }
+
+    pub(super) fn fetch_marketplace_upgrade(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+        marketplace_name: Option<String>,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let cwd_for_event = cwd.clone();
+            let result = fetch_marketplace_upgrade(request_handle, marketplace_name)
+                .await
+                .map_err(|err| format!("Failed to upgrade marketplace: {err}"));
+            app_event_tx.send(AppEvent::MarketplaceUpgradeLoaded {
+                cwd: cwd_for_event,
                 result,
             });
         });
@@ -684,6 +708,20 @@ pub(super) async fn fetch_marketplace_remove(
         })
         .await
         .wrap_err("marketplace/remove failed in TUI")
+}
+
+pub(super) async fn fetch_marketplace_upgrade(
+    request_handle: AppServerRequestHandle,
+    marketplace_name: Option<String>,
+) -> Result<MarketplaceUpgradeResponse> {
+    let request_id = RequestId::String(format!("marketplace-upgrade-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::MarketplaceUpgrade {
+            request_id,
+            params: MarketplaceUpgradeParams { marketplace_name },
+        })
+        .await
+        .wrap_err("marketplace/upgrade failed in TUI")
 }
 pub(super) async fn fetch_plugin_install(
     request_handle: AppServerRequestHandle,

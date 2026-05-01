@@ -1,3 +1,5 @@
+use codex_protocol::items::ImageViewItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -17,8 +19,6 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ViewImageToolCallEvent;
 
 pub struct ViewImageHandler;
 
@@ -152,15 +152,12 @@ impl ToolHandler for ViewImageHandler {
             })?;
         let image_url = image.into_data_url();
 
-        session
-            .send_event(
-                turn.as_ref(),
-                EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
-                    call_id,
-                    path: event_path,
-                }),
-            )
-            .await;
+        let item = TurnItem::ImageView(ImageViewItem {
+            id: call_id,
+            path: event_path,
+        });
+        session.emit_turn_item_started(turn.as_ref(), &item).await;
+        session.emit_turn_item_completed(turn.as_ref(), item).await;
 
         Ok(ViewImageOutput {
             image_url,
