@@ -32,9 +32,9 @@ const ROLLOUT_PREFIX: &str = "rollout-";
 const ROLLOUT_SUFFIX: &str = ".jsonl";
 const BACKFILL_BATCH_SIZE: usize = 200;
 #[cfg(not(test))]
-pub(crate) const BACKFILL_LEASE_SECONDS: i64 = 900;
+const BACKFILL_LEASE_SECONDS: i64 = 900;
 #[cfg(test)]
-pub(crate) const BACKFILL_LEASE_SECONDS: i64 = 1;
+const BACKFILL_LEASE_SECONDS: i64 = 1;
 
 pub(crate) fn builder_from_session_meta(
     session_meta: &SessionMetaLine,
