@@ -11,9 +11,11 @@
 //!    first drawn.
 //! 4. Completed runs only persist when they have output or a non-success status.
 use super::HistoryCell;
-use crate::exec_cell::spinner;
+use crate::motion::MotionMode;
+use crate::motion::ReducedMotionIndicator;
+use crate::motion::activity_indicator;
+use crate::motion::shimmer_text;
 use crate::render::renderable::Renderable;
-use crate::shimmer::shimmer_spans;
 use codex_app_server_protocol::HookEventName;
 use codex_app_server_protocol::HookOutputEntry;
 use codex_app_server_protocol::HookOutputEntryKind;
@@ -627,12 +629,16 @@ fn push_running_hook_header(
     animations_enabled: bool,
 ) {
     let mut header = Vec::new();
-    if animations_enabled {
-        header.push(spinner(start_time, animations_enabled));
+    let motion_mode = MotionMode::from_animations_enabled(animations_enabled);
+    if let Some(indicator) =
+        activity_indicator(start_time, motion_mode, ReducedMotionIndicator::Hidden)
+    {
+        header.push(indicator);
         header.push(" ".into());
-        header.extend(shimmer_spans(hook_text));
-    } else {
-        header.push(hook_text.to_string().bold());
+    }
+    header.extend(shimmer_text(hook_text, motion_mode));
+    if !animations_enabled && let Some(span) = header.last_mut() {
+        span.style = span.style.patch(Style::default().bold());
     }
     if let Some(status_message) = status_message
         && !status_message.is_empty()
