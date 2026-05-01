@@ -112,6 +112,7 @@ struct PageLoadRequest {
     cursor: Option<PageCursor>,
     request_token: usize,
     search_token: Option<usize>,
+    cwd_filter: Option<PathBuf>,
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
 }
@@ -125,6 +126,52 @@ enum PickerLoadRequest {
 enum ProviderFilter {
     Any,
     MatchDefault(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionFilterMode {
+    Cwd,
+    All,
+}
+
+impl SessionFilterMode {
+    fn from_show_all(show_all: bool, filter_cwd: Option<&Path>) -> Self {
+        if show_all || filter_cwd.is_none() {
+            Self::All
+        } else {
+            Self::Cwd
+        }
+    }
+
+    fn toggle(self, filter_cwd: Option<&Path>) -> Self {
+        match self {
+            Self::Cwd => Self::All,
+            Self::All if filter_cwd.is_some() => Self::Cwd,
+            Self::All => Self::All,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToolbarControl {
+    Sort,
+    Filter,
+}
+
+impl ToolbarControl {
+    fn previous(self) -> Self {
+        match self {
+            Self::Sort => Self::Filter,
+            Self::Filter => Self::Sort,
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::Sort => Self::Filter,
+            Self::Filter => Self::Sort,
+        }
+    }
 }
 
 type PickerLoader = Arc<dyn Fn(PickerLoadRequest) + Send + Sync>;
@@ -157,9 +204,9 @@ struct PickerPage {
 /// lazy transcript previews, and pagination.
 ///
 /// Sessions render as compact multi-line records with stable metadata first and
-/// the conversation preview last. Users can toggle between sorting by creation
-/// time and last-updated time using Tab, and can expand the selected session with
-/// Space to load recent transcript context on demand.
+/// the conversation preview last. Users can focus Sort/Filter toolbar controls
+/// with Tab, change the focused control with the arrow keys, and expand the
+/// selected session with Space to load recent transcript context on demand.
 ///
 /// Sessions are loaded on-demand via cursor-based pagination. The backend
 /// `thread/list` API returns pages ordered by the selected sort key, and the
@@ -180,17 +227,18 @@ pub async fn run_resume_picker_with_app_server(
     let is_remote = app_server.is_remote();
     let cwd_filter = picker_cwd_filter(
         config.cwd.as_path(),
-        show_all,
+        /*show_all*/ false,
         is_remote,
         app_server.remote_cwd_override(),
     );
+    let provider_filter = picker_provider_filter(config, is_remote);
     run_session_picker_with_loader(
         tui,
-        config,
         show_all,
+        cwd_filter,
         SessionPickerAction::Resume,
-        is_remote,
-        spawn_app_server_page_loader(app_server, cwd_filter, include_non_interactive, bg_tx),
+        provider_filter,
+        spawn_app_server_page_loader(app_server, include_non_interactive, bg_tx),
         bg_rx,
     )
     .await
@@ -206,19 +254,18 @@ pub async fn run_fork_picker_with_app_server(
     let is_remote = app_server.is_remote();
     let cwd_filter = picker_cwd_filter(
         config.cwd.as_path(),
-        show_all,
+        /*show_all*/ false,
         is_remote,
         app_server.remote_cwd_override(),
     );
+    let provider_filter = picker_provider_filter(config, is_remote);
     run_session_picker_with_loader(
         tui,
-        config,
         show_all,
+        cwd_filter,
         SessionPickerAction::Fork,
-        is_remote,
-        spawn_app_server_page_loader(
-            app_server, cwd_filter, /*include_non_interactive*/ false, bg_tx,
-        ),
+        provider_filter,
+        spawn_app_server_page_loader(app_server, /*include_non_interactive*/ false, bg_tx),
         bg_rx,
     )
     .await
@@ -226,24 +273,14 @@ pub async fn run_fork_picker_with_app_server(
 
 async fn run_session_picker_with_loader(
     tui: &mut Tui,
-    config: &Config,
     show_all: bool,
+    filter_cwd: Option<PathBuf>,
     action: SessionPickerAction,
-    is_remote: bool,
+    provider_filter: ProviderFilter,
     picker_loader: PickerLoader,
     bg_rx: mpsc::UnboundedReceiver<BackgroundEvent>,
 ) -> Result<SessionSelection> {
     let alt = AltScreenGuard::enter(tui);
-    let provider_filter = if is_remote {
-        ProviderFilter::Any
-    } else {
-        ProviderFilter::MatchDefault(config.model_provider_id.to_string())
-    };
-    // Remote sessions live in the server's filesystem namespace, so the client
-    // process cwd is not a meaningful row filter. Local cwd filtering and explicit
-    // remote --cd filtering are handled server-side in thread/list.
-    let filter_cwd = None;
-
     let mut state = PickerState::new(
         alt.tui.frame_requester(),
         picker_loader,
@@ -292,6 +329,14 @@ async fn run_session_picker_with_loader(
     Ok(SessionSelection::StartFresh)
 }
 
+fn picker_provider_filter(config: &Config, is_remote: bool) -> ProviderFilter {
+    if is_remote {
+        ProviderFilter::Any
+    } else {
+        ProviderFilter::MatchDefault(config.model_provider_id.to_string())
+    }
+}
+
 fn picker_cwd_filter(
     config_cwd: &Path,
     show_all: bool,
@@ -309,7 +354,6 @@ fn picker_cwd_filter(
 
 fn spawn_app_server_page_loader(
     app_server: AppServerSession,
-    cwd_filter: Option<PathBuf>,
     include_non_interactive: bool,
     bg_tx: mpsc::UnboundedSender<BackgroundEvent>,
 ) -> PickerLoader {
@@ -324,7 +368,7 @@ fn spawn_app_server_page_loader(
                     let page = load_app_server_page(
                         &mut app_server,
                         cursor,
-                        cwd_filter.as_deref(),
+                        request.cwd_filter.as_deref(),
                         request.provider_filter,
                         request.sort_key,
                         include_non_interactive,
@@ -395,8 +439,9 @@ struct PickerState {
     view_rows: Option<usize>,
     view_width: Option<u16>,
     provider_filter: ProviderFilter,
-    show_all: bool,
+    filter_mode: SessionFilterMode,
     filter_cwd: Option<PathBuf>,
+    toolbar_focus: ToolbarControl,
     action: SessionPickerAction,
     sort_key: ThreadSortKey,
     inline_error: Option<String>,
@@ -649,8 +694,9 @@ impl PickerState {
             view_rows: None,
             view_width: None,
             provider_filter,
-            show_all,
+            filter_mode: SessionFilterMode::from_show_all(show_all, filter_cwd.as_deref()),
             filter_cwd,
+            toolbar_focus: ToolbarControl::Sort,
             action,
             sort_key: ThreadSortKey::UpdatedAt,
             inline_error: None,
@@ -778,7 +824,25 @@ impl PickerState {
             KeyEvent {
                 code: KeyCode::Tab, ..
             } => {
-                self.toggle_sort_key();
+                self.focus_next_toolbar_control();
+                self.request_frame();
+            }
+            KeyEvent {
+                code: KeyCode::BackTab,
+                ..
+            } => {
+                self.focus_previous_toolbar_control();
+                self.request_frame();
+            }
+            KeyEvent {
+                code: KeyCode::Left,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Right,
+                ..
+            } => {
+                self.change_focused_toolbar_value();
                 self.request_frame();
             }
             KeyEvent {
@@ -842,6 +906,7 @@ impl PickerState {
             cursor: None,
             request_token,
             search_token,
+            cwd_filter: self.active_cwd_filter(),
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
         }));
@@ -937,7 +1002,7 @@ impl PickerState {
     }
 
     fn row_matches_filter(&self, row: &Row) -> bool {
-        if self.show_all {
+        if self.filter_mode == SessionFilterMode::All {
             return true;
         }
         let Some(filter_cwd) = self.filter_cwd.as_ref() else {
@@ -1098,6 +1163,7 @@ impl PickerState {
             cursor: Some(cursor),
             request_token,
             search_token,
+            cwd_filter: self.active_cwd_filter(),
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
         }));
@@ -1126,6 +1192,37 @@ impl PickerState {
             ThreadSortKey::UpdatedAt => ThreadSortKey::CreatedAt,
         };
         self.start_initial_load();
+    }
+
+    fn toggle_filter_mode(&mut self) {
+        let next_filter_mode = self.filter_mode.toggle(self.filter_cwd.as_deref());
+        if self.filter_mode == next_filter_mode {
+            return;
+        }
+        self.filter_mode = next_filter_mode;
+        self.start_initial_load();
+    }
+
+    fn active_cwd_filter(&self) -> Option<PathBuf> {
+        match self.filter_mode {
+            SessionFilterMode::Cwd => self.filter_cwd.clone(),
+            SessionFilterMode::All => None,
+        }
+    }
+
+    fn focus_previous_toolbar_control(&mut self) {
+        self.toolbar_focus = self.toolbar_focus.previous();
+    }
+
+    fn focus_next_toolbar_control(&mut self) {
+        self.toolbar_focus = self.toolbar_focus.next();
+    }
+
+    fn change_focused_toolbar_value(&mut self) {
+        match self.toolbar_focus {
+            ToolbarControl::Sort => self.toggle_sort_key(),
+            ToolbarControl::Filter => self.toggle_filter_mode(),
+        }
     }
 
     fn toggle_selected_expansion(&mut self) {
@@ -1352,20 +1449,114 @@ fn search_line(state: &PickerState, width: u16) -> Line<'_> {
     } else {
         format!("Search: {}", state.query).into()
     };
-    let sort_prefix = "Sort: ";
-    let sort_value = sort_key_label(state.sort_key);
-    let search_width = search.content.chars().count();
-    let sort_width = sort_prefix.chars().count() + sort_value.chars().count();
+    let mut toolbar = toolbar_line(state, /*compact*/ false);
+    if toolbar.width() as u16 > width.saturating_sub(2) {
+        toolbar = toolbar_line(state, /*compact*/ true);
+    }
+    let search_width = UnicodeWidthStr::width(search.content.as_ref());
+    let toolbar_width = toolbar.width();
     let spacer_width = width
-        .saturating_sub((search_width + sort_width) as u16)
+        .saturating_sub((search_width + toolbar_width) as u16)
         .max(2) as usize;
+    let available_search_width = width
+        .saturating_sub(toolbar_width as u16)
+        .saturating_sub(spacer_width as u16) as usize;
+    let search = if search_width > available_search_width {
+        let truncated = truncate_text(search.content.as_ref(), available_search_width);
+        if state.query.is_empty() {
+            truncated.dim()
+        } else {
+            truncated.into()
+        }
+    } else {
+        search
+    };
+
+    let mut spans = vec![search, " ".repeat(spacer_width).into()];
+    spans.extend(toolbar.spans);
+    spans.into()
+}
+
+fn toolbar_line(state: &PickerState, compact: bool) -> Line<'static> {
+    let mut spans = Vec::new();
+    spans.extend(sort_control_spans(state, compact));
+    spans.push("   ".dim());
+    spans.extend(filter_control_spans(state, compact));
+    spans.into()
+}
+
+fn sort_control_spans(state: &PickerState, compact: bool) -> Vec<Span<'static>> {
+    let sort_focused = state.toolbar_focus == ToolbarControl::Sort;
+    if compact {
+        return vec![
+            "Sort:".dim(),
+            toolbar_value(
+                sort_key_label(state.sort_key),
+                /*active*/ true,
+                sort_focused,
+            ),
+        ];
+    }
     vec![
-        search,
-        " ".repeat(spacer_width).into(),
-        sort_prefix.dim(),
-        sort_value.magenta(),
+        "Sort: ".dim(),
+        toolbar_value(
+            sort_key_label(ThreadSortKey::UpdatedAt),
+            state.sort_key == ThreadSortKey::UpdatedAt,
+            sort_focused,
+        ),
+        toolbar_value(
+            sort_key_label(ThreadSortKey::CreatedAt),
+            state.sort_key == ThreadSortKey::CreatedAt,
+            sort_focused,
+        ),
     ]
-    .into()
+}
+
+fn filter_control_spans(state: &PickerState, compact: bool) -> Vec<Span<'static>> {
+    let filter_focused = state.toolbar_focus == ToolbarControl::Filter;
+    if compact || state.filter_cwd.is_none() {
+        return vec![
+            "Filter:".dim(),
+            toolbar_value(
+                filter_mode_label(state.filter_mode),
+                /*active*/ true,
+                filter_focused,
+            ),
+        ];
+    }
+    vec![
+        "Filter: ".dim(),
+        toolbar_value(
+            filter_mode_label(SessionFilterMode::Cwd),
+            state.filter_mode == SessionFilterMode::Cwd,
+            filter_focused,
+        ),
+        toolbar_value(
+            filter_mode_label(SessionFilterMode::All),
+            state.filter_mode == SessionFilterMode::All,
+            filter_focused,
+        ),
+    ]
+}
+
+fn toolbar_value(label: &'static str, active: bool, focused: bool) -> Span<'static> {
+    if active {
+        let value = format!("[{label}]");
+        if focused {
+            value.magenta()
+        } else {
+            value.into()
+        }
+    } else {
+        format!(" {label} ").dim()
+    }
+}
+
+fn filter_mode_label(filter_mode: SessionFilterMode) -> &'static str {
+    match filter_mode {
+        SessionFilterMode::Cwd => "Cwd",
+        SessionFilterMode::All => "All",
+    }
 }
 
 fn hint_line(state: &PickerState) -> Line<'_> {
@@ -1386,7 +1577,12 @@ fn hint_line(state: &PickerState) -> Line<'_> {
         " to quit ".dim(),
         "    ".dim(),
         key_hint::plain(KeyCode::Tab).into(),
-        " to toggle sort ".dim(),
+        " focus sort/filter ".dim(),
+        "    ".dim(),
+        key_hint::plain(KeyCode::Left).into(),
+        "/".dim(),
+        key_hint::plain(KeyCode::Right).into(),
+        " change option ".dim(),
         "    ".dim(),
         key_hint::plain(KeyCode::Char(' ')).into(),
         " to expand ".dim(),
@@ -1519,6 +1715,7 @@ fn render_session_lines(
         &updated,
         branch,
         cwd.as_deref(),
+        state.filter_mode == SessionFilterMode::All,
         width,
     ));
     lines
@@ -1530,17 +1727,18 @@ fn render_footer_lines(
     updated: &str,
     branch: Option<&str>,
     cwd: Option<&str>,
+    show_cwd: bool,
     width: u16,
 ) -> Vec<Line<'static>> {
     let date = match sort_key {
         ThreadSortKey::CreatedAt => created,
         ThreadSortKey::UpdatedAt => updated,
     };
-    let parts = vec![
-        FooterPart::Date(date.to_string()),
-        FooterPart::Cwd(cwd.map(str::to_string)),
-        FooterPart::Branch(branch.map(str::to_string)),
-    ];
+    let mut parts = vec![FooterPart::Date(date.to_string())];
+    if show_cwd {
+        parts.push(FooterPart::Cwd(cwd.map(str::to_string)));
+    }
+    parts.push(FooterPart::Branch(branch.map(str::to_string)));
     pack_footer_parts(parts, width)
 }
 
@@ -1948,6 +2146,7 @@ mod tests {
             "3h ago",
             Some("main"),
             Some("tmp/codex"),
+            /*show_cwd*/ true,
             /*width*/ 80,
         );
         let created = render_footer_lines(
@@ -1956,6 +2155,7 @@ mod tests {
             "3h ago",
             Some("main"),
             Some("tmp/codex"),
+            /*show_cwd*/ true,
             /*width*/ 80,
         );
 
@@ -1977,6 +2177,7 @@ mod tests {
             "3h ago",
             /*branch*/ None,
             Some("/tmp/codex"),
+            /*show_cwd*/ true,
             /*width*/ 80,
         );
 
@@ -1996,6 +2197,7 @@ mod tests {
             "4h ago",
             Some(branch),
             Some("~/code/codex.etraut-animations-false-improvements/codex-rs"),
+            /*show_cwd*/ true,
             /*width*/ 140,
         );
 
@@ -2013,6 +2215,7 @@ mod tests {
             "4h ago",
             Some(branch),
             Some(cwd),
+            /*show_cwd*/ true,
             /*width*/ 80,
         );
 
@@ -2022,6 +2225,26 @@ mod tests {
         assert!(footer.contains("⌁ ~/code/codex."));
         assert!(footer.contains("..."));
         assert!(footer.contains(" owner/branch"));
+    }
+
+    #[test]
+    fn footer_omits_cwd_when_hidden() {
+        let footer = render_footer_lines(
+            ThreadSortKey::UpdatedAt,
+            "5h ago",
+            "4h ago",
+            Some("owner/branch"),
+            Some("~/code/codex.owner-worktree/codex-rs"),
+            /*show_cwd*/ false,
+            /*width*/ 80,
+        );
+
+        assert_eq!(footer.len(), 1);
+        let footer = footer[0].to_string();
+        assert!(footer.contains("4h ago"));
+        assert!(footer.contains(" owner/branch"));
+        assert!(!footer.contains("⌁"));
+        assert!(!footer.contains("~/code"));
     }
 
     fn assert_metadata_order(line: &Line<'_>, first: &str, second: &str) {
@@ -2221,6 +2444,57 @@ mod tests {
                 .to_string()
                 .contains("esc to clear search")
         );
+    }
+
+    #[test]
+    fn search_line_renders_sort_and_filter_tabs() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+
+        let loader = page_only_loader(|_| {});
+        let state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ false,
+            Some(PathBuf::from("/tmp/project")),
+            SessionPickerAction::Resume,
+        );
+
+        let width: u16 = 100;
+        let backend = VT100Backend::new(width, /*height*/ 1);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, 1));
+
+        {
+            let mut frame = terminal.get_frame();
+            let line = search_line(&state, frame.area().width);
+            frame.render_widget_ref(line, frame.area());
+        }
+        terminal.flush().expect("flush");
+
+        assert_snapshot!(
+            "resume_picker_search_line_sort_filter_tabs",
+            terminal.backend().to_string()
+        );
+    }
+
+    #[test]
+    fn search_line_compacts_toolbar_on_narrow_width() {
+        let loader = page_only_loader(|_| {});
+        let state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ false,
+            Some(PathBuf::from("/tmp/project")),
+            SessionPickerAction::Resume,
+        );
+
+        let line = search_line(&state, /*width*/ 40).to_string();
+
+        assert!(line.contains("Sort:[Updated]"));
+        assert!(line.contains("Filter:[Cwd]"));
     }
 
     #[test]
@@ -2503,13 +2777,129 @@ mod tests {
         }
 
         state
-            .handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
             .await
             .unwrap();
 
         let guard = recorded_requests.lock().unwrap();
         assert_eq!(guard.len(), 2);
         assert_eq!(guard[1].sort_key, ThreadSortKey::CreatedAt);
+    }
+
+    #[tokio::test]
+    async fn tab_focuses_filter_and_arrows_reload_with_new_filter() {
+        let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader = page_only_loader(move |req: PageLoadRequest| {
+            request_sink.lock().unwrap().push(req);
+        });
+
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ false,
+            Some(PathBuf::from("/tmp/project")),
+            SessionPickerAction::Resume,
+        );
+
+        state.start_initial_load();
+        {
+            let guard = recorded_requests.lock().unwrap();
+            assert_eq!(guard.len(), 1);
+            assert_eq!(guard[0].cwd_filter, Some(PathBuf::from("/tmp/project")));
+        }
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        state
+            .handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
+            .await
+            .unwrap();
+
+        let guard = recorded_requests.lock().unwrap();
+        assert_eq!(guard.len(), 2);
+        assert_eq!(guard[1].cwd_filter, None);
+    }
+
+    #[tokio::test]
+    async fn all_filter_can_switch_back_to_cwd_when_cwd_candidate_exists() {
+        let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader = page_only_loader(move |req: PageLoadRequest| {
+            request_sink.lock().unwrap().push(req);
+        });
+
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            Some(PathBuf::from("/tmp/project")),
+            SessionPickerAction::Resume,
+        );
+
+        state.start_initial_load();
+        {
+            let guard = recorded_requests.lock().unwrap();
+            assert_eq!(guard.len(), 1);
+            assert_eq!(guard[0].cwd_filter, None);
+        }
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        state
+            .handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
+            .await
+            .unwrap();
+
+        let guard = recorded_requests.lock().unwrap();
+        assert_eq!(guard.len(), 2);
+        assert_eq!(guard[1].cwd_filter, Some(PathBuf::from("/tmp/project")));
+    }
+
+    #[tokio::test]
+    async fn filter_stays_all_when_no_cwd_candidate_exists() {
+        let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader = page_only_loader(move |req: PageLoadRequest| {
+            request_sink.lock().unwrap().push(req);
+        });
+
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::Any,
+            /*show_all*/ false,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+
+        assert_eq!(
+            search_line(&state, /*width*/ 80)
+                .to_string()
+                .matches("Cwd")
+                .count(),
+            0
+        );
+
+        state.start_initial_load();
+        state
+            .handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        state
+            .handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
+            .await
+            .unwrap();
+
+        let guard = recorded_requests.lock().unwrap();
+        assert_eq!(guard.len(), 1);
+        assert_eq!(guard[0].cwd_filter, None);
     }
 
     #[tokio::test]
