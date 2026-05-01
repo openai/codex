@@ -958,6 +958,35 @@ mod tests {
     }
 
     #[test]
+    fn active_command_without_animations_is_stable() {
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["bash".into(), "-lc".into(), "echo done".into()],
+            parsed: Vec::new(),
+            output: None,
+            source: ExecCommandSource::Agent,
+            start_time: Some(Instant::now()),
+            duration: None,
+            interaction_input: None,
+        };
+
+        let cell = ExecCell::new(call, /*animations_enabled*/ false);
+        let first: Vec<String> = cell
+            .command_display_lines(/*width*/ 80)
+            .iter()
+            .map(render_line_text)
+            .collect();
+        let second: Vec<String> = cell
+            .command_display_lines(/*width*/ 80)
+            .iter()
+            .map(render_line_text)
+            .collect();
+
+        assert_eq!(first, second);
+        assert_eq!(first, vec!["• Running echo done".to_string()]);
+    }
+
+    #[test]
     fn exploring_display_does_not_split_long_url_like_search_query() {
         let url_like = "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path";
         let call = ExecCall {

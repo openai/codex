@@ -242,14 +242,16 @@ impl Renderable for StatusIndicatorWidget {
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
 
         let mut spans = Vec::with_capacity(5);
-        spans.push(spinner(Some(self.last_resume_at), self.animations_enabled));
-        spans.push(" ".into());
         if self.animations_enabled {
+            spans.push(spinner(Some(self.last_resume_at), self.animations_enabled));
+            spans.push(" ".into());
             spans.extend(shimmer_spans(&self.header));
         } else if !self.header.is_empty() {
             spans.push(self.header.clone().into());
         }
-        spans.push(" ".into());
+        if !spans.is_empty() {
+            spans.push(" ".into());
+        }
         if self.show_interrupt_hint {
             spans.extend(vec![
                 format!("({pretty_elapsed} • ").dim(),
@@ -372,6 +374,30 @@ mod tests {
             .draw(|f| w.render(f.area(), f.buffer_mut()))
             .expect("draw");
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn renders_without_spinner_when_animations_disabled() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ false,
+        );
+        w.is_paused = true;
+        w.elapsed_running = Duration::ZERO;
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 1)).expect("terminal");
+        terminal
+            .draw(|f| w.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        let line = terminal.backend().buffer().content()[..80]
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+
+        assert!(line.starts_with("Working (0s • esc to interrupt)"));
     }
 
     #[test]

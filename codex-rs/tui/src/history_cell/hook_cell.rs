@@ -626,8 +626,10 @@ fn push_running_hook_header(
     status_message: Option<&str>,
     animations_enabled: bool,
 ) {
-    let mut header = vec![spinner(start_time, animations_enabled), " ".into()];
+    let mut header = Vec::new();
     if animations_enabled {
+        header.push(spinner(start_time, animations_enabled));
+        header.push(" ".into());
         header.extend(shimmer_spans(hook_text));
     } else {
         header.push(hook_text.to_string().bold());
@@ -759,6 +761,32 @@ mod tests {
         cell.advance_time(Instant::now());
 
         assert_eq!(cell.transcript_animation_tick(), None);
+    }
+
+    #[test]
+    fn visible_hook_without_animations_omits_spinner() {
+        let mut cell = HookCell::new_active(
+            hook_run_summary("hook-1"),
+            /*animations_enabled*/ false,
+        );
+        cell.reveal_running_runs_now_for_test();
+        cell.advance_time(Instant::now());
+
+        let rendered: Vec<String> = cell
+            .display_lines(/*width*/ 80)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+
+        assert_eq!(
+            rendered,
+            vec!["Running PostToolUse hook: checking output policy".to_string()]
+        );
     }
 
     fn hook_run_summary(id: &str) -> HookRunSummary {
