@@ -21,7 +21,7 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
-pub(crate) async fn start_stdio_connection(
+pub async fn start_stdio_connection(
     transport_event_tx: mpsc::Sender<TransportEvent>,
     stdio_handles: &mut Vec<JoinHandle<()>>,
     initialize_client_name_tx: oneshot::Sender<String>,
