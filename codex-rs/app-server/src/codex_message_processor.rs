@@ -3377,15 +3377,7 @@ impl CodexMessageProcessor {
 
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
-        let mut state_db_ctx = loaded_thread.as_ref().and_then(|thread| thread.state_db());
-        if state_db_ctx.is_none() {
-            state_db_ctx = Some(self.state_db.clone());
-        }
-        let Some(state_db_ctx) = state_db_ctx else {
-            return Err(internal_error(format!(
-                "sqlite state db unavailable for thread {thread_uuid}"
-            )));
-        };
+        let state_db_ctx = self.state_db.clone();
 
         self.ensure_thread_metadata_row_exists(thread_uuid, &state_db_ctx, loaded_thread.as_ref())
             .await?;
@@ -4693,11 +4685,7 @@ impl CodexMessageProcessor {
 
             let emit_thread_goal_update = self.config.features.enabled(Feature::Goals);
             let thread_goal_state_db = if emit_thread_goal_update {
-                if let Some(state_db) = existing_thread.state_db() {
-                    Some(state_db)
-                } else {
-                    Some(self.state_db.clone())
-                }
+                Some(self.state_db.clone())
             } else {
                 None
             };
@@ -4937,9 +4925,7 @@ impl CodexMessageProcessor {
     }
 
     async fn attach_thread_name(&self, thread_id: ThreadId, thread: &mut Thread) {
-        if let Some(title) =
-            title_from_state_db(Some(&self.state_db), &self.config, thread_id).await
-        {
+        if let Some(title) = title_from_state_db(&self.state_db, &self.config, thread_id).await {
             set_thread_name_from_title(thread, title);
         }
     }
@@ -9035,12 +9021,11 @@ async fn read_summary_from_state_db_context_by_thread_id(
 }
 
 async fn title_from_state_db(
-    state_db_ctx: Option<&StateDbHandle>,
+    state_db_ctx: &StateDbHandle,
     config: &Config,
     thread_id: ThreadId,
 ) -> Option<String> {
-    if let Some(state_db_ctx) = state_db_ctx
-        && let Some(metadata) = state_db_ctx.get_thread(thread_id).await.ok().flatten()
+    if let Some(metadata) = state_db_ctx.get_thread(thread_id).await.ok().flatten()
         && let Some(title) = distinct_title(&metadata)
     {
         return Some(title);
