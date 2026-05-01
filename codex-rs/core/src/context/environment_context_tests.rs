@@ -15,6 +15,10 @@ fn fake_shell_name() -> String {
     shell.name().to_string()
 }
 
+fn test_abs_path(unix_path: &str) -> AbsolutePathBuf {
+    test_path_buf(unix_path).abs()
+}
+
 #[test]
 fn serialize_workspace_write_environment_context() {
     let cwd = test_path_buf("/repo");
@@ -102,7 +106,7 @@ fn equals_except_shell_compares_cwd() {
     let context1 = EnvironmentContext::new(
         vec![EnvironmentContextEnvironment {
             id: "local".to_string(),
-            cwd: PathBuf::from("/repo").abs(),
+            cwd: test_abs_path("/repo"),
             shell: fake_shell_name(),
         }],
         /*current_date*/ None,
@@ -113,7 +117,7 @@ fn equals_except_shell_compares_cwd() {
     let context2 = EnvironmentContext::new(
         vec![EnvironmentContextEnvironment {
             id: "local".to_string(),
-            cwd: PathBuf::from("/repo").abs(),
+            cwd: test_abs_path("/repo"),
             shell: fake_shell_name(),
         }],
         /*current_date*/ None,
@@ -129,7 +133,7 @@ fn equals_except_shell_compares_cwd_differences() {
     let context1 = EnvironmentContext::new(
         vec![EnvironmentContextEnvironment {
             id: "local".to_string(),
-            cwd: PathBuf::from("/repo1").abs(),
+            cwd: test_abs_path("/repo1"),
             shell: fake_shell_name(),
         }],
         /*current_date*/ None,
@@ -140,7 +144,7 @@ fn equals_except_shell_compares_cwd_differences() {
     let context2 = EnvironmentContext::new(
         vec![EnvironmentContextEnvironment {
             id: "local".to_string(),
-            cwd: PathBuf::from("/repo2").abs(),
+            cwd: test_abs_path("/repo2"),
             shell: fake_shell_name(),
         }],
         /*current_date*/ None,
@@ -157,7 +161,7 @@ fn equals_except_shell_ignores_shell() {
     let context1 = EnvironmentContext::new(
         vec![EnvironmentContextEnvironment {
             id: "local".to_string(),
-            cwd: PathBuf::from("/repo").abs(),
+            cwd: test_abs_path("/repo"),
             shell: "bash".to_string(),
         }],
         /*current_date*/ None,
@@ -168,7 +172,7 @@ fn equals_except_shell_ignores_shell() {
     let context2 = EnvironmentContext::new(
         vec![EnvironmentContextEnvironment {
             id: "other".to_string(),
-            cwd: PathBuf::from("/repo").abs(),
+            cwd: test_abs_path("/repo"),
             shell: "zsh".to_string(),
         }],
         /*current_date*/ None,
@@ -213,16 +217,18 @@ fn serialize_environment_context_with_subagents() {
 
 #[test]
 fn serialize_environment_context_with_multiple_selected_environments() {
+    let local_cwd = test_path_buf("/repo/local");
+    let remote_cwd = test_path_buf("/repo/remote");
     let context = EnvironmentContext::new(
         vec![
             EnvironmentContextEnvironment {
                 id: "local".to_string(),
-                cwd: PathBuf::from("/repo/local").abs(),
+                cwd: local_cwd.abs(),
                 shell: "bash".to_string(),
             },
             EnvironmentContextEnvironment {
                 id: "remote".to_string(),
-                cwd: PathBuf::from("/repo/remote").abs(),
+                cwd: remote_cwd.abs(),
                 shell: "bash".to_string(),
             },
         ],
@@ -232,20 +238,24 @@ fn serialize_environment_context_with_multiple_selected_environments() {
         /*subagents*/ None,
     );
 
-    let expected = r#"<environment_context>
+    let expected = format!(
+        r#"<environment_context>
   <environments>
     <environment id="local">
-      <cwd>/repo/local</cwd>
+      <cwd>{}</cwd>
       <shell>bash</shell>
     </environment>
     <environment id="remote">
-      <cwd>/repo/remote</cwd>
+      <cwd>{}</cwd>
       <shell>bash</shell>
     </environment>
   </environments>
   <current_date>2026-02-26</current_date>
   <timezone>America/Los_Angeles</timezone>
-</environment_context>"#;
+</environment_context>"#,
+        local_cwd.display(),
+        remote_cwd.display()
+    );
 
     assert_eq!(context.render(), expected);
 }
