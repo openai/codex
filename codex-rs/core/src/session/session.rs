@@ -208,13 +208,6 @@ impl SessionConfiguration {
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
         next_configuration.cwd = absolute_cwd.clone();
-        if updates.environments.is_none()
-            && cwd_changed
-            && next_configuration.environments.len() == 1
-            && let Some(turn_environment) = next_configuration.environments.first_mut()
-        {
-            turn_environment.cwd = absolute_cwd;
-        }
 
         if let Some(permission_profile) = updates.permission_profile.clone() {
             let active_permission_profile =
@@ -935,6 +928,7 @@ impl Session {
                 .map(|(name, _)| name.clone())
                 .collect();
             required_mcp_servers.sort();
+            let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
             let required_mcp_server_count = required_mcp_servers.len();
             let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref()).await;
             {

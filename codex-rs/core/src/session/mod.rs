@@ -446,7 +446,7 @@ impl Codex {
 
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
         let CodexSpawnArgs {
-            config,
+            mut config,
             auth_manager,
             models_manager,
             environment_manager,

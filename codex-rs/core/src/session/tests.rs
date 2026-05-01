@@ -3341,6 +3341,38 @@ async fn relative_cwd_update_without_environments_resolves_under_session_cwd() {
 }
 
 #[tokio::test]
+async fn cwd_update_does_not_rewrite_sticky_environment_cwd() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let (original_cwd, environment_cwd) = {
+        let mut state = session.state.lock().await;
+        let original_cwd = state.session_configuration.cwd.clone();
+        let environment_cwd = original_cwd.join("environment");
+        state.session_configuration.environments = vec![TurnEnvironmentSelection {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            cwd: environment_cwd.clone(),
+        }];
+        (original_cwd, environment_cwd)
+    };
+    let updated_cwd = original_cwd.join("project");
+    std::fs::create_dir_all(updated_cwd.as_path()).expect("create project dir");
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            cwd: Some(PathBuf::from("project")),
+            ..Default::default()
+        })
+        .await
+        .expect("cwd update should succeed");
+
+    let state = session.state.lock().await;
+    assert_eq!(state.session_configuration.cwd, updated_cwd);
+    assert_eq!(
+        state.session_configuration.environments[0].cwd,
+        environment_cwd
+    );
+}
+
+#[tokio::test]
 async fn absolute_cwd_update_with_turn_environment_is_allowed() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
     let absolute_cwd = {
