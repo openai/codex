@@ -1725,7 +1725,7 @@ fn tool_suggest_is_not_registered_without_feature_flag() {
     assert!(
         !tools
             .iter()
-            .any(|tool| tool.name() == TOOL_SUGGEST_TOOL_NAME)
+            .any(|tool| tool.name() == REQUEST_PLUGIN_INSTALL_TOOL_NAME)
     );
 }
 
@@ -1762,8 +1762,8 @@ fn tool_suggest_can_be_registered_without_search_tool() {
         &[],
     );
 
-    assert_contains_tool_names(&tools, &[TOOL_SUGGEST_TOOL_NAME]);
-    let tool_suggest = find_tool(&tools, TOOL_SUGGEST_TOOL_NAME);
+    assert_contains_tool_names(&tools, &[REQUEST_PLUGIN_INSTALL_TOOL_NAME]);
+    let tool_suggest = find_tool(&tools, REQUEST_PLUGIN_INSTALL_TOOL_NAME);
     assert!(tool_suggest.supports_parallel_tool_calls);
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
 
@@ -1827,11 +1827,11 @@ fn tool_suggest_description_lists_discoverable_tools() {
         &[],
     );
     assert!(handlers.contains(&ToolHandlerSpec {
-        name: ToolName::plain(TOOL_SUGGEST_TOOL_NAME),
+        name: ToolName::plain(REQUEST_PLUGIN_INSTALL_TOOL_NAME),
         kind: ToolHandlerKind::ToolSuggest,
     }));
 
-    let tool_suggest = find_tool(&tools, TOOL_SUGGEST_TOOL_NAME);
+    let tool_suggest = find_tool(&tools, REQUEST_PLUGIN_INSTALL_TOOL_NAME);
     let ToolSpec::Function(ResponsesApiTool {
         description,
         parameters,

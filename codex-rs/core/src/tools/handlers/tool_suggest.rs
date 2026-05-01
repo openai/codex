@@ -8,9 +8,9 @@ use codex_rmcp_client::ElicitationResponse;
 use codex_tools::DiscoverableTool;
 use codex_tools::DiscoverableToolAction;
 use codex_tools::DiscoverableToolType;
+use codex_tools::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 use codex_tools::TOOL_SUGGEST_PERSIST_ALWAYS_VALUE;
 use codex_tools::TOOL_SUGGEST_PERSIST_KEY;
-use codex_tools::TOOL_SUGGEST_TOOL_NAME;
 use codex_tools::ToolSuggestArgs;
 use codex_tools::ToolSuggestResult;
 use codex_tools::all_suggested_connectors_picked_up;
@@ -58,7 +58,7 @@ impl ToolHandler for ToolSuggestHandler {
             ToolPayload::Function { arguments } => arguments,
             _ => {
                 return Err(FunctionCallError::Fatal(format!(
-                    "{TOOL_SUGGEST_TOOL_NAME} handler received unsupported payload"
+                    "{REQUEST_PLUGIN_INSTALL_TOOL_NAME} handler received unsupported payload"
                 )));
             }
         };
@@ -114,7 +114,7 @@ impl ToolHandler for ToolSuggestHandler {
             .find(|tool| tool.tool_type() == args.tool_type && tool.id() == args.tool_id)
             .ok_or_else(|| {
                 FunctionCallError::RespondToModel(format!(
-                    "tool_id must match one of the discoverable tools exposed by {TOOL_SUGGEST_TOOL_NAME}"
+                    "tool_id must match one of the discoverable tools exposed by {REQUEST_PLUGIN_INSTALL_TOOL_NAME}"
                 ))
             })?;
 
@@ -160,7 +160,7 @@ impl ToolHandler for ToolSuggestHandler {
         })
         .map_err(|err| {
             FunctionCallError::Fatal(format!(
-                "failed to serialize {TOOL_SUGGEST_TOOL_NAME} response: {err}"
+                "failed to serialize {REQUEST_PLUGIN_INSTALL_TOOL_NAME} response: {err}"
             ))
         })?;
 
