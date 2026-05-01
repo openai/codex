@@ -7,7 +7,7 @@ use super::ContextualUserFragment;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct EnvironmentContext {
-    pub(crate) environments: Vec<EnvironmentContextEnvironment>,
+    pub(crate) environments: EnvironmentContextEnvironments,
     pub(crate) current_date: Option<String>,
     pub(crate) timezone: Option<String>,
     pub(crate) network: Option<NetworkContext>,
@@ -44,6 +44,43 @@ impl EnvironmentContextEnvironment {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EnvironmentContextEnvironments {
+    None,
+    Single(EnvironmentContextEnvironment),
+    Multiple(Vec<EnvironmentContextEnvironment>),
+}
+
+impl EnvironmentContextEnvironments {
+    fn from_vec(environments: Vec<EnvironmentContextEnvironment>) -> Self {
+        match environments.len() {
+            0 => Self::None,
+            1 => Self::Single(
+                environments
+                    .into_iter()
+                    .next()
+                    .expect("single environment must exist"),
+            ),
+            _ => Self::Multiple(environments),
+        }
+    }
+
+    fn equals_except_shell(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::None, Self::None) => true,
+            (Self::Single(left), Self::Single(right)) => left.cwd == right.cwd,
+            (Self::Multiple(left), Self::Multiple(right)) => {
+                left.len() == right.len()
+                    && left
+                        .iter()
+                        .zip(right.iter())
+                        .all(|(left, right)| left.id == right.id && left.cwd == right.cwd)
+            }
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct NetworkContext {
     allowed_domains: Vec<String>,
@@ -68,6 +105,22 @@ impl EnvironmentContext {
         subagents: Option<String>,
     ) -> Self {
         Self {
+            environments: EnvironmentContextEnvironments::from_vec(environments),
+            current_date,
+            timezone,
+            network,
+            subagents,
+        }
+    }
+
+    fn new_with_environments(
+        environments: EnvironmentContextEnvironments,
+        current_date: Option<String>,
+        timezone: Option<String>,
+        network: Option<NetworkContext>,
+        subagents: Option<String>,
+    ) -> Self {
+        Self {
             environments,
             current_date,
             timezone,
@@ -80,7 +133,7 @@ impl EnvironmentContext {
     /// comparing turn to turn, since the initial environment_context will
     /// include the shell, and then it is not configurable from turn to turn.
     pub(crate) fn equals_except_shell(&self, other: &EnvironmentContext) -> bool {
-        self.environments_equal_except_shell(other)
+        self.environments.equals_except_shell(&other.environments)
             && self.current_date == other.current_date
             && self.timezone == other.timezone
             && self.network == other.network
@@ -92,22 +145,28 @@ impl EnvironmentContext {
         after: &EnvironmentContext,
     ) -> Self {
         let before_network = Self::network_from_turn_context_item(before);
-        let environments = match after.environments.as_slice() {
-            [environment] if before.cwd.as_path() != environment.cwd.as_path() => {
-                vec![EnvironmentContextEnvironment::legacy(
-                    environment.cwd.clone(),
-                    environment.shell.clone(),
-                )]
+        let environments = match &after.environments {
+            EnvironmentContextEnvironments::Single(environment) => {
+                if before.cwd.as_path() != environment.cwd.as_path() {
+                    EnvironmentContextEnvironments::Single(EnvironmentContextEnvironment::legacy(
+                        environment.cwd.clone(),
+                        environment.shell.clone(),
+                    ))
+                } else {
+                    EnvironmentContextEnvironments::None
+                }
             }
-            [_, _, ..] => after.environments.clone(),
-            [_] | [] => Vec::new(),
+            EnvironmentContextEnvironments::Multiple(environments) => {
+                EnvironmentContextEnvironments::Multiple(environments.clone())
+            }
+            EnvironmentContextEnvironments::None => EnvironmentContextEnvironments::None,
         };
         let network = if before_network != after.network {
             after.network.clone()
         } else {
             before_network
         };
-        EnvironmentContext::new(
+        EnvironmentContext::new_with_environments(
             environments,
             after.current_date.clone(),
             after.timezone.clone(),
@@ -184,21 +243,6 @@ impl EnvironmentContext {
             denied_domains.clone(),
         ))
     }
-
-    fn environments_equal_except_shell(&self, other: &EnvironmentContext) -> bool {
-        match (self.environments.as_slice(), other.environments.as_slice()) {
-            ([left], [right]) => left.cwd == right.cwd,
-            (left, right) if left.len() > 1 && right.len() > 1 => {
-                left.len() == right.len()
-                    && left
-                        .iter()
-                        .zip(right.iter())
-                        .all(|(left, right)| left.id == right.id && left.cwd == right.cwd)
-            }
-            ([], []) => true,
-            _ => false,
-        }
-    }
 }
 
 impl ContextualUserFragment for EnvironmentContext {
@@ -208,17 +252,17 @@ impl ContextualUserFragment for EnvironmentContext {
 
     fn body(&self) -> String {
         let mut lines = Vec::new();
-        match self.environments.as_slice() {
-            [environment] => {
+        match &self.environments {
+            EnvironmentContextEnvironments::Single(environment) => {
                 lines.push(format!(
                     "  <cwd>{}</cwd>",
                     environment.cwd.to_string_lossy()
                 ));
                 lines.push(format!("  <shell>{}</shell>", environment.shell));
             }
-            [_, _, ..] => {
+            EnvironmentContextEnvironments::Multiple(environments) => {
                 lines.push("  <environments>".to_string());
-                for environment in &self.environments {
+                for environment in environments {
                     lines.push(format!("    <environment id=\"{}\">", environment.id));
                     lines.push(format!(
                         "      <cwd>{}</cwd>",
@@ -229,7 +273,7 @@ impl ContextualUserFragment for EnvironmentContext {
                 }
                 lines.push("  </environments>".to_string());
             }
-            [] => {}
+            EnvironmentContextEnvironments::None => {}
         }
         if let Some(current_date) = &self.current_date {
             lines.push(format!("  <current_date>{current_date}</current_date>"));
