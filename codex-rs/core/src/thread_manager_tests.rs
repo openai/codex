@@ -444,9 +444,15 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .new_turn_with_sub_id("resume-turn".to_string(), SessionSettingsUpdate::default())
         .await
         .expect("build resumed turn context");
-    assert_eq!(resumed_turn.environments.len(), 1);
-    assert_eq!(resumed_turn.environments[0].cwd, default_cwd);
-    assert_ne!(resumed_turn.environments[0].cwd, selected_cwd);
+    assert_eq!(resumed_turn.environments.turn_environments.len(), 1);
+    assert_eq!(
+        resumed_turn.environments.turn_environments[0].cwd,
+        default_cwd
+    );
+    assert_ne!(
+        resumed_turn.environments.turn_environments[0].cwd,
+        selected_cwd
+    );
 
     let forked = manager
         .fork_thread(
@@ -465,9 +471,15 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .new_turn_with_sub_id("fork-turn".to_string(), SessionSettingsUpdate::default())
         .await
         .expect("build forked turn context");
-    assert_eq!(forked_turn.environments.len(), 1);
-    assert_eq!(forked_turn.environments[0].cwd, default_cwd);
-    assert_ne!(forked_turn.environments[0].cwd, selected_cwd);
+    assert_eq!(forked_turn.environments.turn_environments.len(), 1);
+    assert_eq!(
+        forked_turn.environments.turn_environments[0].cwd,
+        default_cwd
+    );
+    assert_ne!(
+        forked_turn.environments.turn_environments[0].cwd,
+        selected_cwd
+    );
 }
 
 #[tokio::test]

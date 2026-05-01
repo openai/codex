@@ -11,6 +11,7 @@ use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use crate::ResponsesApiWebSearchFilters;
 use crate::ResponsesApiWebSearchUserLocation;
+use crate::ToolEnvironmentMode;
 use crate::ToolHandlerSpec;
 use crate::ToolName;
 use crate::ToolNamespace;
@@ -544,7 +545,7 @@ fn disabled_environment_omits_environment_backed_tools() {
         permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     })
-    .with_has_environment(/*has_environment*/ false);
+    .with_environment_mode(ToolEnvironmentMode::None);
     tools_config
         .experimental_supported_tools
         .push("list_dir".to_string());

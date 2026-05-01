@@ -968,7 +968,7 @@ impl Session {
                     "unknown stored MCP environment id",
                 ))
             })?
-            .primary_turn_environment()
+            .primary()
             .cloned();
             let mcp_runtime_environment = match turn_environment {
                 Some(turn_environment) => McpRuntimeEnvironment::new(

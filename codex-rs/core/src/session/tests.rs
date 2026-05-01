@@ -2944,13 +2944,15 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
 fn turn_environments_for_tests(
     environment: &Arc<codex_exec_server::Environment>,
     cwd: &codex_utils_absolute_path::AbsolutePathBuf,
-) -> Vec<TurnEnvironment> {
-    vec![TurnEnvironment {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        environment: Arc::clone(environment),
-        cwd: cwd.clone(),
-        shell: "bash".to_string(),
-    }]
+) -> crate::environment_selection::ResolvedTurnEnvironments {
+    crate::environment_selection::ResolvedTurnEnvironments {
+        turn_environments: vec![TurnEnvironment {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            environment: Arc::clone(environment),
+            cwd: cwd.clone(),
+            shell: "bash".to_string(),
+        }],
+    }
 }
 
 #[tokio::test]
@@ -3399,7 +3401,7 @@ async fn absolute_cwd_update_with_turn_environment_is_allowed() {
 
     assert_eq!(turn_context.cwd, absolute_cwd);
     assert_eq!(turn_context.config.cwd, absolute_cwd);
-    assert_eq!(turn_context.environments.len(), 1);
+    assert_eq!(turn_context.environments.turn_environments.len(), 1);
 }
 
 #[tokio::test]
@@ -4418,15 +4420,16 @@ async fn turn_environments_set_primary_environment() {
         .expect("turn should start");
 
     let turn_environments = &turn_context.environments;
-    assert_eq!(turn_environments.len(), 1);
+    assert_eq!(turn_environments.turn_environments.len(), 1);
     let turn_environment = turn_context
-        .primary_environment()
+        .environments
+        .primary()
         .expect("primary environment should be set");
     assert!(std::sync::Arc::ptr_eq(
         &turn_environment.environment,
-        &turn_environments[0].environment
+        &turn_environments.turn_environments[0].environment
     ));
-    assert!(!turn_context.environments.is_empty());
+    assert!(!turn_context.environments.turn_environments.is_empty());
     assert_eq!(turn_context.cwd.as_path(), selected_cwd.as_path());
     assert_eq!(turn_context.config.cwd.as_path(), selected_cwd.as_path());
 }
@@ -4449,13 +4452,14 @@ async fn default_turn_overlays_session_cwd_onto_stored_thread_environments() {
     let turn_context = session.new_default_turn().await;
 
     let turn_environments = &turn_context.environments;
-    assert_eq!(turn_environments.len(), 1);
+    assert_eq!(turn_environments.turn_environments.len(), 1);
     let turn_environment = turn_context
-        .primary_environment()
+        .environments
+        .primary()
         .expect("primary environment should be set");
     assert!(std::sync::Arc::ptr_eq(
         &turn_environment.environment,
-        &turn_environments[0].environment
+        &turn_environments.turn_environments[0].environment
     ));
     assert_eq!(turn_context.cwd, session_cwd);
     assert_eq!(turn_context.config.cwd, session_cwd);
@@ -4473,28 +4477,32 @@ async fn default_turn_honors_empty_stored_thread_environments() {
 
     let turn_context = session.new_default_turn().await;
 
-    assert!(turn_context.primary_environment().is_none());
-    assert!(turn_context.environments.is_empty());
+    assert!(turn_context.environments.primary().is_none());
+    assert!(turn_context.environments.turn_environments.is_empty());
     assert_eq!(turn_context.cwd, session_cwd);
     assert_eq!(turn_context.config.cwd, session_cwd);
-    assert_eq!(turn_context.environments.len(), 0);
+    assert_eq!(turn_context.environments.turn_environments.len(), 0);
 }
 
 #[tokio::test]
 async fn primary_environment_uses_first_turn_environment() {
     let (_session, mut turn_context) = make_session_and_context().await;
-    let first_environment = turn_context.environments[0].clone();
+    let first_environment = turn_context.environments.turn_environments[0].clone();
     let second_cwd = turn_context.cwd.join("second");
-    turn_context.environments.push(TurnEnvironment {
-        environment_id: "second".to_string(),
-        environment: Arc::clone(&first_environment.environment),
-        cwd: second_cwd.clone(),
-        shell: first_environment.shell.clone(),
-    });
+    turn_context
+        .environments
+        .turn_environments
+        .push(TurnEnvironment {
+            environment_id: "second".to_string(),
+            environment: Arc::clone(&first_environment.environment),
+            cwd: second_cwd.clone(),
+            shell: first_environment.shell.clone(),
+        });
 
     assert_eq!(
         turn_context
-            .primary_environment()
+            .environments
+            .primary()
             .expect("primary environment")
             .environment_id,
         first_environment.environment_id
@@ -4502,14 +4510,18 @@ async fn primary_environment_uses_first_turn_environment() {
     assert_eq!(
         turn_context
             .environments
+            .turn_environments
             .iter()
             .find(|environment| environment.environment_id == "second")
             .expect("second environment")
             .cwd,
         second_cwd
     );
-    assert_eq!(turn_context.environments.len(), 2);
-    assert_eq!(turn_context.environments[1].cwd, second_cwd);
+    assert_eq!(turn_context.environments.turn_environments.len(), 2);
+    assert_eq!(
+        turn_context.environments.turn_environments[1].cwd,
+        second_cwd
+    );
 }
 
 #[tokio::test]
@@ -4527,8 +4539,8 @@ async fn empty_turn_environments_clear_primary_environment() {
         .await
         .expect("turn should start");
 
-    assert!(turn_context.primary_environment().is_none());
-    assert!(turn_context.environments.is_empty());
+    assert!(turn_context.environments.primary().is_none());
+    assert!(turn_context.environments.turn_environments.is_empty());
     assert_eq!(turn_context.cwd, session.get_config().await.cwd);
     assert_eq!(turn_context.config.cwd, session.get_config().await.cwd);
 }

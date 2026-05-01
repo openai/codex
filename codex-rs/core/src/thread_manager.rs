@@ -1100,7 +1100,7 @@ impl ThreadManagerState {
         }
         let environment_selections =
             resolve_environment_selections(self.environment_manager.as_ref(), &environments)?;
-        let watch_registration = match environment_selections.primary_turn_environment() {
+        let watch_registration = match environment_selections.primary() {
             Some(turn_environment) if !turn_environment.environment.is_remote() => {
                 self.skills_watcher
                     .register_config(
