@@ -12,16 +12,20 @@ use codex_app_server_protocol::ProcessOutputDeltaNotification;
 use codex_app_server_protocol::ProcessOutputStream;
 use codex_app_server_protocol::ProcessResizePtyParams;
 use codex_app_server_protocol::ProcessResizePtyResponse;
+use codex_app_server_protocol::ProcessSpawnParams;
 use codex_app_server_protocol::ProcessSpawnResponse;
 use codex_app_server_protocol::ProcessTerminalSize;
 use codex_app_server_protocol::ProcessWriteStdinParams;
 use codex_app_server_protocol::ProcessWriteStdinResponse;
 use codex_app_server_protocol::ServerNotification;
+use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecExpirationOutcome;
 use codex_core::exec::IO_DRAIN_TIMEOUT_MS;
 use codex_core::sandboxing::ExecRequest;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::exec_output::bytes_to_string_smart;
+use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use codex_utils_pty::ProcessHandle;
 use codex_utils_pty::SpawnedProcess;
 use codex_utils_pty::TerminalSize;
@@ -37,11 +41,146 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 
+use super::CodexMessageProcessor;
+use super::create_env;
+
 const EXEC_TIMEOUT_EXIT_CODE: i32 = 124;
 const OUTPUT_CHUNK_SIZE_HINT: usize = 64 * 1024;
 
+impl CodexMessageProcessor {
+    pub(super) async fn process_spawn(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ProcessSpawnParams,
+    ) -> Result<(), JSONRPCErrorError> {
+        self.process_spawn_inner(request_id, params).await
+    }
+
+    async fn process_spawn_inner(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ProcessSpawnParams,
+    ) -> Result<(), JSONRPCErrorError> {
+        let ProcessSpawnParams {
+            command,
+            process_handle,
+            cwd,
+            tty,
+            stream_stdin,
+            stream_stdout_stderr,
+            output_bytes_cap,
+            timeout_ms,
+            env: env_overrides,
+            size,
+        } = params;
+        let method_name = "process/spawn";
+        tracing::debug!("{method_name} command: {command:?}");
+        if command.is_empty() {
+            return Err(invalid_request("command must not be empty"));
+        }
+        if process_handle.is_empty() {
+            return Err(invalid_request("processHandle must not be empty"));
+        }
+        if size.is_some() && !tty {
+            return Err(invalid_params("process/spawn size requires tty: true"));
+        }
+        let mut env = create_env(
+            &self.config.permissions.shell_environment_policy,
+            /*thread_id*/ None,
+        );
+        if let Some(env_overrides) = env_overrides {
+            for (key, value) in env_overrides {
+                match value {
+                    Some(value) => {
+                        env.insert(key, value);
+                    }
+                    None => {
+                        env.remove(&key);
+                    }
+                }
+            }
+        }
+        let timeout_ms = match timeout_ms {
+            Some(timeout_ms) => match u64::try_from(timeout_ms) {
+                Ok(timeout_ms) => Some(timeout_ms),
+                Err(_) => {
+                    return Err(invalid_params(format!(
+                        "{method_name} timeoutMs must be non-negative, got {timeout_ms}"
+                    )));
+                }
+            },
+            None => None,
+        };
+        let expiration = match timeout_ms {
+            Some(timeout_ms) => timeout_ms.into(),
+            None => ExecExpiration::DefaultTimeout,
+        };
+        let output_bytes_cap = Some(output_bytes_cap.unwrap_or(DEFAULT_OUTPUT_BYTES_CAP));
+        let size = match size.map(terminal_size_from_protocol) {
+            Some(Ok(size)) => Some(size),
+            Some(Err(error)) => return Err(error),
+            None => None,
+        };
+        let exec_request = ExecRequest::new(
+            command,
+            cwd,
+            env,
+            /*network*/ None,
+            expiration,
+            ExecCapturePolicy::ShellTool,
+            codex_sandboxing::SandboxType::None,
+            WindowsSandboxLevel::Disabled,
+            /*windows_sandbox_private_desktop*/ false,
+            codex_protocol::models::PermissionProfile::Disabled,
+            /*arg0*/ None,
+        );
+
+        self.process_exec_manager
+            .start(StartProcessParams {
+                outgoing: self.outgoing.clone(),
+                request_id,
+                process_handle,
+                exec_request,
+                tty,
+                stream_stdin,
+                stream_stdout_stderr,
+                output_bytes_cap,
+                size,
+            })
+            .await?;
+
+        Ok(())
+    }
+
+    pub(super) async fn process_write_stdin(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ProcessWriteStdinParams,
+    ) -> Result<ProcessWriteStdinResponse, JSONRPCErrorError> {
+        self.process_exec_manager
+            .write_stdin(request_id, params)
+            .await
+    }
+
+    pub(super) async fn process_resize_pty(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ProcessResizePtyParams,
+    ) -> Result<ProcessResizePtyResponse, JSONRPCErrorError> {
+        self.process_exec_manager.resize_pty(request_id, params).await
+    }
+
+    pub(super) async fn process_kill(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ProcessKillParams,
+    ) -> Result<ProcessKillResponse, JSONRPCErrorError> {
+        self.process_exec_manager.kill(request_id, params).await
+    }
+}
+
 #[derive(Clone, Default)]
-pub(crate) struct ProcessExecManager {
+pub(super) struct ProcessExecManager {
     sessions: Arc<Mutex<HashMap<ConnectionProcessHandle, ProcessSession>>>,
 }
 
@@ -67,16 +206,16 @@ struct ProcessControlRequest {
     response_tx: Option<oneshot::Sender<Result<(), JSONRPCErrorError>>>,
 }
 
-pub(crate) struct StartProcessParams {
-    pub(crate) outgoing: Arc<OutgoingMessageSender>,
-    pub(crate) request_id: ConnectionRequestId,
-    pub(crate) process_handle: String,
-    pub(crate) exec_request: ExecRequest,
-    pub(crate) tty: bool,
-    pub(crate) stream_stdin: bool,
-    pub(crate) stream_stdout_stderr: bool,
-    pub(crate) output_bytes_cap: Option<usize>,
-    pub(crate) size: Option<TerminalSize>,
+struct StartProcessParams {
+    outgoing: Arc<OutgoingMessageSender>,
+    request_id: ConnectionRequestId,
+    process_handle: String,
+    exec_request: ExecRequest,
+    tty: bool,
+    stream_stdin: bool,
+    stream_stdout_stderr: bool,
+    output_bytes_cap: Option<usize>,
+    size: Option<TerminalSize>,
 }
 
 struct RunProcessParams {
@@ -103,10 +242,7 @@ struct SpawnProcessOutputParams {
 }
 
 impl ProcessExecManager {
-    pub(crate) async fn start(
-        &self,
-        params: StartProcessParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    async fn start(&self, params: StartProcessParams) -> Result<(), JSONRPCErrorError> {
         let StartProcessParams {
             outgoing,
             request_id,
@@ -204,7 +340,7 @@ impl ProcessExecManager {
         Ok(())
     }
 
-    pub(crate) async fn write_stdin(
+    async fn write_stdin(
         &self,
         request_id: ConnectionRequestId,
         params: ProcessWriteStdinParams,
@@ -235,7 +371,7 @@ impl ProcessExecManager {
         Ok(ProcessWriteStdinResponse {})
     }
 
-    pub(crate) async fn kill(
+    async fn kill(
         &self,
         request_id: ConnectionRequestId,
         params: ProcessKillParams,
@@ -249,7 +385,7 @@ impl ProcessExecManager {
         Ok(ProcessKillResponse {})
     }
 
-    pub(crate) async fn resize_pty(
+    async fn resize_pty(
         &self,
         request_id: ConnectionRequestId,
         params: ProcessResizePtyParams,
@@ -265,7 +401,7 @@ impl ProcessExecManager {
         Ok(ProcessResizePtyResponse {})
     }
 
-    pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
+    pub(super) async fn connection_closed(&self, connection_id: ConnectionId) {
         let controls = {
             let mut sessions = self.sessions.lock().await;
             let process_handles = sessions
@@ -535,7 +671,7 @@ fn handle_process_resize(
         .map_err(|err| invalid_request(format!("failed to resize PTY: {err}")))
 }
 
-pub(crate) fn terminal_size_from_protocol(
+fn terminal_size_from_protocol(
     size: ProcessTerminalSize,
 ) -> Result<TerminalSize, JSONRPCErrorError> {
     if size.rows == 0 || size.cols == 0 {
