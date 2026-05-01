@@ -1692,7 +1692,7 @@ fn search_tool_keeps_plain_deferred_dynamic_tools_when_namespace_tools_are_disab
 }
 
 #[test]
-fn tool_suggest_is_not_registered_without_feature_flag() {
+fn request_plugin_install_is_not_registered_without_feature_flag() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::ToolSearch);
@@ -1730,7 +1730,7 @@ fn tool_suggest_is_not_registered_without_feature_flag() {
 }
 
 #[test]
-fn tool_suggest_can_be_registered_without_search_tool() {
+fn request_plugin_install_can_be_registered_without_search_tool() {
     let model_info = ModelInfo {
         supports_search_tool: false,
         ..search_capable_model_info()
@@ -1763,11 +1763,12 @@ fn tool_suggest_can_be_registered_without_search_tool() {
     );
 
     assert_contains_tool_names(&tools, &[REQUEST_PLUGIN_INSTALL_TOOL_NAME]);
-    let tool_suggest = find_tool(&tools, REQUEST_PLUGIN_INSTALL_TOOL_NAME);
-    assert!(tool_suggest.supports_parallel_tool_calls);
+    let request_plugin_install = find_tool(&tools, REQUEST_PLUGIN_INSTALL_TOOL_NAME);
+    assert!(request_plugin_install.supports_parallel_tool_calls);
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
 
-    let ToolSpec::Function(ResponsesApiTool { description, .. }) = &tool_suggest.spec else {
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) = &request_plugin_install.spec
+    else {
         panic!("expected function tool");
     };
     assert!(description.contains(
@@ -1779,7 +1780,7 @@ fn tool_suggest_can_be_registered_without_search_tool() {
 }
 
 #[test]
-fn tool_suggest_description_lists_discoverable_tools() {
+fn request_plugin_install_description_lists_discoverable_tools() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
@@ -1828,15 +1829,15 @@ fn tool_suggest_description_lists_discoverable_tools() {
     );
     assert!(handlers.contains(&ToolHandlerSpec {
         name: ToolName::plain(REQUEST_PLUGIN_INSTALL_TOOL_NAME),
-        kind: ToolHandlerKind::ToolSuggest,
+        kind: ToolHandlerKind::RequestPluginInstall,
     }));
 
-    let tool_suggest = find_tool(&tools, REQUEST_PLUGIN_INSTALL_TOOL_NAME);
+    let request_plugin_install = find_tool(&tools, REQUEST_PLUGIN_INSTALL_TOOL_NAME);
     let ToolSpec::Function(ResponsesApiTool {
         description,
         parameters,
         ..
-    }) = &tool_suggest.spec
+    }) = &request_plugin_install.spec
     else {
         panic!("expected function tool");
     };

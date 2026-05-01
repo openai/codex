@@ -111,7 +111,7 @@ impl From<DiscoverablePluginInfo> for DiscoverableTool {
     }
 }
 
-pub fn filter_tool_suggest_discoverable_tools_for_client(
+pub fn filter_request_plugin_install_discoverable_tools_for_client(
     discoverable_tools: Vec<DiscoverableTool>,
     app_server_client_name: Option<&str>,
 ) -> Vec<DiscoverableTool> {
@@ -136,7 +136,7 @@ pub struct DiscoverablePluginInfo {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ToolSuggestEntry {
+pub struct RequestPluginInstallEntry {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
@@ -271,7 +271,9 @@ pub fn collect_tool_search_source_infos<'a>(
         .collect()
 }
 
-pub fn create_tool_suggest_tool(discoverable_tools: &[ToolSuggestEntry]) -> ToolSpec {
+pub fn create_request_plugin_install_tool(
+    discoverable_tools: &[RequestPluginInstallEntry],
+) -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "tool_type".to_string(),
@@ -321,13 +323,13 @@ pub fn create_tool_suggest_tool(discoverable_tools: &[ToolSuggestEntry]) -> Tool
     })
 }
 
-pub fn collect_tool_suggest_entries(
+pub fn collect_request_plugin_install_entries(
     discoverable_tools: &[DiscoverableTool],
-) -> Vec<ToolSuggestEntry> {
+) -> Vec<RequestPluginInstallEntry> {
     discoverable_tools
         .iter()
         .map(|tool| match tool {
-            DiscoverableTool::Connector(connector) => ToolSuggestEntry {
+            DiscoverableTool::Connector(connector) => RequestPluginInstallEntry {
                 id: connector.id.clone(),
                 name: connector.name.clone(),
                 description: connector.description.clone(),
@@ -336,7 +338,7 @@ pub fn collect_tool_suggest_entries(
                 mcp_server_names: Vec::new(),
                 app_connector_ids: Vec::new(),
             },
-            DiscoverableTool::Plugin(plugin) => ToolSuggestEntry {
+            DiscoverableTool::Plugin(plugin) => RequestPluginInstallEntry {
                 id: plugin.id.clone(),
                 name: plugin.name.clone(),
                 description: plugin.description.clone(),
@@ -349,7 +351,7 @@ pub fn collect_tool_suggest_entries(
         .collect()
 }
 
-fn format_discoverable_tools(discoverable_tools: &[ToolSuggestEntry]) -> String {
+fn format_discoverable_tools(discoverable_tools: &[RequestPluginInstallEntry]) -> String {
     let mut discoverable_tools = discoverable_tools.to_vec();
     discoverable_tools.sort_by(|left, right| {
         left.name
@@ -373,7 +375,7 @@ fn format_discoverable_tools(discoverable_tools: &[ToolSuggestEntry]) -> String 
         .join("\n")
 }
 
-fn tool_description_or_fallback(tool: &ToolSuggestEntry) -> String {
+fn tool_description_or_fallback(tool: &RequestPluginInstallEntry) -> String {
     if let Some(description) = tool
         .description
         .as_deref()
@@ -389,7 +391,7 @@ fn tool_description_or_fallback(tool: &ToolSuggestEntry) -> String {
     }
 }
 
-fn plugin_summary(tool: &ToolSuggestEntry) -> String {
+fn plugin_summary(tool: &RequestPluginInstallEntry) -> String {
     let mut details = Vec::new();
     if tool.has_skills {
         details.push("skills".to_string());

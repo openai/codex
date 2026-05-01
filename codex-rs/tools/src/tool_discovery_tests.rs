@@ -49,7 +49,7 @@ fn create_tool_search_tool_deduplicates_and_renders_enabled_sources() {
 }
 
 #[test]
-fn create_tool_suggest_tool_uses_plugin_summary_fallback() {
+fn create_request_plugin_install_tool_uses_plugin_summary_fallback() {
     let expected_description = concat!(
         "# Request plugin/connector install\n\n",
         "Use this tool only to ask the user to install one known plugin or connector from the list below. The list contains known candidates that are not currently installed.\n\n",
@@ -77,8 +77,8 @@ fn create_tool_suggest_tool_uses_plugin_summary_fallback() {
     );
 
     assert_eq!(
-        create_tool_suggest_tool(&[
-            ToolSuggestEntry {
+        create_request_plugin_install_tool(&[
+            RequestPluginInstallEntry {
                 id: "slack@openai-curated".to_string(),
                 name: "Slack".to_string(),
                 description: None,
@@ -87,7 +87,7 @@ fn create_tool_suggest_tool_uses_plugin_summary_fallback() {
                 mcp_server_names: Vec::new(),
                 app_connector_ids: Vec::new(),
             },
-            ToolSuggestEntry {
+            RequestPluginInstallEntry {
                 id: "github".to_string(),
                 name: "GitHub".to_string(),
                 description: None,
@@ -157,7 +157,7 @@ fn discoverable_tool_enums_use_expected_wire_names() {
 }
 
 #[test]
-fn filter_tool_suggest_discoverable_tools_for_codex_tui_omits_plugins() {
+fn filter_request_plugin_install_discoverable_tools_for_codex_tui_omits_plugins() {
     let discoverable_tools = vec![
         DiscoverableTool::Connector(Box::new(AppInfo {
             id: "connector_google_calendar".to_string(),
@@ -185,7 +185,10 @@ fn filter_tool_suggest_discoverable_tools_for_codex_tui_omits_plugins() {
     ];
 
     assert_eq!(
-        filter_tool_suggest_discoverable_tools_for_client(discoverable_tools, Some("codex-tui"),),
+        filter_request_plugin_install_discoverable_tools_for_client(
+            discoverable_tools,
+            Some("codex-tui"),
+        ),
         vec![DiscoverableTool::Connector(Box::new(AppInfo {
             id: "connector_google_calendar".to_string(),
             name: "Google Calendar".to_string(),

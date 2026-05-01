@@ -791,7 +791,7 @@ async fn multi_agent_v2_wait_agent_schema_uses_configured_min_timeout() {
 }
 
 #[tokio::test]
-async fn tool_suggest_requires_apps_and_plugins_features() {
+async fn request_plugin_install_requires_apps_and_plugins_features() {
     let model_info = search_capable_model_info().await;
     let discoverable_tools = Some(vec![discoverable_connector(
         "connector_2128aebfecb84f64a069897515042a44",
