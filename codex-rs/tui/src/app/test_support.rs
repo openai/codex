@@ -59,6 +59,7 @@ pub(super) async fn make_test_app() -> App {
         pending_primary_events: VecDeque::new(),
         pending_app_server_requests: PendingAppServerRequests::default(),
         pending_plugin_enabled_writes: HashMap::new(),
+        pending_hook_enabled_writes: HashMap::new(),
     }
 }
 
@@ -74,7 +75,8 @@ fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
         "test_originator".to_string(),
         /*log_user_prompts*/ false,
         "test".to_string(),
-        SessionSource::Cli,
+        serde_json::from_value(serde_json::json!("cli"))
+            .expect("cli session source should deserialize"),
     )
 }
 

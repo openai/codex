@@ -13,6 +13,7 @@ use codex_core::CodexThread;
 use codex_core::NewThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config as CodexConfig;
+use codex_core::thread_store_from_config;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
@@ -68,7 +69,10 @@ pub async fn run_codex_tool_session(
         thread_id,
         thread,
         session_configured,
-    } = match thread_manager.start_thread(config).await {
+    } = match thread_manager
+        .start_thread(config.clone(), thread_store_from_config(&config))
+        .await
+    {
         Ok(res) => res,
         Err(e) => {
             let result = CallToolResult {

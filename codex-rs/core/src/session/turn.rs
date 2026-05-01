@@ -170,7 +170,7 @@ pub(crate) async fn run_turn(
     let loaded_plugins = sess
         .services
         .plugins_manager
-        .plugins_for_config(&turn_context.config)
+        .plugins_for_config(&turn_context.config.plugins_config_input())
         .await;
     // Structured plugin:// mentions are resolved from the current session's
     // enabled plugins, then converted into turn-scoped guidance below.
@@ -520,7 +520,8 @@ pub(crate) async fn run_turn(
                         stop_hook_active,
                         last_assistant_message: last_agent_message.clone(),
                     };
-                    for run in sess.hooks().preview_stop(&stop_request) {
+                    let hooks = sess.hooks();
+                    for run in hooks.preview_stop(&stop_request) {
                         sess.send_event(
                             &turn_context,
                             EventMsg::HookStarted(codex_protocol::protocol::HookStartedEvent {
@@ -530,7 +531,7 @@ pub(crate) async fn run_turn(
                         )
                         .await;
                     }
-                    let stop_outcome = sess.hooks().run_stop(stop_request).await;
+                    let stop_outcome = hooks.run_stop(stop_request).await;
                     emit_hook_completed_events(&sess, &turn_context, stop_outcome.hook_events)
                         .await;
                     if stop_outcome.should_block {
@@ -1123,7 +1124,7 @@ pub(crate) async fn built_tools(
     let loaded_plugins = sess
         .services
         .plugins_manager
-        .plugins_for_config(&turn_context.config)
+        .plugins_for_config(&turn_context.config.plugins_config_input())
         .await;
 
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
@@ -1901,7 +1902,7 @@ async fn try_run_sampling_request(
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
                 if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
-                    && let Some(event) = consumer.flush_on_complete()
+                    && let Ok(Some(event)) = consumer.finish()
                 {
                     sess.send_event(&turn_context, event).await;
                 }

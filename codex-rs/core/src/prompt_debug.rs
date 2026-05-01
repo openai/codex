@@ -4,9 +4,7 @@ use std::sync::Arc;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
-use codex_features::Feature;
 use codex_login::AuthManager;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -19,6 +17,7 @@ use crate::session::session::Session;
 use crate::session::turn::build_prompt;
 use crate::session::turn::built_tools;
 use crate::thread_manager::ThreadManager;
+use crate::thread_manager::thread_store_from_config;
 
 /// Build the model-visible `input` list for a single debug turn.
 #[doc(hidden)]
@@ -40,17 +39,11 @@ pub async fn build_prompt_input(
         &config,
         Arc::clone(&auth_manager),
         SessionSource::Exec,
-        CollaborationModesConfig {
-            default_mode_request_user_input: config
-                .features
-                .enabled(Feature::DefaultModeRequestUserInput),
-        },
-        Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::from_env(
-            local_runtime_paths,
-        ))),
+        Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await),
         /*analytics_events_client*/ None,
     );
-    let thread = thread_manager.start_thread(config).await?;
+    let thread_store = thread_store_from_config(&config);
+    let thread = thread_manager.start_thread(config, thread_store).await?;
 
     let output = build_prompt_input_from_session(thread.thread.codex.session.as_ref(), input).await;
     let shutdown = thread.thread.shutdown_and_wait().await;

@@ -26,13 +26,13 @@ use tracing::warn;
 
 use crate::config::Config;
 use crate::mcp::McpManager;
-use crate::plugins::PluginsManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
 use crate::session::INITIAL_SUBMIT_ID;
 use codex_config::AppsRequirementsToml;
 use codex_config::types::AppToolApproval;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::ToolSuggestDiscoverableType;
+use codex_core_plugins::PluginsManager;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -201,7 +201,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         config.codex_linux_sandbox_exe.clone(),
     )?;
     let environment_manager =
-        EnvironmentManager::new(EnvironmentManagerArgs::from_env(local_runtime_paths));
+        EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await;
     list_accessible_connectors_from_mcp_tools_with_environment_manager(
         config,
         force_refetch,
@@ -403,8 +403,9 @@ fn write_cached_accessible_connectors(
 }
 
 async fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
+    let plugins_input = config.plugins_config_input();
     let mut connector_ids = PluginsManager::new(config.codex_home.to_path_buf())
-        .plugins_for_config(config)
+        .plugins_for_config(&plugins_input)
         .await
         .capability_summaries()
         .iter()
@@ -419,6 +420,14 @@ async fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
             .filter(|discoverable| discoverable.kind == ToolSuggestDiscoverableType::Connector)
             .map(|discoverable| discoverable.id.clone()),
     );
+    let disabled_connector_ids = config
+        .tool_suggest
+        .disabled_tools
+        .iter()
+        .filter(|disabled_tool| disabled_tool.kind == ToolSuggestDiscoverableType::Connector)
+        .map(|disabled_tool| disabled_tool.id.as_str())
+        .collect::<HashSet<_>>();
+    connector_ids.retain(|connector_id| !disabled_connector_ids.contains(connector_id.as_str()));
     connector_ids
 }
 

@@ -3,6 +3,8 @@ mod enroll;
 mod protocol;
 mod websocket;
 
+use crate::transport::remote_control::websocket::RemoteControlChannels;
+use crate::transport::remote_control::websocket::RemoteControlStatusPublisher;
 use crate::transport::remote_control::websocket::RemoteControlWebsocket;
 
 pub use self::protocol::ClientId;
@@ -12,6 +14,8 @@ use self::protocol::normalize_remote_control_url;
 use super::CHANNEL_CAPACITY;
 use super::TransportEvent;
 use super::next_connection_id;
+use codex_app_server_protocol::RemoteControlConnectionStatus;
+use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_login::AuthManager;
 use codex_state::StateRuntime;
 use std::io;
@@ -33,6 +37,7 @@ pub(super) struct QueuedServerEnvelope {
 #[derive(Clone)]
 pub(crate) struct RemoteControlHandle {
     enabled_tx: Arc<watch::Sender<bool>>,
+    status_tx: Arc<watch::Sender<RemoteControlStatusChangedNotification>>,
     state_db_available: bool,
 }
 
@@ -48,6 +53,12 @@ impl RemoteControlHandle {
             *state = enabled;
             changed
         });
+    }
+
+    pub(crate) fn status_receiver(
+        &self,
+    ) -> watch::Receiver<RemoteControlStatusChangedNotification> {
+        self.status_tx.subscribe()
     }
 }
 
@@ -73,13 +84,26 @@ pub(crate) async fn start_remote_control(
     };
 
     let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
+    let initial_status = RemoteControlStatusChangedNotification {
+        status: if initial_enabled {
+            RemoteControlConnectionStatus::Connecting
+        } else {
+            RemoteControlConnectionStatus::Disabled
+        },
+        environment_id: None,
+    };
+    let (status_tx, _status_rx) = watch::channel(initial_status);
+    let status_publisher = RemoteControlStatusPublisher::new(status_tx.clone());
     let join_handle = tokio::spawn(async move {
         RemoteControlWebsocket::new(
             remote_control_url,
             remote_control_target,
             state_db,
             auth_manager,
-            transport_event_tx,
+            RemoteControlChannels {
+                transport_event_tx,
+                status_publisher,
+            },
             shutdown_token,
             enabled_rx,
         )
@@ -91,6 +115,7 @@ pub(crate) async fn start_remote_control(
         join_handle,
         RemoteControlHandle {
             enabled_tx: Arc::new(enabled_tx),
+            status_tx: Arc::new(status_tx),
             state_db_available,
         },
     ))

@@ -2,6 +2,7 @@
 use std::io;
 use std::net::SocketAddr;
 use std::net::TcpListener;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -12,6 +13,9 @@ use codex_login::ServerOptions;
 use codex_login::run_login_server;
 use core_test_support::skip_if_no_network;
 use tempfile::tempdir;
+
+const DEFAULT_LOGIN_PORT: u16 = 1455;
+const FALLBACK_LOGIN_PORT: u16 = 1457;
 
 // See spawn.rs for details
 
@@ -118,6 +122,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         open_browser: false,
         force_state: Some(state),
         forced_chatgpt_workspace_id: Some(chatgpt_account_id.to_string()),
+        codex_streamlined_login: false,
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -179,6 +184,7 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
         open_browser: false,
         force_state: Some(state),
         forced_chatgpt_workspace_id: None,
+        codex_streamlined_login: false,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -218,6 +224,7 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
         open_browser: false,
         force_state: Some(state.clone()),
         forced_chatgpt_workspace_id: Some("org-required".to_string()),
+        codex_streamlined_login: false,
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -275,6 +282,7 @@ async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error()
         open_browser: false,
         force_state: Some(state.clone()),
         forced_chatgpt_workspace_id: None,
+        codex_streamlined_login: false,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -342,6 +350,7 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
         open_browser: false,
         force_state: Some(state.clone()),
         forced_chatgpt_workspace_id: None,
+        codex_streamlined_login: false,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -402,6 +411,72 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn falls_back_to_registered_fallback_port_when_default_port_is_in_use() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    match TcpListener::bind(("127.0.0.1", FALLBACK_LOGIN_PORT)) {
+        Ok(listener) => drop(listener),
+        Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
+            eprintln!("Skipping test because 127.0.0.1:{FALLBACK_LOGIN_PORT} is already in use");
+            return Ok(());
+        }
+        Err(err) => return Err(err.into()),
+    }
+
+    let default_port_listener = match TcpListener::bind(("127.0.0.1", DEFAULT_LOGIN_PORT)) {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
+            eprintln!("Skipping test because 127.0.0.1:{DEFAULT_LOGIN_PORT} is already in use");
+            return Ok(());
+        }
+        Err(err) => return Err(err.into()),
+    };
+    let default_port_server =
+        Arc::new(tiny_http::Server::from_listener(default_port_listener, None).unwrap());
+    let default_port_server_handle = {
+        let server = default_port_server.clone();
+        thread::spawn(move || {
+            while let Ok(req) = server.recv() {
+                let _ = req.respond(tiny_http::Response::from_string("not codex"));
+            }
+        })
+    };
+
+    let (issuer_addr, _issuer_handle) = start_mock_issuer("org-123");
+    let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
+    let tmp = tempdir()?;
+
+    let mut opts = ServerOptions::new(
+        tmp.path().to_path_buf(),
+        codex_login::CLIENT_ID.to_string(),
+        /*forced_chatgpt_workspace_id*/ None,
+        AuthCredentialsStoreMode::File,
+    );
+    opts.issuer = issuer;
+    opts.open_browser = false;
+    opts.force_state = Some("fallback_state".to_string());
+
+    let server_result = run_login_server(opts);
+    default_port_server.unblock();
+    let _ = default_port_server_handle.join();
+
+    let server = server_result?;
+    let actual_port = server.actual_port;
+    let auth_url = server.auth_url.clone();
+    server.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(2), server.block_until_done())
+        .await
+        .expect("login server should shut down after cancel");
+
+    assert_eq!(actual_port, FALLBACK_LOGIN_PORT);
+    assert!(auth_url.contains(&format!(
+        "redirect_uri=http%3A%2F%2Flocalhost%3A{FALLBACK_LOGIN_PORT}%2Fauth%2Fcallback"
+    )));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -420,6 +495,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         open_browser: false,
         force_state: Some("cancel_state".to_string()),
         forced_chatgpt_workspace_id: None,
+        codex_streamlined_login: false,
     };
 
     let first_server = run_login_server(first_opts)?;
@@ -440,6 +516,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         open_browser: false,
         force_state: Some("cancel_state_2".to_string()),
         forced_chatgpt_workspace_id: None,
+        codex_streamlined_login: false,
     };
 
     let second_server = run_login_server(second_opts)?;

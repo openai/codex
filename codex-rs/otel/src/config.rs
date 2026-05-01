@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde::Deserialize;
+use serde::Serialize;
 
 pub(crate) const STATSIG_OTLP_HTTP_ENDPOINT: &str = "https://ab.chatgpt.com/otlp/v1/metrics";
 pub(crate) const STATSIG_API_KEY_HEADER: &str = "statsig-api-key";
@@ -42,6 +44,14 @@ pub struct OtelSettings {
     pub trace_exporter: OtelExporter,
     pub metrics_exporter: OtelExporter,
     pub runtime_metrics: bool,
+}
+
+/// Resolved Statsig metrics settings that another process can use to recreate
+/// the built-in metrics exporter configuration without receiving generic
+/// exporter credentials in-process.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatsigMetricsSettings {
+    pub environment: String,
 }
 
 #[derive(Clone, Debug)]

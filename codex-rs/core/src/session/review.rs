@@ -25,6 +25,7 @@ pub(super) async fn spawn_review_thread(
     let _ = review_features.disable(Feature::WebSearchCached);
     let review_web_search_mode = WebSearchMode::Disabled;
     let goal_tools_supported = !config.ephemeral && parent_turn_context.tools_config.goal_tools;
+    let provider_capabilities = parent_turn_context.provider.capabilities();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
         available_models: &sess
@@ -41,6 +42,9 @@ pub(super) async fn spawn_review_thread(
         permission_profile: &parent_turn_context.permission_profile,
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
     })
+    .with_namespace_tools_capability(provider_capabilities.namespace_tools)
+    .with_image_generation_capability(provider_capabilities.image_generation)
+    .with_web_search_capability(provider_capabilities.web_search)
     .with_unified_exec_shell_mode_for_session(
         crate::tools::spec::tool_user_shell_type(sess.services.user_shell.as_ref()),
         sess.services.shell_zsh_path.as_ref(),

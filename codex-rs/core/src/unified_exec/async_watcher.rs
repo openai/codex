@@ -132,6 +132,7 @@ pub(crate) fn spawn_exit_watcher(
                 cwd,
                 Some(process_id.to_string()),
                 transcript,
+                String::new(),
                 message,
                 duration,
             )
@@ -238,10 +239,15 @@ pub(crate) async fn emit_failed_exec_end_for_unified_exec(
     cwd: AbsolutePathBuf,
     process_id: Option<String>,
     transcript: Arc<Mutex<HeadTailBuffer>>,
+    fallback_output: String,
     message: String,
     duration: Duration,
 ) {
-    let stdout = resolve_aggregated_output(&transcript, String::new()).await;
+    let stdout = if fallback_output.is_empty() {
+        resolve_aggregated_output(&transcript, fallback_output).await
+    } else {
+        fallback_output
+    };
     let aggregated_output = if stdout.is_empty() {
         message.clone()
     } else {

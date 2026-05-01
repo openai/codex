@@ -1,5 +1,7 @@
 use super::*;
 use codex_config::Constrained;
+use codex_config::types::AppToolApproval;
+use codex_config::types::ApprovalsReviewer;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
@@ -7,6 +9,7 @@ use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::GranularApprovalConfig;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -14,6 +17,7 @@ use std::path::PathBuf;
 fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
     McpConfig {
         chatgpt_base_url: "https://chatgpt.com".to_string(),
+        apps_mcp_path_override: None,
         codex_home,
         mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode::default(),
         mcp_oauth_callback_port: None,
@@ -44,6 +48,7 @@ fn mcp_prompt_auto_approval_honors_unrestricted_managed_profiles() {
             file_system: ManagedFileSystemPermissions::Unrestricted,
             network: NetworkSandboxPolicy::Enabled,
         },
+        McpPermissionPromptAutoApproveContext::default(),
     ));
     assert!(mcp_permission_prompt_is_auto_approved(
         AskForApproval::Never,
@@ -51,16 +56,69 @@ fn mcp_prompt_auto_approval_honors_unrestricted_managed_profiles() {
             file_system: ManagedFileSystemPermissions::Unrestricted,
             network: NetworkSandboxPolicy::Restricted,
         },
+        McpPermissionPromptAutoApproveContext::default(),
     ));
     assert!(!mcp_permission_prompt_is_auto_approved(
         AskForApproval::Never,
         &PermissionProfile::read_only(),
+        McpPermissionPromptAutoApproveContext::default(),
     ));
     assert!(!mcp_permission_prompt_is_auto_approved(
         AskForApproval::OnRequest,
         &PermissionProfile::Managed {
             file_system: ManagedFileSystemPermissions::Unrestricted,
             network: NetworkSandboxPolicy::Enabled,
+        },
+        McpPermissionPromptAutoApproveContext::default(),
+    ));
+}
+
+#[test]
+fn mcp_prompt_auto_approval_honors_auto_review_approved_tools() {
+    assert!(mcp_permission_prompt_is_auto_approved(
+        AskForApproval::OnRequest,
+        &PermissionProfile::read_only(),
+        McpPermissionPromptAutoApproveContext {
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            tool_approval_mode: Some(AppToolApproval::Approve),
+        },
+    ));
+    assert!(mcp_permission_prompt_is_auto_approved(
+        AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: true,
+        }),
+        &PermissionProfile::read_only(),
+        McpPermissionPromptAutoApproveContext {
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            tool_approval_mode: Some(AppToolApproval::Approve),
+        },
+    ));
+    assert!(!mcp_permission_prompt_is_auto_approved(
+        AskForApproval::OnRequest,
+        &PermissionProfile::read_only(),
+        McpPermissionPromptAutoApproveContext {
+            approvals_reviewer: Some(ApprovalsReviewer::User),
+            tool_approval_mode: Some(AppToolApproval::Approve),
+        },
+    ));
+    assert!(!mcp_permission_prompt_is_auto_approved(
+        AskForApproval::OnFailure,
+        &PermissionProfile::read_only(),
+        McpPermissionPromptAutoApproveContext {
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            tool_approval_mode: Some(AppToolApproval::Approve),
+        },
+    ));
+    assert!(!mcp_permission_prompt_is_auto_approved(
+        AskForApproval::UnlessTrusted,
+        &PermissionProfile::read_only(),
+        McpPermissionPromptAutoApproveContext {
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            tool_approval_mode: Some(AppToolApproval::Approve),
         },
     ));
 }
@@ -109,19 +167,31 @@ fn tool_plugin_provenance_collects_app_and_mcp_sources() {
 #[test]
 fn codex_apps_mcp_url_for_base_url_keeps_existing_paths() {
     assert_eq!(
-        codex_apps_mcp_url_for_base_url("https://chatgpt.com/backend-api"),
+        codex_apps_mcp_url_for_base_url(
+            "https://chatgpt.com/backend-api",
+            /*apps_mcp_path_override*/ None,
+        ),
         "https://chatgpt.com/backend-api/wham/apps"
     );
     assert_eq!(
-        codex_apps_mcp_url_for_base_url("https://chat.openai.com"),
+        codex_apps_mcp_url_for_base_url(
+            "https://chat.openai.com",
+            /*apps_mcp_path_override*/ None,
+        ),
         "https://chat.openai.com/backend-api/wham/apps"
     );
     assert_eq!(
-        codex_apps_mcp_url_for_base_url("http://localhost:8080/api/codex"),
+        codex_apps_mcp_url_for_base_url(
+            "http://localhost:8080/api/codex",
+            /*apps_mcp_path_override*/ None,
+        ),
         "http://localhost:8080/api/codex/apps"
     );
     assert_eq!(
-        codex_apps_mcp_url_for_base_url("http://localhost:8080"),
+        codex_apps_mcp_url_for_base_url(
+            "http://localhost:8080",
+            /*apps_mcp_path_override*/ None,
+        ),
         "http://localhost:8080/api/codex/apps"
     );
 }
@@ -156,6 +226,25 @@ fn codex_apps_server_config_uses_legacy_codex_apps_path() {
     };
 
     assert_eq!(url, "https://chatgpt.com/backend-api/wham/apps");
+}
+
+#[test]
+fn codex_apps_server_config_uses_configured_apps_mcp_path_override() {
+    let mut config = test_mcp_config(PathBuf::from("/tmp"));
+    config.apps_mcp_path_override = Some("/custom/mcp".to_string());
+    config.apps_enabled = true;
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    let servers = with_codex_apps_mcp(HashMap::new(), Some(&auth), &config);
+    let server = servers
+        .get(CODEX_APPS_MCP_SERVER_NAME)
+        .expect("codex apps should be present when apps is enabled");
+    let url = match &server.transport {
+        McpServerTransportConfig::StreamableHttp { url, .. } => url,
+        _ => panic!("expected streamable http transport for codex apps"),
+    };
+
+    assert_eq!(url, "https://chatgpt.com/backend-api/custom/mcp");
 }
 
 #[tokio::test]

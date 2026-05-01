@@ -94,6 +94,37 @@ pub fn prepare_pending_session_imports(
     Ok(pending_session_imports)
 }
 
+pub fn prepare_validated_session_imports(
+    codex_home: &Path,
+    requested_sessions: Vec<ExternalAgentSessionMigration>,
+) -> Vec<PendingSessionImport> {
+    requested_sessions
+        .into_iter()
+        .filter_map(|session| pending_session_import(codex_home, session))
+        .collect()
+}
+
+fn pending_session_import(
+    codex_home: &Path,
+    session: ExternalAgentSessionMigration,
+) -> Option<PendingSessionImport> {
+    let has_been_imported = match has_current_session_been_imported(codex_home, &session.path) {
+        Ok(has_been_imported) => has_been_imported,
+        Err(_) => return None,
+    };
+    if has_been_imported {
+        return None;
+    }
+    let imported_session = match load_importable_session(&session.path) {
+        Ok(Some(imported_session)) => imported_session,
+        Ok(None) | Err(_) => return None,
+    };
+    Some(PendingSessionImport {
+        source_path: session.path,
+        session: imported_session,
+    })
+}
+
 fn load_importable_session(path: &Path) -> io::Result<Option<ImportedExternalAgentSession>> {
     let Some(imported_session) = load_session_for_import(path)? else {
         return Ok(None);

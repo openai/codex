@@ -45,12 +45,6 @@ impl ToolHandler for Handler {
 
         let session_source = turn.session_source.clone();
         let child_depth = next_thread_spawn_depth(&session_source);
-        let max_depth = turn.config.agent_max_depth;
-        if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
-            return Err(FunctionCallError::RespondToModel(
-                "Agent depth limit reached. Solve the task yourself.".to_string(),
-            ));
-        }
         session
             .send_event(
                 &turn,

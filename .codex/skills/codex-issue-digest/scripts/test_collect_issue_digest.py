@@ -51,6 +51,77 @@ def test_normalize_requested_labels_accepts_all_area_phrases():
     )
 
 
+def test_search_issue_numbers_requests_updated_sort(monkeypatch):
+    calls = []
+
+    def fake_gh_json(args):
+        calls.append(args)
+        return {
+            "items": [
+                {"number": 1, "updated_at": "2026-04-25T00:00:00Z"},
+            ]
+        }
+
+    monkeypatch.setattr(collect_issue_digest, "gh_json", fake_gh_json)
+
+    assert collect_issue_digest.search_issue_numbers(["query"], limit=10) == [1]
+    assert "-f" in calls[0]
+    assert "sort=updated" in calls[0]
+    assert "order=desc" in calls[0]
+
+
+def test_search_issue_numbers_applies_limit_per_query(monkeypatch):
+    calls = []
+
+    def fake_gh_json(args):
+        calls.append(args)
+        query = next(
+            value.removeprefix("q=") for value in args if value.startswith("q=")
+        )
+        page = int(
+            next(
+                value.removeprefix("page=")
+                for value in args
+                if value.startswith("page=")
+            )
+        )
+        base = 10_000 if query == "first" else 20_000
+        offset = (page - 1) * 100
+        return {
+            "items": [
+                {
+                    "number": base + offset + idx,
+                    "updated_at": f"2026-04-25T00:{idx:02d}:00Z",
+                }
+                for idx in range(100)
+            ]
+        }
+
+    monkeypatch.setattr(collect_issue_digest, "gh_json", fake_gh_json)
+
+    collect_issue_digest.search_issue_numbers(["first", "second"], limit=150)
+
+    queried_pages = [
+        (
+            next(
+                value.removeprefix("q=") for value in args if value.startswith("q=")
+            ),
+            next(
+                value.removeprefix("page=")
+                for value in args
+                if value.startswith("page=")
+            ),
+        )
+        for args in calls
+    ]
+    assert queried_pages == [
+        ("first", "1"),
+        ("first", "2"),
+        ("second", "1"),
+        ("second", "2"),
+    ]
+
+
 def test_summarize_issue_keeps_new_comments_and_reaction_signals():
     since = collect_issue_digest.parse_timestamp("2026-04-25T00:00:00Z", "--since")
     until = collect_issue_digest.parse_timestamp("2026-04-26T00:00:00Z", "--until")
@@ -227,19 +298,19 @@ def test_parse_duration_hours_accepts_common_phrases():
 
 def test_attention_thresholds_scale_by_window_length():
     one_day = collect_issue_digest.attention_thresholds_for_window(24)
-    assert one_day["elevated"] == 10
-    assert one_day["very_high"] == 20
+    assert one_day["elevated"] == 5
+    assert one_day["very_high"] == 10
 
     half_day = collect_issue_digest.attention_thresholds_for_window(12)
-    assert half_day["elevated"] == 5
-    assert half_day["very_high"] == 10
+    assert half_day["elevated"] == 3
+    assert half_day["very_high"] == 5
 
     week = collect_issue_digest.attention_thresholds_for_window(168)
-    assert week["elevated"] == 70
-    assert week["very_high"] == 140
-    assert collect_issue_digest.attention_marker_for(69, week) == ""
-    assert collect_issue_digest.attention_marker_for(107, week) == "🔥"
-    assert collect_issue_digest.attention_marker_for(140, week) == "🔥🔥"
+    assert week["elevated"] == 35
+    assert week["very_high"] == 70
+    assert collect_issue_digest.attention_marker_for(34, week) == ""
+    assert collect_issue_digest.attention_marker_for(35, week) == "🔥"
+    assert collect_issue_digest.attention_marker_for(70, week) == "🔥🔥"
 
 
 def test_fetch_comments_uses_since_filter_and_page_cap(monkeypatch):
@@ -300,7 +371,7 @@ def test_attention_markers_count_human_user_interactions():
             "user": {"login": f"user-{idx}"},
             "body": "same here",
         }
-        for idx in range(9)
+        for idx in range(4)
     ]
     comments.append(
         {
@@ -322,8 +393,8 @@ def test_attention_markers_count_human_user_interactions():
         comment_chars=100,
     )
 
-    assert summary["user_interactions"] == 10
-    assert summary["activity"]["new_human_comments"] == 9
+    assert summary["user_interactions"] == 5
+    assert summary["activity"]["new_human_comments"] == 4
     assert summary["attention"] is True
     assert summary["attention_level"] == 1
     assert summary["attention_marker"] == "🔥"
@@ -337,7 +408,7 @@ def test_attention_markers_count_human_user_interactions():
             "user": {"login": f"extra-user-{idx}"},
             "body": "also seeing this",
         }
-        for idx in range(11)
+        for idx in range(100, 106)
     )
 
     summary = collect_issue_digest.summarize_issue(
@@ -350,7 +421,7 @@ def test_attention_markers_count_human_user_interactions():
         comment_chars=100,
     )
 
-    assert summary["user_interactions"] == 20
+    assert summary["user_interactions"] == 10
     assert summary["attention_level"] == 2
     assert summary["attention_marker"] == "🔥🔥"
 

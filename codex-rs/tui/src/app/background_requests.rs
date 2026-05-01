@@ -7,6 +7,9 @@
 use super::*;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
+use codex_app_server_protocol::MarketplaceRemoveParams;
+use codex_app_server_protocol::MarketplaceRemoveResponse;
+use codex_app_server_protocol::RequestId;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 impl App {
@@ -92,6 +95,17 @@ impl App {
         });
     }
 
+    pub(super) fn fetch_hooks_list(&mut self, app_server: &AppServerSession, cwd: PathBuf) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = fetch_hooks_list(request_handle, cwd.clone())
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::HooksLoaded { cwd, result });
+        });
+    }
+
     pub(super) fn fetch_plugin_detail(
         &mut self,
         app_server: &AppServerSession,
@@ -125,6 +139,30 @@ impl App {
             app_event_tx.send(AppEvent::MarketplaceAddLoaded {
                 cwd: cwd_for_event,
                 source: source_for_event,
+                result,
+            });
+        });
+    }
+
+    pub(super) fn fetch_marketplace_remove(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+        marketplace_name: String,
+        marketplace_display_name: String,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let cwd_for_event = cwd.clone();
+            let marketplace_name_for_event = marketplace_name.clone();
+            let result = fetch_marketplace_remove(request_handle, marketplace_name)
+                .await
+                .map_err(|err| format!("Failed to remove marketplace: {err}"));
+            app_event_tx.send(AppEvent::MarketplaceRemoveLoaded {
+                cwd: cwd_for_event,
+                marketplace_name: marketplace_name_for_event,
+                marketplace_display_name,
                 result,
             });
         });
@@ -223,6 +261,43 @@ impl App {
         });
     }
 
+    pub(super) fn set_hook_enabled(
+        &mut self,
+        app_server: &AppServerSession,
+        key: String,
+        enabled: bool,
+    ) {
+        if let Some(queued_enabled) = self.pending_hook_enabled_writes.get_mut(&key) {
+            *queued_enabled = Some(enabled);
+            return;
+        }
+
+        self.pending_hook_enabled_writes.insert(key.clone(), None);
+        self.spawn_hook_enabled_write(app_server, key, enabled);
+    }
+
+    pub(super) fn spawn_hook_enabled_write(
+        &mut self,
+        app_server: &AppServerSession,
+        key: String,
+        enabled: bool,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let key_for_event = key.clone();
+            let result = write_hook_enabled(request_handle, key, enabled)
+                .await
+                .map(|_| ())
+                .map_err(|err| format!("Failed to update hook config: {err}"));
+            app_event_tx.send(AppEvent::HookEnabledSet {
+                key: key_for_event,
+                enabled,
+                result,
+            });
+        });
+    }
+
     pub(super) fn refresh_plugin_mentions(&mut self) {
         let config = self.config.clone();
         let app_event_tx = self.app_event_tx.clone();
@@ -232,8 +307,9 @@ impl App {
         }
 
         tokio::spawn(async move {
+            let plugins_input = config.plugins_config_input();
             let plugins = PluginsManager::new(config.codex_home.to_path_buf())
-                .plugins_for_config(&config)
+                .plugins_for_config(&plugins_input)
                 .await
                 .capability_summaries()
                 .to_vec();
@@ -457,7 +533,7 @@ pub(super) async fn fetch_account_rate_limits(
         .await
         .wrap_err("account/rateLimits/read failed in TUI")?;
 
-    Ok(app_server_rate_limit_snapshots_to_core(response))
+    Ok(app_server_rate_limit_snapshots(response))
 }
 
 pub(super) async fn send_add_credits_nudge_email(
@@ -513,6 +589,20 @@ pub(super) async fn fetch_plugins_list(
         .wrap_err("plugin/list failed in TUI")?;
     hide_cli_only_plugin_marketplaces(&mut response);
     Ok(response)
+}
+
+pub(super) async fn fetch_hooks_list(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+) -> Result<HooksListResponse> {
+    let request_id = RequestId::String(format!("hooks-list-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::HooksList {
+            request_id,
+            params: HooksListParams { cwds: vec![cwd] },
+        })
+        .await
+        .wrap_err("hooks/list failed in TUI")
 }
 
 const CLI_HIDDEN_PLUGIN_MARKETPLACES: &[&str] = &["openai-bundled"];
@@ -582,6 +672,19 @@ fn marketplace_add_source_for_request(cwd: &std::path::Path, source: String) -> 
     source
 }
 
+pub(super) async fn fetch_marketplace_remove(
+    request_handle: AppServerRequestHandle,
+    marketplace_name: String,
+) -> Result<MarketplaceRemoveResponse> {
+    let request_id = RequestId::String(format!("marketplace-remove-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::MarketplaceRemove {
+            request_id,
+            params: MarketplaceRemoveParams { marketplace_name },
+        })
+        .await
+        .wrap_err("marketplace/remove failed in TUI")
+}
 pub(super) async fn fetch_plugin_install(
     request_handle: AppServerRequestHandle,
     marketplace_path: AbsolutePathBuf,
@@ -634,6 +737,34 @@ pub(super) async fn write_plugin_enabled(
         })
         .await
         .wrap_err("config/value/write failed while updating plugin enablement in TUI")
+}
+
+pub(super) async fn write_hook_enabled(
+    request_handle: AppServerRequestHandle,
+    key: String,
+    enabled: bool,
+) -> Result<ConfigWriteResponse> {
+    let request_id = RequestId::String(format!("hooks-config-write-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::ConfigBatchWrite {
+            request_id,
+            params: ConfigBatchWriteParams {
+                edits: vec![codex_app_server_protocol::ConfigEdit {
+                    key_path: "hooks.state".to_string(),
+                    value: serde_json::json!({
+                        key: {
+                            "enabled": enabled,
+                        }
+                    }),
+                    merge_strategy: MergeStrategy::Upsert,
+                }],
+                file_path: None,
+                expected_version: None,
+                reload_user_config: true,
+            },
+        })
+        .await
+        .wrap_err("config/batchWrite failed while updating hook enablement in TUI")
 }
 
 pub(super) fn build_feedback_upload_params(

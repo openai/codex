@@ -876,7 +876,9 @@ impl AuthModeWidget {
             match request_handle
                 .request_typed::<LoginAccountResponse>(ClientRequest::LoginAccount {
                     request_id: onboarding_request_id(),
-                    params: LoginAccountParams::Chatgpt,
+                    params: LoginAccountParams::Chatgpt {
+                        codex_streamlined_login: false,
+                    },
                 })
                 .await
             {
@@ -1016,7 +1018,6 @@ mod tests {
     use codex_cloud_requirements::cloud_requirements_loader_for_storage;
     use codex_config::types::AuthCredentialsStoreMode;
 
-    use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -1047,7 +1048,8 @@ mod tests {
                 codex_app_server_client::EnvironmentManager::default_for_tests(),
             ),
             config_warnings: Vec::new(),
-            session_source: SessionSource::Cli,
+            session_source: serde_json::from_value(serde_json::json!("cli"))
+                .expect("cli session source should deserialize"),
             enable_codex_api_key_env: false,
             client_name: "test".to_string(),
             client_version: "test".to_string(),

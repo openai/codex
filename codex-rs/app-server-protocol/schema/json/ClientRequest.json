@@ -354,6 +354,17 @@
       ],
       "type": "object"
     },
+    "CommandMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "ConfigBatchWriteParams": {
       "properties": {
         "edits": {
@@ -850,6 +861,9 @@
         "SKILLS",
         "PLUGINS",
         "MCP_SERVER_CONFIG",
+        "SUBAGENTS",
+        "HOOKS",
+        "COMMANDS",
         "SESSIONS"
       ],
       "type": "string"
@@ -1390,6 +1404,29 @@
       },
       "type": "object"
     },
+    "HookMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "HooksListParams": {
+      "properties": {
+        "cwds": {
+          "description": "When empty, defaults to the current session working directory.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ImageDetail": {
       "enum": [
         "auto",
@@ -1561,6 +1598,9 @@
         },
         {
           "properties": {
+            "codexStreamlinedLogin": {
+              "type": "boolean"
+            },
             "type": {
               "enum": [
                 "chatgpt"
@@ -1696,6 +1736,17 @@
       ],
       "type": "object"
     },
+    "McpServerMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "McpServerOauthLoginParams": {
       "properties": {
         "name": {
@@ -1779,6 +1830,27 @@
     },
     "MigrationDetails": {
       "properties": {
+        "commands": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/CommandMigration"
+          },
+          "type": "array"
+        },
+        "hooks": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/HookMigration"
+          },
+          "type": "array"
+        },
+        "mcpServers": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/McpServerMigration"
+          },
+          "type": "array"
+        },
         "plugins": {
           "default": [],
           "items": {
@@ -1790,6 +1862,13 @@
           "default": [],
           "items": {
             "$ref": "#/definitions/SessionMigration"
+          },
+          "type": "array"
+        },
+        "subagents": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/SubagentMigration"
           },
           "type": "array"
         }
@@ -1830,6 +1909,9 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "ModelProviderCapabilitiesReadParams": {
       "type": "object"
     },
     "NetworkAccess": {
@@ -1957,6 +2039,31 @@
         }
       ]
     },
+    "PermissionProfileModificationParams": {
+      "oneOf": [
+        {
+          "description": "Additional concrete directory that should be writable.",
+          "properties": {
+            "path": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "additionalWritableRoot"
+              ],
+              "title": "AdditionalWritableRootPermissionProfileModificationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "AdditionalWritableRootPermissionProfileModificationParams",
+          "type": "object"
+        }
+      ]
+    },
     "PermissionProfileNetworkPermissions": {
       "properties": {
         "enabled": {
@@ -1967,6 +2074,40 @@
         "enabled"
       ],
       "type": "object"
+    },
+    "PermissionProfileSelectionParams": {
+      "oneOf": [
+        {
+          "description": "Select a named built-in or user-defined profile and optionally apply bounded modifications that Codex knows how to validate.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "modifications": {
+              "items": {
+                "$ref": "#/definitions/PermissionProfileModificationParams"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "profile"
+              ],
+              "title": "ProfilePermissionProfileSelectionParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "ProfilePermissionProfileSelectionParams",
+          "type": "object"
+        }
+      ]
     },
     "Personality": {
       "enum": [
@@ -2042,6 +2183,37 @@
       },
       "required": [
         "pluginName"
+      ],
+      "type": "object"
+    },
+    "PluginShareDeleteParams": {
+      "properties": {
+        "remotePluginId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "remotePluginId"
+      ],
+      "type": "object"
+    },
+    "PluginShareListParams": {
+      "type": "object"
+    },
+    "PluginShareSaveParams": {
+      "properties": {
+        "pluginPath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "remotePluginId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "pluginPath"
       ],
       "type": "object"
     },
@@ -3158,6 +3330,17 @@
       ],
       "type": "string"
     },
+    "SubagentMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "TextElement": {
       "properties": {
         "byteRange": {
@@ -3268,10 +3451,6 @@
           ]
         },
         "ephemeral": {
-          "type": "boolean"
-        },
-        "excludeTurns": {
-          "description": "When true, return only thread metadata and live fork state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after forking.",
           "type": "boolean"
         },
         "model": {
@@ -3675,10 +3854,6 @@
             "null"
           ]
         },
-        "excludeTurns": {
-          "description": "When true, return only thread metadata and live-resume state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after resuming.",
-          "type": "boolean"
-        },
         "model": {
           "description": "Configuration overrides for the resumed thread, if any.",
           "type": [
@@ -3937,44 +4112,6 @@
         "clear"
       ],
       "type": "string"
-    },
-    "ThreadTurnsListParams": {
-      "properties": {
-        "cursor": {
-          "description": "Opaque cursor to pass to the next call to continue after the last turn.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "limit": {
-          "description": "Optional turn page size.",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "sortDirection": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SortDirection"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional turn pagination direction; defaults to descending."
-        },
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "threadId"
-      ],
-      "type": "object"
     },
     "ThreadUnarchiveParams": {
       "properties": {
@@ -4707,30 +4844,6 @@
       "type": "object"
     },
     {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "thread/turns/list"
-          ],
-          "title": "Thread/turns/listRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadTurnsListParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Thread/turns/listRequest",
-      "type": "object"
-    },
-    {
       "description": "Append raw Responses API items to the thread history without starting a user turn.",
       "properties": {
         "id": {
@@ -4777,6 +4890,30 @@
         "params"
       ],
       "title": "Skills/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "hooks/list"
+          ],
+          "title": "Hooks/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/HooksListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Hooks/listRequest",
       "type": "object"
     },
     {
@@ -4897,6 +5034,78 @@
         "params"
       ],
       "title": "Plugin/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/share/save"
+          ],
+          "title": "Plugin/share/saveRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginShareSaveParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/share/saveRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/share/list"
+          ],
+          "title": "Plugin/share/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginShareListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/share/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/share/delete"
+          ],
+          "title": "Plugin/share/deleteRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginShareDeleteParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/share/deleteRequest",
       "type": "object"
     },
     {
@@ -5401,6 +5610,30 @@
         "params"
       ],
       "title": "Model/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "modelProvider/capabilities/read"
+          ],
+          "title": "ModelProvider/capabilities/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ModelProviderCapabilitiesReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ModelProvider/capabilities/readRequest",
       "type": "object"
     },
     {

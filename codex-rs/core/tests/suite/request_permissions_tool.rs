@@ -6,11 +6,12 @@ use codex_core::config::Constrained;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -28,6 +29,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
@@ -70,13 +72,13 @@ fn build_add_file_patch(patch_path: &Path, content: &str) -> String {
     )
 }
 
-fn workspace_write_excluding_tmp() -> SandboxPolicy {
-    SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    }
+fn workspace_write_excluding_tmp() -> PermissionProfile {
+    PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    )
 }
 
 fn requested_directory_write_permissions(path: &Path) -> RequestPermissionProfile {
@@ -133,10 +135,12 @@ async fn submit_turn(
     test: &TestCodex,
     prompt: &str,
     approval_policy: AskForApproval,
-    sandbox_policy: SandboxPolicy,
+    permission_profile: PermissionProfile,
     approvals_reviewer: Option<ApprovalsReviewer>,
 ) -> Result<()> {
     let session_model = test.session_configured.model.clone();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(permission_profile, test.config.cwd.as_path());
     test.codex
         .submit(Op::UserTurn {
             environments: None,
@@ -149,7 +153,7 @@ async fn submit_turn(
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
-            permission_profile: None,
+            permission_profile,
             model: session_model,
             effort: None,
             summary: None,
@@ -199,14 +203,15 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
 
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
-    let sandbox_policy = workspace_write_excluding_tmp();
-    let sandbox_policy_for_config = sandbox_policy.clone();
+    let permission_profile = workspace_write_excluding_tmp();
+    let permission_profile_for_config = permission_profile.clone();
 
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config
-            .set_legacy_sandbox_policy(sandbox_policy_for_config)
-            .expect("set sandbox policy");
+            .permissions
+            .set_permission_profile(permission_profile_for_config)
+            .expect("set permission profile");
         config
             .features
             .enable(Feature::ExecPermissionApprovals)
@@ -258,7 +263,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
         &test,
         "write outside the workspace",
         approval_policy,
-        sandbox_policy,
+        permission_profile,
         /*approvals_reviewer*/ None,
     )
     .await?;
@@ -331,14 +336,15 @@ async fn approved_folder_write_request_permissions_unblocks_later_apply_patch() 
 async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
-    let sandbox_policy = workspace_write_excluding_tmp();
-    let sandbox_policy_for_config = sandbox_policy.clone();
+    let permission_profile = workspace_write_excluding_tmp();
+    let permission_profile_for_config = permission_profile.clone();
 
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config
-            .set_legacy_sandbox_policy(sandbox_policy_for_config)
-            .expect("set sandbox policy");
+            .permissions
+            .set_permission_profile(permission_profile_for_config)
+            .expect("set permission profile");
         config
             .features
             .enable(Feature::ExecPermissionApprovals)
@@ -415,7 +421,7 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
         &test,
         "patch outside the workspace",
         approval_policy,
-        sandbox_policy,
+        permission_profile,
         strict_auto_review.then_some(ApprovalsReviewer::User),
     )
     .await?;

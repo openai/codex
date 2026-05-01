@@ -1,8 +1,10 @@
 use super::App;
-use crate::app_server_session::ThreadSessionState;
-use crate::read_session_model;
+use crate::session_resume::read_session_model;
+use crate::session_state::ThreadSessionState;
+use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::Thread;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 
 impl App {
@@ -11,17 +13,23 @@ impl App {
             return;
         };
 
-        let approval_policy = self.config.permissions.approval_policy.value();
+        let approval_policy = AskForApproval::from(self.config.permissions.approval_policy.value());
         let approvals_reviewer = self.config.approvals_reviewer;
         let permission_profile = self
             .chat_widget
             .config_ref()
             .permissions
             .permission_profile();
+        let active_permission_profile = self
+            .chat_widget
+            .config_ref()
+            .permissions
+            .active_permission_profile();
         let update_session = |session: &mut ThreadSessionState| {
             session.approval_policy = approval_policy;
             session.approvals_reviewer = approvals_reviewer;
             session.permission_profile = permission_profile.clone();
+            session.active_permission_profile = active_permission_profile.clone();
         };
 
         if self.primary_thread_id == Some(active_thread_id)
@@ -43,7 +51,8 @@ impl App {
         thread_id: ThreadId,
         thread: &Thread,
     ) -> ThreadSessionState {
-        let permission_profile = self.active_permission_profile();
+        let permission_profile = self.current_permission_profile();
+        let active_permission_profile = self.current_active_permission_profile();
         let mut session = self
             .primary_session_configured
             .clone()
@@ -55,9 +64,12 @@ impl App {
                 model: self.chat_widget.current_model().to_string(),
                 model_provider_id: self.config.model_provider_id.clone(),
                 service_tier: self.chat_widget.current_service_tier(),
-                approval_policy: self.config.permissions.approval_policy.value(),
+                approval_policy: AskForApproval::from(
+                    self.config.permissions.approval_policy.value(),
+                ),
                 approvals_reviewer: self.config.approvals_reviewer,
                 permission_profile: permission_profile.clone(),
+                active_permission_profile: active_permission_profile.clone(),
                 cwd: thread.cwd.clone(),
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: self.chat_widget.current_reasoning_effort(),
@@ -71,6 +83,7 @@ impl App {
         session.model_provider_id = thread.model_provider.clone();
         session.cwd = thread.cwd.clone();
         session.permission_profile = permission_profile;
+        session.active_permission_profile = active_permission_profile;
         session.instruction_source_paths = Vec::new();
         session.rollout_path = thread.path.clone();
         if let Some(model) =
@@ -85,11 +98,18 @@ impl App {
         session
     }
 
-    fn active_permission_profile(&self) -> PermissionProfile {
+    fn current_permission_profile(&self) -> PermissionProfile {
         self.chat_widget
             .config_ref()
             .permissions
             .permission_profile()
+    }
+
+    fn current_active_permission_profile(&self) -> Option<ActivePermissionProfile> {
+        self.chat_widget
+            .config_ref()
+            .permissions
+            .active_permission_profile()
     }
 }
 
@@ -101,15 +121,16 @@ mod tests {
     use crate::app::thread_events::ThreadEventChannel;
     use crate::test_support::PathBufExt;
     use crate::test_support::test_path_buf;
+    use codex_app_server_protocol::AskForApproval;
+    use codex_app_server_protocol::FileSystemAccessMode;
+    use codex_app_server_protocol::FileSystemPath;
+    use codex_app_server_protocol::FileSystemSandboxEntry;
+    use codex_app_server_protocol::FileSystemSpecialPath;
+    use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
+    use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
+    use codex_app_server_protocol::PermissionProfileNetworkPermissions;
     use codex_config::types::ApprovalsReviewer;
     use codex_protocol::models::PermissionProfile;
-    use codex_protocol::protocol::AskForApproval;
-    use codex_protocol::protocol::FileSystemAccessMode;
-    use codex_protocol::protocol::FileSystemPath;
-    use codex_protocol::protocol::FileSystemSandboxEntry;
-    use codex_protocol::protocol::FileSystemSandboxPolicy;
-    use codex_protocol::protocol::FileSystemSpecialPath;
-    use codex_protocol::protocol::NetworkSandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
@@ -125,6 +146,7 @@ mod tests {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             cwd: cwd.abs(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
@@ -171,7 +193,7 @@ mod tests {
         app.side_threads
             .insert(side_thread_id, SideThreadState::new(main_thread_id));
         app.config.permissions.approval_policy =
-            codex_config::Constrained::allow_any(AskForApproval::OnRequest);
+            codex_config::Constrained::allow_any(AskForApproval::OnRequest.to_core());
         app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
         let expected_permission_profile = PermissionProfile::workspace_write();
         app.chat_widget.handle_thread_session(main_session.clone());
@@ -225,23 +247,27 @@ mod tests {
         let mut app = make_test_app().await;
         let thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000403").expect("valid thread");
-        let profile = PermissionProfile::from_runtime_permissions(
-            &FileSystemSandboxPolicy::restricted(vec![
-                FileSystemSandboxEntry {
-                    path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::Root,
+        let profile: PermissionProfile = AppServerPermissionProfile::Managed {
+            network: PermissionProfileNetworkPermissions { enabled: false },
+            file_system: PermissionProfileFileSystemPermissions::Restricted {
+                entries: vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        access: FileSystemAccessMode::Read,
                     },
-                    access: FileSystemAccessMode::Read,
-                },
-                FileSystemSandboxEntry {
-                    path: FileSystemPath::GlobPattern {
-                        pattern: "**/.env".to_string(),
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::GlobPattern {
+                            pattern: "**/.env".to_string(),
+                        },
+                        access: FileSystemAccessMode::None,
                     },
-                    access: FileSystemAccessMode::None,
-                },
-            ]),
-            NetworkSandboxPolicy::Restricted,
-        );
+                ],
+                glob_scan_max_depth: None,
+            },
+        }
+        .into();
         let session = ThreadSessionState {
             permission_profile: profile.clone(),
             ..test_thread_session(thread_id, test_path_buf("/tmp/main"))
@@ -256,7 +282,7 @@ mod tests {
         );
         app.chat_widget.handle_thread_session(session.clone());
         app.config.permissions.approval_policy =
-            codex_config::Constrained::allow_any(AskForApproval::OnRequest);
+            codex_config::Constrained::allow_any(AskForApproval::OnRequest.to_core());
 
         app.sync_active_thread_permission_settings_to_cached_session()
             .await;

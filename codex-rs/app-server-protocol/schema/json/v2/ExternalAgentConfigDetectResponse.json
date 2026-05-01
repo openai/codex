@@ -1,6 +1,17 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "CommandMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "ExternalAgentConfigMigrationItem": {
       "properties": {
         "cwd": {
@@ -40,12 +51,58 @@
         "SKILLS",
         "PLUGINS",
         "MCP_SERVER_CONFIG",
+        "SUBAGENTS",
+        "HOOKS",
+        "COMMANDS",
         "SESSIONS"
       ],
       "type": "string"
     },
+    "HookMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "McpServerMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "MigrationDetails": {
       "properties": {
+        "commands": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/CommandMigration"
+          },
+          "type": "array"
+        },
+        "hooks": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/HookMigration"
+          },
+          "type": "array"
+        },
+        "mcpServers": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/McpServerMigration"
+          },
+          "type": "array"
+        },
         "plugins": {
           "default": [],
           "items": {
@@ -57,6 +114,13 @@
           "default": [],
           "items": {
             "$ref": "#/definitions/SessionMigration"
+          },
+          "type": "array"
+        },
+        "subagents": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/SubagentMigration"
           },
           "type": "array"
         }
@@ -99,6 +163,17 @@
       "required": [
         "cwd",
         "path"
+      ],
+      "type": "object"
+    },
+    "SubagentMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
       ],
       "type": "object"
     }

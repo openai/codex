@@ -18,6 +18,7 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
+use codex_core::thread_store_from_config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
@@ -26,8 +27,8 @@ use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -202,6 +203,18 @@ pub enum ShellModelOutput {
     // UnifiedExec has its own set of tests
 }
 
+/// Returns the permission fields required by `Op::UserTurn` for tests that
+/// construct the op directly.
+pub fn turn_permission_fields(
+    permission_profile: PermissionProfile,
+    cwd: &Path,
+) -> (SandboxPolicy, Option<PermissionProfile>) {
+    let sandbox_policy = permission_profile
+        .to_legacy_sandbox_policy(cwd)
+        .unwrap_or_else(|_| SandboxPolicy::new_read_only_policy());
+    (sandbox_policy, Some(permission_profile))
+}
+
 pub struct TestCodexBuilder {
     config_mutators: Vec<Box<ConfigMutator>>,
     auth: CodexAuth,
@@ -371,15 +384,17 @@ impl TestCodexBuilder {
             .exec_server_url
             .clone()
             .or_else(|| test_env.exec_server_url().map(str::to_owned));
-        let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
-            codex_exec_server::EnvironmentManagerArgs {
+        let local_runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
+            std::env::current_exe()?,
+            /*codex_linux_sandbox_exe*/ None,
+        )?;
+        let environment_manager = Arc::new(
+            codex_exec_server::EnvironmentManager::create_for_tests(
                 exec_server_url,
-                local_runtime_paths: codex_exec_server::ExecServerRuntimePaths::new(
-                    std::env::current_exe()?,
-                    /*codex_linux_sandbox_exe*/ None,
-                )?,
-            },
-        ));
+                local_runtime_paths,
+            )
+            .await,
+        );
         let file_system = test_env.environment().get_filesystem();
         let mut workspace_setups = vec![];
         swap(&mut self.workspace_setups, &mut workspace_setups);
@@ -413,7 +428,6 @@ impl TestCodexBuilder {
                 &config,
                 codex_core::test_support::auth_manager_from_auth(auth.clone()),
                 SessionSource::Exec,
-                CollaborationModesConfig::default(),
                 Arc::clone(&environment_manager),
                 /*analytics_events_client*/ None,
             )
@@ -435,6 +449,7 @@ impl TestCodexBuilder {
                     codex_core::test_support::resume_thread_from_rollout_with_user_shell_override(
                         thread_manager.as_ref(),
                         config.clone(),
+                        thread_store_from_config(&config),
                         path,
                         auth_manager,
                         user_shell_override,
@@ -446,6 +461,7 @@ impl TestCodexBuilder {
                 let auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
                 Box::pin(thread_manager.resume_thread_from_rollout(
                     config.clone(),
+                    thread_store_from_config(&config),
                     path,
                     auth_manager,
                     /*parent_trace*/ None,
@@ -457,12 +473,18 @@ impl TestCodexBuilder {
                     codex_core::test_support::start_thread_with_user_shell_override(
                         thread_manager.as_ref(),
                         config.clone(),
+                        thread_store_from_config(&config),
                         user_shell_override,
                     ),
                 )
                 .await?
             }
-            (None, None) => Box::pin(thread_manager.start_thread(config.clone())).await?,
+            (None, None) => {
+                Box::pin(
+                    thread_manager.start_thread(config.clone(), thread_store_from_config(&config)),
+                )
+                .await?
+            }
         };
 
         Ok(TestCodex {
@@ -591,10 +613,19 @@ impl TestCodex {
     }
 
     pub async fn submit_turn(&self, prompt: &str) -> Result<()> {
-        self.submit_turn_with_policies(
+        self.submit_turn_with_permission_profile(prompt, PermissionProfile::Disabled)
+            .await
+    }
+
+    pub async fn submit_turn_with_permission_profile(
+        &self,
+        prompt: &str,
+        permission_profile: PermissionProfile,
+    ) -> Result<()> {
+        self.submit_turn_with_approval_and_permission_profile(
             prompt,
             AskForApproval::Never,
-            SandboxPolicy::DangerFullAccess,
+            permission_profile,
         )
         .await
     }
@@ -613,10 +644,10 @@ impl TestCodex {
         prompt: &str,
         service_tier: Option<ServiceTier>,
     ) -> Result<()> {
-        self.submit_turn_with_context(
+        self.submit_turn_with_permission_profile_context(
             prompt,
             AskForApproval::Never,
-            SandboxPolicy::DangerFullAccess,
+            PermissionProfile::Disabled,
             Some(service_tier),
             /*environments*/ None,
         )
@@ -629,10 +660,30 @@ impl TestCodex {
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
     ) -> Result<()> {
+        let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+            &sandbox_policy,
+            self.config.cwd.as_path(),
+        );
         self.submit_turn_with_context(
             prompt,
             approval_policy,
-            sandbox_policy,
+            permission_profile,
+            /*service_tier*/ None,
+            /*environments*/ None,
+        )
+        .await
+    }
+
+    pub async fn submit_turn_with_approval_and_permission_profile(
+        &self,
+        prompt: &str,
+        approval_policy: AskForApproval,
+        permission_profile: PermissionProfile,
+    ) -> Result<()> {
+        self.submit_turn_with_permission_profile_context(
+            prompt,
+            approval_policy,
+            permission_profile,
             /*service_tier*/ None,
             /*environments*/ None,
         )
@@ -644,11 +695,29 @@ impl TestCodex {
         prompt: &str,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> Result<()> {
-        self.submit_turn_with_context(
+        self.submit_turn_with_permission_profile_context(
             prompt,
             AskForApproval::Never,
-            SandboxPolicy::DangerFullAccess,
+            PermissionProfile::Disabled,
             /*service_tier*/ None,
+            environments,
+        )
+        .await
+    }
+
+    async fn submit_turn_with_permission_profile_context(
+        &self,
+        prompt: &str,
+        approval_policy: AskForApproval,
+        permission_profile: PermissionProfile,
+        service_tier: Option<Option<ServiceTier>>,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
+    ) -> Result<()> {
+        self.submit_turn_with_context(
+            prompt,
+            approval_policy,
+            permission_profile,
+            service_tier,
             environments,
         )
         .await
@@ -658,10 +727,12 @@ impl TestCodex {
         &self,
         prompt: &str,
         approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
+        permission_profile: PermissionProfile,
         service_tier: Option<Option<ServiceTier>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> Result<()> {
+        let (sandbox_policy, permission_profile) =
+            turn_permission_fields(permission_profile, self.config.cwd.as_path());
         let session_model = self.session_configured.model.clone();
         self.codex
             .submit(Op::UserTurn {
@@ -675,7 +746,7 @@ impl TestCodex {
                 approval_policy,
                 approvals_reviewer: None,
                 sandbox_policy,
-                permission_profile: None,
+                permission_profile,
                 model: session_model,
                 effort: None,
                 summary: None,
@@ -832,6 +903,16 @@ impl TestCodexHarness {
     ) -> Result<()> {
         self.test
             .submit_turn_with_policy(prompt, sandbox_policy)
+            .await
+    }
+
+    pub async fn submit_with_permission_profile(
+        &self,
+        prompt: &str,
+        permission_profile: PermissionProfile,
+    ) -> Result<()> {
+        self.test
+            .submit_turn_with_permission_profile(prompt, permission_profile)
             .await
     }
 

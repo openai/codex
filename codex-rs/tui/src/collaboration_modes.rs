@@ -1,11 +1,11 @@
+use codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 
 use crate::model_catalog::ModelCatalog;
 
-fn filtered_presets(model_catalog: &ModelCatalog) -> Vec<CollaborationModeMask> {
-    model_catalog
-        .list_collaboration_modes()
+fn filtered_presets(_model_catalog: &ModelCatalog) -> Vec<CollaborationModeMask> {
+    builtin_collaboration_mode_presets()
         .into_iter()
         .filter(|mask| mask.mode.is_some_and(ModeKind::is_tui_visible))
         .collect()

@@ -20,6 +20,8 @@ use async_channel::unbounded;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
+use codex_config::types::AppToolApproval;
+use codex_config::types::ApprovalsReviewer;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_plugin::PluginCapabilitySummary;
@@ -67,7 +69,17 @@ pub fn qualified_mcp_tool_name_prefix(server_name: &str) -> String {
 pub fn mcp_permission_prompt_is_auto_approved(
     approval_policy: AskForApproval,
     permission_profile: &PermissionProfile,
+    context: McpPermissionPromptAutoApproveContext,
 ) -> bool {
+    if matches!(
+        approval_policy,
+        AskForApproval::OnRequest | AskForApproval::Granular(_)
+    ) && context.approvals_reviewer == Some(ApprovalsReviewer::AutoReview)
+        && context.tool_approval_mode == Some(AppToolApproval::Approve)
+    {
+        return true;
+    }
+
     if approval_policy != AskForApproval::Never {
         return false;
     }
@@ -78,6 +90,12 @@ pub fn mcp_permission_prompt_is_auto_approved(
             file_system.to_sandbox_policy().has_full_disk_write_access()
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct McpPermissionPromptAutoApproveContext {
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    pub tool_approval_mode: Option<AppToolApproval>,
 }
 
 /// MCP runtime settings derived from `codex_core::config::Config`.
@@ -93,6 +111,8 @@ pub fn mcp_permission_prompt_is_auto_approved(
 pub struct McpConfig {
     /// Base URL for ChatGPT-hosted app MCP servers, copied from the root config.
     pub chatgpt_base_url: String,
+    /// Optional path override for the built-in apps MCP server.
+    pub apps_mcp_path_override: Option<String>,
     /// Codex home directory used for MCP OAuth state and app-tool cache files.
     pub codex_home: PathBuf,
     /// Preferred credential store for MCP OAuth tokens.
@@ -333,7 +353,10 @@ pub async fn collect_mcp_snapshot_from_manager(
 }
 
 pub(crate) fn codex_apps_mcp_url(config: &McpConfig) -> String {
-    codex_apps_mcp_url_for_base_url(&config.chatgpt_base_url)
+    codex_apps_mcp_url_for_base_url(
+        &config.chatgpt_base_url,
+        config.apps_mcp_path_override.as_deref(),
+    )
 }
 
 /// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
@@ -376,15 +399,19 @@ fn normalize_codex_apps_base_url(base_url: &str) -> String {
     base_url
 }
 
-fn codex_apps_mcp_url_for_base_url(base_url: &str) -> String {
+fn codex_apps_mcp_url_for_base_url(base_url: &str, apps_mcp_path_override: Option<&str>) -> String {
     let base_url = normalize_codex_apps_base_url(base_url);
-    if base_url.contains("/backend-api") {
-        format!("{base_url}/wham/apps")
+    let (base_url, default_path) = if base_url.contains("/backend-api") {
+        (base_url, "wham/apps")
     } else if base_url.contains("/api/codex") {
-        format!("{base_url}/apps")
+        (base_url, "apps")
     } else {
-        format!("{base_url}/api/codex/apps")
-    }
+        (format!("{base_url}/api/codex"), "apps")
+    };
+    let path = apps_mcp_path_override
+        .unwrap_or(default_path)
+        .trim_start_matches('/');
+    format!("{base_url}/{path}")
 }
 
 fn codex_apps_mcp_server_config(config: &McpConfig) -> McpServerConfig {

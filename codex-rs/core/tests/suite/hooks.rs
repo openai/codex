@@ -7,13 +7,14 @@ use codex_core::config::Constrained;
 use codex_features::Feature;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::managed_network_requirements_loader;
 use core_test_support::responses::ev_apply_patch_function_call;
@@ -47,6 +48,24 @@ const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
 const BLOCKED_PROMPT_CONTEXT: &str = "Remember the blocked lighthouse note.";
 const PERMISSION_REQUEST_HOOK_MATCHER: &str = "^Bash$";
 const PERMISSION_REQUEST_ALLOW_REASON: &str = "should not be used for allow";
+
+fn restrictive_workspace_write_profile() -> PermissionProfile {
+    PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    )
+}
+
+fn network_workspace_write_profile() -> PermissionProfile {
+    PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Enabled,
+        /*exclude_tmpdir_env_var*/ false,
+        /*exclude_slash_tmp*/ false,
+    )
+}
 
 fn write_stop_hook(home: &Path, block_prompts: &[&str]) -> Result<()> {
     let script_path = home.join("stop_hook.py");
@@ -1322,10 +1341,10 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
 
     fs::write(&marker, "seed").context("create permission request marker")?;
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "run the shell command after hook approval",
         AskForApproval::OnRequest,
-        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 
@@ -1407,15 +1426,10 @@ async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result
     let test = builder.build(&server).await?;
     let target_path = test.workspace_path(&patch_path);
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "apply the patch after hook approval",
         AskForApproval::OnRequest,
-        SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        },
+        restrictive_workspace_write_profile(),
     )
     .await?;
 
@@ -1494,10 +1508,10 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
 
     fs::write(&marker, "seed").context("create exec command permission request marker")?;
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "run the exec command after hook approval",
         AskForApproval::OnRequest,
-        codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+        PermissionProfile::read_only(),
     )
     .await?;
 
@@ -1558,13 +1572,8 @@ allow_local_binding = true
     .await;
 
     let approval_policy = AskForApproval::OnFailure;
-    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
-        network_access: true,
-        exclude_tmpdir_env_var: false,
-        exclude_slash_tmp: false,
-    };
-    let sandbox_policy_for_config = sandbox_policy.clone();
+    let permission_profile = network_workspace_write_profile();
+    let permission_profile_for_config = permission_profile.clone();
     let test = test_codex()
         .with_home(Arc::clone(&home))
         .with_pre_build_hook(|home| {
@@ -1580,8 +1589,9 @@ allow_local_binding = true
                 .expect("test config should allow feature update");
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
             config
-                .set_legacy_sandbox_policy(sandbox_policy_for_config)
-                .expect("set sandbox policy");
+                .permissions
+                .set_permission_profile(permission_profile_for_config)
+                .expect("set permission profile");
         })
         .build(&server)
         .await?;
@@ -1598,10 +1608,10 @@ allow_local_binding = true
         .as_ref()
         .expect("expected runtime managed network proxy addresses");
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "run the shell command after network hook approval",
         approval_policy,
-        sandbox_policy,
+        permission_profile,
     )
     .await?;
 
@@ -1695,10 +1705,10 @@ async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Re
     let marker_path = test.workspace_path(marker);
     let _ = fs::remove_file(&marker_path);
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "retry the shell command after sandbox denial",
         AskForApproval::OnFailure,
-        codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+        PermissionProfile::read_only(),
     )
     .await?;
 
@@ -1769,9 +1779,9 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
         fs::remove_file(&marker).context("remove leftover pre tool use marker")?;
     }
 
-    test.submit_turn_with_policy(
+    test.submit_turn_with_permission_profile(
         "run the blocked shell command",
-        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 
@@ -2013,9 +2023,9 @@ async fn pre_tool_use_blocks_shell_when_defined_in_config_toml() -> Result<()> {
         fs::remove_file(&marker).context("remove leftover config.toml marker")?;
     }
 
-    test.submit_turn_with_policy(
+    test.submit_turn_with_permission_profile(
         "run the blocked shell command from config toml",
-        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 

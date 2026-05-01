@@ -38,6 +38,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
@@ -324,7 +325,7 @@ fn shell_request_escalation_execution_is_explicit() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Result<()> {
-    let (mut session, mut turn_context) = make_session_and_context().await;
+    let (session, mut turn_context) = make_session_and_context().await;
     std::fs::create_dir_all(&turn_context.config.codex_home)
         .context("recreate codex home for hook fixtures")?;
     let script_path = turn_context
@@ -376,13 +377,16 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         .derive_exec_args("", /*use_login_shell*/ false);
     let hook_shell_program = hook_shell_argv.remove(0);
     let _ = hook_shell_argv.pop();
-    session.services.hooks = Hooks::new(HooksConfig {
-        feature_enabled: true,
-        config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
-        shell_program: Some(hook_shell_program),
-        shell_args: hook_shell_argv,
-        ..HooksConfig::default()
-    });
+    session
+        .services
+        .hooks
+        .store(Arc::new(Hooks::new(HooksConfig {
+            feature_enabled: true,
+            config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
+            shell_program: Some(hook_shell_program),
+            shell_args: hook_shell_argv,
+            ..HooksConfig::default()
+        })));
 
     turn_context.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     turn_context.permission_profile = PermissionProfile::from_runtime_permissions(

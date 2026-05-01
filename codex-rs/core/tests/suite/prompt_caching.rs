@@ -9,12 +9,13 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::TempDirExt;
 use core_test_support::responses::ev_completed;
@@ -25,6 +26,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -405,7 +407,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     )
     .await;
 
-    let TestCodex { codex, .. } = test_codex()
+    let TestCodex { codex, config, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config
@@ -431,19 +433,22 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let writable = TempDir::new().unwrap();
-    let new_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![writable.path().try_into().unwrap()],
-        network_access: true,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    };
+    let permission_profile = PermissionProfile::workspace_write_with(
+        &[writable.abs()],
+        NetworkSandboxPolicy::Enabled,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    );
+    let sandbox_policy = permission_profile
+        .to_legacy_sandbox_policy(config.cwd.as_path())
+        .expect("workspace profile should have legacy projection");
     codex
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
             approvals_reviewer: None,
-            sandbox_policy: Some(new_policy.clone()),
-            permission_profile: None,
+            sandbox_policy: Some(sandbox_policy),
+            permission_profile: Some(permission_profile),
             windows_sandbox_level: None,
             model: None,
             effort: Some(Some(ReasoningEffort::High)),
@@ -709,12 +714,14 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     // Second turn using per-turn overrides via UserTurn
     let new_cwd = TempDir::new().unwrap();
     let writable = TempDir::new().unwrap();
-    let new_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![writable.abs()],
-        network_access: true,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    };
+    let permission_profile = PermissionProfile::workspace_write_with(
+        &[writable.abs()],
+        NetworkSandboxPolicy::Enabled,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    );
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(permission_profile, new_cwd.path());
     codex
         .submit(Op::UserTurn {
             environments: None,
@@ -725,8 +732,8 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             cwd: new_cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy: new_policy.clone(),
-            permission_profile: None,
+            sandbox_policy,
+            permission_profile,
             model: "o3".to_string(),
             effort: Some(ReasoningEffort::High),
             summary: Some(ReasoningSummary::Detailed),
@@ -983,6 +990,8 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, default_cwd.as_path());
     codex
         .submit(Op::UserTurn {
             environments: None,
@@ -993,8 +1002,8 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             cwd: default_cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
+            sandbox_policy,
+            permission_profile,
             model: "o3".to_string(),
             effort: Some(ReasoningEffort::High),
             summary: Some(ReasoningSummary::Detailed),

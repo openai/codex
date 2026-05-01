@@ -5,12 +5,14 @@ use crate::manifest::load_plugin_manifest;
 use crate::marketplace::MarketplacePluginSource;
 use crate::marketplace::list_marketplaces;
 use crate::marketplace::load_marketplace;
+use crate::remote::RemoteInstalledPlugin;
 use crate::store::PluginStore;
 use crate::store::plugin_version_for_source;
 use codex_config::ConfigLayerStack;
 use codex_config::HooksFile;
 use codex_config::types::McpServerConfig;
 use codex_config::types::PluginConfig;
+use codex_config::types::PluginMcpServerConfig;
 use codex_core_skills::SkillMetadata;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_core_skills::config_rules::resolve_disabled_skill_paths;
@@ -107,13 +109,15 @@ struct PluginAppConfig {
 
 pub async fn load_plugins_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
+    extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
     restriction_product: Option<Product>,
+    plugin_hooks_enabled: bool,
 ) -> PluginLoadOutcome<McpServerConfig> {
     let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
-    let mut configured_plugins: Vec<_> = configured_plugins_from_stack(config_layer_stack)
-        .into_iter()
-        .collect();
+    let mut configured_plugins = configured_plugins_from_stack(config_layer_stack);
+    configured_plugins.extend(extra_plugins);
+    let mut configured_plugins: Vec<_> = configured_plugins.into_iter().collect();
     configured_plugins.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
     let mut plugins = Vec::with_capacity(configured_plugins.len());
@@ -125,6 +129,7 @@ pub async fn load_plugins_from_layer_stack(
             store,
             restriction_product,
             &skill_config_rules,
+            plugin_hooks_enabled,
         )
         .await;
         for name in loaded_plugin.mcp_servers.keys() {
@@ -143,6 +148,41 @@ pub async fn load_plugins_from_layer_stack(
     }
 
     PluginLoadOutcome::from_plugins(plugins)
+}
+
+pub fn remote_installed_plugins_to_config(
+    plugins: &[RemoteInstalledPlugin],
+    store: &PluginStore,
+) -> HashMap<String, PluginConfig> {
+    plugins
+        .iter()
+        .filter_map(|plugin| {
+            let plugin_id =
+                match PluginId::new(plugin.name.clone(), plugin.marketplace_name.clone()) {
+                    Ok(plugin_id) => plugin_id,
+                    Err(err) => {
+                        warn!(
+                            plugin = %plugin.name,
+                            remote_id = %plugin.id,
+                            error = %err,
+                            "ignoring invalid remote installed plugin name"
+                        );
+                        return None;
+                    }
+                };
+            // TODO(remote plugins): download or update missing local bundles during remote
+            // installed reconciliation. Until then, only publish remote installed state for
+            // bundles already present in the local plugin cache.
+            store.active_plugin_root(&plugin_id)?;
+            Some((
+                plugin_id.as_key(),
+                PluginConfig {
+                    enabled: plugin.enabled,
+                    mcp_servers: HashMap::new(),
+                },
+            ))
+        })
+        .collect()
 }
 
 pub fn refresh_curated_plugin_cache(
@@ -459,6 +499,7 @@ async fn load_plugin(
     store: &PluginStore,
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
+    plugin_hooks_enabled: bool,
 ) -> LoadedPlugin<McpServerConfig> {
     let plugin_id = PluginId::parse(&config_name);
     let active_plugin_root = plugin_id
@@ -539,7 +580,10 @@ async fn load_plugin(
     let mut mcp_servers = HashMap::new();
     for mcp_config_path in plugin_mcp_config_paths(plugin_root.as_path(), manifest_paths) {
         let plugin_mcp = load_mcp_servers_from_file(plugin_root.as_path(), &mcp_config_path).await;
-        for (name, config) in plugin_mcp.mcp_servers {
+        for (name, mut config) in plugin_mcp.mcp_servers {
+            if let Some(policy) = plugin.mcp_servers.get(&name) {
+                apply_plugin_mcp_server_policy(&mut config, policy);
+            }
             if mcp_servers.insert(name.clone(), config).is_some() {
                 warn!(
                     plugin = %plugin_root.display(),
@@ -552,15 +596,36 @@ async fn load_plugin(
     }
     loaded_plugin.mcp_servers = mcp_servers;
     loaded_plugin.apps = load_plugin_apps(plugin_root.as_path()).await;
-    let (hook_sources, hook_load_warnings) = load_plugin_hooks(
-        &plugin_root,
-        &loaded_plugin_id,
-        &store.plugin_data_root(&loaded_plugin_id),
-        manifest_paths,
-    );
-    loaded_plugin.hook_sources = hook_sources;
-    loaded_plugin.hook_load_warnings = hook_load_warnings;
+    if plugin_hooks_enabled {
+        let (hook_sources, hook_load_warnings) = load_plugin_hooks(
+            &plugin_root,
+            &loaded_plugin_id,
+            &store.plugin_data_root(&loaded_plugin_id),
+            manifest_paths,
+        );
+        loaded_plugin.hook_sources = hook_sources;
+        loaded_plugin.hook_load_warnings = hook_load_warnings;
+    }
     loaded_plugin
+}
+
+fn apply_plugin_mcp_server_policy(config: &mut McpServerConfig, policy: &PluginMcpServerConfig) {
+    config.enabled = policy.enabled;
+    if let Some(approval_mode) = policy.default_tools_approval_mode {
+        config.default_tools_approval_mode = Some(approval_mode);
+    }
+    if let Some(enabled_tools) = &policy.enabled_tools {
+        config.enabled_tools = Some(enabled_tools.clone());
+    }
+    if let Some(disabled_tools) = &policy.disabled_tools {
+        config.disabled_tools = Some(disabled_tools.clone());
+    }
+    for (tool_name, tool_policy) in &policy.tools {
+        let tool_config = config.tools.entry(tool_name.clone()).or_default();
+        if let Some(approval_mode) = tool_policy.approval_mode {
+            tool_config.approval_mode = Some(approval_mode);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -862,6 +927,7 @@ pub async fn plugin_telemetry_metadata_from_root(
 
     PluginTelemetryMetadata {
         plugin_id: plugin_id.clone(),
+        remote_plugin_id: None,
         capability_summary: Some(PluginCapabilitySummary {
             config_name: plugin_id.as_key(),
             display_name: plugin_id.plugin_name.clone(),

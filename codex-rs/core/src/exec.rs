@@ -152,6 +152,19 @@ pub enum ExecExpiration {
     Timeout(Duration),
     DefaultTimeout,
     Cancellation(CancellationToken),
+    TimeoutOrCancellation {
+        timeout: Duration,
+        cancellation: CancellationToken,
+    },
+}
+
+/// Why an `ExecExpiration` completed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExecExpirationOutcome {
+    /// The configured timeout elapsed.
+    TimedOut,
+    /// The cancellation token was cancelled.
+    Cancelled,
 }
 
 impl From<Option<u64>> for ExecExpiration {
@@ -169,14 +182,30 @@ impl From<u64> for ExecExpiration {
 }
 
 impl ExecExpiration {
-    pub(crate) async fn wait(self) {
+    /// Waits for this expiration and reports whether it timed out or was cancelled.
+    pub async fn wait_with_outcome(self) -> ExecExpirationOutcome {
         match self {
-            ExecExpiration::Timeout(duration) => tokio::time::sleep(duration).await,
+            ExecExpiration::Timeout(duration) => {
+                tokio::time::sleep(duration).await;
+                ExecExpirationOutcome::TimedOut
+            }
             ExecExpiration::DefaultTimeout => {
-                tokio::time::sleep(Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)).await
+                tokio::time::sleep(Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)).await;
+                ExecExpirationOutcome::TimedOut
             }
             ExecExpiration::Cancellation(cancel) => {
                 cancel.cancelled().await;
+                ExecExpirationOutcome::Cancelled
+            }
+            ExecExpiration::TimeoutOrCancellation {
+                timeout,
+                cancellation,
+            } => {
+                tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => ExecExpirationOutcome::Cancelled,
+                    _ = tokio::time::sleep(timeout) => ExecExpirationOutcome::TimedOut,
+                }
             }
         }
     }
@@ -187,8 +216,50 @@ impl ExecExpiration {
             ExecExpiration::Timeout(duration) => Some(duration.as_millis() as u64),
             ExecExpiration::DefaultTimeout => Some(DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
             ExecExpiration::Cancellation(_) => None,
+            ExecExpiration::TimeoutOrCancellation { timeout, .. } => {
+                Some(timeout.as_millis() as u64)
+            }
         }
     }
+
+    pub(crate) fn with_cancellation(self, cancellation: CancellationToken) -> Self {
+        match self {
+            ExecExpiration::Timeout(timeout) => ExecExpiration::TimeoutOrCancellation {
+                timeout,
+                cancellation,
+            },
+            ExecExpiration::DefaultTimeout => ExecExpiration::TimeoutOrCancellation {
+                timeout: Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
+                cancellation,
+            },
+            ExecExpiration::Cancellation(existing) => {
+                ExecExpiration::Cancellation(cancel_when_either(existing, cancellation))
+            }
+            ExecExpiration::TimeoutOrCancellation {
+                timeout,
+                cancellation: existing,
+            } => ExecExpiration::TimeoutOrCancellation {
+                timeout,
+                cancellation: cancel_when_either(existing, cancellation),
+            },
+        }
+    }
+}
+
+pub(crate) fn cancel_when_either(
+    first: CancellationToken,
+    second: CancellationToken,
+) -> CancellationToken {
+    let combined = CancellationToken::new();
+    let cancel = combined.clone();
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = first.cancelled() => {}
+            _ = second.cancelled() => {}
+        }
+        cancel.cancel();
+    });
+    combined
 }
 
 impl ExecCapturePolicy {
@@ -1266,9 +1337,9 @@ async fn consume_output(
 
     let expiration_wait = async {
         if capture_policy.uses_expiration() {
-            expiration.wait().await;
+            Some(expiration.wait_with_outcome().await)
         } else {
-            std::future::pending::<()>().await;
+            std::future::pending::<Option<ExecExpirationOutcome>>().await
         }
     };
     tokio::pin!(expiration_wait);
@@ -1277,10 +1348,16 @@ async fn consume_output(
             let exit_status = status_result?;
             (exit_status, false)
         }
-        _ = &mut expiration_wait => {
+        outcome = &mut expiration_wait => {
             kill_child_process_group(&mut child)?;
             child.start_kill()?;
-            (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true)
+            let timed_out = matches!(outcome, Some(ExecExpirationOutcome::TimedOut));
+            let exit_status = if timed_out {
+                synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE)
+            } else {
+                synthetic_exit_status_for_code(/*code*/ 1)
+            };
+            (exit_status, timed_out)
         }
         _ = tokio::signal::ctrl_c() => {
             kill_child_process_group(&mut child)?;
@@ -1390,12 +1467,23 @@ fn synthetic_exit_status(code: i32) -> ExitStatus {
     std::process::ExitStatus::from_raw(code)
 }
 
+#[cfg(unix)]
+fn synthetic_exit_status_for_code(code: i32) -> ExitStatus {
+    use std::os::unix::process::ExitStatusExt;
+    std::process::ExitStatus::from_raw(code << 8)
+}
+
 #[cfg(windows)]
 fn synthetic_exit_status(code: i32) -> ExitStatus {
     use std::os::windows::process::ExitStatusExt;
     // On Windows the raw status is a u32. Use a direct cast to avoid
     // panicking on negative i32 values produced by prior narrowing casts.
     std::process::ExitStatus::from_raw(code as u32)
+}
+
+#[cfg(windows)]
+fn synthetic_exit_status_for_code(code: i32) -> ExitStatus {
+    synthetic_exit_status(code)
 }
 
 #[cfg(test)]

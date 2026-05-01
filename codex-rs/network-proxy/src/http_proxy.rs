@@ -1034,7 +1034,10 @@ mod tests {
     #[tokio::test]
     async fn http_connect_accept_allows_allowlisted_host_in_full_mode() {
         let policy = {
-            let mut policy = NetworkProxySettings::default();
+            let mut policy = NetworkProxySettings {
+                allow_local_binding: true,
+                ..NetworkProxySettings::default()
+            };
             policy.set_allowed_domains(vec!["example.com".to_string()]);
             policy
         };

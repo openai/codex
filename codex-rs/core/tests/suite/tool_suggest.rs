@@ -8,8 +8,8 @@ use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -111,10 +111,10 @@ async fn tool_suggest_is_available_without_search_tool_after_discovery_attempts(
         });
     let test = builder.build(&server).await?;
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "list tools",
         AskForApproval::Never,
-        SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 
@@ -131,12 +131,13 @@ async fn tool_suggest_is_available_without_search_tool_after_discovery_attempts(
 
     let description =
         function_tool_description(&body, TOOL_SUGGEST_TOOL_NAME).expect("description");
-    assert!(
-        description.contains(
-            "You've already tried to find a matching available tool for the user's request"
-        )
-    );
-    assert!(description.contains("This includes `tool_search` (if available) and other means."));
+    assert!(description.contains(
+        "Use this tool only to ask the user to install one known plugin or connector from the list below"
+    ));
+    assert!(description.contains(
+        "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
+    ));
+    assert!(description.contains("IMPORTANT: DO NOT call this tool in parallel with other tools."));
     assert!(!description.contains("tool_search fails to find a good match"));
 
     Ok(())

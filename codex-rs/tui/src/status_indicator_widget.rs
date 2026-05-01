@@ -148,11 +148,6 @@ impl StatusIndicatorWidget {
         self.show_interrupt_hint = visible;
     }
 
-    #[cfg(test)]
-    pub(crate) fn interrupt_hint_visible(&self) -> bool {
-        self.show_interrupt_hint
-    }
-
     pub(crate) fn pause_timer(&mut self) {
         self.pause_timer_at(Instant::now());
     }

@@ -38,6 +38,8 @@ pub use crate::tui_keymap::TuiGlobalKeymap;
 pub use crate::tui_keymap::TuiKeymap;
 pub use crate::tui_keymap::TuiListKeymap;
 pub use crate::tui_keymap::TuiPagerKeymap;
+pub use crate::tui_keymap::TuiVimNormalKeymap;
+pub use crate::tui_keymap::TuiVimOperatorKeymap;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 pub const DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 2;
@@ -186,11 +188,45 @@ pub struct ToolSuggestDiscoverable {
     pub id: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ToolSuggestDisabledTool {
+    #[serde(rename = "type")]
+    pub kind: ToolSuggestDiscoverableType,
+    pub id: String,
+}
+
+impl ToolSuggestDisabledTool {
+    pub fn plugin(id: impl Into<String>) -> Self {
+        Self {
+            kind: ToolSuggestDiscoverableType::Plugin,
+            id: id.into(),
+        }
+    }
+
+    pub fn connector(id: impl Into<String>) -> Self {
+        Self {
+            kind: ToolSuggestDiscoverableType::Connector,
+            id: id.into(),
+        }
+    }
+
+    pub fn normalized(&self) -> Option<Self> {
+        let id = self.id.trim();
+        (!id.is_empty()).then(|| Self {
+            kind: self.kind,
+            id: id.to_string(),
+        })
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ToolSuggestConfig {
     #[serde(default)]
     pub discoverables: Vec<ToolSuggestDiscoverable>,
+    #[serde(default)]
+    pub disabled_tools: Vec<ToolSuggestDisabledTool>,
 }
 
 /// Memories settings loaded from config.toml.
@@ -575,6 +611,11 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
 
+    /// Start the composer in Vim mode (`Normal`) by default.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub vim_mode_default: bool,
+
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
     /// - `auto` (default): Disable alternate screen in Zellij, enable elsewhere.
@@ -683,6 +724,50 @@ pub use crate::skills_config::SkillsConfig;
 pub struct PluginConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+
+    /// Per-MCP-server policy overlays for MCP servers contributed by this plugin.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub mcp_servers: HashMap<String, PluginMcpServerConfig>,
+}
+
+/// Policy settings for a plugin-provided MCP server.
+///
+/// This intentionally excludes transport settings: plugin manifests own how the
+/// MCP server is launched, while user config owns enablement and tool policy.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct PluginMcpServerConfig {
+    /// When `false`, Codex skips initializing this plugin MCP server.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+
+    /// Approval mode for tools in this server unless a tool override exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_tools_approval_mode: Option<AppToolApproval>,
+
+    /// Explicit allow-list of tools exposed from this server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_tools: Option<Vec<String>>,
+
+    /// Explicit deny-list of tools. These tools are removed after applying `enabled_tools`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_tools: Option<Vec<String>>,
+
+    /// Per-tool approval settings keyed by tool name.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub tools: HashMap<String, McpServerToolConfig>,
+}
+
+impl Default for PluginMcpServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_tools_approval_mode: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            tools: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]

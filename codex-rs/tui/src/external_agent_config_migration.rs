@@ -799,7 +799,7 @@ mod tests {
                     plugin_names: vec!["warehouse".to_string()],
                 },
             ],
-            sessions: Vec::new(),
+            ..Default::default()
         }
     }
 

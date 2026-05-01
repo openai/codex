@@ -1,0 +1,173 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "AbsolutePathBuf": {
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "type": "string"
+    },
+    "HookErrorInfo": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "path"
+      ],
+      "type": "object"
+    },
+    "HookEventName": {
+      "enum": [
+        "preToolUse",
+        "permissionRequest",
+        "postToolUse",
+        "sessionStart",
+        "userPromptSubmit",
+        "stop"
+      ],
+      "type": "string"
+    },
+    "HookHandlerType": {
+      "enum": [
+        "command",
+        "prompt",
+        "agent"
+      ],
+      "type": "string"
+    },
+    "HookMetadata": {
+      "properties": {
+        "command": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "displayOrder": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "eventName": {
+          "$ref": "#/definitions/HookEventName"
+        },
+        "handlerType": {
+          "$ref": "#/definitions/HookHandlerType"
+        },
+        "isManaged": {
+          "type": "boolean"
+        },
+        "key": {
+          "type": "string"
+        },
+        "matcher": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pluginId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/definitions/HookSource"
+        },
+        "sourcePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "statusMessage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeoutSec": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "displayOrder",
+        "enabled",
+        "eventName",
+        "handlerType",
+        "isManaged",
+        "key",
+        "source",
+        "sourcePath",
+        "timeoutSec"
+      ],
+      "type": "object"
+    },
+    "HookSource": {
+      "enum": [
+        "system",
+        "user",
+        "project",
+        "mdm",
+        "sessionFlags",
+        "plugin",
+        "cloudRequirements",
+        "legacyManagedConfigFile",
+        "legacyManagedConfigMdm",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "HooksListEntry": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "errors": {
+          "items": {
+            "$ref": "#/definitions/HookErrorInfo"
+          },
+          "type": "array"
+        },
+        "hooks": {
+          "items": {
+            "$ref": "#/definitions/HookMetadata"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "cwd",
+        "errors",
+        "hooks",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "data": {
+      "items": {
+        "$ref": "#/definitions/HooksListEntry"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "data"
+  ],
+  "title": "HooksListResponse",
+  "type": "object"
+}

@@ -38,7 +38,7 @@ pub(super) fn parse_session_updated_event(parsed: &Value) -> Option<RealtimeEven
         .and_then(Value::as_str)
         .map(str::to_string);
     Some(RealtimeEvent::SessionUpdated {
-        session_id,
+        realtime_session_id: session_id,
         instructions,
     })
 }

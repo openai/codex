@@ -218,6 +218,18 @@
       },
       "type": "object"
     },
+    "AppsMcpPathOverrideConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "AskForApproval": {
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
       "oneOf": [
@@ -355,7 +367,13 @@
             "apps": {
               "type": "boolean"
             },
+            "apps_mcp_path_override": {
+              "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
+            },
             "browser_use": {
+              "type": "boolean"
+            },
+            "browser_use_external": {
               "type": "boolean"
             },
             "child_agents_md": {
@@ -705,6 +723,16 @@
       },
       "type": "object"
     },
+    "FeatureToml_for_AppsMcpPathOverrideConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/AppsMcpPathOverrideConfigToml"
+        }
+      ]
+    },
     "FeatureToml_for_MultiAgentV2ConfigToml": {
       "anyOf": [
         {
@@ -859,53 +887,6 @@
         }
       ]
     },
-    "HookEventsToml": {
-      "properties": {
-        "PermissionRequest": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        },
-        "PostToolUse": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        },
-        "PreToolUse": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        },
-        "SessionStart": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        },
-        "Stop": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        },
-        "UserPromptSubmit": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/MatcherGroup"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
     "HookHandlerConfig": {
       "oneOf": [
         {
@@ -969,6 +950,67 @@
           "type": "object"
         }
       ]
+    },
+    "HookStateToml": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "HooksToml": {
+      "properties": {
+        "PermissionRequest": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "PostToolUse": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "PreToolUse": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "SessionStart": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "Stop": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "UserPromptSubmit": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "state": {
+          "additionalProperties": {
+            "$ref": "#/definitions/HookStateToml"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
     },
     "KeybindingsSpec": {
       "anyOf": [
@@ -1735,6 +1777,54 @@
         "enabled": {
           "default": true,
           "type": "boolean"
+        },
+        "mcp_servers": {
+          "additionalProperties": {
+            "$ref": "#/definitions/PluginMcpServerConfig"
+          },
+          "description": "Per-MCP-server policy overlays for MCP servers contributed by this plugin.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "PluginMcpServerConfig": {
+      "additionalProperties": false,
+      "description": "Policy settings for a plugin-provided MCP server.\n\nThis intentionally excludes transport settings: plugin manifests own how the MCP server is launched, while user config owns enablement and tool policy.",
+      "properties": {
+        "default_tools_approval_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            }
+          ],
+          "description": "Approval mode for tools in this server unless a tool override exists."
+        },
+        "disabled_tools": {
+          "description": "Explicit deny-list of tools. These tools are removed after applying `enabled_tools`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "description": "When `false`, Codex skips initializing this plugin MCP server.",
+          "type": "boolean"
+        },
+        "enabled_tools": {
+          "description": "Explicit allow-list of tools exposed from this server.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tools": {
+          "additionalProperties": {
+            "$ref": "#/definitions/McpServerToolConfig"
+          },
+          "description": "Per-tool approval settings keyed by tool name.",
+          "type": "object"
         }
       },
       "type": "object"
@@ -2169,6 +2259,13 @@
     "ToolSuggestConfig": {
       "additionalProperties": false,
       "properties": {
+        "disabled_tools": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ToolSuggestDisabledTool"
+          },
+          "type": "array"
+        },
         "discoverables": {
           "default": [],
           "items": {
@@ -2177,6 +2274,22 @@
           "type": "array"
         }
       },
+      "type": "object"
+    },
+    "ToolSuggestDisabledTool": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/definitions/ToolSuggestDiscoverableType"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
       "type": "object"
     },
     "ToolSuggestDiscoverable": {
@@ -2301,7 +2414,8 @@
               "open_transcript": null,
               "queue": null,
               "submit": null,
-              "toggle_shortcuts": null
+              "toggle_shortcuts": null,
+              "toggle_vim_mode": null
             },
             "list": {
               "accept": null,
@@ -2320,6 +2434,44 @@
               "page_up": null,
               "scroll_down": null,
               "scroll_up": null
+            },
+            "vim_normal": {
+              "append_after_cursor": null,
+              "append_line_end": null,
+              "cancel_operator": null,
+              "delete_char": null,
+              "delete_to_line_end": null,
+              "enter_insert": null,
+              "insert_line_start": null,
+              "move_down": null,
+              "move_left": null,
+              "move_line_end": null,
+              "move_line_start": null,
+              "move_right": null,
+              "move_up": null,
+              "move_word_backward": null,
+              "move_word_end": null,
+              "move_word_forward": null,
+              "open_line_above": null,
+              "open_line_below": null,
+              "paste_after": null,
+              "start_delete_operator": null,
+              "start_yank_operator": null,
+              "yank_line": null
+            },
+            "vim_operator": {
+              "cancel": null,
+              "delete_line": null,
+              "motion_down": null,
+              "motion_left": null,
+              "motion_line_end": null,
+              "motion_line_start": null,
+              "motion_right": null,
+              "motion_up": null,
+              "motion_word_backward": null,
+              "motion_word_end": null,
+              "motion_word_forward": null,
+              "yank_line": null
             }
           },
           "description": "Keybinding overrides for the TUI.\n\nThis supports rebinding selected actions globally and by context. Context bindings take precedence over `global` bindings."
@@ -2392,6 +2544,11 @@
           "default": null,
           "description": "Syntax highlighting theme name (kebab-case).\n\nWhen set, overrides automatic light/dark theme detection. Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.",
           "type": "string"
+        },
+        "vim_mode_default": {
+          "default": false,
+          "description": "Start the composer in Vim mode (`Normal`) by default. Defaults to `false`.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2739,6 +2896,14 @@
             }
           ],
           "description": "Toggle the composer shortcut overlay."
+        },
+        "toggle_vim_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle Vim mode for the composer input."
         }
       },
       "type": "object"
@@ -2828,7 +2993,8 @@
             "open_transcript": null,
             "queue": null,
             "submit": null,
-            "toggle_shortcuts": null
+            "toggle_shortcuts": null,
+            "toggle_vim_mode": null
           }
         },
         "list": {
@@ -2861,6 +3027,58 @@
             "page_up": null,
             "scroll_down": null,
             "scroll_up": null
+          }
+        },
+        "vim_normal": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiVimNormalKeymap"
+            }
+          ],
+          "default": {
+            "append_after_cursor": null,
+            "append_line_end": null,
+            "cancel_operator": null,
+            "delete_char": null,
+            "delete_to_line_end": null,
+            "enter_insert": null,
+            "insert_line_start": null,
+            "move_down": null,
+            "move_left": null,
+            "move_line_end": null,
+            "move_line_start": null,
+            "move_right": null,
+            "move_up": null,
+            "move_word_backward": null,
+            "move_word_end": null,
+            "move_word_forward": null,
+            "open_line_above": null,
+            "open_line_below": null,
+            "paste_after": null,
+            "start_delete_operator": null,
+            "start_yank_operator": null,
+            "yank_line": null
+          }
+        },
+        "vim_operator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiVimOperatorKeymap"
+            }
+          ],
+          "default": {
+            "cancel": null,
+            "delete_line": null,
+            "motion_down": null,
+            "motion_left": null,
+            "motion_line_end": null,
+            "motion_line_start": null,
+            "motion_right": null,
+            "motion_up": null,
+            "motion_word_backward": null,
+            "motion_word_end": null,
+            "motion_word_forward": null,
+            "yank_line": null
           }
         }
       },
@@ -2988,6 +3206,292 @@
             }
           ],
           "description": "Scroll up by one row."
+        }
+      },
+      "type": "object"
+    },
+    "TuiVimNormalKeymap": {
+      "additionalProperties": false,
+      "description": "Vim normal-mode keybindings for modal editing inside text areas.\n\nActions that use uppercase letters (like `A` for append-line-end) should be specified as `shift-a` in config; the runtime matcher handles cross-terminal shift-reporting differences automatically.",
+      "properties": {
+        "append_after_cursor": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter insert mode after cursor (`a`)."
+        },
+        "append_line_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter insert mode at end of line (`A`)."
+        },
+        "cancel_operator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Cancel a pending operator and return to normal mode."
+        },
+        "delete_char": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Delete character under cursor (`x`)."
+        },
+        "delete_to_line_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Delete from cursor to end of line (`D`)."
+        },
+        "enter_insert": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter insert mode at cursor (`i`)."
+        },
+        "insert_line_start": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter insert mode at first non-blank of line (`I`)."
+        },
+        "move_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor down (`j`), or recall newer composer history at history boundaries."
+        },
+        "move_left": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor left (`h`)."
+        },
+        "move_line_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to end of line (`$`)."
+        },
+        "move_line_start": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to start of line (`0`)."
+        },
+        "move_right": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor right (`l`)."
+        },
+        "move_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor up (`k`), or recall older composer history at history boundaries."
+        },
+        "move_word_backward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to start of previous word (`b`)."
+        },
+        "move_word_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to end of current/next word (`e`)."
+        },
+        "move_word_forward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to start of next word (`w`)."
+        },
+        "open_line_above": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open a new line above and enter insert mode (`O`)."
+        },
+        "open_line_below": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open a new line below and enter insert mode (`o`)."
+        },
+        "paste_after": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Paste after cursor (`p`)."
+        },
+        "start_delete_operator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Begin delete operator; next key selects motion (`d`)."
+        },
+        "start_yank_operator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Begin yank operator; next key selects motion (`y`)."
+        },
+        "yank_line": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Yank the entire line (`Y`)."
+        }
+      },
+      "type": "object"
+    },
+    "TuiVimOperatorKeymap": {
+      "additionalProperties": false,
+      "description": "Vim operator-pending keybindings for modal editing inside text areas.\n\nThis context is active only while waiting for a motion after `d` or `y`. Repeating the operator key (`dd`, `yy`) targets the entire line. Pressing `Esc` cancels the pending operator and returns to normal mode without modifying text.",
+      "properties": {
+        "cancel": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Cancel the pending operator and return to normal mode."
+        },
+        "delete_line": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Repeat delete operator to delete the whole line (`dd`)."
+        },
+        "motion_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: down one line (`j`)."
+        },
+        "motion_left": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: left (`h`)."
+        },
+        "motion_line_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to end of line (`$`)."
+        },
+        "motion_line_start": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to start of line (`0`)."
+        },
+        "motion_right": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: right (`l`)."
+        },
+        "motion_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: up one line (`k`)."
+        },
+        "motion_word_backward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to start of previous word (`b`)."
+        },
+        "motion_word_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to end of current/next word (`e`)."
+        },
+        "motion_word_forward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to start of next word (`w`)."
+        },
+        "yank_line": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Repeat yank operator to yank the whole line (`yy`)."
         }
       },
       "type": "object"
@@ -3274,7 +3778,13 @@
         "apps": {
           "type": "boolean"
         },
+        "apps_mcp_path_override": {
+          "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
+        },
         "browser_use": {
+          "type": "boolean"
+        },
+        "browser_use_external": {
           "type": "boolean"
         },
         "child_agents_md": {
@@ -3554,10 +4064,10 @@
     "hooks": {
       "allOf": [
         {
-          "$ref": "#/definitions/HookEventsToml"
+          "$ref": "#/definitions/HooksToml"
         }
       ],
-      "description": "Lifecycle hooks configured inline in TOML."
+      "description": "Lifecycle hooks configured inline in TOML plus user-level overrides."
     },
     "include_apps_instructions": {
       "description": "Whether to inject the `<apps_instructions>` developer block.",

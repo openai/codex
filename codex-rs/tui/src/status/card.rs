@@ -3,17 +3,20 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::with_border_with_inner_width;
 use crate::legacy_core::config::Config;
+use crate::token_usage::TokenUsage;
+use crate::token_usage::TokenUsageInfo;
 use crate::version::CODEX_CLI_VERSION;
 use chrono::DateTime;
 use chrono::Local;
+use codex_app_server_protocol::AskForApproval;
 use codex_model_provider_info::WireApi;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::TokenUsage;
-use codex_protocol::protocol::TokenUsageInfo;
 use codex_utils_sandbox_summary::summarize_permission_profile;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
@@ -164,6 +167,7 @@ pub(crate) fn new_status_output_with_rate_limits(
 ) -> CompositeHistoryCell {
     new_status_output_with_rate_limits_handle(
         config,
+        /*runtime_model_provider_base_url*/ None,
         account_display,
         token_info,
         total_usage,
@@ -185,6 +189,7 @@ pub(crate) fn new_status_output_with_rate_limits(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_output_with_rate_limits_handle(
     config: &Config,
+    runtime_model_provider_base_url: Option<&str>,
     account_display: Option<&StatusAccountDisplay>,
     token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
@@ -203,6 +208,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let (card, handle) = StatusHistoryCell::new(
         config,
+        runtime_model_provider_base_url,
         account_display,
         token_info,
         total_usage,
@@ -229,6 +235,7 @@ impl StatusHistoryCell {
     #[allow(clippy::too_many_arguments)]
     fn new(
         config: &Config,
+        runtime_model_provider_base_url: Option<&str>,
         account_display: Option<&StatusAccountDisplay>,
         token_info: Option<&TokenUsageInfo>,
         total_usage: &TokenUsage,
@@ -244,6 +251,8 @@ impl StatusHistoryCell {
         agents_summary: String,
         refreshing_rate_limits: bool,
     ) -> (Self, StatusHistoryHandle) {
+        let approval_policy = AskForApproval::from(config.permissions.approval_policy.value());
+        let permission_profile = config.permissions.permission_profile();
         let mut config_entries = vec![
             ("workdir", config.cwd.display().to_string()),
             ("model", model_name.to_string()),
@@ -254,10 +263,7 @@ impl StatusHistoryCell {
             ),
             (
                 "sandbox",
-                summarize_permission_profile(
-                    &config.permissions.permission_profile(),
-                    config.cwd.as_path(),
-                ),
+                summarize_permission_profile(&permission_profile, config.cwd.as_path()),
             ),
         ];
         if config.model_provider.wire_api == WireApi::Responses {
@@ -280,20 +286,17 @@ impl StatusHistoryCell {
             .find(|(k, _)| *k == "approval")
             .map(|(_, v)| v.clone())
             .unwrap_or_else(|| "<unknown>".to_string());
-        let permission_profile = config.permissions.permission_profile();
+        let active_permission_profile = config.permissions.active_permission_profile();
         let sandbox = status_permission_summary(&permission_profile, config.cwd.as_path());
-        let permissions = if config.permissions.approval_policy.value() == AskForApproval::OnRequest
-            && permission_profile == PermissionProfile::workspace_write()
-        {
-            "Default".to_string()
-        } else if config.permissions.approval_policy.value() == AskForApproval::Never
-            && permission_profile == PermissionProfile::Disabled
-        {
-            "Full Access".to_string()
-        } else {
-            format!("Custom ({sandbox}, {approval})")
-        };
-        let model_provider = format_model_provider(config);
+        let approval = status_approval_label(approval_policy, config.approvals_reviewer, &approval);
+        let permissions = status_permissions_label(
+            active_permission_profile.as_ref(),
+            &permission_profile,
+            approval_policy,
+            &sandbox,
+            &approval,
+        );
+        let model_provider = format_model_provider(config, runtime_model_provider_base_url);
         let account = compose_account_display(account_display);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let forked_from = forked_from.map(|id| id.to_string());
@@ -537,16 +540,104 @@ impl StatusHistoryCell {
 
 fn status_permission_summary(permission_profile: &PermissionProfile, cwd: &Path) -> String {
     let summary = summarize_permission_profile(permission_profile, cwd);
+    if let Some(details) = summary.strip_prefix("read-only") {
+        if details.contains("(network access enabled)") {
+            return "read-only with network access".to_string();
+        }
+        return "read-only".to_string();
+    }
     if let Some(details) = summary.strip_prefix("workspace-write") {
         if details.contains("(network access enabled)") {
-            return "workspace-write with network access".to_string();
+            return "workspace with network access".to_string();
         }
-        return "workspace-write".to_string();
+        return "workspace".to_string();
     }
     if summary == "custom permissions (network access enabled)" {
         return "custom permissions with network access".to_string();
     }
     summary
+}
+
+fn status_permissions_label(
+    active_permission_profile: Option<&ActivePermissionProfile>,
+    permission_profile: &PermissionProfile,
+    approval_policy: AskForApproval,
+    sandbox: &str,
+    approval: &str,
+) -> String {
+    let active_id = active_permission_profile.map(|active| active.id.as_str());
+    let writable_root_modifications = active_permission_profile
+        .map(|active| {
+            active
+                .modifications
+                .iter()
+                .filter(|modification| {
+                    matches!(
+                        modification,
+                        ActivePermissionProfileModification::AdditionalWritableRoot { .. }
+                    )
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    let modification_suffix = match writable_root_modifications {
+        0 => String::new(),
+        1 => " + 1 writable root".to_string(),
+        count => format!(" + {count} writable roots"),
+    };
+    match active_id {
+        Some(":read-only") => {
+            let label = if sandbox == "read-only with network access" {
+                "Read Only with network access"
+            } else {
+                "Read Only"
+            };
+            return format!("{label}{modification_suffix} ({approval})");
+        }
+        Some(":workspace") => match sandbox {
+            "workspace" => return format!("Workspace{modification_suffix} ({approval})"),
+            "workspace with network access" => {
+                return format!("Workspace with network access{modification_suffix} ({approval})");
+            }
+            _ => {}
+        },
+        Some(":danger-no-sandbox") if permission_profile == &PermissionProfile::Disabled => {
+            return if approval_policy == AskForApproval::Never {
+                "Full Access".to_string()
+            } else {
+                format!("No Sandbox ({approval})")
+            };
+        }
+        Some(id) => return format!("Profile {id}{modification_suffix} ({sandbox}, {approval})"),
+        None => {}
+    }
+
+    if sandbox == "read-only" {
+        return format!("Read Only ({approval})");
+    }
+    if approval_policy == AskForApproval::OnRequest && sandbox == "workspace" {
+        return format!("Workspace ({approval})");
+    }
+    if approval_policy == AskForApproval::Never
+        && permission_profile == &PermissionProfile::Disabled
+    {
+        return "Full Access".to_string();
+    }
+    format!("Custom ({sandbox}, {approval})")
+}
+
+fn status_approval_label(
+    approval_policy: AskForApproval,
+    approvals_reviewer: ApprovalsReviewer,
+    approval: &str,
+) -> String {
+    if approval_policy == AskForApproval::OnRequest
+        && approvals_reviewer == ApprovalsReviewer::AutoReview
+    {
+        "auto-review".to_string()
+    } else {
+        approval.to_string()
+    }
 }
 
 impl HistoryCell for StatusHistoryCell {
@@ -699,7 +790,7 @@ impl HistoryCell for StatusHistoryCell {
     }
 }
 
-fn format_model_provider(config: &Config) -> Option<String> {
+fn format_model_provider(config: &Config, runtime_base_url: Option<&str>) -> Option<String> {
     let provider = &config.model_provider;
     let name = provider.name.trim();
     let provider_name = if name.is_empty() {
@@ -707,7 +798,7 @@ fn format_model_provider(config: &Config) -> Option<String> {
     } else {
         name
     };
-    let base_url = provider.base_url.as_deref().and_then(sanitize_base_url);
+    let base_url = runtime_base_url.and_then(sanitize_base_url);
     let is_default_openai = provider.is_openai() && base_url.is_none();
     if is_default_openai {
         return None;

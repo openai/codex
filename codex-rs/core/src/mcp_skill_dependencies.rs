@@ -20,6 +20,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::skills::model::SkillToolDependency;
 use codex_mcp::McpOAuthLoginSupport;
+use codex_mcp::McpPermissionPromptAutoApproveContext;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_mcp::oauth_login_support;
 use codex_mcp::resolve_oauth_scopes;
@@ -222,6 +223,7 @@ async fn should_install_mcp_dependencies(
     if mcp_permission_prompt_is_auto_approved(
         turn_context.approval_policy.value(),
         &turn_context.permission_profile(),
+        McpPermissionPromptAutoApproveContext::default(),
     ) {
         return true;
     }

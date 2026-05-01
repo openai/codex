@@ -69,6 +69,30 @@ fn approval_metadata(
     }
 }
 
+fn write_sample_plugin_mcp(codex_home: &std::path::Path) {
+    let plugin_root = codex_home.join("plugins/cache/test/sample/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create plugin manifest dir");
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "sample"
+}"#,
+    )
+    .expect("write plugin manifest");
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "sample": {
+      "type": "http",
+      "url": "https://sample.example/mcp"
+    }
+  }
+}"#,
+    )
+    .expect("write plugin mcp config");
+}
+
 fn prompt_options(
     allow_session_remember: bool,
     allow_persistent_approval: bool,
@@ -139,17 +163,20 @@ print({hook_output:?})
     )
     .expect("write hooks.json");
 
-    session.services.hooks = Hooks::new(HooksConfig {
-        feature_enabled: true,
-        config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
-        shell_program: (!cfg!(windows)).then_some("/bin/sh".to_string()),
-        shell_args: if cfg!(windows) {
-            Vec::new()
-        } else {
-            vec!["-c".to_string()]
-        },
-        ..HooksConfig::default()
-    });
+    session
+        .services
+        .hooks
+        .store(Arc::new(Hooks::new(HooksConfig {
+            feature_enabled: true,
+            config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
+            shell_program: (!cfg!(windows)).then_some("/bin/sh".to_string()),
+            shell_args: if cfg!(windows) {
+                Vec::new()
+            } else {
+                vec!["-c".to_string()]
+            },
+            ..HooksConfig::default()
+        })));
 
     log_path.to_path_buf()
 }
@@ -809,6 +836,72 @@ fn sanitize_mcp_tool_result_for_model_preserves_image_when_supported() {
     .expect("unsanitized result");
 
     assert_eq!(got, original);
+}
+
+#[test]
+fn truncate_mcp_tool_result_for_event_preserves_small_result() {
+    let original = CallToolResult {
+        content: vec![serde_json::json!({
+            "type": "text",
+            "text": "hello",
+        })],
+        structured_content: Some(serde_json::json!({"x": 1})),
+        is_error: Some(false),
+        meta: Some(serde_json::json!({"k": "v"})),
+    };
+
+    let got = truncate_mcp_tool_result_for_event(&Ok(original.clone()))
+        .expect("small result should remain successful");
+
+    assert_eq!(got, original);
+}
+
+#[test]
+fn truncate_mcp_tool_result_for_event_bounds_large_result() {
+    let original = CallToolResult {
+        content: vec![serde_json::json!({
+            "type": "text",
+            "text": "long-message-with-newlines-\n".repeat(200_000),
+        })],
+        structured_content: Some(serde_json::json!({
+            "structured": "structured-value-".repeat(200_000),
+        })),
+        is_error: Some(false),
+        meta: Some(serde_json::json!({
+            "meta": "meta-value-".repeat(200_000),
+        })),
+    };
+
+    let got = truncate_mcp_tool_result_for_event(&Ok(original))
+        .expect("large result should remain successful");
+    let serialized = serde_json::to_string(&got).expect("truncated result should serialize");
+
+    // The truncated preview is embedded as a JSON string, so quotes and
+    // backslashes can be escaped again. That can roughly double the preview
+    // bytes in the worst case. The extra buffer covers the small result wrapper
+    // and marker.
+    assert!(serialized.len() < MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES * 2 + 1024);
+    assert_eq!(got.structured_content, None);
+    assert_eq!(got.meta, None);
+    assert_eq!(got.is_error, Some(false));
+    assert!(
+        got.content[0]
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|text| text.contains("truncated")),
+        "large event result should contain a truncation marker: {got:?}"
+    );
+}
+
+#[test]
+fn truncate_mcp_tool_result_for_event_bounds_large_error() {
+    let got = truncate_mcp_tool_result_for_event(&Err("error-message-".repeat(200_000)))
+        .expect_err("large error should remain an error");
+
+    // `truncate_text` includes its own marker, so allow a small amount of
+    // overhead beyond the requested byte budget.
+    assert!(got.len() < MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES + 1024);
+    assert!(got.contains("truncated"));
 }
 
 #[tokio::test]
@@ -1486,20 +1579,113 @@ approval_mode = "prompt"
         .build()
         .await
         .expect("load config");
-    let (_session, mut turn_context) = make_session_and_context().await;
+    let (session, mut turn_context) = make_session_and_context().await;
     turn_context.config = Arc::new(config);
 
     assert_eq!(
-        custom_mcp_tool_approval_mode(&turn_context, "docs", "read"),
+        custom_mcp_tool_approval_mode(&session, &turn_context, "docs", "read").await,
         AppToolApproval::Approve
     );
     assert_eq!(
-        custom_mcp_tool_approval_mode(&turn_context, "docs", "search"),
+        custom_mcp_tool_approval_mode(&session, &turn_context, "docs", "search").await,
         AppToolApproval::Prompt
     );
     assert_eq!(
-        custom_mcp_tool_approval_mode(&turn_context, "unknown", "search"),
+        custom_mcp_tool_approval_mode(&session, &turn_context, "unknown", "search").await,
         AppToolApproval::Auto
+    );
+}
+
+#[tokio::test]
+async fn custom_mcp_tool_approval_mode_uses_plugin_mcp_policy() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    write_sample_plugin_mcp(codex_home.as_path());
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+[features]
+plugins = true
+
+[plugins."sample@test"]
+enabled = true
+
+[plugins."sample@test".mcp_servers.sample]
+default_tools_approval_mode = "prompt"
+
+[plugins."sample@test".mcp_servers.sample.tools.search]
+approval_mode = "approve"
+"#,
+    )
+    .expect("seed config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .build()
+        .await
+        .expect("load config");
+    turn_context.config = Arc::new(config);
+    session.services.plugins_manager.clear_cache();
+
+    assert_eq!(
+        custom_mcp_tool_approval_mode(&session, &turn_context, "sample", "read").await,
+        AppToolApproval::Prompt
+    );
+    assert_eq!(
+        custom_mcp_tool_approval_mode(&session, &turn_context, "sample", "search").await,
+        AppToolApproval::Approve
+    );
+}
+
+#[tokio::test]
+async fn custom_mcp_tool_approval_mode_uses_updated_plugin_mcp_policy_after_cache_warm() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    write_sample_plugin_mcp(codex_home.as_path());
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+[features]
+plugins = true
+
+[plugins."sample@test"]
+enabled = true
+"#,
+    )
+    .expect("seed config");
+    let initial_config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .build()
+        .await
+        .expect("load initial config");
+    session
+        .services
+        .plugins_manager
+        .plugins_for_config(&initial_config.plugins_config_input())
+        .await;
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+[features]
+plugins = true
+
+[plugins."sample@test"]
+enabled = true
+
+[plugins."sample@test".mcp_servers.sample.tools.search]
+approval_mode = "approve"
+"#,
+    )
+    .expect("update config");
+    let updated_config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .build()
+        .await
+        .expect("load updated config");
+    turn_context.config = Arc::new(updated_config);
+
+    assert_eq!(
+        custom_mcp_tool_approval_mode(&session, &turn_context, "sample", "search").await,
+        AppToolApproval::Approve
     );
 }
 
@@ -1581,6 +1767,56 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_serve
             approval_mode: Some(AppToolApproval::Approve),
         }
     );
+    assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
+}
+
+#[tokio::test]
+async fn maybe_persist_mcp_tool_approval_writes_plugin_mcp_policy() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    write_sample_plugin_mcp(codex_home.as_path());
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+[features]
+plugins = true
+
+[plugins."sample@test"]
+enabled = true
+"#,
+    )
+    .expect("seed config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .build()
+        .await
+        .expect("load config");
+    turn_context.config = Arc::new(config);
+    session.services.plugins_manager.clear_cache();
+    let key = McpToolApprovalKey {
+        server: "sample".to_string(),
+        connector_id: None,
+        tool_name: "search".to_string(),
+    };
+
+    maybe_persist_mcp_tool_approval(&session, &turn_context, key.clone()).await;
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let parsed: ConfigToml = toml::from_str(&contents).expect("parse config");
+    let tool = parsed
+        .plugins
+        .get("sample@test")
+        .and_then(|plugin| plugin.mcp_servers.get("sample"))
+        .and_then(|server| server.tools.get("search"))
+        .expect("sample/search tool config exists");
+
+    assert_eq!(
+        tool,
+        &McpServerToolConfig {
+            approval_mode: Some(AppToolApproval::Approve),
+        }
+    );
+    assert!(contents.contains(r#"[plugins."sample@test".mcp_servers.sample.tools.search]"#));
     assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
 }
 
@@ -2386,31 +2622,19 @@ async fn full_access_mode_skips_arc_monitor_for_all_approval_modes() {
 }
 
 #[tokio::test]
-async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_enabled() {
+async fn approve_mode_skips_arc_and_guardian_when_guardian_reviewer_is_enabled() {
     use wiremock::Mock;
     use wiremock::ResponseTemplate;
     use wiremock::matchers::method;
     use wiremock::matchers::path;
 
     let server = start_mock_server().await;
-    let guardian_request_log = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-guardian"),
-            ev_assistant_message(
-                "msg-guardian",
-                &serde_json::json!({
-                    "risk_level": "low",
-                    "user_authorization": "high",
-                    "outcome": "allow",
-                    "rationale": "The user already configured guardian to review escalated approvals for this session.",
-                })
-                .to_string(),
-            ),
-            ev_completed("resp-guardian"),
-        ]),
-    )
-    .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
     Mock::given(method("POST"))
         .and(path("/codex/safety/arc"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -2424,7 +2648,7 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
                 "why": "requires review",
             }],
         })))
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -2483,9 +2707,5 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
     )
     .await;
 
-    assert_eq!(decision, Some(McpToolApprovalDecision::Accept));
-    assert_eq!(
-        guardian_request_log.single_request().path(),
-        "/v1/responses"
-    );
+    assert_eq!(decision, None);
 }

@@ -107,7 +107,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
     use crate::tools::handlers::unavailable_tool_message;
-    use crate::tools::tool_search_entry::build_tool_search_entries;
+    use crate::tools::tool_search_entry::build_tool_search_entries_for_config;
 
     let mut builder = ToolRegistryBuilder::new();
     let mcp_tool_plan_inputs = mcp_tools.as_ref().map(map_mcp_tools_for_plan);
@@ -166,11 +166,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let shell_command_handler = Arc::new(ShellCommandHandler::from(config.shell_command_backend));
     let request_permissions_handler = Arc::new(RequestPermissionsHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
-        default_mode_request_user_input: config.default_mode_request_user_input,
+        available_modes: config.request_user_input_available_modes.clone(),
     });
     let deferred_dynamic_tools = dynamic_tools
         .iter()
-        .filter(|tool| tool.defer_loading)
+        .filter(|tool| tool.defer_loading && (config.namespace_tools || tool.namespace.is_none()))
         .cloned()
         .collect::<Vec<_>>();
     let mut tool_search_handler = None;
@@ -270,7 +270,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::ToolSearch => {
                 if tool_search_handler.is_none() {
-                    let entries = build_tool_search_entries(
+                    let entries = build_tool_search_entries_for_config(
+                        config,
                         deferred_mcp_tools.as_ref(),
                         &deferred_dynamic_tools,
                     );

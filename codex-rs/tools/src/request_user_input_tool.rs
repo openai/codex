@@ -1,12 +1,25 @@
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
 use crate::ToolSpec;
+use codex_features::Feature;
+use codex_features::Features;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use std::collections::BTreeMap;
 
 pub const REQUEST_USER_INPUT_TOOL_NAME: &str = "request_user_input";
+
+pub fn request_user_input_available_modes(features: &Features) -> Vec<ModeKind> {
+    TUI_VISIBLE_COLLABORATION_MODES
+        .into_iter()
+        .filter(|mode| {
+            mode.allows_request_user_input()
+                || (features.enabled(Feature::DefaultModeRequestUserInput)
+                    && *mode == ModeKind::Default)
+        })
+        .collect()
+}
 
 pub fn create_request_user_input_tool(description: String) -> ToolSpec {
     let option_props = BTreeMap::from([
@@ -85,9 +98,9 @@ pub fn create_request_user_input_tool(description: String) -> ToolSpec {
 
 pub fn request_user_input_unavailable_message(
     mode: ModeKind,
-    default_mode_request_user_input: bool,
+    available_modes: &[ModeKind],
 ) -> Option<String> {
-    if request_user_input_is_available(mode, default_mode_request_user_input) {
+    if available_modes.contains(&mode) {
         None
     } else {
         let mode_name = mode.display_name();
@@ -115,23 +128,17 @@ pub fn normalize_request_user_input_args(
     Ok(args)
 }
 
-pub fn request_user_input_tool_description(default_mode_request_user_input: bool) -> String {
-    let allowed_modes = format_allowed_modes(default_mode_request_user_input);
+pub fn request_user_input_tool_description(available_modes: &[ModeKind]) -> String {
+    let allowed_modes = format_allowed_modes(available_modes);
     format!(
         "Request user input for one to three short questions and wait for the response. This tool is only available in {allowed_modes}."
     )
 }
 
-fn request_user_input_is_available(mode: ModeKind, default_mode_request_user_input: bool) -> bool {
-    mode.allows_request_user_input()
-        || (default_mode_request_user_input && mode == ModeKind::Default)
-}
-
-fn format_allowed_modes(default_mode_request_user_input: bool) -> String {
-    let mode_names: Vec<&str> = TUI_VISIBLE_COLLABORATION_MODES
-        .into_iter()
-        .filter(|mode| request_user_input_is_available(*mode, default_mode_request_user_input))
-        .map(ModeKind::display_name)
+fn format_allowed_modes(available_modes: &[ModeKind]) -> String {
+    let mode_names: Vec<&str> = available_modes
+        .iter()
+        .map(|mode| mode.display_name())
         .collect();
 
     match mode_names.as_slice() {

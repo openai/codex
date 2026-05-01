@@ -14,6 +14,8 @@ use crate::DiscoverableToolAction;
 use crate::DiscoverableToolType;
 
 pub const TOOL_SUGGEST_APPROVAL_KIND_VALUE: &str = "tool_suggestion";
+pub const TOOL_SUGGEST_PERSIST_KEY: &str = "persist";
+pub const TOOL_SUGGEST_PERSIST_ALWAYS_VALUE: &str = "always";
 
 #[derive(Debug, Deserialize)]
 pub struct ToolSuggestArgs {
@@ -37,6 +39,7 @@ pub struct ToolSuggestResult {
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct ToolSuggestMeta<'a> {
     pub codex_approval_kind: &'static str,
+    pub persist: &'static str,
     pub tool_type: DiscoverableToolType,
     pub suggest_type: DiscoverableToolAction,
     pub suggest_reason: &'a str,
@@ -111,6 +114,7 @@ fn build_tool_suggestion_meta<'a>(
 ) -> ToolSuggestMeta<'a> {
     ToolSuggestMeta {
         codex_approval_kind: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
+        persist: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE,
         tool_type,
         suggest_type: action_type,
         suggest_reason,

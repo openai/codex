@@ -67,7 +67,7 @@ pub use message_history::history_metadata as message_history_metadata;
 pub use message_history::lookup as lookup_message_history_entry;
 pub use utils::path_utils;
 pub mod personality_migration;
-pub mod plugins;
+pub(crate) mod plugins;
 #[doc(hidden)]
 pub(crate) mod prompt_debug;
 #[doc(hidden)]
@@ -119,7 +119,9 @@ pub use thread_manager::ForkSnapshot;
 pub use thread_manager::NewThread;
 pub use thread_manager::StartThreadOptions;
 pub use thread_manager::ThreadManager;
+pub use thread_manager::ThreadShutdownReport;
 pub use thread_manager::build_models_manager;
+pub use thread_manager::thread_store_from_config;
 pub use web_search::web_search_action_detail;
 pub use web_search::web_search_detail;
 pub use windows_sandbox_read_grants::grant_read_root_non_elevated;
@@ -196,8 +198,5 @@ pub use file_watcher::FileWatcherEvent;
 pub use installation_id::resolve_installation_id;
 pub use turn_metadata::build_turn_metadata_header;
 pub mod compact;
-pub(crate) mod memory_trace;
-pub use memory_trace::BuiltMemory;
-pub use memory_trace::build_memories_from_trace_files;
 mod memory_usage;
 pub mod otel_init;

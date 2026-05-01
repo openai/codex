@@ -60,6 +60,9 @@ pub(crate) struct SessionConfiguration {
     pub(super) approvals_reviewer: ApprovalsReviewer,
     /// Canonical permission profile for the session.
     pub(super) permission_profile: Constrained<PermissionProfile>,
+    /// Named or implicit built-in permissions profile selected from config, if
+    /// any.
+    pub(super) active_permission_profile: Option<ActivePermissionProfile>,
     pub(super) windows_sandbox_level: WindowsSandboxLevel,
 
     /// Absolute working directory that should be treated as the *root* of the
@@ -97,6 +100,10 @@ impl SessionConfiguration {
         self.permission_profile.get().clone()
     }
 
+    pub(super) fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
+        self.active_permission_profile.clone()
+    }
+
     pub(super) fn sandbox_policy(&self) -> SandboxPolicy {
         self.permission_profile()
             .to_legacy_sandbox_policy(&self.cwd)
@@ -127,6 +134,7 @@ impl SessionConfiguration {
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
             permission_profile: self.permission_profile(),
+            active_permission_profile: self.active_permission_profile(),
             cwd: self.cwd.clone(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
@@ -206,10 +214,19 @@ impl SessionConfiguration {
         }
 
         if let Some(permission_profile) = updates.permission_profile.clone() {
+            let active_permission_profile =
+                updates.active_permission_profile.clone().or_else(|| {
+                    if permission_profile == self.permission_profile() {
+                        self.active_permission_profile.clone()
+                    } else {
+                        None
+                    }
+                });
             next_configuration.set_permission_profile_projection(
                 permission_profile,
                 Some(&current_file_system_sandbox_policy),
             )?;
+            next_configuration.active_permission_profile = active_permission_profile;
         } else if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
             let file_system_sandbox_policy =
                 FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
@@ -225,6 +242,7 @@ impl SessionConfiguration {
                     network_sandbox_policy,
                 ),
             )?;
+            next_configuration.active_permission_profile = None;
         } else if cwd_changed
             && file_system_policy_matches_legacy
             && file_system_policy_has_rebindable_project_root_write
@@ -285,6 +303,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,
     pub(crate) sandbox_policy: Option<SandboxPolicy>,
     pub(crate) permission_profile: Option<PermissionProfile>,
+    pub(crate) active_permission_profile: Option<ActivePermissionProfile>,
     pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
     pub(crate) collaboration_mode: Option<CollaborationMode>,
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
@@ -746,29 +765,8 @@ impl Session {
                     (None, None)
                 };
 
-            let mut hook_shell_argv =
-                default_shell.derive_exec_args("", /*use_login_shell*/ false);
-            let hook_shell_program = hook_shell_argv.remove(0);
-            let _ = hook_shell_argv.pop();
-            let plugin_hooks_enabled = config.features.enabled(Feature::PluginHooks);
-            let (plugin_hook_sources, plugin_hook_load_warnings) = if plugin_hooks_enabled {
-                let plugin_outcome = plugins_manager.plugins_for_config(&config).await;
-                (
-                    plugin_outcome.effective_plugin_hook_sources(),
-                    plugin_outcome.effective_plugin_hook_warnings(),
-                )
-            } else {
-                (Vec::new(), Vec::new())
-            };
-            let hooks = Hooks::new(HooksConfig {
-                legacy_notify_argv: config.notify.clone(),
-                feature_enabled: config.features.enabled(Feature::CodexHooks),
-                config_layer_stack: Some(config.config_layer_stack.clone()),
-                plugin_hook_sources,
-                plugin_hook_load_warnings,
-                shell_program: Some(hook_shell_program),
-                shell_args: hook_shell_argv,
-            });
+            let hooks =
+                build_hooks_for_config(&config, plugins_manager.as_ref(), &default_shell).await;
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
@@ -805,7 +803,7 @@ impl Session {
                 shell_zsh_path: config.zsh_path.clone(),
                 main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
                 analytics_events_client,
-                hooks,
+                hooks: arc_swap::ArcSwap::from_pointee(hooks),
                 rollout_thread_trace,
                 user_shell: Arc::new(default_shell),
                 shell_snapshot_tx,
@@ -887,6 +885,7 @@ impl Session {
                     approval_policy: session_configuration.approval_policy.value(),
                     approvals_reviewer: session_configuration.approvals_reviewer,
                     permission_profile: session_configuration.permission_profile(),
+                    active_permission_profile: session_configuration.active_permission_profile(),
                     cwd: session_configuration.cwd.clone(),
                     reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),
                     history_log_id,

@@ -243,6 +243,9 @@ impl ChatWidget {
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
             }
+            SlashCommand::Vim => {
+                self.toggle_vim_mode_and_notify();
+            }
             SlashCommand::Keymap => {
                 self.open_keymap_picker();
             }
@@ -345,6 +348,9 @@ impl ChatWidget {
             SlashCommand::Skills => {
                 self.open_skills_menu();
             }
+            SlashCommand::Hooks => {
+                self.add_hooks_output();
+            }
             SlashCommand::Status => {
                 if self.should_prefetch_rate_limits() {
                     let request_id = self.next_status_refresh_request_id;
@@ -409,8 +415,8 @@ impl ChatWidget {
             SlashCommand::TestApproval => {
                 use std::collections::HashMap;
 
-                use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
-                use codex_protocol::protocol::FileChange;
+                use crate::approval_events::ApplyPatchApprovalRequestEvent;
+                use crate::diff_model::FileChange;
 
                 self.on_apply_patch_approval_request(
                     "1".to_string(),
@@ -617,7 +623,7 @@ impl ChatWidget {
                 let control_command = match trimmed.to_ascii_lowercase().as_str() {
                     "clear" => Some(GoalControlCommand::Clear),
                     "pause" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Paused)),
-                    "unpause" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Active)),
+                    "resume" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Active)),
                     _ => None,
                 };
                 if let Some(command) = control_command {
@@ -705,9 +711,8 @@ impl ChatWidget {
                 self.request_side_conversation(parent_thread_id, Some(user_message));
             }
             SlashCommand::Review if !trimmed.is_empty() => {
-                self.submit_op(AppCommand::review(ReviewRequest {
-                    target: ReviewTarget::Custom { instructions: args },
-                    user_facing_hint: None,
+                self.submit_op(AppCommand::review(ReviewTarget::Custom {
+                    instructions: args,
                 }));
             }
             SlashCommand::Resume if !trimmed.is_empty() => {
@@ -844,6 +849,7 @@ impl ChatWidget {
             | SlashCommand::Plugins
             | SlashCommand::Rollout
             | SlashCommand::Copy
+            | SlashCommand::Vim
             | SlashCommand::Diff
             | SlashCommand::Rename
             | SlashCommand::TestApproval => QueueDrain::Continue,
@@ -878,6 +884,7 @@ impl ChatWidget {
             | SlashCommand::Logout
             | SlashCommand::Mention
             | SlashCommand::Skills
+            | SlashCommand::Hooks
             | SlashCommand::Title
             | SlashCommand::Statusline
             | SlashCommand::Theme => QueueDrain::Stop,
