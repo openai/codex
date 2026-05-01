@@ -14,6 +14,8 @@ use codex_core::find_thread_path_by_id_str;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::protocol::SessionSource;
+use codex_rollout::StateDbHandle;
+use codex_rollout::find_thread_path_by_id_str_with_state_db;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadataBuilder;
 use pretty_assertions::assert_eq;
@@ -56,7 +58,11 @@ fn write_minimal_rollout_with_id(codex_home: &Path, id: Uuid) -> PathBuf {
     write_minimal_rollout_with_id_in_subdir(codex_home, "sessions", id)
 }
 
-async fn upsert_thread_metadata(codex_home: &Path, thread_id: ThreadId, rollout_path: PathBuf) {
+async fn upsert_thread_metadata(
+    codex_home: &Path,
+    thread_id: ThreadId,
+    rollout_path: PathBuf,
+) -> StateDbHandle {
     let runtime = StateRuntime::init(codex_home.to_path_buf(), "test-provider".to_string())
         .await
         .unwrap();
@@ -73,6 +79,7 @@ async fn upsert_thread_metadata(codex_home: &Path, thread_id: ThreadId, rollout_
     builder.cwd = codex_home.to_path_buf();
     let metadata = builder.build("test-provider");
     runtime.upsert_thread(&metadata).await.unwrap();
+    runtime
 }
 
 #[tokio::test]
@@ -115,11 +122,12 @@ async fn find_prefers_sqlite_path_by_id() {
     std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
     std::fs::write(&db_path, "").unwrap();
     write_minimal_rollout_with_id(home.path(), id);
-    upsert_thread_metadata(home.path(), thread_id, db_path.clone()).await;
+    let state_db = upsert_thread_metadata(home.path(), thread_id, db_path.clone()).await;
 
-    let found = find_thread_path_by_id_str(home.path(), &id.to_string())
-        .await
-        .unwrap();
+    let found =
+        find_thread_path_by_id_str_with_state_db(home.path(), &id.to_string(), Some(&state_db))
+            .await
+            .unwrap();
 
     assert_eq!(found, Some(db_path));
 }
@@ -134,11 +142,12 @@ async fn find_falls_back_to_filesystem_when_sqlite_has_no_match() {
     let unrelated_path = home
         .path()
         .join("sessions/2030/12/30/rollout-2030-12-30T00-00-00-unrelated.jsonl");
-    upsert_thread_metadata(home.path(), unrelated_thread_id, unrelated_path).await;
+    let state_db = upsert_thread_metadata(home.path(), unrelated_thread_id, unrelated_path).await;
 
-    let found = find_thread_path_by_id_str(home.path(), &id.to_string())
-        .await
-        .unwrap();
+    let found =
+        find_thread_path_by_id_str_with_state_db(home.path(), &id.to_string(), Some(&state_db))
+            .await
+            .unwrap();
 
     assert_eq!(found, Some(expected));
 }
