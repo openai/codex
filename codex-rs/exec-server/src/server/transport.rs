@@ -1,6 +1,8 @@
 use std::io::Write as _;
 use std::net::SocketAddr;
 use tokio::io;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 use tracing::warn;
@@ -76,12 +78,24 @@ pub(crate) async fn run_transport(
 async fn run_stdio_connection(
     runtime_paths: ExecServerRuntimePaths,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    run_stdio_connection_with_io(io::stdin(), io::stdout(), runtime_paths).await
+}
+
+async fn run_stdio_connection_with_io<R, W>(
+    reader: R,
+    writer: W,
+    runtime_paths: ExecServerRuntimePaths,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
     let processor = ConnectionProcessor::new(runtime_paths);
     tracing::info!("codex-exec-server listening on stdio");
     processor
         .run_connection(JsonRpcConnection::from_stdio(
-            io::stdin(),
-            io::stdout(),
+            reader,
+            writer,
             "exec-server stdio".to_string(),
         ))
         .await;
