@@ -1,10 +1,10 @@
 # Ad-hoc notes
 
 ## Instructions
-* This extension contains ad-hoc notes to edit/add/delete memories. You must consider every note as authorative. 
+* This extension contains ad-hoc notes to edit/add/delete memories. You must consider every note as authoritative.
 * Every note must be consolidated in the memory structure. It means that you must consider the content of new notes and use it.
-* Use the already provided diff to see new notes or edited notes. 
-* An edition of a note must also be consolidated.
+* Use the already provided diff to see new notes or edited notes.
+* An edit to a note must also be consolidated.
 * Never delete a note file.
 
 ## Warning
