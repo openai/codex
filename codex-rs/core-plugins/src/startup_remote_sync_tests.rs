@@ -1,11 +1,12 @@
 use super::*;
-use crate::config::CONFIG_TOML_FILE;
-use crate::plugins::PluginsManager;
-use crate::plugins::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
-use crate::plugins::test_support::write_curated_plugin_sha;
-use crate::plugins::test_support::write_file;
-use crate::plugins::test_support::write_openai_curated_marketplace;
-use codex_core_plugins::startup_sync::curated_plugins_repo_path;
+use crate::PluginsManager;
+use crate::startup_sync::curated_plugins_repo_path;
+use crate::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
+use crate::test_support::load_plugins_config;
+use crate::test_support::write_curated_plugin_sha;
+use crate::test_support::write_file;
+use crate::test_support::write_openai_curated_marketplace;
+use codex_config::CONFIG_TOML_FILE;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use pretty_assertions::assert_eq;
@@ -48,7 +49,7 @@ enabled = false
         .mount(&server)
         .await;
 
-    let mut config = crate::plugins::test_support::load_plugins_config(tmp.path()).await;
+    let mut config = load_plugins_config(tmp.path(), tmp.path()).await;
     config.chatgpt_base_url = format!("{}/backend-api/", server.uri());
     let manager = Arc::new(PluginsManager::new(tmp.path().to_path_buf()));
     let auth_manager =

@@ -2556,7 +2556,6 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
         .thread_manager
         .start_thread_with_tools(
             base_test.config.clone(),
-            codex_core::thread_store_from_config(&base_test.config),
             vec![DynamicToolSpec {
                 namespace: Some("codex_app".to_string()),
                 name: "hidden_dynamic_tool".to_string(),

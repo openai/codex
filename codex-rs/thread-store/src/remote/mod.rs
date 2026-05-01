@@ -69,6 +69,7 @@ impl ThreadStore for RemoteThreadStore {
                 params.event_persistence_mode,
             )
             .into(),
+            metadata_json: helpers::thread_persistence_metadata_json(&params.metadata)?,
         };
         self.client()
             .await?
@@ -96,6 +97,7 @@ impl ThreadStore for RemoteThreadStore {
                 params.event_persistence_mode,
             )
             .into(),
+            metadata_json: helpers::thread_persistence_metadata_json(&params.metadata)?,
         };
         self.client()
             .await?
@@ -258,5 +260,150 @@ impl ThreadStore for RemoteThreadStore {
             message: "remote thread store omitted unarchive_thread response thread".to_string(),
         })?;
         helpers::stored_thread_from_proto(thread)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use codex_protocol::ThreadId;
+    use codex_protocol::models::BaseInstructions;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::ThreadMemoryMode;
+    use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc;
+    use tonic::Request;
+    use tonic::Response;
+    use tonic::Status;
+    use tonic::transport::Server;
+
+    use super::*;
+    use crate::ThreadEventPersistenceMode;
+    use crate::ThreadPersistenceMetadata;
+    use proto::thread_store_server;
+    use proto::thread_store_server::ThreadStoreServer;
+
+    enum RecordedRequest {
+        Create(proto::CreateThreadRequest),
+        Resume(proto::ResumeThreadRequest),
+    }
+
+    struct TestServer {
+        requests_tx: mpsc::UnboundedSender<RecordedRequest>,
+    }
+
+    #[tonic::async_trait]
+    impl thread_store_server::ThreadStore for TestServer {
+        async fn create_thread(
+            &self,
+            request: Request<proto::CreateThreadRequest>,
+        ) -> Result<Response<proto::Empty>, Status> {
+            self.requests_tx
+                .send(RecordedRequest::Create(request.into_inner()))
+                .expect("record create request");
+            Ok(Response::new(proto::Empty {}))
+        }
+
+        async fn resume_thread(
+            &self,
+            request: Request<proto::ResumeThreadRequest>,
+        ) -> Result<Response<proto::Empty>, Status> {
+            self.requests_tx
+                .send(RecordedRequest::Resume(request.into_inner()))
+                .expect("record resume request");
+            Ok(Response::new(proto::Empty {}))
+        }
+
+        async fn list_threads(
+            &self,
+            _request: Request<proto::ListThreadsRequest>,
+        ) -> Result<Response<proto::ListThreadsResponse>, Status> {
+            Err(Status::unimplemented("not implemented"))
+        }
+    }
+
+    async fn test_store() -> (RemoteThreadStore, mpsc::UnboundedReceiver<RecordedRequest>) {
+        let (requests_tx, requests_rx) = mpsc::unbounded_channel();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("test server addr");
+
+        tokio::spawn(async move {
+            Server::builder()
+                .add_service(ThreadStoreServer::new(TestServer { requests_tx }))
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                .await
+                .expect("test server");
+        });
+
+        (
+            RemoteThreadStore::new(format!("http://{addr}")),
+            requests_rx,
+        )
+    }
+
+    #[tokio::test]
+    async fn create_thread_forwards_metadata() {
+        let (store, mut requests_rx) = test_store().await;
+        let metadata = ThreadPersistenceMetadata {
+            cwd: Some(PathBuf::from("/workspace")),
+            model_provider: "test-provider".to_string(),
+            memory_mode: ThreadMemoryMode::Enabled,
+        };
+
+        store
+            .create_thread(CreateThreadParams {
+                thread_id: ThreadId::new(),
+                forked_from_id: None,
+                source: SessionSource::Exec,
+                base_instructions: BaseInstructions::default(),
+                dynamic_tools: Vec::new(),
+                metadata: metadata.clone(),
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            })
+            .await
+            .expect("create thread");
+
+        let Some(RecordedRequest::Create(request)) = requests_rx.recv().await else {
+            panic!("expected create request");
+        };
+        assert_eq!(
+            serde_json::from_str::<ThreadPersistenceMetadata>(&request.metadata_json)
+                .expect("metadata json"),
+            metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_thread_forwards_metadata() {
+        let (store, mut requests_rx) = test_store().await;
+        let metadata = ThreadPersistenceMetadata {
+            cwd: Some(PathBuf::from("/workspace")),
+            model_provider: "test-provider".to_string(),
+            memory_mode: ThreadMemoryMode::Disabled,
+        };
+
+        store
+            .resume_thread(ResumeThreadParams {
+                thread_id: ThreadId::new(),
+                rollout_path: None,
+                history: None,
+                include_archived: false,
+                metadata: metadata.clone(),
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            })
+            .await
+            .expect("resume thread");
+
+        let Some(RecordedRequest::Resume(request)) = requests_rx.recv().await else {
+            panic!("expected resume request");
+        };
+        assert_eq!(
+            serde_json::from_str::<ThreadPersistenceMetadata>(&request.metadata_json)
+                .expect("metadata json"),
+            metadata
+        );
     }
 }

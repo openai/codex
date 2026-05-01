@@ -729,7 +729,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let skills_watcher = Arc::new(SkillsWatcher::noop());
     let thread_store = Arc::new(codex_thread_store::LocalThreadStore::new(
-        codex_rollout::RolloutConfig::from_view(&config),
+        codex_thread_store::LocalThreadStoreConfig::from_config(&config),
     ));
 
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {

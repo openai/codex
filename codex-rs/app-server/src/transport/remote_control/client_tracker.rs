@@ -195,7 +195,7 @@ impl ClientTracker {
                 })
                 .await
             }
-            ClientEvent::Ack => Ok(()),
+            ClientEvent::ClientMessageChunk { .. } | ClientEvent::Ack { .. } => Ok(()),
             ClientEvent::Ping => {
                 if let Some(client) = self.clients.get_mut(&client_key) {
                     client.last_activity_at = Instant::now();

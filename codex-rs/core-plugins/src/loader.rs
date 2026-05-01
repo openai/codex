@@ -927,6 +927,7 @@ pub async fn plugin_telemetry_metadata_from_root(
 
     PluginTelemetryMetadata {
         plugin_id: plugin_id.clone(),
+        remote_plugin_id: None,
         capability_summary: Some(PluginCapabilitySummary {
             config_name: plugin_id.as_key(),
             display_name: plugin_id.plugin_name.clone(),

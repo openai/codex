@@ -96,5 +96,5 @@ fn resource_timestamp(file_name: &str) -> Option<DateTime<Utc>> {
 }
 
 #[cfg(test)]
-#[path = "extensions_tests.rs"]
+#[path = "prune_tests.rs"]
 mod tests;

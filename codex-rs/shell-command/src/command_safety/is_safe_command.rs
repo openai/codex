@@ -6,6 +6,8 @@ use crate::command_safety::is_dangerous_command::executable_name_lookup_key;
 use crate::command_safety::is_dangerous_command::find_git_subcommand;
 use crate::command_safety::is_dangerous_command::git_global_option_requires_prompt;
 use crate::command_safety::windows_safe_commands::is_safe_command_windows;
+#[cfg(windows)]
+use crate::command_safety::windows_safe_commands::is_safe_powershell_words as is_safe_powershell_words_windows;
 
 pub fn is_known_safe_command(command: &[String]) -> bool {
     let command: Vec<String> = command
@@ -42,6 +44,21 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
         return true;
     }
     false
+}
+
+/// Returns whether already-tokenized PowerShell words are read-only enough to
+/// be auto-approved by the Windows safelist.
+pub fn is_safe_powershell_words(command: &[String]) -> bool {
+    #[cfg(windows)]
+    {
+        is_safe_powershell_words_windows(command)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = command;
+        false
+    }
 }
 
 fn is_safe_to_call_with_exec(command: &[String]) -> bool {
@@ -637,5 +654,16 @@ mod tests {
             !is_known_safe_command(&vec_str(&["bash", "-lc", "ls > out.txt"])),
             "> redirection should be rejected"
         );
+    }
+
+    #[test]
+    fn direct_powershell_words_use_windows_safelist() {
+        let command = vec_str(&["Get-Content", "Cargo.toml"]);
+
+        if cfg!(windows) {
+            assert!(is_safe_powershell_words(&command));
+        } else {
+            assert!(!is_safe_powershell_words(&command));
+        }
     }
 }

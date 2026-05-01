@@ -58,7 +58,7 @@ pub(super) async fn update_thread_metadata(
     codex_rollout::state_db::reconcile_rollout(
         state_db_ctx.as_deref(),
         resolved_rollout_path.path.as_path(),
-        store.config.model_provider_id.as_str(),
+        store.config.default_model_provider_id.as_str(),
         /*builder*/ None,
         &[],
         /*archived_only*/ resolved_rollout_path.archived.then_some(true),
@@ -203,6 +203,7 @@ mod tests {
     use crate::ResumeThreadParams;
     use crate::ThreadEventPersistenceMode;
     use crate::ThreadMetadataPatch;
+    use crate::ThreadPersistenceMetadata;
     use crate::ThreadStore;
     use crate::local::LocalThreadStore;
     use crate::local::test_support::test_config;
@@ -254,7 +255,7 @@ mod tests {
             write_session_file(home.path(), "2025-01-03T14-30-00", uuid).expect("session file");
         let runtime = codex_state::StateRuntime::init(
             home.path().to_path_buf(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
@@ -299,6 +300,7 @@ mod tests {
                 rollout_path: Some(path.clone()),
                 history: None,
                 include_archived: true,
+                metadata: test_thread_metadata(),
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -400,7 +402,7 @@ mod tests {
             .expect("archived session file");
         let runtime = codex_state::StateRuntime::init(
             home.path().to_path_buf(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
@@ -411,7 +413,7 @@ mod tests {
         codex_rollout::state_db::reconcile_rollout(
             Some(runtime.as_ref()),
             archived_path.as_path(),
-            config.model_provider_id.as_str(),
+            config.default_model_provider_id.as_str(),
             /*builder*/ None,
             &[],
             /*archived_only*/ Some(true),
@@ -463,7 +465,7 @@ mod tests {
             .expect("archived session file");
         let runtime = codex_state::StateRuntime::init(
             home.path().to_path_buf(),
-            config.model_provider_id.clone(),
+            config.default_model_provider_id.clone(),
         )
         .await
         .expect("state db should initialize");
@@ -474,7 +476,7 @@ mod tests {
         codex_rollout::state_db::reconcile_rollout(
             Some(runtime.as_ref()),
             archived_path.as_path(),
-            config.model_provider_id.as_str(),
+            config.default_model_provider_id.as_str(),
             /*builder*/ None,
             &[],
             /*archived_only*/ Some(true),
@@ -487,6 +489,7 @@ mod tests {
                 rollout_path: Some(archived_path.clone()),
                 history: None,
                 include_archived: true,
+                metadata: test_thread_metadata(),
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
@@ -514,6 +517,14 @@ mod tests {
                 .archived_at
                 .is_some()
         );
+    }
+
+    fn test_thread_metadata() -> ThreadPersistenceMetadata {
+        ThreadPersistenceMetadata {
+            cwd: Some(std::env::current_dir().expect("cwd")),
+            model_provider: "test-provider".to_string(),
+            memory_mode: ThreadMemoryMode::Enabled,
+        }
     }
 
     fn last_rollout_item(path: &std::path::Path) -> Value {

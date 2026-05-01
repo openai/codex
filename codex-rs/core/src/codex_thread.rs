@@ -25,12 +25,16 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
+use codex_thread_store::StoredThreadHistory;
+use codex_thread_store::ThreadStoreError;
+use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::HashMap;
@@ -90,6 +94,7 @@ pub struct CodexThreadTurnContextOverrides {
 pub struct CodexThread {
     pub(crate) codex: Codex,
     pub(crate) session_source: SessionSource,
+    session_configured: SessionConfiguredEvent,
     rollout_path: Option<PathBuf>,
     out_of_band_elicitation_count: Mutex<u64>,
     _watch_registration: WatchRegistration,
@@ -100,6 +105,7 @@ pub struct CodexThread {
 impl CodexThread {
     pub(crate) fn new(
         codex: Codex,
+        session_configured: SessionConfiguredEvent,
         rollout_path: Option<PathBuf>,
         session_source: SessionSource,
         watch_registration: WatchRegistration,
@@ -107,6 +113,7 @@ impl CodexThread {
         Self {
             codex,
             session_source,
+            session_configured,
             rollout_path,
             out_of_band_elicitation_count: Mutex::new(0),
             _watch_registration: watch_registration,
@@ -374,12 +381,34 @@ impl CodexThread {
         self.rollout_path.clone()
     }
 
+    pub(crate) fn session_configured(&self) -> SessionConfiguredEvent {
+        self.session_configured.clone()
+    }
+
+    pub(crate) fn is_running(&self) -> bool {
+        !self.codex.tx_sub.is_closed()
+    }
+
     pub async fn guardian_trunk_rollout_path(&self) -> Option<PathBuf> {
         self.codex
             .session
             .guardian_review_session
             .trunk_rollout_path()
             .await
+    }
+
+    pub async fn load_history(
+        &self,
+        include_archived: bool,
+    ) -> ThreadStoreResult<StoredThreadHistory> {
+        let live_thread = self
+            .codex
+            .session
+            .live_thread_for_persistence("load history")
+            .map_err(|err| ThreadStoreError::Internal {
+                message: err.to_string(),
+            })?;
+        live_thread.load_history(include_archived).await
     }
 
     pub fn state_db(&self) -> Option<StateDbHandle> {

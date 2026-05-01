@@ -1,6 +1,7 @@
 mod client_tracker;
 mod enroll;
 mod protocol;
+mod segment;
 mod websocket;
 
 use crate::transport::remote_control::websocket::RemoteControlChannels;
@@ -121,5 +122,7 @@ pub(crate) async fn start_remote_control(
     ))
 }
 
+#[cfg(test)]
+mod segment_tests;
 #[cfg(test)]
 mod tests;

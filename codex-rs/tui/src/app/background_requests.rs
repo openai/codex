@@ -307,8 +307,9 @@ impl App {
         }
 
         tokio::spawn(async move {
+            let plugins_input = config.plugins_config_input();
             let plugins = PluginsManager::new(config.codex_home.to_path_buf())
-                .plugins_for_config(&config)
+                .plugins_for_config(&plugins_input)
                 .await
                 .capability_summaries()
                 .to_vec();

@@ -831,7 +831,7 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
     send_client_event(
         &mut first_websocket,
         ClientEnvelope {
-            event: ClientEvent::Ack,
+            event: ClientEvent::Ack { segment_id: None },
             client_id: client_id.clone(),
             stream_id: Some(stream_id),
             seq_id: Some(1),

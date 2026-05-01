@@ -31,6 +31,7 @@ message CreateThreadRequest {
   string base_instructions_json = 4;
   repeated string dynamic_tools_json = 5;
   ThreadEventPersistenceMode event_persistence_mode = 6;
+  string metadata_json = 7;
 }
 
 message ResumeThreadRequest {
@@ -40,6 +41,7 @@ message ResumeThreadRequest {
   bool has_history = 4;
   bool include_archived = 5;
   ThreadEventPersistenceMode event_persistence_mode = 6;
+  string metadata_json = 7;
 }
 
 message AppendThreadItemsRequest {

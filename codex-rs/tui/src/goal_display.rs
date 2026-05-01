@@ -15,6 +15,12 @@ pub(crate) fn format_goal_elapsed_seconds(seconds: i64) -> String {
 
     let hours = minutes / 60;
     let remaining_minutes = minutes % 60;
+    if hours >= 24 {
+        let days = hours / 24;
+        let remaining_hours = hours % 24;
+        return format!("{days}d {remaining_hours}h {remaining_minutes}m");
+    }
+
     if remaining_minutes == 0 {
         format!("{hours}h")
     } else {
@@ -64,6 +70,14 @@ mod tests {
         assert_eq!(format_goal_elapsed_seconds(30 * 60), "30m");
         assert_eq!(format_goal_elapsed_seconds(90 * 60), "1h 30m");
         assert_eq!(format_goal_elapsed_seconds(2 * 60 * 60), "2h");
+        let just_before_one_day = 24 * 60 * 60 - 1;
+        assert_eq!(format_goal_elapsed_seconds(just_before_one_day), "23h 59m");
+
+        let one_day = 24 * 60 * 60;
+        assert_eq!(format_goal_elapsed_seconds(one_day), "1d 0h 0m");
+
+        let almost_three_days = 2 * 24 * 60 * 60 + 23 * 60 * 60 + 42 * 60;
+        assert_eq!(format_goal_elapsed_seconds(almost_three_days), "2d 23h 42m");
     }
 
     fn test_thread_goal(token_budget: Option<i64>, tokens_used: i64) -> ThreadGoal {

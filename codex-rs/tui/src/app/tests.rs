@@ -1199,8 +1199,10 @@ async fn replayed_interrupted_turn_restores_queued_input_to_composer() {
 #[tokio::test]
 async fn token_usage_update_refreshes_status_line_with_runtime_context_window() {
     let mut app = make_test_app().await;
-    app.chat_widget
-        .setup_status_line(vec![crate::bottom_pane::StatusLineItem::ContextWindowSize]);
+    app.chat_widget.setup_status_line(
+        vec![crate::bottom_pane::StatusLineItem::ContextWindowSize],
+        /*use_theme_colors*/ true,
+    );
 
     assert_eq!(app.chat_widget.status_line_text(), None);
 
@@ -1592,6 +1594,7 @@ fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
         let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
+        app.config.sqlite_home = codex_home.path().to_path_buf();
         // Seed the previous setting so this test exercises the thread-mode update path.
         app.config.memories.generate_memories = true;
 
@@ -5077,6 +5080,32 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
     assert!(!app.backtrack_render_pending);
     assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
     assert_eq!(app.chat_widget.composer_text_with_pending(), "draft prompt");
+}
+
+#[tokio::test]
+async fn backtrack_esc_does_not_steal_empty_vim_insert_escape() {
+    let mut app = make_test_app().await;
+    let esc = crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE);
+
+    assert!(app.chat_widget.composer_is_empty());
+    assert!(app.should_handle_backtrack_esc(esc));
+
+    app.chat_widget.toggle_vim_mode_and_notify();
+    assert!(app.should_handle_backtrack_esc(esc));
+
+    app.chat_widget
+        .handle_key_event(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('i'),
+            KeyModifiers::NONE,
+        ));
+    assert!(app.chat_widget.should_handle_vim_insert_escape(esc));
+    assert!(!app.should_handle_backtrack_esc(esc));
+
+    app.chat_widget.handle_key_event(esc);
+
+    assert!(!app.backtrack.primed);
+    assert!(!app.chat_widget.should_handle_vim_insert_escape(esc));
+    assert!(app.should_handle_backtrack_esc(esc));
 }
 
 #[tokio::test]

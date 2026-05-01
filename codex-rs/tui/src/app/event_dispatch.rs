@@ -1785,22 +1785,29 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
             }
-            AppEvent::StatusLineSetup { items } => {
+            AppEvent::StatusLineSetup {
+                items,
+                use_theme_colors,
+            } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
-                let edit = crate::legacy_core::config::edit::status_line_items_edit(&ids);
+                let items_edit = crate::legacy_core::config::edit::status_line_items_edit(&ids);
+                let colors_edit =
+                    crate::legacy_core::config::edit::status_line_use_colors_edit(use_theme_colors);
                 let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_edits([edit])
+                    .with_edits([items_edit, colors_edit])
                     .apply()
                     .await;
                 match apply_result {
                     Ok(()) => {
                         self.config.tui_status_line = Some(ids.clone());
-                        self.chat_widget.setup_status_line(items);
+                        self.config.tui_status_line_use_colors = use_theme_colors;
+                        self.chat_widget.setup_status_line(items, use_theme_colors);
                     }
                     Err(err) => {
-                        tracing::error!(error = %err, "failed to persist status line items; keeping previous selection");
-                        self.chat_widget
-                            .add_error_message(format!("Failed to save status line items: {err}"));
+                        tracing::error!(error = %err, "failed to persist status line settings; keeping previous selection");
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save status line settings: {err}"
+                        ));
                     }
                 }
             }
@@ -1857,14 +1864,19 @@ impl App {
                             crate::render::highlight::set_syntax_theme(theme);
                         }
                         self.sync_tui_theme_selection(name);
+                        self.refresh_status_line();
                     }
                     Err(err) => {
                         self.restore_runtime_theme_from_config();
+                        self.refresh_status_line();
                         tracing::error!(error = %err, "failed to persist theme selection");
                         self.chat_widget
                             .add_error_message(format!("Failed to save theme: {err}"));
                     }
                 }
+            }
+            AppEvent::SyntaxThemePreviewed => {
+                self.refresh_status_line();
             }
             AppEvent::OpenKeymapActionMenu { context, action } => {
                 self.chat_widget

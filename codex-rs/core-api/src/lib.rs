@@ -37,7 +37,6 @@ pub use codex_core::config::Permissions;
 pub use codex_core::config::TerminalResizeReflowConfig;
 pub use codex_core::config::ThreadStoreConfig;
 pub use codex_core::config::find_codex_home;
-pub use codex_core::plugins::PluginsManager;
 pub use codex_core::skills::SkillsManager;
 pub use codex_core::thread_store_from_config;
 pub use codex_exec_server::EnvironmentManager;

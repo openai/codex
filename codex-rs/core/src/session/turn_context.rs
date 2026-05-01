@@ -696,7 +696,7 @@ impl Session {
         let plugin_outcome = self
             .services
             .plugins_manager
-            .plugins_for_config(&per_turn_config)
+            .plugins_for_config(&per_turn_config.plugins_config_input())
             .await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);

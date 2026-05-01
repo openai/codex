@@ -1107,9 +1107,10 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        thread_store_from_config(&config),
     );
     let NewThread { thread: codex, .. } = thread_manager
-        .start_thread(config.clone(), thread_store_from_config(&config))
+        .start_thread(config.clone())
         .await
         .expect("create new conversation");
 

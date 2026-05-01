@@ -315,6 +315,8 @@ impl TerminalTitleSetupView {
             name: item.to_string(),
             description: Some(item.description().to_string()),
             enabled,
+            orderable: true,
+            section_break_after: false,
         }
     }
 }

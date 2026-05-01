@@ -42,6 +42,9 @@ pub struct PluginHookSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginTelemetryMetadata {
     pub plugin_id: PluginId,
+    /// Optional backend identifier for remote plugins, used when analytics
+    /// should report the remote id instead of the local plugin cache id.
+    pub remote_plugin_id: Option<String>,
     pub capability_summary: Option<PluginCapabilitySummary>,
 }
 
@@ -49,6 +52,7 @@ impl PluginTelemetryMetadata {
     pub fn from_plugin_id(plugin_id: &PluginId) -> Self {
         Self {
             plugin_id: plugin_id.clone(),
+            remote_plugin_id: None,
             capability_summary: None,
         }
     }
@@ -60,6 +64,7 @@ impl PluginCapabilitySummary {
             .ok()
             .map(|plugin_id| PluginTelemetryMetadata {
                 plugin_id,
+                remote_plugin_id: None,
                 capability_summary: Some(self.clone()),
             })
     }

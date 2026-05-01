@@ -564,6 +564,7 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadReadResponse,
     },
+    #[experimental("thread/turns/list")]
     ThreadTurnsList => "thread/turns/list" {
         params: v2::ThreadTurnsListParams,
         // Explicitly concurrent: this primarily reads append-only rollout storage.
@@ -610,6 +611,11 @@ client_request_definitions! {
         params: v2::PluginReadParams,
         serialization: global("config"),
         response: v2::PluginReadResponse,
+    },
+    PluginSkillRead => "plugin/skill/read" {
+        params: v2::PluginSkillReadParams,
+        serialization: global("config"),
+        response: v2::PluginSkillReadResponse,
     },
     PluginShareSave => "plugin/share/save" {
         params: v2::PluginShareSaveParams,
