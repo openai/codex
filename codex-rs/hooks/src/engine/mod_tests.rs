@@ -617,7 +617,7 @@ fn trusted_plugin_hook_stack(
 }
 
 #[test]
-fn requirements_managed_hooks_warn_when_managed_dir_is_missing() {
+fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
     let temp = tempdir().expect("create temp dir");
     let missing_dir = temp.path().join("missing-managed-hooks");
     let managed_hooks = managed_hooks_for_current_platform(
@@ -626,7 +626,7 @@ fn requirements_managed_hooks_warn_when_managed_dir_is_missing() {
             pre_tool_use: vec![MatcherGroup {
                 matcher: Some("^Bash$".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
-                    command: format!("python3 {}", missing_dir.join("pre.py").display()),
+                    command: "echo hi".to_string(),
                     command_windows: None,
                     timeout_sec: Some(10),
                     r#async: false,
@@ -663,27 +663,25 @@ fn requirements_managed_hooks_warn_when_managed_dir_is_missing() {
         },
     );
 
-    assert!(engine.warnings().iter().any(|warning| {
-        warning.contains("managed hook directory")
-            && warning.contains("does not exist")
-            && warning.contains(&missing_dir.display().to_string())
-    }));
+    assert!(engine.warnings().is_empty());
     let cwd = cwd();
-    assert!(
-        engine
-            .preview_pre_tool_use(&PreToolUseRequest {
-                session_id: ThreadId::new(),
-                turn_id: "turn-1".to_string(),
-                cwd,
-                transcript_path: None,
-                model: "gpt-test".to_string(),
-                permission_mode: "default".to_string(),
-                tool_name: "Bash".to_string(),
-                matcher_aliases: Vec::new(),
-                tool_use_id: "tool-1".to_string(),
-                tool_input: serde_json::json!({ "command": "echo hello" }),
-            })
-            .is_empty()
+    let preview = engine.preview_pre_tool_use(&PreToolUseRequest {
+        session_id: ThreadId::new(),
+        turn_id: "turn-1".to_string(),
+        cwd,
+        transcript_path: None,
+        model: "gpt-test".to_string(),
+        permission_mode: "default".to_string(),
+        tool_name: "Bash".to_string(),
+        matcher_aliases: Vec::new(),
+        tool_use_id: "tool-1".to_string(),
+        tool_input: serde_json::json!({ "command": "echo hello" }),
+    });
+    assert_eq!(preview.len(), 1);
+    assert_eq!(engine.handlers[0].command, "echo hi");
+    assert_eq!(
+        engine.handlers[0].source_path,
+        AbsolutePathBuf::try_from(missing_dir).expect("absolute missing dir")
     );
 }
 
@@ -793,9 +791,7 @@ fn allow_managed_hooks_only_skips_unmanaged_json_and_toml_hooks() {
     );
     let config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User {
-                file: config_path.clone(),
-            },
+            ConfigLayerSource::User { file: config_path },
             config_toml_with_pre_tool_use("python3 /tmp/toml-hook.py"),
         )],
         requirements,
@@ -815,24 +811,7 @@ fn allow_managed_hooks_only_skips_unmanaged_json_and_toml_hooks() {
     );
 
     assert!(engine.handlers.is_empty());
-    assert!(
-        engine.warnings().iter().any(|warning| {
-            warning.contains("skipping unmanaged hooks config")
-                && warning.contains("allow_managed_hooks_only")
-                && warning.contains(&hooks_json_path.display().to_string())
-        }),
-        "expected skipped hooks.json warning, got {:?}",
-        engine.warnings()
-    );
-    assert!(
-        engine.warnings().iter().any(|warning| {
-            warning.contains("skipping unmanaged hooks config")
-                && warning.contains("allow_managed_hooks_only")
-                && warning.contains(&config_path.display().to_string())
-        }),
-        "expected skipped config.toml hooks warning, got {:?}",
-        engine.warnings()
-    );
+    assert!(engine.warnings().is_empty());
 }
 
 #[test]
@@ -848,7 +827,7 @@ fn allow_managed_hooks_only_skips_unmanaged_plugin_hooks() {
         plugin_id,
         plugin_root,
         plugin_data_root,
-        source_path: source_path.clone(),
+        source_path: source_path,
         source_relative_path: "hooks/hooks.json".to_string(),
         hooks: pre_tool_use_hook_events("python3 /tmp/plugin-hook.py"),
     }];
@@ -870,15 +849,7 @@ fn allow_managed_hooks_only_skips_unmanaged_plugin_hooks() {
     );
 
     assert!(engine.handlers.is_empty());
-    assert!(
-        engine.warnings().iter().any(|warning| {
-            warning.contains("skipping unmanaged hooks config")
-                && warning.contains("allow_managed_hooks_only")
-                && warning.contains(&source_path.display().to_string())
-        }),
-        "expected skipped plugin hook warning, got {:?}",
-        engine.warnings()
-    );
+    assert!(engine.warnings().is_empty());
 }
 
 #[test]
