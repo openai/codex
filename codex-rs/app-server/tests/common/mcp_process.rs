@@ -19,7 +19,6 @@ use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::CommandExecResizeParams;
 use codex_app_server_protocol::CommandExecTerminateParams;
-use codex_app_server_protocol::CommandExecUnsandboxedParams;
 use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
@@ -62,6 +61,10 @@ use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginSkillReadParams;
 use codex_app_server_protocol::PluginUninstallParams;
+use codex_app_server_protocol::ProcessKillParams;
+use codex_app_server_protocol::ProcessResizePtyParams;
+use codex_app_server_protocol::ProcessSpawnParams;
+use codex_app_server_protocol::ProcessWriteStdinParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
@@ -742,13 +745,40 @@ impl McpProcess {
         self.send_request("command/exec", params).await
     }
 
-    /// Send a `command/execUnsandboxed` JSON-RPC request (v2).
-    pub async fn send_command_exec_unsandboxed_request(
+    /// Send a `process/spawn` JSON-RPC request (v2).
+    pub async fn send_process_spawn_request(
         &mut self,
-        params: CommandExecUnsandboxedParams,
+        params: ProcessSpawnParams,
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
-        self.send_request("command/execUnsandboxed", params).await
+        self.send_request("process/spawn", params).await
+    }
+
+    /// Send a `process/writeStdin` JSON-RPC request (v2).
+    pub async fn send_process_write_stdin_request(
+        &mut self,
+        params: ProcessWriteStdinParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("process/writeStdin", params).await
+    }
+
+    /// Send a `process/resizePty` JSON-RPC request (v2).
+    pub async fn send_process_resize_pty_request(
+        &mut self,
+        params: ProcessResizePtyParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("process/resizePty", params).await
+    }
+
+    /// Send a `process/kill` JSON-RPC request (v2).
+    pub async fn send_process_kill_request(
+        &mut self,
+        params: ProcessKillParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("process/kill", params).await
     }
 
     /// Send a `command/exec/write` JSON-RPC request (v2).

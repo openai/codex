@@ -80,6 +80,7 @@ pub enum ClientRequestSerializationScope {
     Thread { thread_id: String },
     ThreadPath { path: PathBuf },
     CommandExecProcess { process_id: String },
+    Process { process_handle: String },
     FuzzyFileSearchSession { session_id: String },
     FsWatch { watch_id: String },
     McpOauth { server_name: String },
@@ -125,6 +126,11 @@ macro_rules! serialization_scope_expr {
     ($actual_params:ident, command_process_id($params:ident . $field:ident)) => {
         Some(ClientRequestSerializationScope::CommandExecProcess {
             process_id: $actual_params.$field.clone(),
+        })
+    };
+    ($actual_params:ident, process_handle($params:ident . $field:ident)) => {
+        Some(ClientRequestSerializationScope::Process {
+            process_handle: $actual_params.$field.clone(),
         })
     };
     ($actual_params:ident, fuzzy_session_id($params:ident . $field:ident)) => {
@@ -882,13 +888,6 @@ client_request_definitions! {
         serialization: optional_command_process_id(params.process_id),
         response: v2::CommandExecResponse,
     },
-    /// Execute a standalone command (argv vector) without a sandbox.
-    CommandExecUnsandboxed => "command/execUnsandboxed" {
-        params: v2::CommandExecUnsandboxedParams,
-        serialization: optional_command_process_id(params.process_id),
-        manual_payload_conversion: manual,
-        response: v2::CommandExecResponse,
-    },
     /// Write stdin bytes to a running `command/exec` session or close stdin.
     CommandExecWrite => "command/exec/write" {
         params: v2::CommandExecWriteParams,
@@ -906,6 +905,30 @@ client_request_definitions! {
         params: v2::CommandExecResizeParams,
         serialization: command_process_id(params.process_id),
         response: v2::CommandExecResizeResponse,
+    },
+    /// Spawn a standalone process (argv vector) without a Codex sandbox.
+    ProcessSpawn => "process/spawn" {
+        params: v2::ProcessSpawnParams,
+        serialization: process_handle(params.process_handle),
+        response: v2::ProcessSpawnResponse,
+    },
+    /// Write stdin bytes to a running `process/spawn` session or close stdin.
+    ProcessWriteStdin => "process/writeStdin" {
+        params: v2::ProcessWriteStdinParams,
+        serialization: process_handle(params.process_handle),
+        response: v2::ProcessWriteStdinResponse,
+    },
+    /// Terminate a running `process/spawn` session by client-supplied `processHandle`.
+    ProcessKill => "process/kill" {
+        params: v2::ProcessKillParams,
+        serialization: process_handle(params.process_handle),
+        response: v2::ProcessKillResponse,
+    },
+    /// Resize a running PTY-backed `process/spawn` session by client-supplied `processHandle`.
+    ProcessResizePty => "process/resizePty" {
+        params: v2::ProcessResizePtyParams,
+        serialization: process_handle(params.process_handle),
+        response: v2::ProcessResizePtyResponse,
     },
 
     ConfigRead => "config/read" {
@@ -1408,6 +1431,10 @@ server_notification_definitions! {
     PlanDelta => "item/plan/delta" (v2::PlanDeltaNotification),
     /// Stream base64-encoded stdout/stderr chunks for a running `command/exec` session.
     CommandExecOutputDelta => "command/exec/outputDelta" (v2::CommandExecOutputDeltaNotification),
+    /// Stream base64-encoded stdout/stderr chunks for a running `process/spawn` session.
+    ProcessOutputDelta => "process/outputDelta" (v2::ProcessOutputDeltaNotification),
+    /// Final exit notification for a `process/spawn` session.
+    ProcessExited => "process/exited" (v2::ProcessExitedNotification),
     CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
     TerminalInteraction => "item/commandExecution/terminalInteraction" (v2::TerminalInteractionNotification),
     /// Deprecated legacy apply_patch output stream notification.

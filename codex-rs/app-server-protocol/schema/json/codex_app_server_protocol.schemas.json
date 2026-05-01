@@ -1745,31 +1745,6 @@
           "type": "object"
         },
         {
-          "description": "Execute a standalone command (argv vector) without a sandbox.",
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "command/execUnsandboxed"
-              ],
-              "title": "Command/execUnsandboxedRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/CommandExecUnsandboxedParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Command/execUnsandboxedRequest",
-          "type": "object"
-        },
-        {
           "description": "Write stdin bytes to a running `command/exec` session or close stdin.",
           "properties": {
             "id": {
@@ -1842,6 +1817,106 @@
             "params"
           ],
           "title": "Command/exec/resizeRequest",
+          "type": "object"
+        },
+        {
+          "description": "Spawn a standalone process (argv vector) without a Codex sandbox.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "process/spawn"
+              ],
+              "title": "Process/spawnRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ProcessSpawnParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Process/spawnRequest",
+          "type": "object"
+        },
+        {
+          "description": "Write stdin bytes to a running `process/spawn` session or close stdin.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "process/writeStdin"
+              ],
+              "title": "Process/writeStdinRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ProcessWriteStdinParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Process/writeStdinRequest",
+          "type": "object"
+        },
+        {
+          "description": "Terminate a running `process/spawn` session by client-supplied `processHandle`.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "process/kill"
+              ],
+              "title": "Process/killRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ProcessKillParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Process/killRequest",
+          "type": "object"
+        },
+        {
+          "description": "Resize a running PTY-backed `process/spawn` session by client-supplied `processHandle`.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "process/resizePty"
+              ],
+              "title": "Process/resizePtyRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ProcessResizePtyParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Process/resizePtyRequest",
           "type": "object"
         },
         {
@@ -4271,6 +4346,48 @@
             "params"
           ],
           "title": "Command/exec/outputDeltaNotification",
+          "type": "object"
+        },
+        {
+          "description": "Stream base64-encoded stdout/stderr chunks for a running `process/spawn` session.",
+          "properties": {
+            "method": {
+              "enum": [
+                "process/outputDelta"
+              ],
+              "title": "Process/outputDeltaNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ProcessOutputDeltaNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Process/outputDeltaNotification",
+          "type": "object"
+        },
+        {
+          "description": "Final exit notification for a `process/spawn` session.",
+          "properties": {
+            "method": {
+              "enum": [
+                "process/exited"
+              ],
+              "title": "Process/exitedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ProcessExitedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Process/exitedNotification",
           "type": "object"
         },
         {
@@ -6908,99 +7025,6 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Empty success response for `command/exec/terminate`.",
         "title": "CommandExecTerminateResponse",
-        "type": "object"
-      },
-      "CommandExecUnsandboxedParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Run a standalone command (argv vector) without a sandbox or thread/turn.\n\nThe final `command/execUnsandboxed` response is deferred until the process exits and is sent only after all `command/exec/outputDelta` notifications for that connection have been emitted.",
-        "properties": {
-          "command": {
-            "description": "Command argv vector. Empty arrays are rejected.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "cwd": {
-            "description": "Optional working directory. Defaults to the server cwd.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "disableOutputCap": {
-            "description": "Disable stdout/stderr capture truncation for this request.\n\nCannot be combined with `outputBytesCap`.",
-            "type": "boolean"
-          },
-          "disableTimeout": {
-            "description": "Disable the timeout entirely for this request.\n\nCannot be combined with `timeoutMs`.",
-            "type": "boolean"
-          },
-          "env": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "description": "Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable.",
-            "type": [
-              "object",
-              "null"
-            ]
-          },
-          "outputBytesCap": {
-            "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with `disableOutputCap`.",
-            "format": "uint",
-            "minimum": 0.0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "processId": {
-            "description": "Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "size": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/CommandExecTerminalSize"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Optional initial PTY size in character cells. Only valid when `tty` is true."
-          },
-          "streamStdin": {
-            "description": "Allow follow-up `command/exec/write` requests to write stdin bytes.\n\nRequires a client-supplied `processId`.",
-            "type": "boolean"
-          },
-          "streamStdoutStderr": {
-            "description": "Stream stdout/stderr via `command/exec/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the final response and require a client-supplied `processId`.",
-            "type": "boolean"
-          },
-          "timeoutMs": {
-            "description": "Optional timeout in milliseconds.\n\nWhen omitted, the server default applies. Cannot be combined with `disableTimeout`.",
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "tty": {
-            "description": "Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`.",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "command"
-        ],
-        "title": "CommandExecUnsandboxedParams",
         "type": "object"
       },
       "CommandExecWriteParams": {
@@ -12759,6 +12783,299 @@
           "marketplaceName",
           "pluginNames"
         ],
+        "type": "object"
+      },
+      "ProcessExitedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Final process exit notification for `process/spawn`.",
+        "properties": {
+          "exitCode": {
+            "description": "Process exit code.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "processHandle": {
+            "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+            "type": "string"
+          },
+          "stderr": {
+            "description": "Buffered stderr capture.\n\nEmpty when stderr was streamed via `process/outputDelta`.",
+            "type": "string"
+          },
+          "stdout": {
+            "description": "Buffered stdout capture.\n\nEmpty when stdout was streamed via `process/outputDelta`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "exitCode",
+          "processHandle",
+          "stderr",
+          "stdout"
+        ],
+        "title": "ProcessExitedNotification",
+        "type": "object"
+      },
+      "ProcessKillParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "description": "Terminate a running `process/spawn` session.",
+        "properties": {
+          "processHandle": {
+            "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "processHandle"
+        ],
+        "title": "ProcessKillParams",
+        "type": "object"
+      },
+      "ProcessKillResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Empty success response for `process/kill`.",
+        "title": "ProcessKillResponse",
+        "type": "object"
+      },
+      "ProcessOutputDeltaNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Base64-encoded output chunk emitted for a streaming `process/spawn` request.",
+        "properties": {
+          "capReached": {
+            "description": "True on the final streamed chunk for this stream when output was truncated by `outputBytesCap`.",
+            "type": "boolean"
+          },
+          "deltaBase64": {
+            "description": "Base64-encoded output bytes.",
+            "type": "string"
+          },
+          "processHandle": {
+            "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+            "type": "string"
+          },
+          "stream": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/ProcessOutputStream"
+              }
+            ],
+            "description": "Output stream this chunk belongs to."
+          }
+        },
+        "required": [
+          "capReached",
+          "deltaBase64",
+          "processHandle",
+          "stream"
+        ],
+        "title": "ProcessOutputDeltaNotification",
+        "type": "object"
+      },
+      "ProcessOutputStream": {
+        "description": "Stream label for `process/outputDelta` notifications.",
+        "oneOf": [
+          {
+            "description": "stdout stream. PTY mode multiplexes terminal output here.",
+            "enum": [
+              "stdout"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "stderr stream.",
+            "enum": [
+              "stderr"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "ProcessResizePtyParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "description": "Resize a running PTY-backed `process/spawn` session.",
+        "properties": {
+          "processHandle": {
+            "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+            "type": "string"
+          },
+          "size": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/ProcessTerminalSize"
+              }
+            ],
+            "description": "New PTY size in character cells."
+          }
+        },
+        "required": [
+          "processHandle",
+          "size"
+        ],
+        "title": "ProcessResizePtyParams",
+        "type": "object"
+      },
+      "ProcessResizePtyResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Empty success response for `process/resizePty`.",
+        "title": "ProcessResizePtyResponse",
+        "type": "object"
+      },
+      "ProcessSpawnParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "description": "Spawn a standalone process (argv vector) without a Codex sandbox.\n\n`process/spawn` returns after the process has started and the connection-scoped `processHandle` has been registered. Process output and exit are reported via `process/outputDelta` and `process/exited` notifications.",
+        "properties": {
+          "command": {
+            "description": "Command argv vector. Empty arrays are rejected.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cwd": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Absolute working directory for the process."
+          },
+          "env": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": "Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "outputBytesCap": {
+            "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies.",
+            "format": "uint",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "processHandle": {
+            "description": "Client-supplied, connection-scoped process handle.",
+            "type": "string"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ProcessTerminalSize"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional initial PTY size in character cells. Only valid when `tty` is true."
+          },
+          "streamStdin": {
+            "description": "Allow follow-up `process/writeStdin` requests to write stdin bytes.",
+            "type": "boolean"
+          },
+          "streamStdoutStderr": {
+            "description": "Stream stdout/stderr via `process/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the `process/exited` notification.",
+            "type": "boolean"
+          },
+          "timeoutMs": {
+            "description": "Optional timeout in milliseconds.\n\nWhen omitted, the server default applies.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tty": {
+            "description": "Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "command",
+          "cwd",
+          "processHandle"
+        ],
+        "title": "ProcessSpawnParams",
+        "type": "object"
+      },
+      "ProcessSpawnResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Successful response for `process/spawn`.",
+        "properties": {
+          "processHandle": {
+            "description": "Client-supplied, connection-scoped process handle.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "processHandle"
+        ],
+        "title": "ProcessSpawnResponse",
+        "type": "object"
+      },
+      "ProcessTerminalSize": {
+        "description": "PTY size in character cells for `process/spawn` PTY sessions.",
+        "properties": {
+          "cols": {
+            "description": "Terminal width in character cells.",
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "rows": {
+            "description": "Terminal height in character cells.",
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cols",
+          "rows"
+        ],
+        "type": "object"
+      },
+      "ProcessWriteStdinParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "description": "Write stdin bytes to a running `process/spawn` session, close stdin, or both.",
+        "properties": {
+          "closeStdin": {
+            "description": "Close stdin after writing `deltaBase64`, if present.",
+            "type": "boolean"
+          },
+          "deltaBase64": {
+            "description": "Optional base64-encoded stdin bytes to write.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "processHandle": {
+            "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "processHandle"
+        ],
+        "title": "ProcessWriteStdinParams",
+        "type": "object"
+      },
+      "ProcessWriteStdinResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Empty success response for `process/writeStdin`.",
+        "title": "ProcessWriteStdinResponse",
         "type": "object"
       },
       "ProfileV2": {

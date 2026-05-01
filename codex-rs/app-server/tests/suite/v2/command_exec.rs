@@ -12,7 +12,6 @@ use codex_app_server_protocol::CommandExecResizeParams;
 use codex_app_server_protocol::CommandExecResponse;
 use codex_app_server_protocol::CommandExecTerminalSize;
 use codex_app_server_protocol::CommandExecTerminateParams;
-use codex_app_server_protocol::CommandExecUnsandboxedParams;
 use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::FileSystemAccessMode;
 use codex_app_server_protocol::FileSystemPath;
@@ -23,8 +22,13 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::PermissionProfile;
 use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
 use codex_app_server_protocol::PermissionProfileNetworkPermissions;
+use codex_app_server_protocol::ProcessExitedNotification;
+use codex_app_server_protocol::ProcessKillParams;
+use codex_app_server_protocol::ProcessSpawnParams;
+use codex_app_server_protocol::ProcessSpawnResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use tempfile::TempDir;
@@ -140,50 +144,118 @@ async fn command_exec_without_process_id_keeps_buffered_compatibility() -> Resul
 }
 
 #[tokio::test]
-async fn command_exec_unsandboxed_runs_without_sandbox_policy_param() -> Result<()> {
+async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let probe_file = codex_home.path().join("unsandboxed-created");
+    let process_handle = "one-shot-1".to_string();
+    let probe_file = codex_home.path().join("process-created");
     let command_request_id = mcp
-        .send_command_exec_unsandboxed_request(CommandExecUnsandboxedParams {
+        .send_process_spawn_request(ProcessSpawnParams {
             command: vec![
                 "sh".to_string(),
                 "-c".to_string(),
-                "printf unsandboxed > \"$1\"".to_string(),
+                "printf process > \"$1\"; sleep 1; printf process-out; printf process-err >&2"
+                    .to_string(),
                 "sh".to_string(),
                 probe_file.display().to_string(),
             ],
-            process_id: None,
+            process_handle: process_handle.clone(),
+            cwd: AbsolutePathBuf::try_from(codex_home.path())?,
             tty: false,
             stream_stdin: false,
             stream_stdout_stderr: false,
             output_bytes_cap: None,
-            disable_output_cap: false,
-            disable_timeout: false,
             timeout_ms: None,
-            cwd: None,
+            env: None,
+            size: None,
+        })
+        .await?;
+
+    let started_at = Instant::now();
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    assert!(
+        started_at.elapsed() < Duration::from_millis(900),
+        "process/spawn should return before the process exits"
+    );
+    let response: ProcessSpawnResponse = to_response(response)?;
+    assert_eq!(
+        response,
+        ProcessSpawnResponse {
+            process_handle: process_handle.clone(),
+        }
+    );
+
+    let exited = read_process_exited(&mut mcp).await?;
+    assert_eq!(
+        exited,
+        ProcessExitedNotification {
+            process_handle,
+            exit_code: 0,
+            stdout: "process-out".to_string(),
+            stderr: "process-err".to_string(),
+        }
+    );
+    assert_eq!(std::fs::read_to_string(probe_file)?, "process");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn process_kill_terminates_running_process() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let process_handle = "sleep-process-1".to_string();
+    let spawn_request_id = mcp
+        .send_process_spawn_request(ProcessSpawnParams {
+            command: vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],
+            process_handle: process_handle.clone(),
+            cwd: AbsolutePathBuf::try_from(codex_home.path())?,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            timeout_ms: None,
             env: None,
             size: None,
         })
         .await?;
 
     let response = mcp
-        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .read_stream_until_response_message(RequestId::Integer(spawn_request_id))
         .await?;
-    let response: CommandExecResponse = to_response(response)?;
+    let response: ProcessSpawnResponse = to_response(response)?;
     assert_eq!(
         response,
-        CommandExecResponse {
-            exit_code: 0,
-            stdout: String::new(),
-            stderr: String::new(),
+        ProcessSpawnResponse {
+            process_handle: process_handle.clone(),
         }
     );
-    assert_eq!(std::fs::read_to_string(probe_file)?, "unsandboxed");
+
+    let kill_request_id = mcp
+        .send_process_kill_request(ProcessKillParams {
+            process_handle: process_handle.clone(),
+        })
+        .await?;
+    let kill_response = mcp
+        .read_stream_until_response_message(RequestId::Integer(kill_request_id))
+        .await?;
+    assert_eq!(kill_response.result, serde_json::json!({}));
+
+    let exited = read_process_exited(&mut mcp).await?;
+    assert_eq!(exited.process_handle, process_handle);
+    assert_ne!(exited.exit_code, 0);
+    assert_eq!(exited.stdout, "");
+    assert_eq!(exited.stderr, "");
 
     Ok(())
 }
@@ -990,6 +1062,16 @@ async fn read_command_exec_delta(
         .read_stream_until_notification_message("command/exec/outputDelta")
         .await?;
     decode_delta_notification(notification)
+}
+
+async fn read_process_exited(mcp: &mut McpProcess) -> Result<ProcessExitedNotification> {
+    let notification = mcp
+        .read_stream_until_notification_message("process/exited")
+        .await?;
+    let params = notification
+        .params
+        .context("process/exited notification should include params")?;
+    serde_json::from_value(params).context("deserialize process/exited notification")
 }
 
 async fn wait_for_command_exec_output_contains(

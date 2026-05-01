@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "Terminate a running `process/spawn` session.",
+  "properties": {
+    "processHandle": {
+      "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "processHandle"
+  ],
+  "title": "ProcessKillParams",
+  "type": "object"
+}

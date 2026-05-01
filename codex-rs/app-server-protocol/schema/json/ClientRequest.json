@@ -330,97 +330,6 @@
       ],
       "type": "object"
     },
-    "CommandExecUnsandboxedParams": {
-      "description": "Run a standalone command (argv vector) without a sandbox or thread/turn.\n\nThe final `command/execUnsandboxed` response is deferred until the process exits and is sent only after all `command/exec/outputDelta` notifications for that connection have been emitted.",
-      "properties": {
-        "command": {
-          "description": "Command argv vector. Empty arrays are rejected.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "cwd": {
-          "description": "Optional working directory. Defaults to the server cwd.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "disableOutputCap": {
-          "description": "Disable stdout/stderr capture truncation for this request.\n\nCannot be combined with `outputBytesCap`.",
-          "type": "boolean"
-        },
-        "disableTimeout": {
-          "description": "Disable the timeout entirely for this request.\n\nCannot be combined with `timeoutMs`.",
-          "type": "boolean"
-        },
-        "env": {
-          "additionalProperties": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "description": "Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable.",
-          "type": [
-            "object",
-            "null"
-          ]
-        },
-        "outputBytesCap": {
-          "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with `disableOutputCap`.",
-          "format": "uint",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "processId": {
-          "description": "Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "size": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/CommandExecTerminalSize"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional initial PTY size in character cells. Only valid when `tty` is true."
-        },
-        "streamStdin": {
-          "description": "Allow follow-up `command/exec/write` requests to write stdin bytes.\n\nRequires a client-supplied `processId`.",
-          "type": "boolean"
-        },
-        "streamStdoutStderr": {
-          "description": "Stream stdout/stderr via `command/exec/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the final response and require a client-supplied `processId`.",
-          "type": "boolean"
-        },
-        "timeoutMs": {
-          "description": "Optional timeout in milliseconds.\n\nWhen omitted, the server default applies. Cannot be combined with `disableTimeout`.",
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "tty": {
-          "description": "Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`.",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "command"
-      ],
-      "type": "object"
-    },
     "CommandExecWriteParams": {
       "description": "Write stdin bytes to a running `command/exec` session, close stdin, or both.",
       "properties": {
@@ -2353,6 +2262,174 @@
       "required": [
         "marketplaceName",
         "pluginNames"
+      ],
+      "type": "object"
+    },
+    "ProcessKillParams": {
+      "additionalProperties": false,
+      "description": "Terminate a running `process/spawn` session.",
+      "properties": {
+        "processHandle": {
+          "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "processHandle"
+      ],
+      "type": "object"
+    },
+    "ProcessResizePtyParams": {
+      "additionalProperties": false,
+      "description": "Resize a running PTY-backed `process/spawn` session.",
+      "properties": {
+        "processHandle": {
+          "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+          "type": "string"
+        },
+        "size": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProcessTerminalSize"
+            }
+          ],
+          "description": "New PTY size in character cells."
+        }
+      },
+      "required": [
+        "processHandle",
+        "size"
+      ],
+      "type": "object"
+    },
+    "ProcessSpawnParams": {
+      "additionalProperties": false,
+      "description": "Spawn a standalone process (argv vector) without a Codex sandbox.\n\n`process/spawn` returns after the process has started and the connection-scoped `processHandle` has been registered. Process output and exit are reported via `process/outputDelta` and `process/exited` notifications.",
+      "properties": {
+        "command": {
+          "description": "Command argv vector. Empty arrays are rejected.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cwd": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute working directory for the process."
+        },
+        "env": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": "Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "outputBytesCap": {
+          "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "processHandle": {
+          "description": "Client-supplied, connection-scoped process handle.",
+          "type": "string"
+        },
+        "size": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProcessTerminalSize"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional initial PTY size in character cells. Only valid when `tty` is true."
+        },
+        "streamStdin": {
+          "description": "Allow follow-up `process/writeStdin` requests to write stdin bytes.",
+          "type": "boolean"
+        },
+        "streamStdoutStderr": {
+          "description": "Stream stdout/stderr via `process/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the `process/exited` notification.",
+          "type": "boolean"
+        },
+        "timeoutMs": {
+          "description": "Optional timeout in milliseconds.\n\nWhen omitted, the server default applies.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tty": {
+          "description": "Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "command",
+        "cwd",
+        "processHandle"
+      ],
+      "type": "object"
+    },
+    "ProcessTerminalSize": {
+      "description": "PTY size in character cells for `process/spawn` PTY sessions.",
+      "properties": {
+        "cols": {
+          "description": "Terminal width in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "rows": {
+          "description": "Terminal height in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "type": "object"
+    },
+    "ProcessWriteStdinParams": {
+      "additionalProperties": false,
+      "description": "Write stdin bytes to a running `process/spawn` session, close stdin, or both.",
+      "properties": {
+        "closeStdin": {
+          "description": "Close stdin after writing `deltaBase64`, if present.",
+          "type": "boolean"
+        },
+        "deltaBase64": {
+          "description": "Optional base64-encoded stdin bytes to write.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "processHandle": {
+          "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "processHandle"
       ],
       "type": "object"
     },
@@ -6151,31 +6228,6 @@
       "type": "object"
     },
     {
-      "description": "Execute a standalone command (argv vector) without a sandbox.",
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "command/execUnsandboxed"
-          ],
-          "title": "Command/execUnsandboxedRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/CommandExecUnsandboxedParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Command/execUnsandboxedRequest",
-      "type": "object"
-    },
-    {
       "description": "Write stdin bytes to a running `command/exec` session or close stdin.",
       "properties": {
         "id": {
@@ -6248,6 +6300,106 @@
         "params"
       ],
       "title": "Command/exec/resizeRequest",
+      "type": "object"
+    },
+    {
+      "description": "Spawn a standalone process (argv vector) without a Codex sandbox.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "process/spawn"
+          ],
+          "title": "Process/spawnRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ProcessSpawnParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Process/spawnRequest",
+      "type": "object"
+    },
+    {
+      "description": "Write stdin bytes to a running `process/spawn` session or close stdin.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "process/writeStdin"
+          ],
+          "title": "Process/writeStdinRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ProcessWriteStdinParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Process/writeStdinRequest",
+      "type": "object"
+    },
+    {
+      "description": "Terminate a running `process/spawn` session by client-supplied `processHandle`.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "process/kill"
+          ],
+          "title": "Process/killRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ProcessKillParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Process/killRequest",
+      "type": "object"
+    },
+    {
+      "description": "Resize a running PTY-backed `process/spawn` session by client-supplied `processHandle`.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "process/resizePty"
+          ],
+          "title": "Process/resizePtyRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ProcessResizePtyParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Process/resizePtyRequest",
       "type": "object"
     },
     {

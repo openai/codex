@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "Write stdin bytes to a running `process/spawn` session, close stdin, or both.",
+  "properties": {
+    "closeStdin": {
+      "description": "Close stdin after writing `deltaBase64`, if present.",
+      "type": "boolean"
+    },
+    "deltaBase64": {
+      "description": "Optional base64-encoded stdin bytes to write.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "processHandle": {
+      "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "processHandle"
+  ],
+  "title": "ProcessWriteStdinParams",
+  "type": "object"
+}

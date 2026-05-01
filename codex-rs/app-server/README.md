@@ -177,11 +177,16 @@ Example with notification opt-out:
 - `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
-- `command/execUnsandboxed` — run a single command without the server sandbox; accepts the same execution controls as `command/exec` except there is no `sandboxPolicy` parameter.
 - `command/exec/write` — write base64-decoded stdin bytes to a running `command/exec` session or close stdin; returns `{}`.
 - `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
 - `command/exec/terminate` — terminate a running `command/exec` session by `processId`; returns `{}`.
 - `command/exec/outputDelta` — notification emitted for base64-encoded stdout/stderr chunks from a streaming `command/exec` session.
+- `process/spawn` — spawn a standalone process without the Codex sandbox; returns after the process starts and emits `process/outputDelta` and `process/exited` notifications.
+- `process/writeStdin` — write base64-decoded stdin bytes to a running `process/spawn` session or close stdin; returns `{}`.
+- `process/resizePty` — resize a running PTY-backed `process/spawn` session by `processHandle`; returns `{}`.
+- `process/kill` — terminate a running `process/spawn` session by `processHandle`; returns `{}`.
+- `process/outputDelta` — notification emitted for base64-encoded stdout/stderr chunks from a streaming `process/spawn` session.
+- `process/exited` — notification emitted when a `process/spawn` session exits.
 - `fs/readFile` — read an absolute file path and return `{ dataBase64 }`.
 - `fs/writeFile` — write an absolute file path from base64-encoded `{ dataBase64 }`; returns `{}`.
 - `fs/createDirectory` — create an absolute directory path; `recursive` defaults to `true`.
@@ -933,8 +938,8 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
 } }
 ```
 
-- For clients that are already sandboxed externally, set the legacy `sandboxPolicy` to `{"type":"externalSandbox","networkAccess":"enabled"}` (or omit `networkAccess` to keep it restricted). Codex will not enforce its own sandbox in this mode; it tells the model it has full file-system access and passes the `networkAccess` state through `environment_context`.
-- Use `command/execUnsandboxed` to run the same argv-based command flow without Codex sandboxing. Its params are the same as `command/exec` except `sandboxPolicy` is not accepted, it does not validate against sandbox constraints, and follow-up `command/exec/write`, `command/exec/resize`, `command/exec/terminate`, and `command/exec/outputDelta` use the same `processId` rules.
+- For clients that are already sandboxed externally and want one-shot deferred command execution, set the legacy `sandboxPolicy` to `{"type":"externalSandbox","networkAccess":"enabled"}` (or omit `networkAccess` to keep it restricted). Codex will not enforce its own sandbox in this mode; it tells the model it has full file-system access and passes the `networkAccess` state through `environment_context`.
+- Use `process/spawn` when the client wants an explicitly unsandboxed process lifecycle API with immediate spawn acknowledgement, handle-based control, output notifications, and an exit notification.
 
 Notes:
 
@@ -1004,6 +1009,77 @@ Streaming stdin/stdout uses base64 so PTY sessions can carry arbitrary bytes:
 - `command/exec/outputDelta.capReached` is `true` on the final streamed chunk for a stream when `outputBytesCap` truncates that stream; later output on that stream is dropped.
 - `command/exec.params.env` overrides the server-computed environment per key; set a key to `null` to unset an inherited variable.
 - `command/exec/resize` is only supported for PTY-backed `command/exec` sessions.
+
+### Example: Process lifecycle execution
+
+Use `process/spawn` to start a standalone argv-based process without the Codex sandbox. The spawn response means the process has started and the `processHandle` is registered; completion is reported later through `process/exited`.
+
+```json
+{ "method": "process/spawn", "id": 40, "params": {
+    "command": ["cargo", "check"],
+    "processHandle": "cargo-check-1",
+    "cwd": "/Users/me/project",                    // required absolute path
+    "env": { "RUST_LOG": null },                    // optional; override or unset inherited env vars
+    "outputBytesCap": 1048576,                     // optional; per-stream capture cap
+    "timeoutMs": 10000                             // optional; ms timeout; defaults to server timeout
+} }
+{ "id": 40, "result": {
+    "processHandle": "cargo-check-1"
+} }
+{ "method": "process/exited", "params": {
+    "processHandle": "cargo-check-1",
+    "exitCode": 0,
+    "stdout": "...",
+    "stderr": ""
+} }
+```
+
+For interactive or streaming processes, set `tty: true` or `streamStdoutStderr: true` and route output notifications by `processHandle`:
+
+```json
+{ "method": "process/spawn", "id": 41, "params": {
+    "command": ["bash", "-i"],
+    "processHandle": "bash-1",
+    "cwd": "/Users/me/project",
+    "tty": true,
+    "size": { "rows": 40, "cols": 120 }
+} }
+{ "id": 41, "result": { "processHandle": "bash-1" } }
+{ "method": "process/outputDelta", "params": {
+    "processHandle": "bash-1",
+    "stream": "stdout",
+    "deltaBase64": "YmFzaC00LjQkIA==",
+    "capReached": false
+} }
+{ "method": "process/writeStdin", "id": 42, "params": {
+    "processHandle": "bash-1",
+    "deltaBase64": "cHdkCg=="
+} }
+{ "id": 42, "result": {} }
+{ "method": "process/resizePty", "id": 43, "params": {
+    "processHandle": "bash-1",
+    "size": { "rows": 48, "cols": 160 }
+} }
+{ "id": 43, "result": {} }
+{ "method": "process/kill", "id": 44, "params": {
+    "processHandle": "bash-1"
+} }
+{ "id": 44, "result": {} }
+{ "method": "process/exited", "params": {
+    "processHandle": "bash-1",
+    "exitCode": 137,
+    "stdout": "",
+    "stderr": ""
+} }
+```
+
+- Empty `command` arrays and empty `processHandle` strings are rejected.
+- `cwd` is required and must be absolute.
+- `process/spawn` is intentionally unsandboxed and rejects sandbox-selection fields such as `sandboxPolicy` and `permissionProfile`.
+- `tty: true` implies PTY mode plus `streamStdin: true` and `streamStdoutStderr: true`.
+- `process/writeStdin` accepts either `deltaBase64`, `closeStdin`, or both.
+- `outputBytesCap` applies independently to `stdout` and `stderr`, and streamed bytes are not duplicated into `process/exited`.
+- `process/outputDelta` and `process/exited` notifications are connection-scoped. If the originating connection closes, the server terminates the process.
 
 ### Example: Filesystem utilities
 

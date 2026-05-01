@@ -2403,6 +2403,86 @@
       ],
       "type": "string"
     },
+    "ProcessExitedNotification": {
+      "description": "Final process exit notification for `process/spawn`.",
+      "properties": {
+        "exitCode": {
+          "description": "Process exit code.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "processHandle": {
+          "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+          "type": "string"
+        },
+        "stderr": {
+          "description": "Buffered stderr capture.\n\nEmpty when stderr was streamed via `process/outputDelta`.",
+          "type": "string"
+        },
+        "stdout": {
+          "description": "Buffered stdout capture.\n\nEmpty when stdout was streamed via `process/outputDelta`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exitCode",
+        "processHandle",
+        "stderr",
+        "stdout"
+      ],
+      "type": "object"
+    },
+    "ProcessOutputDeltaNotification": {
+      "description": "Base64-encoded output chunk emitted for a streaming `process/spawn` request.",
+      "properties": {
+        "capReached": {
+          "description": "True on the final streamed chunk for this stream when output was truncated by `outputBytesCap`.",
+          "type": "boolean"
+        },
+        "deltaBase64": {
+          "description": "Base64-encoded output bytes.",
+          "type": "string"
+        },
+        "processHandle": {
+          "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+          "type": "string"
+        },
+        "stream": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProcessOutputStream"
+            }
+          ],
+          "description": "Output stream this chunk belongs to."
+        }
+      },
+      "required": [
+        "capReached",
+        "deltaBase64",
+        "processHandle",
+        "stream"
+      ],
+      "type": "object"
+    },
+    "ProcessOutputStream": {
+      "description": "Stream label for `process/outputDelta` notifications.",
+      "oneOf": [
+        {
+          "description": "stdout stream. PTY mode multiplexes terminal output here.",
+          "enum": [
+            "stdout"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "stderr stream.",
+          "enum": [
+            "stderr"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "RateLimitReachedType": {
       "enum": [
         "rate_limit_reached",
@@ -5149,6 +5229,48 @@
         "params"
       ],
       "title": "Command/exec/outputDeltaNotification",
+      "type": "object"
+    },
+    {
+      "description": "Stream base64-encoded stdout/stderr chunks for a running `process/spawn` session.",
+      "properties": {
+        "method": {
+          "enum": [
+            "process/outputDelta"
+          ],
+          "title": "Process/outputDeltaNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ProcessOutputDeltaNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Process/outputDeltaNotification",
+      "type": "object"
+    },
+    {
+      "description": "Final exit notification for a `process/spawn` session.",
+      "properties": {
+        "method": {
+          "enum": [
+            "process/exited"
+          ],
+          "title": "Process/exitedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ProcessExitedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Process/exitedNotification",
       "type": "object"
     },
     {

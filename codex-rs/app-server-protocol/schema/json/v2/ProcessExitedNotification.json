@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Final process exit notification for `process/spawn`.",
+  "properties": {
+    "exitCode": {
+      "description": "Process exit code.",
+      "format": "int32",
+      "type": "integer"
+    },
+    "processHandle": {
+      "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+      "type": "string"
+    },
+    "stderr": {
+      "description": "Buffered stderr capture.\n\nEmpty when stderr was streamed via `process/outputDelta`.",
+      "type": "string"
+    },
+    "stdout": {
+      "description": "Buffered stdout capture.\n\nEmpty when stdout was streamed via `process/outputDelta`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "exitCode",
+    "processHandle",
+    "stderr",
+    "stdout"
+  ],
+  "title": "ProcessExitedNotification",
+  "type": "object"
+}

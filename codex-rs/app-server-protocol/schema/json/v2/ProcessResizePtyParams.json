@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "ProcessTerminalSize": {
+      "description": "PTY size in character cells for `process/spawn` PTY sessions.",
+      "properties": {
+        "cols": {
+          "description": "Terminal width in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "rows": {
+          "description": "Terminal height in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "Resize a running PTY-backed `process/spawn` session.",
+  "properties": {
+    "processHandle": {
+      "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+      "type": "string"
+    },
+    "size": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ProcessTerminalSize"
+        }
+      ],
+      "description": "New PTY size in character cells."
+    }
+  },
+  "required": [
+    "processHandle",
+    "size"
+  ],
+  "title": "ProcessResizePtyParams",
+  "type": "object"
+}

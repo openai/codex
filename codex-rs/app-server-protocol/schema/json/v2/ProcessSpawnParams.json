@@ -1,0 +1,114 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "AbsolutePathBuf": {
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "type": "string"
+    },
+    "ProcessTerminalSize": {
+      "description": "PTY size in character cells for `process/spawn` PTY sessions.",
+      "properties": {
+        "cols": {
+          "description": "Terminal width in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "rows": {
+          "description": "Terminal height in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "Spawn a standalone process (argv vector) without a Codex sandbox.\n\n`process/spawn` returns after the process has started and the connection-scoped `processHandle` has been registered. Process output and exit are reported via `process/outputDelta` and `process/exited` notifications.",
+  "properties": {
+    "command": {
+      "description": "Command argv vector. Empty arrays are rejected.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "cwd": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Absolute working directory for the process."
+    },
+    "env": {
+      "additionalProperties": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "description": "Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable.",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "outputBytesCap": {
+      "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies.",
+      "format": "uint",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "processHandle": {
+      "description": "Client-supplied, connection-scoped process handle.",
+      "type": "string"
+    },
+    "size": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ProcessTerminalSize"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional initial PTY size in character cells. Only valid when `tty` is true."
+    },
+    "streamStdin": {
+      "description": "Allow follow-up `process/writeStdin` requests to write stdin bytes.",
+      "type": "boolean"
+    },
+    "streamStdoutStderr": {
+      "description": "Stream stdout/stderr via `process/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the `process/exited` notification.",
+      "type": "boolean"
+    },
+    "timeoutMs": {
+      "description": "Optional timeout in milliseconds.\n\nWhen omitted, the server default applies.",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "tty": {
+      "description": "Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "command",
+    "cwd",
+    "processHandle"
+  ],
+  "title": "ProcessSpawnParams",
+  "type": "object"
+}
