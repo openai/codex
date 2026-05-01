@@ -159,7 +159,7 @@ impl ChatWidget {
 
         self.set_status_line(status_line_from_segments(
             segments,
-            self.config.tui_status_line_use_theme_colors,
+            self.config.tui_status_line_use_colors,
         ));
     }
 

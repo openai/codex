@@ -1792,9 +1792,7 @@ impl App {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
                 let items_edit = crate::legacy_core::config::edit::status_line_items_edit(&ids);
                 let colors_edit =
-                    crate::legacy_core::config::edit::status_line_use_theme_colors_edit(
-                        use_theme_colors,
-                    );
+                    crate::legacy_core::config::edit::status_line_use_colors_edit(use_theme_colors);
                 let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_edits([items_edit, colors_edit])
                     .apply()
@@ -1802,7 +1800,7 @@ impl App {
                 match apply_result {
                     Ok(()) => {
                         self.config.tui_status_line = Some(ids.clone());
-                        self.config.tui_status_line_use_theme_colors = use_theme_colors;
+                        self.config.tui_status_line_use_colors = use_theme_colors;
                         self.chat_widget.setup_status_line(items, use_theme_colors);
                     }
                     Err(err) => {

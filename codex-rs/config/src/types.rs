@@ -630,7 +630,7 @@ pub struct Tui {
     /// Color status line items with colors derived from the active syntax theme.
     /// Defaults to `true`.
     #[serde(default = "default_true")]
-    pub status_line_use_theme_colors: bool,
+    pub status_line_use_colors: bool,
 
     /// Ordered list of terminal title item identifiers.
     ///

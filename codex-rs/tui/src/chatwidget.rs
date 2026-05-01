@@ -1866,7 +1866,7 @@ impl ChatWidget {
         );
         let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
         self.config.tui_status_line = Some(ids);
-        self.config.tui_status_line_use_theme_colors = use_theme_colors;
+        self.config.tui_status_line_use_colors = use_theme_colors;
         self.refresh_status_line();
     }
 
@@ -6902,7 +6902,7 @@ impl ChatWidget {
         let configured_status_line_items = self.configured_status_line_items();
         let view = StatusLineSetupView::new(
             Some(configured_status_line_items.as_slice()),
-            self.config.tui_status_line_use_theme_colors,
+            self.config.tui_status_line_use_colors,
             self.status_surface_preview_data(),
             self.app_event_tx.clone(),
         );

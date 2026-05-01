@@ -2486,7 +2486,7 @@
           },
           "type": "array"
         },
-        "status_line_use_theme_colors": {
+        "status_line_use_colors": {
           "default": true,
           "description": "Color status line items with colors derived from the active syntax theme. Defaults to `true`.",
           "type": "boolean"
