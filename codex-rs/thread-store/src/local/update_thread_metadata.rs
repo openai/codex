@@ -221,7 +221,7 @@ mod tests {
     #[tokio::test]
     async fn update_thread_metadata_sets_name_on_active_rollout_and_indexes_name() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = Uuid::from_u128(301);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let path =
@@ -296,7 +296,7 @@ mod tests {
     async fn update_thread_metadata_uses_live_rollout_path_for_external_resume() {
         let home = TempDir::new().expect("temp dir");
         let external_home = TempDir::new().expect("external temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = Uuid::from_u128(307);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let path = write_session_file(external_home.path(), "2025-01-03T14-45-00", uuid)
@@ -336,7 +336,7 @@ mod tests {
     #[tokio::test]
     async fn update_thread_metadata_rejects_mismatched_session_meta_id() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let filename_uuid = Uuid::from_u128(303);
         let metadata_uuid = Uuid::from_u128(304);
         let thread_id = ThreadId::from_string(&filename_uuid.to_string()).expect("valid thread id");
@@ -368,7 +368,7 @@ mod tests {
     #[tokio::test]
     async fn update_thread_metadata_rejects_multi_field_patch_without_partial_write() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = Uuid::from_u128(305);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let path =

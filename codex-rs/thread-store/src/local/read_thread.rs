@@ -415,7 +415,7 @@ mod tests {
     #[tokio::test]
     async fn read_thread_returns_active_rollout_summary() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = Uuid::from_u128(205);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let active_path =
@@ -443,7 +443,7 @@ mod tests {
     #[tokio::test]
     async fn read_thread_returns_rollout_path_summary() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = Uuid::from_u128(211);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let active_path =
@@ -522,7 +522,7 @@ mod tests {
     #[tokio::test]
     async fn read_thread_returns_archived_rollout_when_requested() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = Uuid::from_u128(207);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let archived_path = write_archived_session_file(home.path(), "2025-01-03T12-00-00", uuid)
@@ -563,7 +563,7 @@ mod tests {
     #[tokio::test]
     async fn read_thread_prefers_active_rollout_over_archived() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = Uuid::from_u128(208);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let active_path =
@@ -588,7 +588,7 @@ mod tests {
     #[tokio::test]
     async fn read_thread_returns_forked_from_id() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = Uuid::from_u128(209);
         let parent_uuid = Uuid::from_u128(210);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
@@ -736,7 +736,7 @@ mod tests {
     #[tokio::test]
     async fn read_thread_uses_legacy_thread_name_when_sqlite_title_is_missing() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = Uuid::from_u128(213);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
@@ -924,7 +924,7 @@ mod tests {
     #[tokio::test]
     async fn read_thread_uses_session_meta_for_rollout_without_user_preview_or_sqlite_metadata() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = Uuid::from_u128(218);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let day_dir = home.path().join("sessions/2025/01/03");
@@ -1139,7 +1139,7 @@ mod tests {
     #[tokio::test]
     async fn read_thread_fails_without_rollout() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = Uuid::from_u128(206);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
 

@@ -289,7 +289,7 @@ mod tests {
     #[tokio::test]
     async fn live_writer_lifecycle_writes_and_closes() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let thread_id = ThreadId::default();
 
         store
@@ -358,7 +358,7 @@ mod tests {
     #[tokio::test]
     async fn discard_thread_drops_unmaterialized_live_writer() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let thread_id = ThreadId::default();
 
         store
@@ -397,7 +397,7 @@ mod tests {
         let config = test_config(home.path());
         let thread_id = ThreadId::default();
 
-        let first_store = LocalThreadStore::new(config.clone(), None);
+        let first_store = LocalThreadStore::new(config.clone(), /*state_db*/ None);
         first_store
             .create_thread(create_thread_params(thread_id))
             .await
@@ -426,7 +426,7 @@ mod tests {
             .await
             .expect("shutdown initial writer");
 
-        let resumed_store = LocalThreadStore::new(config, None);
+        let resumed_store = LocalThreadStore::new(config, /*state_db*/ None);
         resumed_store
             .resume_thread(ResumeThreadParams {
                 thread_id,
@@ -457,7 +457,7 @@ mod tests {
     #[tokio::test]
     async fn create_thread_rejects_duplicate_live_writer() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let thread_id = ThreadId::default();
 
         store
@@ -535,7 +535,7 @@ mod tests {
     async fn load_history_uses_live_writer_rollout_path() {
         let home = TempDir::new().expect("temp dir");
         let external_home = TempDir::new().expect("external temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = uuid::Uuid::from_u128(404);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let rollout_path = write_session_file(external_home.path(), "2025-01-04T10-00-00", uuid)
@@ -623,7 +623,7 @@ mod tests {
     #[tokio::test]
     async fn load_history_uses_live_writer_rollout_path_for_archived_source() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = uuid::Uuid::from_u128(405);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let rollout_path = write_archived_session_file(home.path(), "2025-01-04T10-30-00", uuid)
@@ -691,7 +691,7 @@ mod tests {
     #[tokio::test]
     async fn read_thread_by_rollout_path_includes_history() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), None);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let thread_id = ThreadId::default();
 
         store
