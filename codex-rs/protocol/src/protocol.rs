@@ -3940,6 +3940,7 @@ mod tests {
     use crate::items::FileChangeItem;
     use crate::items::ImageGenerationItem;
     use crate::items::McpToolCallItem;
+    use crate::items::McpToolCallStatus;
     use crate::items::UserMessageItem;
     use crate::items::WebSearchItem;
     use crate::mcp::CallToolResult;
@@ -4684,13 +4685,13 @@ mod tests {
             turn_id: "turn-1".into(),
             item: TurnItem::McpToolCall(McpToolCallItem {
                 id: "mcp-1".into(),
-                invocation: McpInvocation {
-                    server: "server".into(),
-                    tool: "tool".into(),
-                    arguments: Some(json!({"arg": "value"})),
-                },
+                server: "server".into(),
+                tool: "tool".into(),
+                arguments: json!({"arg": "value"}),
                 mcp_app_resource_uri: Some("app://connector".into()),
+                status: McpToolCallStatus::InProgress,
                 result: None,
+                error: None,
                 duration: None,
             }),
         };
@@ -4786,18 +4787,18 @@ mod tests {
             turn_id: "turn-1".into(),
             item: TurnItem::McpToolCall(McpToolCallItem {
                 id: "mcp-1".into(),
-                invocation: McpInvocation {
-                    server: "server".into(),
-                    tool: "tool".into(),
-                    arguments: Some(json!({"arg": "value"})),
-                },
+                server: "server".into(),
+                tool: "tool".into(),
+                arguments: json!({"arg": "value"}),
                 mcp_app_resource_uri: Some("app://connector".into()),
-                result: Some(Ok(CallToolResult {
+                status: McpToolCallStatus::Completed,
+                result: Some(CallToolResult {
                     content: vec![json!({"type": "text", "text": "ok"})],
                     structured_content: None,
                     is_error: Some(false),
                     meta: None,
-                })),
+                }),
+                error: None,
                 duration: Some(Duration::from_millis(42)),
             }),
         };

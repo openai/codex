@@ -45,7 +45,9 @@ use codex_mcp::SandboxState;
 use codex_mcp::declared_openai_file_input_param_names;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_otel::sanitize_metric_tag_value;
+use codex_protocol::items::McpToolCallError;
 use codex_protocol::items::McpToolCallItem;
+use codex_protocol::items::McpToolCallStatus;
 use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::openai_models::InputModality;
@@ -707,11 +709,20 @@ async fn notify_mcp_tool_call_started(
     invocation: McpInvocation,
     mcp_app_resource_uri: Option<String>,
 ) {
+    let McpInvocation {
+        server,
+        tool,
+        arguments,
+    } = invocation;
     let item = TurnItem::McpToolCall(McpToolCallItem {
         id: call_id.to_string(),
-        invocation,
+        server,
+        tool,
+        arguments: arguments.unwrap_or(JsonValue::Null),
         mcp_app_resource_uri,
+        status: McpToolCallStatus::InProgress,
         result: None,
+        error: None,
         duration: None,
     });
     sess.emit_turn_item_started(turn_context, &item).await;
@@ -726,11 +737,31 @@ async fn notify_mcp_tool_call_completed(
     duration: Duration,
     result: Result<CallToolResult, String>,
 ) {
+    let (status, result, error) = match result {
+        Ok(result) if result.is_error.unwrap_or(false) => {
+            (McpToolCallStatus::Failed, Some(result), None)
+        }
+        Ok(result) => (McpToolCallStatus::Completed, Some(result), None),
+        Err(message) => (
+            McpToolCallStatus::Failed,
+            None,
+            Some(McpToolCallError { message }),
+        ),
+    };
+    let McpInvocation {
+        server,
+        tool,
+        arguments,
+    } = invocation;
     let item = TurnItem::McpToolCall(McpToolCallItem {
         id: call_id.to_string(),
-        invocation,
+        server,
+        tool,
+        arguments: arguments.unwrap_or(JsonValue::Null),
         mcp_app_resource_uri,
-        result: Some(result),
+        status,
+        result,
+        error,
         duration: Some(duration),
     });
     sess.emit_turn_item_completed(turn_context, item).await;

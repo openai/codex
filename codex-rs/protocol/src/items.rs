@@ -167,18 +167,42 @@ pub struct FileChangeItem {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct McpToolCallItem {
     pub id: String,
-    pub invocation: McpInvocation,
+    pub server: String,
+    pub tool: String,
+    pub arguments: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub mcp_app_resource_uri: Option<String>,
+    pub status: McpToolCallStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub result: Option<Result<CallToolResult, String>>,
+    pub result: Option<CallToolResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<McpToolCallError>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(type = "string", optional)]
     pub duration: Option<Duration>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum McpToolCallStatus {
+    InProgress,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct McpToolCallError {
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -463,18 +487,32 @@ impl McpToolCallItem {
     pub fn as_legacy_begin_event(&self) -> EventMsg {
         EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
             call_id: self.id.clone(),
-            invocation: self.invocation.clone(),
+            invocation: McpInvocation {
+                server: self.server.clone(),
+                tool: self.tool.clone(),
+                arguments: (!self.arguments.is_null()).then(|| self.arguments.clone()),
+            },
             mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
         })
     }
 
     pub fn as_legacy_end_event(&self) -> Option<EventMsg> {
+        let result = match (&self.result, &self.error) {
+            (Some(result), _) => Ok(result.clone()),
+            (None, Some(error)) => Err(error.message.clone()),
+            (None, None) => return None,
+        };
+
         Some(EventMsg::McpToolCallEnd(McpToolCallEndEvent {
             call_id: self.id.clone(),
-            invocation: self.invocation.clone(),
+            invocation: McpInvocation {
+                server: self.server.clone(),
+                tool: self.tool.clone(),
+                arguments: (!self.arguments.is_null()).then(|| self.arguments.clone()),
+            },
             mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
             duration: self.duration?,
-            result: self.result.clone()?,
+            result,
         }))
     }
 }

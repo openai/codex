@@ -31,6 +31,8 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+use codex_protocol::items::McpToolCallError as CoreMcpToolCallError;
+use codex_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::CallToolResult as CoreMcpCallToolResult;
 use codex_protocol::mcp::Resource as McpResource;
@@ -2789,6 +2791,14 @@ impl From<CoreMcpCallToolResult> for McpToolCallResult {
             content: result.content,
             structured_content: result.structured_content,
             meta: result.meta,
+        }
+    }
+}
+
+impl From<CoreMcpToolCallError> for McpToolCallError {
+    fn from(error: CoreMcpToolCallError) -> Self {
+        Self {
+            message: error.message,
         }
     }
 }
@@ -6494,31 +6504,19 @@ impl From<CoreTurnItem> for ThreadItem {
                     .unwrap_or(PatchApplyStatus::InProgress),
             },
             CoreTurnItem::McpToolCall(mcp) => {
-                let status = match &mcp.result {
-                    None => McpToolCallStatus::InProgress,
-                    Some(Ok(result)) if !result.is_error.unwrap_or(false) => {
-                        McpToolCallStatus::Completed
-                    }
-                    Some(Ok(_)) | Some(Err(_)) => McpToolCallStatus::Failed,
-                };
                 let duration_ms = mcp
                     .duration
                     .and_then(|duration| i64::try_from(duration.as_millis()).ok());
-                let (result, error) = match mcp.result {
-                    None => (None, None),
-                    Some(Ok(result)) => (Some(Box::new(McpToolCallResult::from(result))), None),
-                    Some(Err(message)) => (None, Some(McpToolCallError { message })),
-                };
 
                 ThreadItem::McpToolCall {
                     id: mcp.id,
-                    server: mcp.invocation.server,
-                    tool: mcp.invocation.tool,
-                    status,
-                    arguments: mcp.invocation.arguments.unwrap_or(JsonValue::Null),
+                    server: mcp.server,
+                    tool: mcp.tool,
+                    status: McpToolCallStatus::from(mcp.status),
+                    arguments: mcp.arguments,
                     mcp_app_resource_uri: mcp.mcp_app_resource_uri,
-                    result,
-                    error,
+                    result: mcp.result.map(McpToolCallResult::from).map(Box::new),
+                    error: mcp.error.map(McpToolCallError::from),
                     duration_ms,
                 }
             }
@@ -6627,6 +6625,16 @@ impl From<&CorePatchApplyStatus> for PatchApplyStatus {
             CorePatchApplyStatus::Completed => PatchApplyStatus::Completed,
             CorePatchApplyStatus::Failed => PatchApplyStatus::Failed,
             CorePatchApplyStatus::Declined => PatchApplyStatus::Declined,
+        }
+    }
+}
+
+impl From<CoreMcpToolCallStatus> for McpToolCallStatus {
+    fn from(value: CoreMcpToolCallStatus) -> Self {
+        match value {
+            CoreMcpToolCallStatus::InProgress => McpToolCallStatus::InProgress,
+            CoreMcpToolCallStatus::Completed => McpToolCallStatus::Completed,
+            CoreMcpToolCallStatus::Failed => McpToolCallStatus::Failed,
         }
     }
 }
@@ -8134,13 +8142,13 @@ mod tests {
     use codex_protocol::items::FileChangeItem;
     use codex_protocol::items::ImageViewItem;
     use codex_protocol::items::McpToolCallItem;
+    use codex_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
     use codex_protocol::items::ReasoningItem;
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
     use codex_protocol::items::WebSearchItem;
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
-    use codex_protocol::protocol::McpInvocation;
     use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
     use codex_protocol::user_input::UserInput as CoreUserInput;
     use codex_utils_absolute_path::test_support::PathBufExt;
@@ -10462,13 +10470,13 @@ mod tests {
 
         let mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
             id: "mcp-1".to_string(),
-            invocation: McpInvocation {
-                server: "server".to_string(),
-                tool: "tool".to_string(),
-                arguments: Some(json!({"arg": "value"})),
-            },
+            server: "server".to_string(),
+            tool: "tool".to_string(),
+            arguments: json!({"arg": "value"}),
             mcp_app_resource_uri: Some("app://connector".to_string()),
+            status: CoreMcpToolCallStatus::InProgress,
             result: None,
+            error: None,
             duration: None,
         });
 
@@ -10489,18 +10497,18 @@ mod tests {
 
         let completed_mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
             id: "mcp-2".to_string(),
-            invocation: McpInvocation {
-                server: "server".to_string(),
-                tool: "tool".to_string(),
-                arguments: None,
-            },
+            server: "server".to_string(),
+            tool: "tool".to_string(),
+            arguments: JsonValue::Null,
             mcp_app_resource_uri: None,
-            result: Some(Ok(CallToolResult {
+            status: CoreMcpToolCallStatus::Completed,
+            result: Some(CallToolResult {
                 content: vec![json!({"type": "text", "text": "ok"})],
                 structured_content: Some(json!({"ok": true})),
                 is_error: Some(false),
                 meta: Some(json!({"trace": "1"})),
-            })),
+            }),
+            error: None,
             duration: Some(Duration::from_millis(42)),
         });
 

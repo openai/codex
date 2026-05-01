@@ -3,7 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_protocol::items::McpToolCallError;
 use codex_protocol::items::McpToolCallItem;
+use codex_protocol::items::McpToolCallStatus;
 use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::function_call_output_content_items_to_text;
@@ -563,11 +565,20 @@ async fn emit_tool_call_begin(
     call_id: &str,
     invocation: McpInvocation,
 ) {
+    let McpInvocation {
+        server,
+        tool,
+        arguments,
+    } = invocation;
     let item = TurnItem::McpToolCall(McpToolCallItem {
         id: call_id.to_string(),
-        invocation,
+        server,
+        tool,
+        arguments: arguments.unwrap_or(Value::Null),
         mcp_app_resource_uri: None,
+        status: McpToolCallStatus::InProgress,
         result: None,
+        error: None,
         duration: None,
     });
     session.emit_turn_item_started(turn, &item).await;
@@ -581,11 +592,31 @@ async fn emit_tool_call_end(
     duration: Duration,
     result: Result<CallToolResult, String>,
 ) {
+    let (status, result, error) = match result {
+        Ok(result) if result.is_error.unwrap_or(false) => {
+            (McpToolCallStatus::Failed, Some(result), None)
+        }
+        Ok(result) => (McpToolCallStatus::Completed, Some(result), None),
+        Err(message) => (
+            McpToolCallStatus::Failed,
+            None,
+            Some(McpToolCallError { message }),
+        ),
+    };
+    let McpInvocation {
+        server,
+        tool,
+        arguments,
+    } = invocation;
     let item = TurnItem::McpToolCall(McpToolCallItem {
         id: call_id.to_string(),
-        invocation,
+        server,
+        tool,
+        arguments: arguments.unwrap_or(Value::Null),
         mcp_app_resource_uri: None,
-        result: Some(result),
+        status,
+        result,
+        error,
         duration: Some(duration),
     });
     session.emit_turn_item_completed(turn, item).await;
