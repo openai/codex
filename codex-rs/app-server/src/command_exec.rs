@@ -17,17 +17,6 @@ use codex_app_server_protocol::CommandExecTerminateResponse;
 use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::CommandExecWriteResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::ProcessExitedNotification;
-use codex_app_server_protocol::ProcessKillParams;
-use codex_app_server_protocol::ProcessKillResponse;
-use codex_app_server_protocol::ProcessOutputDeltaNotification;
-use codex_app_server_protocol::ProcessOutputStream;
-use codex_app_server_protocol::ProcessResizePtyParams;
-use codex_app_server_protocol::ProcessResizePtyResponse;
-use codex_app_server_protocol::ProcessSpawnResponse;
-use codex_app_server_protocol::ProcessTerminalSize;
-use codex_app_server_protocol::ProcessWriteStdinParams;
-use codex_app_server_protocol::ProcessWriteStdinResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_core::config::StartedNetworkProxy;
 use codex_core::exec::ExecExpiration;
@@ -73,65 +62,7 @@ impl Default for CommandExecManager {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ConnectionProcessId {
     connection_id: ConnectionId,
-    protocol: ProcessProtocol,
     process_id: InternalProcessId,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum ProcessProtocol {
-    CommandExec,
-    Process,
-}
-
-impl ProcessProtocol {
-    fn active_resource_name(self) -> &'static str {
-        match self {
-            Self::CommandExec => "command/exec",
-            Self::Process => "process",
-        }
-    }
-
-    fn control_methods(self) -> &'static str {
-        match self {
-            Self::CommandExec => {
-                "command/exec/write, command/exec/terminate, and command/exec/resize"
-            }
-            Self::Process => "process/writeStdin, process/kill, and process/resizePty",
-        }
-    }
-
-    fn identifier_name(self) -> &'static str {
-        match self {
-            Self::CommandExec => "process id",
-            Self::Process => "process handle",
-        }
-    }
-
-    fn stdin_not_enabled_message(self) -> &'static str {
-        match self {
-            Self::CommandExec => "stdin streaming is not enabled for this command/exec",
-            Self::Process => "stdin streaming is not enabled for this process",
-        }
-    }
-
-    fn terminal_size_error_message(self) -> &'static str {
-        match self {
-            Self::CommandExec => "command/exec size rows and cols must be greater than 0",
-            Self::Process => "process size rows and cols must be greater than 0",
-        }
-    }
-
-    fn no_longer_running_message(self, process_id: &InternalProcessId) -> String {
-        match self {
-            Self::CommandExec => {
-                format!(
-                    "command/exec {} is no longer running",
-                    process_id.error_repr()
-                )
-            }
-            Self::Process => format!("process {} is no longer running", process_id.error_repr()),
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -156,7 +87,6 @@ struct CommandControlRequest {
 pub(crate) struct StartCommandExecParams {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
     pub(crate) request_id: ConnectionRequestId,
-    pub(crate) protocol: ProcessProtocol,
     pub(crate) process_id: Option<String>,
     pub(crate) exec_request: ExecRequest,
     pub(crate) started_network_proxy: Option<StartedNetworkProxy>,
@@ -170,7 +100,6 @@ pub(crate) struct StartCommandExecParams {
 struct RunCommandParams {
     outgoing: Arc<OutgoingMessageSender>,
     request_id: ConnectionRequestId,
-    protocol: ProcessProtocol,
     process_id: Option<String>,
     spawned: SpawnedProcess,
     control_rx: mpsc::Receiver<CommandControlRequest>,
@@ -182,7 +111,6 @@ struct RunCommandParams {
 
 struct SpawnProcessOutputParams {
     connection_id: ConnectionId,
-    protocol: ProcessProtocol,
     process_id: Option<String>,
     output_rx: mpsc::Receiver<Vec<u8>>,
     stdio_timeout_rx: watch::Receiver<bool>,
@@ -219,7 +147,6 @@ impl CommandExecManager {
         let StartCommandExecParams {
             outgoing,
             request_id,
-            protocol,
             process_id,
             exec_request,
             started_network_proxy,
@@ -245,7 +172,6 @@ impl CommandExecManager {
         );
         let process_key = ConnectionProcessId {
             connection_id: request_id.connection_id,
-            protocol,
             process_id: process_id.clone(),
         };
 
@@ -264,9 +190,7 @@ impl CommandExecManager {
                 let mut sessions = self.sessions.lock().await;
                 if sessions.contains_key(&process_key) {
                     return Err(invalid_request(format!(
-                        "duplicate active {} {}: {}",
-                        process_key.protocol.active_resource_name(),
-                        process_key.protocol.identifier_name(),
+                        "duplicate active command/exec process id: {}",
                         process_key.process_id.error_repr(),
                     )));
                 }
@@ -330,9 +254,7 @@ impl CommandExecManager {
             let mut sessions = self.sessions.lock().await;
             if sessions.contains_key(&process_key) {
                 return Err(invalid_request(format!(
-                    "duplicate active {} {}: {}",
-                    process_key.protocol.active_resource_name(),
-                    process_key.protocol.identifier_name(),
+                    "duplicate active command/exec process id: {}",
                     process_key.process_id.error_repr(),
                 )));
             }
@@ -364,24 +286,11 @@ impl CommandExecManager {
                 return Err(internal_error(format!("failed to spawn command: {err}")));
             }
         };
-        if let (ProcessProtocol::Process, InternalProcessId::Client(process_handle)) =
-            (protocol, &process_id)
-        {
-            outgoing
-                .send_response(
-                    request_id.clone(),
-                    ProcessSpawnResponse {
-                        process_handle: process_handle.clone(),
-                    },
-                )
-                .await;
-        }
         tokio::spawn(async move {
             let _started_network_proxy = started_network_proxy;
             run_command(RunCommandParams {
                 outgoing,
                 request_id: request_id.clone(),
-                protocol,
                 process_id: notification_process_id,
                 spawned,
                 control_rx,
@@ -416,7 +325,6 @@ impl CommandExecManager {
 
         let target_process_id = ConnectionProcessId {
             connection_id: request_id.connection_id,
-            protocol: ProcessProtocol::CommandExec,
             process_id: InternalProcessId::Client(params.process_id),
         };
         self.send_control(
@@ -438,7 +346,6 @@ impl CommandExecManager {
     ) -> Result<CommandExecTerminateResponse, JSONRPCErrorError> {
         let target_process_id = ConnectionProcessId {
             connection_id: request_id.connection_id,
-            protocol: ProcessProtocol::CommandExec,
             process_id: InternalProcessId::Client(params.process_id),
         };
         self.send_control(target_process_id, CommandControl::Terminate)
@@ -453,87 +360,16 @@ impl CommandExecManager {
     ) -> Result<CommandExecResizeResponse, JSONRPCErrorError> {
         let target_process_id = ConnectionProcessId {
             connection_id: request_id.connection_id,
-            protocol: ProcessProtocol::CommandExec,
             process_id: InternalProcessId::Client(params.process_id),
         };
         self.send_control(
             target_process_id,
             CommandControl::Resize {
-                size: command_terminal_size_from_protocol(params.size)?,
+                size: terminal_size_from_protocol(params.size)?,
             },
         )
         .await?;
         Ok(CommandExecResizeResponse {})
-    }
-
-    pub(crate) async fn process_write_stdin(
-        &self,
-        request_id: ConnectionRequestId,
-        params: ProcessWriteStdinParams,
-    ) -> Result<ProcessWriteStdinResponse, JSONRPCErrorError> {
-        if params.delta_base64.is_none() && !params.close_stdin {
-            return Err(invalid_params(
-                "process/writeStdin requires deltaBase64 or closeStdin",
-            ));
-        }
-
-        let delta = match params.delta_base64 {
-            Some(delta_base64) => STANDARD
-                .decode(delta_base64)
-                .map_err(|err| invalid_params(format!("invalid deltaBase64: {err}")))?,
-            None => Vec::new(),
-        };
-
-        let target_process_id = ConnectionProcessId {
-            connection_id: request_id.connection_id,
-            protocol: ProcessProtocol::Process,
-            process_id: InternalProcessId::Client(params.process_handle),
-        };
-        self.send_control(
-            target_process_id,
-            CommandControl::Write {
-                delta,
-                close_stdin: params.close_stdin,
-            },
-        )
-        .await?;
-
-        Ok(ProcessWriteStdinResponse {})
-    }
-
-    pub(crate) async fn process_kill(
-        &self,
-        request_id: ConnectionRequestId,
-        params: ProcessKillParams,
-    ) -> Result<ProcessKillResponse, JSONRPCErrorError> {
-        let target_process_id = ConnectionProcessId {
-            connection_id: request_id.connection_id,
-            protocol: ProcessProtocol::Process,
-            process_id: InternalProcessId::Client(params.process_handle),
-        };
-        self.send_control(target_process_id, CommandControl::Terminate)
-            .await?;
-        Ok(ProcessKillResponse {})
-    }
-
-    pub(crate) async fn process_resize_pty(
-        &self,
-        request_id: ConnectionRequestId,
-        params: ProcessResizePtyParams,
-    ) -> Result<ProcessResizePtyResponse, JSONRPCErrorError> {
-        let target_process_id = ConnectionProcessId {
-            connection_id: request_id.connection_id,
-            protocol: ProcessProtocol::Process,
-            process_id: InternalProcessId::Client(params.process_handle),
-        };
-        self.send_control(
-            target_process_id,
-            CommandControl::Resize {
-                size: process_terminal_size_from_protocol(params.size)?,
-            },
-        )
-        .await?;
-        Ok(ProcessResizePtyResponse {})
     }
 
     pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
@@ -578,30 +414,28 @@ impl CommandExecManager {
                 .cloned()
                 .ok_or_else(|| {
                     invalid_request(format!(
-                        "no active {} for {} {}",
-                        process_id.protocol.active_resource_name(),
-                        process_id.protocol.identifier_name(),
+                        "no active command/exec for process id {}",
                         process_id.process_id.error_repr(),
                     ))
                 })?
         };
         let CommandExecSession::Active { control_tx } = session else {
-            return Err(invalid_request(format!(
-                "{} are not supported for windows sandbox processes",
-                process_id.protocol.control_methods(),
-            )));
+            return Err(invalid_request(
+                "command/exec/write, command/exec/terminate, and command/exec/resize are not supported for windows sandbox processes",
+            ));
         };
         let (response_tx, response_rx) = oneshot::channel();
         let request = CommandControlRequest {
             control,
             response_tx: Some(response_tx),
         };
-        control_tx.send(request).await.map_err(|_| {
-            process_no_longer_running_error(process_id.protocol, &process_id.process_id)
-        })?;
-        response_rx.await.map_err(|_| {
-            process_no_longer_running_error(process_id.protocol, &process_id.process_id)
-        })?
+        control_tx
+            .send(request)
+            .await
+            .map_err(|_| command_no_longer_running_error(&process_id.process_id))?;
+        response_rx
+            .await
+            .map_err(|_| command_no_longer_running_error(&process_id.process_id))?
     }
 }
 
@@ -609,7 +443,6 @@ async fn run_command(params: RunCommandParams) {
     let RunCommandParams {
         outgoing,
         request_id,
-        protocol,
         process_id,
         spawned,
         control_rx,
@@ -634,7 +467,6 @@ async fn run_command(params: RunCommandParams) {
 
     let stdout_handle = spawn_process_output(SpawnProcessOutputParams {
         connection_id: request_id.connection_id,
-        protocol,
         process_id: process_id.clone(),
         output_rx: stdout_rx,
         stdio_timeout_rx: stdio_timeout_rx.clone(),
@@ -645,7 +477,6 @@ async fn run_command(params: RunCommandParams) {
     });
     let stderr_handle = spawn_process_output(SpawnProcessOutputParams {
         connection_id: request_id.connection_id,
-        protocol,
         process_id: process_id.clone(),
         output_rx: stderr_rx,
         stdio_timeout_rx,
@@ -664,7 +495,6 @@ async fn run_command(params: RunCommandParams) {
                             CommandControl::Write { delta, close_stdin } => {
                                 handle_process_write(
                                     &session,
-                                    protocol,
                                     stream_stdin,
                                     delta,
                                     close_stdin,
@@ -711,41 +541,21 @@ async fn run_command(params: RunCommandParams) {
     let stderr = stderr_handle.await.unwrap_or_default();
     timeout_handle.abort();
 
-    match protocol {
-        ProcessProtocol::CommandExec => {
-            outgoing
-                .send_response(
-                    request_id,
-                    CommandExecResponse {
-                        exit_code,
-                        stdout,
-                        stderr,
-                    },
-                )
-                .await;
-        }
-        ProcessProtocol::Process => {
-            if let Some(process_handle) = process_id {
-                outgoing
-                    .send_server_notification_to_connection_and_wait(
-                        request_id.connection_id,
-                        ServerNotification::ProcessExited(ProcessExitedNotification {
-                            process_handle,
-                            exit_code,
-                            stdout,
-                            stderr,
-                        }),
-                    )
-                    .await;
-            }
-        }
-    }
+    outgoing
+        .send_response(
+            request_id,
+            CommandExecResponse {
+                exit_code,
+                stdout,
+                stderr,
+            },
+        )
+        .await;
 }
 
 fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHandle<String> {
     let SpawnProcessOutputParams {
         connection_id,
-        protocol,
         process_id,
         mut output_rx,
         mut stdio_timeout_rx,
@@ -783,38 +593,19 @@ fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHa
             };
             let cap_reached = Some(observed_num_bytes) == output_bytes_cap;
             if let (true, Some(process_id)) = (stream_output, process_id.as_ref()) {
-                match protocol {
-                    ProcessProtocol::CommandExec => {
-                        outgoing
-                            .send_server_notification_to_connection_and_wait(
-                                connection_id,
-                                ServerNotification::CommandExecOutputDelta(
-                                    CommandExecOutputDeltaNotification {
-                                        process_id: process_id.clone(),
-                                        stream,
-                                        delta_base64: STANDARD.encode(capped_chunk),
-                                        cap_reached,
-                                    },
-                                ),
-                            )
-                            .await;
-                    }
-                    ProcessProtocol::Process => {
-                        outgoing
-                            .send_server_notification_to_connection_and_wait(
-                                connection_id,
-                                ServerNotification::ProcessOutputDelta(
-                                    ProcessOutputDeltaNotification {
-                                        process_handle: process_id.clone(),
-                                        stream: process_output_stream_from_command_exec(stream),
-                                        delta_base64: STANDARD.encode(capped_chunk),
-                                        cap_reached,
-                                    },
-                                ),
-                            )
-                            .await;
-                    }
-                }
+                outgoing
+                    .send_server_notification_to_connection_and_wait(
+                        connection_id,
+                        ServerNotification::CommandExecOutputDelta(
+                            CommandExecOutputDeltaNotification {
+                                process_id: process_id.clone(),
+                                stream,
+                                delta_base64: STANDARD.encode(capped_chunk),
+                                cap_reached,
+                            },
+                        ),
+                    )
+                    .await;
             } else if !stream_output {
                 buffer.extend_from_slice(capped_chunk);
             }
@@ -828,13 +619,14 @@ fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHa
 
 async fn handle_process_write(
     session: &ProcessHandle,
-    protocol: ProcessProtocol,
     stream_stdin: bool,
     delta: Vec<u8>,
     close_stdin: bool,
 ) -> Result<(), JSONRPCErrorError> {
     if !stream_stdin {
-        return Err(invalid_request(protocol.stdin_not_enabled_message()));
+        return Err(invalid_request(
+            "stdin streaming is not enabled for this command/exec",
+        ));
     }
     if !delta.is_empty() {
         session
@@ -858,41 +650,25 @@ fn handle_process_resize(
         .map_err(|err| invalid_request(format!("failed to resize PTY: {err}")))
 }
 
-pub(crate) fn command_terminal_size_from_protocol(
+pub(crate) fn terminal_size_from_protocol(
     size: CommandExecTerminalSize,
 ) -> Result<TerminalSize, JSONRPCErrorError> {
-    terminal_size_from_parts(size.rows, size.cols, ProcessProtocol::CommandExec)
-}
-
-pub(crate) fn process_terminal_size_from_protocol(
-    size: ProcessTerminalSize,
-) -> Result<TerminalSize, JSONRPCErrorError> {
-    terminal_size_from_parts(size.rows, size.cols, ProcessProtocol::Process)
-}
-
-fn terminal_size_from_parts(
-    rows: u16,
-    cols: u16,
-    protocol: ProcessProtocol,
-) -> Result<TerminalSize, JSONRPCErrorError> {
-    if rows == 0 || cols == 0 {
-        return Err(invalid_params(protocol.terminal_size_error_message()));
+    if size.rows == 0 || size.cols == 0 {
+        return Err(invalid_params(
+            "command/exec size rows and cols must be greater than 0",
+        ));
     }
-    Ok(TerminalSize { rows, cols })
+    Ok(TerminalSize {
+        rows: size.rows,
+        cols: size.cols,
+    })
 }
 
-fn process_output_stream_from_command_exec(stream: CommandExecOutputStream) -> ProcessOutputStream {
-    match stream {
-        CommandExecOutputStream::Stdout => ProcessOutputStream::Stdout,
-        CommandExecOutputStream::Stderr => ProcessOutputStream::Stderr,
-    }
-}
-
-fn process_no_longer_running_error(
-    protocol: ProcessProtocol,
-    process_id: &InternalProcessId,
-) -> JSONRPCErrorError {
-    invalid_request(protocol.no_longer_running_message(process_id))
+fn command_no_longer_running_error(process_id: &InternalProcessId) -> JSONRPCErrorError {
+    invalid_request(format!(
+        "command/exec {} is no longer running",
+        process_id.error_repr(),
+    ))
 }
 
 #[cfg(test)]
@@ -948,7 +724,6 @@ mod tests {
                     connection_id: ConnectionId(1),
                     request_id: codex_app_server_protocol::RequestId::Integer(42),
                 },
-                protocol: ProcessProtocol::CommandExec,
                 process_id: Some("proc-42".to_string()),
                 exec_request: windows_sandbox_exec_request(),
                 started_network_proxy: None,
@@ -985,7 +760,6 @@ mod tests {
                     codex_analytics::AnalyticsEventsClient::disabled(),
                 )),
                 request_id: request_id.clone(),
-                protocol: ProcessProtocol::CommandExec,
                 process_id: Some("proc-99".to_string()),
                 exec_request: windows_sandbox_exec_request(),
                 started_network_proxy: None,
@@ -1036,7 +810,6 @@ mod tests {
                     codex_analytics::AnalyticsEventsClient::disabled(),
                 )),
                 request_id: request_id.clone(),
-                protocol: ProcessProtocol::CommandExec,
                 process_id: Some("proc-100".to_string()),
                 exec_request: ExecRequest::new(
                     vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],
@@ -1122,7 +895,6 @@ mod tests {
                     codex_analytics::AnalyticsEventsClient::disabled(),
                 )),
                 request_id: request_id.clone(),
-                protocol: ProcessProtocol::CommandExec,
                 process_id: Some("proc-101".to_string()),
                 exec_request: ExecRequest::new(
                     vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],
@@ -1183,7 +955,6 @@ mod tests {
         };
         let process_id = ConnectionProcessId {
             connection_id: request_id.connection_id,
-            protocol: ProcessProtocol::CommandExec,
             process_id: InternalProcessId::Client("proc-11".to_string()),
         };
         manager
@@ -1220,7 +991,6 @@ mod tests {
         };
         let process_id = ConnectionProcessId {
             connection_id: request_id.connection_id,
-            protocol: ProcessProtocol::CommandExec,
             process_id: InternalProcessId::Client("proc-12".to_string()),
         };
         manager
@@ -1258,7 +1028,6 @@ mod tests {
         manager.sessions.lock().await.insert(
             ConnectionProcessId {
                 connection_id: request_id.connection_id,
-                protocol: ProcessProtocol::CommandExec,
                 process_id: process_id.clone(),
             },
             CommandExecSession::Active { control_tx },
