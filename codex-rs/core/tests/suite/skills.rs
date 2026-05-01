@@ -253,9 +253,11 @@ async fn list_skills_skips_cwd_roots_when_environment_disabled() -> Result<()> {
             )?,
         )),
         /*analytics_events_client*/ None,
-        state_db,
-        thread_store,
-        agent_graph_store,
+        codex_core::ThreadManagerPersistence {
+            state_db,
+            thread_store,
+            agent_graph_store,
+        },
     );
     let new_thread = thread_manager.start_thread(config.clone()).await?;
     let cwd = config.cwd.to_path_buf();

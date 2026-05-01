@@ -45,6 +45,7 @@ use codex_core_api::SessionSource;
 use codex_core_api::ShellEnvironmentPolicy;
 use codex_core_api::TerminalResizeReflowConfig;
 use codex_core_api::ThreadManager;
+use codex_core_api::ThreadManagerPersistence;
 use codex_core_api::ThreadStoreConfig;
 use codex_core_api::ToolSuggestConfig;
 use codex_core_api::TuiKeymap;
@@ -125,9 +126,11 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         SessionSource::Exec,
         environment_manager,
         /*analytics_events_client*/ None,
-        state_db,
-        Arc::clone(&thread_store),
-        agent_graph_store,
+        ThreadManagerPersistence {
+            state_db,
+            thread_store: Arc::clone(&thread_store),
+            agent_graph_store,
+        },
     );
 
     let NewThread {
