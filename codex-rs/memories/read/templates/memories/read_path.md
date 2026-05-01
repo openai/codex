@@ -3,7 +3,11 @@
 You have access to a memory folder with guidance from prior runs. It can save
 time and help you stay consistent. Use it whenever it is likely to help.
 
-Never update memories. You can only read them.
+You can update the memories **only** when explicitly asked by the user. This must always come from a direct request from the user.
+When updating memories:
+- Write your update in {{ base_path }}/extensions/ad_hoc/
+- Each update must be one small file containing what you want to add/delete/update from the memories
+- Do not try to edit the memory files yourself, only add one update note in {{ base_path }}/extensions/ad_hoc/
 
 Decision boundary: should you use memory for a new user query?
 
