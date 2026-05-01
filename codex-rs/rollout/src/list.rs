@@ -1254,6 +1254,7 @@ async fn find_thread_path_by_id_str_in_subdir(
         _ => None,
     };
     let thread_id = ThreadId::from_string(id_str).ok();
+    let mut unverified_db_path = None;
     if let Some(state_db_ctx) = state_db_ctx
         && let Some(thread_id) = thread_id
         && let Some(db_path) = state_db::find_rollout_path_by_id(
@@ -1265,21 +1266,43 @@ async fn find_thread_path_by_id_str_in_subdir(
         .await
     {
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
-            return Ok(Some(db_path));
+            match read_session_meta_line(&db_path).await {
+                Ok(meta_line) if meta_line.meta.id == thread_id => {
+                    return Ok(Some(db_path));
+                }
+                Ok(meta_line) => {
+                    tracing::error!(
+                        "state db returned rollout path for thread {id_str} but file belongs to thread {}: {}",
+                        meta_line.meta.id,
+                        db_path.display()
+                    );
+                    tracing::warn!(
+                        "state db discrepancy during find_thread_path_by_id_str_in_subdir: mismatched_db_path"
+                    );
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        "state db returned rollout path for thread {id_str} that could not be verified: {}: {err}",
+                        db_path.display()
+                    );
+                    unverified_db_path = Some(db_path);
+                }
+            }
+        } else {
+            tracing::error!(
+                "state db returned stale rollout path for thread {id_str}: {}",
+                db_path.display()
+            );
+            tracing::warn!(
+                "state db discrepancy during find_thread_path_by_id_str_in_subdir: stale_db_path"
+            );
         }
-        tracing::error!(
-            "state db returned stale rollout path for thread {id_str}: {}",
-            db_path.display()
-        );
-        tracing::warn!(
-            "state db discrepancy during find_thread_path_by_id_str_in_subdir: stale_db_path"
-        );
     }
 
     let mut root = codex_home.to_path_buf();
     root.push(subdir);
     if !root.exists() {
-        return Ok(None);
+        return Ok(unverified_db_path);
     }
     // This is safe because we know the values are valid.
     #[allow(clippy::unwrap_used)]
@@ -1309,7 +1332,7 @@ async fn find_thread_path_by_id_str_in_subdir(
         .await;
     }
 
-    Ok(found)
+    Ok(found.or(unverified_db_path))
 }
 
 /// Locate a recorded thread rollout file by its UUID string using the existing
