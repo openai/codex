@@ -758,6 +758,9 @@ pub(super) fn handle_patch_apply_begin(
                 id: call_id.into(),
                 changes: file_update_changes_from_tui(changes),
                 status: AppServerPatchApplyStatus::InProgress,
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             },
         }),
         /*replay_kind*/ None,
@@ -779,6 +782,9 @@ pub(super) fn handle_patch_apply_end(
                 id: call_id.into(),
                 changes: file_update_changes_from_tui(changes),
                 status,
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             },
         }),
         /*replay_kind*/ None,
@@ -819,6 +825,9 @@ pub(super) fn handle_image_generation_end(
                 revised_prompt,
                 result: String::new(),
                 saved_path,
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             },
         }),
         /*replay_kind*/ None,
@@ -933,6 +942,8 @@ pub(super) fn begin_exec_with_source(
         command_actions,
         aggregated_output: None,
         exit_code: None,
+        started_at_ms: None,
+        completed_at_ms: None,
         duration_ms: None,
     };
     handle_exec_begin(chat, item.clone());
@@ -956,6 +967,8 @@ pub(super) fn begin_unified_exec_startup(
         command_actions: Vec::new(),
         aggregated_output: None,
         exit_code: None,
+        started_at_ms: None,
+        completed_at_ms: None,
         duration_ms: None,
     };
     handle_exec_begin(chat, item.clone());
@@ -1179,6 +1192,8 @@ pub(super) fn end_exec(
             command_actions,
             aggregated_output: (!aggregated.is_empty()).then_some(aggregated),
             exit_code: Some(exit_code),
+            started_at_ms: None,
+            completed_at_ms: None,
             duration_ms: Some(5),
         },
     );

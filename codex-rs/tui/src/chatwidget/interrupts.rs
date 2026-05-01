@@ -182,6 +182,8 @@ mod tests {
             command_actions: Vec::new(),
             aggregated_output: None,
             exit_code: None,
+            started_at_ms: None,
+            completed_at_ms: None,
             duration_ms: None,
         }
     }

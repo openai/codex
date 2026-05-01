@@ -364,6 +364,8 @@ async fn exec_end_without_begin_uses_event_command() {
             command_actions,
             aggregated_output: Some("done".to_string()),
             exit_code: Some(0),
+            started_at_ms: None,
+            completed_at_ms: None,
             duration_ms: Some(5),
         },
     );

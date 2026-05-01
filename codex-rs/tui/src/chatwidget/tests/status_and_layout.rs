@@ -2693,6 +2693,8 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             command_actions: command_actions.clone(),
             aggregated_output: None,
             exit_code: None,
+            started_at_ms: None,
+            completed_at_ms: None,
             duration_ms: None,
         },
     );
@@ -2708,6 +2710,8 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             command_actions,
             aggregated_output: None,
             exit_code: Some(0),
+            started_at_ms: None,
+            completed_at_ms: None,
             duration_ms: Some(16000),
         },
     );

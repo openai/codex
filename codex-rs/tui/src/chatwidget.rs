@@ -6041,7 +6041,9 @@ impl ChatWidget {
             } => {}
             item @ ThreadItem::FileChange { .. } => self.on_file_change_completed(item),
             item @ ThreadItem::McpToolCall { .. } => self.on_mcp_tool_call_completed(item),
-            ThreadItem::WebSearch { id, query, action } => {
+            ThreadItem::WebSearch {
+                id, query, action, ..
+            } => {
                 self.on_web_search_begin(id.clone());
                 self.on_web_search_end(
                     id,
@@ -6082,6 +6084,9 @@ impl ChatWidget {
                 model,
                 reasoning_effort,
                 agents_states,
+                started_at_ms,
+                completed_at_ms,
+                duration_ms,
             } => self.on_collab_agent_tool_call(ThreadItem::CollabAgentToolCall {
                 id,
                 tool,
@@ -6092,6 +6097,9 @@ impl ChatWidget {
                 model,
                 reasoning_effort,
                 agents_states,
+                started_at_ms,
+                completed_at_ms,
+                duration_ms,
             }),
             ThreadItem::DynamicToolCall { .. } => {}
         }
@@ -6454,6 +6462,9 @@ impl ChatWidget {
                 model,
                 reasoning_effort,
                 agents_states,
+                started_at_ms,
+                completed_at_ms,
+                duration_ms,
             } => self.on_collab_agent_tool_call(ThreadItem::CollabAgentToolCall {
                 id,
                 tool,
@@ -6464,6 +6475,9 @@ impl ChatWidget {
                 model,
                 reasoning_effort,
                 agents_states,
+                started_at_ms,
+                completed_at_ms,
+                duration_ms,
             }),
             ThreadItem::EnteredReviewMode { review, .. } => {
                 if !from_replay {
