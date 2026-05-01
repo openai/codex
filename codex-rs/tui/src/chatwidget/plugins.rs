@@ -16,10 +16,11 @@ use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::history_cell;
 use crate::key_hint;
 use crate::legacy_core::config::Config;
+use crate::motion::MotionMode;
+use crate::motion::shimmer_text;
 use crate::onboarding::mark_url_hyperlink;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
@@ -100,7 +101,10 @@ impl Renderable for DelayedLoadingHeader {
         } else if self.animations_enabled {
             self.frame_requester
                 .schedule_frame_in(LOADING_ANIMATION_INTERVAL);
-            lines.push(Line::from(shimmer_spans(self.loading_text.as_str())));
+            lines.push(Line::from(shimmer_text(
+                self.loading_text.as_str(),
+                MotionMode::Animated,
+            )));
         } else {
             lines.push(Line::from(self.loading_text.as_str().dim()));
         }

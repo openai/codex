@@ -46,10 +46,11 @@ use uuid::Uuid;
 use crate::LoginStatus;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
+use crate::motion::MotionMode;
+use crate::motion::shimmer_text;
 use crate::onboarding::keys;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
-use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 
 /// Marks buffer cells that have cyan+underlined style as an OSC 8 hyperlink.
@@ -511,7 +512,10 @@ impl AuthModeWidget {
             // Schedule a follow-up frame to keep the shimmer animation going.
             self.request_frame
                 .schedule_frame_in(std::time::Duration::from_millis(100));
-            spans.extend(shimmer_spans("Finish signing in via your browser"));
+            spans.extend(shimmer_text(
+                "Finish signing in via your browser",
+                MotionMode::Animated,
+            ));
         } else {
             spans.push("Finish signing in via your browser".into());
         }
