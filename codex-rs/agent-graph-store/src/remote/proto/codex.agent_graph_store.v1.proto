@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package codex.agent_graph_store.v1;
+
+service AgentGraphStore {
+  rpc UpsertThreadSpawnEdge(UpsertThreadSpawnEdgeRequest) returns (Empty);
+  rpc SetThreadSpawnEdgeStatus(SetThreadSpawnEdgeStatusRequest) returns (Empty);
+  rpc ListThreadSpawnChildren(ListThreadSpawnChildrenRequest) returns (ListThreadSpawnChildrenResponse);
+  rpc ListThreadSpawnDescendants(ListThreadSpawnDescendantsRequest) returns (ListThreadSpawnDescendantsResponse);
+}
+
+message Empty {}
+
+message UpsertThreadSpawnEdgeRequest {
+  string parent_thread_id = 1;
+  string child_thread_id = 2;
+  // Servers must reject THREAD_SPAWN_EDGE_STATUS_UNSPECIFIED.
+  ThreadSpawnEdgeStatus status = 3;
+}
+
+message SetThreadSpawnEdgeStatusRequest {
+  string child_thread_id = 1;
+  // Servers must reject THREAD_SPAWN_EDGE_STATUS_UNSPECIFIED.
+  ThreadSpawnEdgeStatus status = 2;
+}
+
+message ListThreadSpawnChildrenRequest {
+  string parent_thread_id = 1;
+  // Absent means all statuses.
+  optional ThreadSpawnEdgeStatus status_filter = 2;
+}
+
+message ListThreadSpawnChildrenResponse {
+  // Ordered child thread ids.
+  repeated string thread_ids = 1;
+}
+
+message ListThreadSpawnDescendantsRequest {
+  string root_thread_id = 1;
+  // Absent means all statuses.
+  optional ThreadSpawnEdgeStatus status_filter = 2;
+}
+
+message ListThreadSpawnDescendantsResponse {
+  // Ordered descendant thread ids.
+  repeated string thread_ids = 1;
+}
+
+enum ThreadSpawnEdgeStatus {
+  THREAD_SPAWN_EDGE_STATUS_UNSPECIFIED = 0;
+  THREAD_SPAWN_EDGE_STATUS_OPEN = 1;
+  THREAD_SPAWN_EDGE_STATUS_CLOSED = 2;
+}

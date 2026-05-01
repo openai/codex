@@ -1756,11 +1756,16 @@ dependencies = [
  "codex-protocol",
  "codex-state",
  "pretty_assertions",
+ "prost 0.14.3",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
 ]
 
 [[package]]
