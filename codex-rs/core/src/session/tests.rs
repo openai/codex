@@ -3312,8 +3312,8 @@ async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
 
     assert_eq!(session_cwd, updated_cwd);
     assert_eq!(config.cwd, turn_context.cwd);
-    assert_eq!(next_turn.cwd, turn_context.cwd);
-    assert_eq!(next_turn.config.cwd, turn_context.cwd);
+    assert_eq!(next_turn.cwd, updated_cwd);
+    assert_eq!(next_turn.config.cwd, updated_cwd);
 }
 
 #[tokio::test]
@@ -4431,11 +4431,11 @@ async fn turn_environments_set_primary_environment() {
 }
 
 #[tokio::test]
-async fn default_turn_uses_stored_thread_environments() {
+async fn default_turn_overlays_session_cwd_onto_stored_thread_environments() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let session_cwd = session.get_config().await.cwd.clone();
     let selected_cwd =
-        AbsolutePathBuf::try_from(session.get_config().await.cwd.as_path().join("selected"))
-            .expect("absolute path");
+        AbsolutePathBuf::try_from(session_cwd.as_path().join("selected")).expect("absolute path");
 
     {
         let mut state = session.state.lock().await;
@@ -4456,8 +4456,8 @@ async fn default_turn_uses_stored_thread_environments() {
         &turn_environment.environment,
         &turn_environments[0].environment
     ));
-    assert_eq!(turn_context.cwd, selected_cwd);
-    assert_eq!(turn_context.config.cwd, selected_cwd);
+    assert_eq!(turn_context.cwd, session_cwd);
+    assert_eq!(turn_context.config.cwd, session_cwd);
 }
 
 #[tokio::test]

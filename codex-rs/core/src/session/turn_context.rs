@@ -564,10 +564,16 @@ impl Session {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
-                    let effective_environments = updates
+                    let mut effective_environments = updates
                         .environments
                         .clone()
                         .unwrap_or_else(|| next.environments.clone());
+                    if updates.environments.is_none() {
+                        Self::overlay_runtime_cwd_on_primary_environment(
+                            &mut effective_environments,
+                            &next.cwd,
+                        );
+                    }
                     let turn_environments =
                         self.resolve_turn_environments(&effective_environments)?;
                     let previous_cwd = state.session_configuration.cwd.clone();
@@ -753,14 +759,18 @@ impl Session {
             let state = self.state.lock().await;
             state.session_configuration.clone()
         };
-        let turn_environments =
-            match self.resolve_turn_environments(&session_configuration.environments) {
-                Ok(turn_environments) => turn_environments,
-                Err(err) => {
-                    warn!("failed to resolve stored session environments: {err}");
-                    Vec::new()
-                }
-            };
+        let mut effective_environments = session_configuration.environments.clone();
+        Self::overlay_runtime_cwd_on_primary_environment(
+            &mut effective_environments,
+            &session_configuration.cwd,
+        );
+        let turn_environments = match self.resolve_turn_environments(&effective_environments) {
+            Ok(turn_environments) => turn_environments,
+            Err(err) => {
+                warn!("failed to resolve stored session environments: {err}");
+                Vec::new()
+            }
+        };
 
         self.new_turn_from_configuration(
             sub_id,
@@ -769,5 +779,16 @@ impl Session {
             turn_environments,
         )
         .await
+    }
+
+    fn overlay_runtime_cwd_on_primary_environment(
+        environments: &mut [TurnEnvironmentSelection],
+        runtime_cwd: &AbsolutePathBuf,
+    ) {
+        if let Some(turn_environment) = environments.first_mut()
+            && turn_environment.cwd != *runtime_cwd
+        {
+            turn_environment.cwd = runtime_cwd.clone();
+        }
     }
 }
