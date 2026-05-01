@@ -283,6 +283,7 @@ export type { PluginReadParams } from "./PluginReadParams";
 export type { PluginReadResponse } from "./PluginReadResponse";
 export type { PluginShareDeleteParams } from "./PluginShareDeleteParams";
 export type { PluginShareDeleteResponse } from "./PluginShareDeleteResponse";
+export type { PluginShareListItem } from "./PluginShareListItem";
 export type { PluginShareListParams } from "./PluginShareListParams";
 export type { PluginShareListResponse } from "./PluginShareListResponse";
 export type { PluginShareSaveParams } from "./PluginShareSaveParams";

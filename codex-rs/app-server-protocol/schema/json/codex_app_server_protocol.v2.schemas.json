@@ -8987,6 +8987,31 @@
       "title": "PluginShareDeleteResponse",
       "type": "object"
     },
+    "PluginShareListItem": {
+      "properties": {
+        "localPluginPath": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plugin": {
+          "$ref": "#/definitions/PluginSummary"
+        },
+        "shareUrl": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plugin",
+        "shareUrl"
+      ],
+      "type": "object"
+    },
     "PluginShareListParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "PluginShareListParams",
@@ -8997,7 +9022,7 @@
       "properties": {
         "data": {
           "items": {
-            "$ref": "#/definitions/PluginSummary"
+            "$ref": "#/definitions/PluginShareListItem"
           },
           "type": "array"
         }

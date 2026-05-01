@@ -330,14 +330,16 @@ impl CodexMessageProcessor {
         let result = codex_core_plugins::remote::save_remote_plugin_share(
             &remote_plugin_service_config,
             auth.as_ref(),
-            plugin_path.as_path(),
+            config.codex_home.as_path(),
+            &plugin_path,
             remote_plugin_id.as_deref(),
         )
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "save remote plugin share"))?;
+        let remote_plugin_id = result.remote_plugin_id;
         self.clear_plugin_related_caches();
         Ok(PluginShareSaveResponse {
-            remote_plugin_id: result.remote_plugin_id,
+            remote_plugin_id,
             share_url: result.share_url.unwrap_or_default(),
         })
     }
@@ -361,11 +363,24 @@ impl CodexMessageProcessor {
         let data = codex_core_plugins::remote::list_remote_plugin_shares(
             &remote_plugin_service_config,
             auth.as_ref(),
+            config.codex_home.as_path(),
         )
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "list remote plugin shares"))?
         .into_iter()
-        .map(remote_plugin_summary_to_info)
+        .map(|summary| {
+            let RemoteCatalogPluginShareSummary {
+                summary,
+                share_url,
+                local_plugin_path,
+            } = summary;
+            let plugin = remote_plugin_summary_to_info(summary);
+            PluginShareListItem {
+                plugin,
+                share_url: share_url.unwrap_or_default(),
+                local_plugin_path,
+            }
+        })
         .collect();
         Ok(PluginShareListResponse { data })
     }
@@ -395,6 +410,7 @@ impl CodexMessageProcessor {
         codex_core_plugins::remote::delete_remote_plugin_share(
             &remote_plugin_service_config,
             auth.as_ref(),
+            config.codex_home.as_path(),
             &remote_plugin_id,
         )
         .await

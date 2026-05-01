@@ -8,6 +8,7 @@ use codex_app_server_protocol::SkillInterface;
 use codex_login::CodexAuth;
 use codex_login::default_client::build_reqwest_client;
 use codex_plugin::PluginId;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use reqwest::RequestBuilder;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -70,6 +71,13 @@ pub struct RemotePluginSummary {
     pub auth_policy: PluginAuthPolicy,
     pub availability: PluginAvailability,
     pub interface: Option<PluginInterface>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemotePluginShareSummary {
+    pub summary: RemotePluginSummary,
+    pub share_url: Option<String>,
+    pub local_plugin_path: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -265,6 +273,8 @@ struct RemotePluginDirectoryItem {
     id: String,
     name: String,
     scope: RemotePluginScope,
+    #[serde(default)]
+    share_url: Option<String>,
     installation_policy: PluginInstallPolicy,
     authentication_policy: PluginAuthPolicy,
     #[serde(rename = "status", default)]

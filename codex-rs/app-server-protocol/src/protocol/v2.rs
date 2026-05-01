@@ -4635,7 +4635,7 @@ pub struct PluginShareListParams {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginShareListResponse {
-    pub data: Vec<PluginSummary>,
+    pub data: Vec<PluginShareListItem>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4649,6 +4649,15 @@ pub struct PluginShareDeleteParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginShareDeleteResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareListItem {
+    pub plugin: PluginSummary,
+    pub share_url: String,
+    pub local_plugin_path: Option<AbsolutePathBuf>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
@@ -10732,33 +10741,41 @@ mod tests {
     }
 
     #[test]
-    fn plugin_share_list_response_serializes_plugin_summaries() {
+    fn plugin_share_list_response_serializes_share_items() {
         assert_eq!(
             serde_json::to_value(PluginShareListResponse {
-                data: vec![PluginSummary {
-                    id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
-                    name: "gmail".to_string(),
-                    source: PluginSource::Remote,
-                    installed: false,
-                    enabled: false,
-                    install_policy: PluginInstallPolicy::Available,
-                    auth_policy: PluginAuthPolicy::OnUse,
-                    availability: PluginAvailability::Available,
-                    interface: None,
+                data: vec![PluginShareListItem {
+                    plugin: PluginSummary {
+                        id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                        name: "gmail".to_string(),
+                        source: PluginSource::Remote,
+                        installed: false,
+                        enabled: false,
+                        install_policy: PluginInstallPolicy::Available,
+                        auth_policy: PluginAuthPolicy::OnUse,
+                        availability: PluginAvailability::Available,
+                        interface: None,
+                    },
+                    share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
+                    local_plugin_path: None,
                 }],
             })
             .unwrap(),
             json!({
                 "data": [{
-                    "id": "plugins~Plugin_00000000000000000000000000000000",
-                    "name": "gmail",
-                    "source": { "type": "remote" },
-                    "installed": false,
-                    "enabled": false,
-                    "installPolicy": "AVAILABLE",
-                    "authPolicy": "ON_USE",
-                    "availability": "AVAILABLE",
-                    "interface": null,
+                    "plugin": {
+                        "id": "plugins~Plugin_00000000000000000000000000000000",
+                        "name": "gmail",
+                        "source": { "type": "remote" },
+                        "installed": false,
+                        "enabled": false,
+                        "installPolicy": "AVAILABLE",
+                        "authPolicy": "ON_USE",
+                        "availability": "AVAILABLE",
+                        "interface": null,
+                    },
+                    "shareUrl": "https://chatgpt.example/plugins/share/share-key-1",
+                    "localPluginPath": null,
                 }],
             }),
         );
