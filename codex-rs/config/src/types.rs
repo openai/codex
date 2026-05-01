@@ -634,6 +634,11 @@ pub struct Tui {
     #[serde(default)]
     pub status_line: Option<Vec<String>>,
 
+    /// Color status line items with colors derived from the active syntax theme.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub status_line_use_colors: bool,
+
     /// Ordered list of terminal title item identifiers.
     ///
     /// When set, the TUI renders the selected items into the terminal window/tab title.

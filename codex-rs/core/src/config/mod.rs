@@ -524,6 +524,9 @@ pub struct Config {
     /// When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.
     pub tui_status_line: Option<Vec<String>>,
 
+    /// Whether to color status line items with colors from the active syntax theme.
+    pub tui_status_line_use_colors: bool,
+
     /// Ordered list of terminal title item identifiers for the TUI.
     ///
     /// When unset, the TUI defaults to: `activity` and `project`.
@@ -3011,6 +3014,11 @@ impl Config {
                 .map(|t| t.alternate_screen)
                 .unwrap_or_default(),
             tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
+            tui_status_line_use_colors: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.status_line_use_colors)
+                .unwrap_or(true),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
             terminal_resize_reflow,

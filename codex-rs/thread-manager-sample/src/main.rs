@@ -191,6 +191,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
