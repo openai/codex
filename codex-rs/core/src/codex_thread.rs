@@ -32,7 +32,9 @@ use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
+use codex_thread_store::StoredThread;
 use codex_thread_store::StoredThreadHistory;
+use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -409,6 +411,21 @@ impl CodexThread {
                 message: err.to_string(),
             })?;
         live_thread.load_history(include_archived).await
+    }
+
+    pub async fn update_thread_metadata(
+        &self,
+        patch: ThreadMetadataPatch,
+        include_archived: bool,
+    ) -> ThreadStoreResult<StoredThread> {
+        let live_thread = self
+            .codex
+            .session
+            .live_thread_for_persistence("update thread metadata")
+            .map_err(|err| ThreadStoreError::Internal {
+                message: err.to_string(),
+            })?;
+        live_thread.update_metadata(patch, include_archived).await
     }
 
     pub fn state_db(&self) -> Option<StateDbHandle> {

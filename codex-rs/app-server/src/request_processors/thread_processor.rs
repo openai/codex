@@ -1440,54 +1440,49 @@ impl ThreadRequestProcessor {
             return Err(invalid_request("gitInfo must include at least one field"));
         }
 
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-        let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
-        let mut state_db_ctx = loaded_thread.as_ref().and_then(|thread| thread.state_db());
-        if state_db_ctx.is_none() {
-            state_db_ctx = self.state_db.clone();
-        }
-        let Some(state_db_ctx) = state_db_ctx else {
-            return Err(internal_error(format!(
-                "sqlite state db unavailable for thread {thread_uuid}"
-            )));
-        };
-
-        self.ensure_thread_metadata_row_exists(thread_uuid, &state_db_ctx, loaded_thread.as_ref())
-            .await?;
-
         let git_sha = Self::normalize_thread_metadata_git_field(sha, "gitInfo.sha")?;
         let git_branch = Self::normalize_thread_metadata_git_field(branch, "gitInfo.branch")?;
         let git_origin_url =
             Self::normalize_thread_metadata_git_field(origin_url, "gitInfo.originUrl")?;
 
-        let updated = state_db_ctx
-            .update_thread_git_info(
-                thread_uuid,
-                git_sha.as_ref().map(|value| value.as_deref()),
-                git_branch.as_ref().map(|value| value.as_deref()),
-                git_origin_url.as_ref().map(|value| value.as_deref()),
-            )
-            .await
-            .map_err(|err| {
-                internal_error(format!(
-                    "failed to update thread metadata for {thread_uuid}: {err}"
-                ))
-            })?;
-        if !updated {
-            return Err(internal_error(format!(
-                "thread metadata disappeared before update completed: {thread_uuid}"
-            )));
-        }
-
-        let Some(summary) =
-            read_summary_from_state_db_context_by_thread_id(Some(&state_db_ctx), thread_uuid).await
-        else {
-            return Err(internal_error(format!(
-                "failed to reload updated thread metadata for {thread_uuid}"
-            )));
+        let patch = StoreThreadMetadataPatch {
+            git_info: Some(StoreGitInfoPatch {
+                sha: git_sha,
+                branch: git_branch,
+                origin_url: git_origin_url,
+            }),
+            ..Default::default()
         };
 
-        let mut thread = summary_to_thread(summary, &self.config.cwd);
+        let updated_thread = {
+            let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+            let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
+            if let Some(loaded_thread) = loaded_thread.as_ref() {
+                if loaded_thread.config_snapshot().await.ephemeral {
+                    return Err(invalid_request(format!(
+                        "ephemeral thread does not support metadata updates: {thread_id}"
+                    )));
+                }
+                loaded_thread
+                    .update_thread_metadata(patch, /*include_archived*/ true)
+                    .await
+            } else {
+                self.thread_store
+                    .update_thread_metadata(StoreUpdateThreadMetadataParams {
+                        thread_id: thread_uuid,
+                        patch,
+                        include_archived: true,
+                    })
+                    .await
+            }
+            .map_err(|err| thread_store_write_error("update thread metadata", err))?
+        };
+
+        let (mut thread, _) = thread_from_stored_thread(
+            updated_thread,
+            self.config.model_provider_id.as_str(),
+            &self.config.cwd,
+        );
         self.attach_thread_name(thread_uuid, &mut thread).await;
         thread.status = resolve_thread_status(
             self.thread_watch_manager
@@ -1513,126 +1508,6 @@ impl ThreadRequestProcessor {
             }
             Some(None) => Ok(Some(None)),
             None => Ok(None),
-        }
-    }
-
-    async fn ensure_thread_metadata_row_exists(
-        &self,
-        thread_uuid: ThreadId,
-        state_db_ctx: &Arc<StateRuntime>,
-        loaded_thread: Option<&Arc<CodexThread>>,
-    ) -> Result<(), JSONRPCErrorError> {
-        match state_db_ctx.get_thread(thread_uuid).await {
-            Ok(Some(_)) => return Ok(()),
-            Ok(None) => {}
-            Err(err) => {
-                return Err(internal_error(format!(
-                    "failed to load thread metadata for {thread_uuid}: {err}"
-                )));
-            }
-        }
-
-        if let Some(thread) = loaded_thread {
-            let Some(rollout_path) = thread.rollout_path() else {
-                return Err(invalid_request(format!(
-                    "ephemeral thread does not support metadata updates: {thread_uuid}"
-                )));
-            };
-
-            reconcile_rollout(
-                Some(state_db_ctx),
-                rollout_path.as_path(),
-                self.config.model_provider_id.as_str(),
-                /*builder*/ None,
-                &[],
-                /*archived_only*/ None,
-                /*new_thread_memory_mode*/ None,
-            )
-            .await;
-
-            match state_db_ctx.get_thread(thread_uuid).await {
-                Ok(Some(_)) => return Ok(()),
-                Ok(None) => {}
-                Err(err) => {
-                    return Err(internal_error(format!(
-                        "failed to load reconciled thread metadata for {thread_uuid}: {err}"
-                    )));
-                }
-            }
-
-            let config_snapshot = thread.config_snapshot().await;
-            let model_provider = config_snapshot.model_provider_id.clone();
-            let mut builder = ThreadMetadataBuilder::new(
-                thread_uuid,
-                rollout_path,
-                Utc::now(),
-                config_snapshot.session_source.clone(),
-            );
-            builder.model_provider = Some(model_provider.clone());
-            builder.cwd = config_snapshot.cwd.to_path_buf();
-            builder.cli_version = Some(env!("CARGO_PKG_VERSION").to_string());
-            builder.sandbox_policy = config_snapshot.sandbox_policy();
-            builder.approval_mode = config_snapshot.approval_policy;
-            let metadata = builder.build(model_provider.as_str());
-            if let Err(err) = state_db_ctx.insert_thread_if_absent(&metadata).await {
-                return Err(internal_error(format!(
-                    "failed to create thread metadata for {thread_uuid}: {err}"
-                )));
-            }
-            return Ok(());
-        }
-
-        let rollout_path = match find_thread_path_by_id_str(
-            &self.config.codex_home,
-            &thread_uuid.to_string(),
-            self.state_db.as_deref(),
-        )
-        .await
-        {
-            Ok(Some(path)) => path,
-            Ok(None) => match find_archived_thread_path_by_id_str(
-                &self.config.codex_home,
-                &thread_uuid.to_string(),
-                self.state_db.as_deref(),
-            )
-            .await
-            {
-                Ok(Some(path)) => path,
-                Ok(None) => {
-                    return Err(invalid_request(format!("thread not found: {thread_uuid}")));
-                }
-                Err(err) => {
-                    return Err(internal_error(format!(
-                        "failed to locate archived thread id {thread_uuid}: {err}"
-                    )));
-                }
-            },
-            Err(err) => {
-                return Err(internal_error(format!(
-                    "failed to locate thread id {thread_uuid}: {err}"
-                )));
-            }
-        };
-
-        reconcile_rollout(
-            Some(state_db_ctx),
-            rollout_path.as_path(),
-            self.config.model_provider_id.as_str(),
-            /*builder*/ None,
-            &[],
-            /*archived_only*/ None,
-            /*new_thread_memory_mode*/ None,
-        )
-        .await;
-
-        match state_db_ctx.get_thread(thread_uuid).await {
-            Ok(Some(_)) => Ok(()),
-            Ok(None) => Err(internal_error(format!(
-                "failed to create thread metadata from rollout for {thread_uuid}"
-            ))),
-            Err(err) => Err(internal_error(format!(
-                "failed to load reconciled thread metadata for {thread_uuid}: {err}"
-            ))),
         }
     }
 
@@ -3675,19 +3550,6 @@ fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPC
     }
 }
 
-async fn read_summary_from_state_db_context_by_thread_id(
-    state_db_ctx: Option<&StateDbHandle>,
-    thread_id: ThreadId,
-) -> Option<ConversationSummary> {
-    let state_db_ctx = state_db_ctx?;
-
-    let metadata = match state_db_ctx.get_thread(thread_id).await {
-        Ok(Some(metadata)) => metadata,
-        Ok(None) | Err(_) => return None,
-    };
-    Some(summary_from_thread_metadata(&metadata))
-}
-
 async fn title_from_state_db(
     config: &Config,
     state_db_ctx: Option<&StateDbHandle>,
@@ -3820,6 +3682,7 @@ fn summary_from_stored_thread(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn summary_from_state_db_metadata(
     conversation_id: ThreadId,
     path: PathBuf,
@@ -3864,6 +3727,7 @@ fn summary_from_state_db_metadata(
     }
 }
 
+#[cfg(test)]
 fn summary_from_thread_metadata(metadata: &ThreadMetadata) -> ConversationSummary {
     summary_from_state_db_metadata(
         metadata.id,
