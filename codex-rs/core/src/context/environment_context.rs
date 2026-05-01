@@ -136,13 +136,12 @@ impl EnvironmentContext {
     }
 
     pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
-        let environments =
-            EnvironmentContextEnvironment::from_turn_environments(&turn_context.environments);
-        let environments = Self::model_facing_environments(environments);
         Self::new(
             Some(turn_context.cwd.to_path_buf()),
             shell.name().to_string(),
-            environments,
+            Self::model_facing_environments(
+                EnvironmentContextEnvironment::from_turn_environments(&turn_context.environments),
+            ),
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
             Self::network_from_turn_context(turn_context),
