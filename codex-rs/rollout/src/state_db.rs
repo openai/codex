@@ -22,10 +22,35 @@ use tracing::warn;
 /// Core-facing handle to the SQLite-backed state runtime.
 pub type StateDbHandle = Arc<codex_state::StateRuntime>;
 
-/// Initialize the state runtime for thread state persistence and backfill checks.
+/// Initialize the state runtime for thread state persistence.
+///
+/// This is the process entry point for local state: it opens the SQLite-backed
+/// runtime, applies rollout metadata backfills as needed, and returns the
+/// initialized handle.
 pub async fn init(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
     let config = RolloutConfig::from_view(config);
-    init_with_roots(
+    match try_init_with_roots(
+        config.codex_home,
+        config.sqlite_home,
+        config.model_provider_id,
+    )
+    .await
+    {
+        Ok(runtime) => Some(runtime),
+        Err(err) => {
+            warn!("failed to initialize state runtime: {err}");
+            None
+        }
+    }
+}
+
+/// Initialize the state runtime and return any initialization error to the caller.
+///
+/// Prefer [`init`] unless the caller needs to surface the exact failure after
+/// tracing or UI setup has completed.
+pub async fn try_init(config: &impl RolloutConfigView) -> anyhow::Result<StateDbHandle> {
+    let config = RolloutConfig::from_view(config);
+    try_init_with_roots(
         config.codex_home,
         config.sqlite_home,
         config.model_provider_id,
@@ -33,49 +58,38 @@ pub async fn init(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
     .await
 }
 
-/// Initialize the state runtime for a local thread store.
-pub async fn init_with_roots(
+async fn try_init_with_roots(
     codex_home: PathBuf,
     sqlite_home: PathBuf,
     default_model_provider_id: String,
-) -> Option<StateDbHandle> {
-    let runtime = match codex_state::StateRuntime::init(
-        sqlite_home.clone(),
-        default_model_provider_id.clone(),
-    )
-    .await
-    {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            warn!(
-                "failed to initialize state runtime at {}: {err}",
-                sqlite_home.display()
-            );
-            return None;
-        }
-    };
+) -> anyhow::Result<StateDbHandle> {
+    let runtime =
+        codex_state::StateRuntime::init(sqlite_home.clone(), default_model_provider_id.clone())
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "failed to initialize state runtime at {}: {err}",
+                    sqlite_home.display()
+                )
+            })?;
     let backfill_state = match runtime.get_backfill_state().await {
         Ok(state) => state,
         Err(err) => {
-            warn!(
+            return Err(anyhow::anyhow!(
                 "failed to read backfill state at {}: {err}",
                 codex_home.display()
-            );
-            return None;
+            ));
         }
     };
     if backfill_state.status != codex_state::BackfillStatus::Complete {
-        let runtime_for_backfill = runtime.clone();
-        tokio::spawn(async move {
-            metadata::backfill_sessions(
-                runtime_for_backfill.as_ref(),
-                codex_home.as_path(),
-                default_model_provider_id.as_str(),
-            )
-            .await;
-        });
+        metadata::backfill_sessions(
+            runtime.as_ref(),
+            codex_home.as_path(),
+            default_model_provider_id.as_str(),
+        )
+        .await;
     }
-    Some(runtime)
+    Ok(runtime)
 }
 
 /// Get the DB if the feature is enabled and the DB exists.
@@ -84,13 +98,16 @@ pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHand
     if !tokio::fs::try_exists(&state_path).await.unwrap_or(false) {
         return None;
     }
-    let runtime = codex_state::StateRuntime::init(
-        config.sqlite_home().to_path_buf(),
-        config.model_provider_id().to_string(),
-    )
-    .await
-    .ok()?;
-    require_backfill_complete(runtime, config.sqlite_home()).await
+    match try_init(config).await {
+        Ok(runtime) => Some(runtime),
+        Err(err) => {
+            warn!(
+                "failed to initialize existing state db at {}: {err}",
+                config.sqlite_home().display()
+            );
+            None
+        }
+    }
 }
 
 /// Open the state runtime when the SQLite file exists, without feature gating.
@@ -101,30 +118,17 @@ pub async fn open_if_present(codex_home: &Path, default_provider: &str) -> Optio
     if !tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
         return None;
     }
-    let runtime =
-        codex_state::StateRuntime::init(codex_home.to_path_buf(), default_provider.to_string())
-            .await
-            .ok()?;
-    require_backfill_complete(runtime, codex_home).await
-}
-
-async fn require_backfill_complete(
-    runtime: StateDbHandle,
-    codex_home: &Path,
-) -> Option<StateDbHandle> {
-    match runtime.get_backfill_state().await {
-        Ok(state) if state.status == codex_state::BackfillStatus::Complete => Some(runtime),
-        Ok(state) => {
-            warn!(
-                "state db backfill not complete at {} (status: {})",
-                codex_home.display(),
-                state.status.as_str()
-            );
-            None
-        }
+    match try_init_with_roots(
+        codex_home.to_path_buf(),
+        codex_home.to_path_buf(),
+        default_provider.to_string(),
+    )
+    .await
+    {
+        Ok(runtime) => Some(runtime),
         Err(err) => {
             warn!(
-                "failed to read backfill state at {}: {err}",
+                "failed to open existing state db at {}: {err}",
                 codex_home.display()
             );
             None

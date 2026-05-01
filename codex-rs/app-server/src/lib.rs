@@ -54,6 +54,7 @@ use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
+use codex_rollout::state_db as rollout_state_db;
 use codex_state::log_db;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -486,11 +487,7 @@ pub async fn run_main_with_transport_options(
         }
     };
 
-    let state_db_result = codex_state::StateRuntime::init(
-        config.sqlite_home.clone(),
-        config.model_provider_id.clone(),
-    )
-    .await;
+    let state_db_result = rollout_state_db::try_init(&config).await;
     let state_db_init_error = state_db_result.as_ref().err().map(ToString::to_string);
     let state_db = state_db_result.ok();
 

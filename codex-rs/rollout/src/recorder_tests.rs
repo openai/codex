@@ -3,6 +3,7 @@
 use super::*;
 use crate::config::RolloutConfig;
 use chrono::TimeZone;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
@@ -11,6 +12,9 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::UserMessageEvent;
 use pretty_assertions::assert_eq;
@@ -63,6 +67,77 @@ fn write_session_file(root: &Path, ts: &str, uuid: Uuid) -> std::io::Result<Path
     });
     writeln!(file, "{user_event}")?;
     Ok(path)
+}
+
+#[tokio::test]
+async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let uuid = Uuid::new_v4();
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = home.path().join(format!(
+        "sessions/2026/01/27/rollout-2026-01-27T12-34-56-{uuid}.jsonl"
+    ));
+    let parent = rollout_path
+        .parent()
+        .expect("rollout path should have parent");
+    fs::create_dir_all(parent)?;
+
+    let session_meta_line = SessionMetaLine {
+        meta: SessionMeta {
+            id: thread_id,
+            forked_from_id: None,
+            timestamp: "2026-01-27T12:34:56Z".to_string(),
+            cwd: home.path().to_path_buf(),
+            originator: "test".to_string(),
+            cli_version: "test".to_string(),
+            source: SessionSource::Cli,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+            model_provider: None,
+            base_instructions: None,
+            dynamic_tools: None,
+            memory_mode: None,
+        },
+        git: None,
+    };
+    let lines = [
+        RolloutLine {
+            timestamp: "2026-01-27T12:34:56Z".to_string(),
+            item: RolloutItem::SessionMeta(session_meta_line),
+        },
+        RolloutLine {
+            timestamp: "2026-01-27T12:34:57Z".to_string(),
+            item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: "hello from startup backfill".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            })),
+        },
+    ];
+    let jsonl = lines
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<Result<Vec<_>, _>>()?
+        .join("\n");
+    fs::write(&rollout_path, format!("{jsonl}\n"))?;
+
+    let runtime = crate::state_db::init(&test_config(home.path()))
+        .await
+        .expect("state db should initialize");
+
+    let metadata = runtime
+        .get_thread(thread_id)
+        .await?
+        .expect("thread should be backfilled before init returns");
+    assert_eq!(metadata.rollout_path, rollout_path);
+    assert_eq!(
+        runtime.get_backfill_state().await?.status,
+        codex_state::BackfillStatus::Complete
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
