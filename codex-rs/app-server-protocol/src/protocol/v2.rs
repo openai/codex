@@ -159,8 +159,10 @@ impl TryFrom<&CoreServiceTier> for ServiceTier {
 #[ts(type = "string", export_to = "v2/")]
 pub struct ServiceTierId(pub String);
 
-pub fn service_tier_id_into_core(service_tier_id: ServiceTierId) -> CoreServiceTier {
-    CoreServiceTier::from(service_tier_id.0)
+impl From<ServiceTierId> for CoreServiceTier {
+    fn from(value: ServiceTierId) -> Self {
+        Self::from(value.0)
+    }
 }
 
 impl From<CoreServiceTier> for ServiceTierId {
@@ -2585,7 +2587,7 @@ impl From<CoreModelServiceTier> for ModelServiceTier {
 impl From<ModelServiceTier> for CoreModelServiceTier {
     fn from(value: ModelServiceTier) -> Self {
         Self {
-            id: service_tier_id_into_core(value.id),
+            id: value.id.into(),
             name: value.name,
             description: value.description,
         }
