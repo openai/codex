@@ -3,7 +3,7 @@
 //! Crossterm's public helpers wait up to two seconds for terminal responses. That is too long for
 //! TUI startup, where unsupported terminals should simply fall back to conservative defaults.
 //! This module sends the same kinds of optional terminal queries with a caller-provided deadline,
-//! prefers the controlling terminal path, falls back to duplicated stdio handles when `/dev/tty` is
+//! prefers duplicated stdio handles, falls back to the controlling terminal path when stdio is
 //! unavailable, and reports `None` when a response is unavailable.
 //!
 //! The probes run before the crossterm event stream is created, so they do not share crossterm's
@@ -41,11 +41,11 @@ mod imp {
 
     /// Temporary terminal handle used while a startup probe owns terminal input.
     ///
-    /// The preferred path is `/dev/tty`, because it follows the controlling terminal even when
-    /// stdin or stdout are redirected. Some environments expose terminal stdin/stdout without
-    /// allowing `/dev/tty`; in that case the handle falls back to duplicated stdin for reads and
-    /// duplicated stdout for writes. Only the reader is switched to nonblocking mode, and its
-    /// original file status flags are restored when the handle is dropped.
+    /// The preferred path is duplicated stdin/stdout, because terminal replies are delivered to the
+    /// same input stream crossterm reads from. Some embedded or redirected environments expose a
+    /// controlling terminal without terminal stdio; in that case the handle falls back to
+    /// `/dev/tty`. Only the reader is switched to nonblocking mode, and its original file status
+    /// flags are restored when the handle is dropped.
     struct Tty {
         reader: File,
         writer: File,
@@ -57,39 +57,44 @@ mod imp {
         ///
         /// The reader and writer must be separate file descriptions so switching the reader into
         /// nonblocking mode does not also make writes fail with `WouldBlock` under terminal
-        /// backpressure. Falling back to duplicated stdin/stdout keeps embedded or redirected
-        /// environments usable when they still present real terminal descriptors but do not expose
-        /// `/dev/tty`.
+        /// backpressure. Falling back to `/dev/tty` keeps embedded or redirected environments
+        /// usable when they still expose a controlling terminal.
         fn open() -> io::Result<Self> {
-            let tty_reader = OpenOptions::new().read(true).open("/dev/tty");
-            let tty_writer = OpenOptions::new().write(true).open("/dev/tty");
-            match (tty_reader, tty_writer) {
+            let stdio_reader = dup_file(libc::STDIN_FILENO);
+            let stdio_writer = dup_file(libc::STDOUT_FILENO);
+            match (stdio_reader, stdio_writer) {
                 (Ok(reader), Ok(writer)) => Self::new(reader, writer),
                 (reader, writer) => {
-                    let tty_err = match (reader.err(), writer.err()) {
+                    let stdio_err = match (reader.err(), writer.err()) {
                         (Some(reader_err), Some(writer_err)) => {
                             format!("reader: {reader_err}; writer: {writer_err}")
                         }
                         (Some(reader_err), None) => format!("reader: {reader_err}"),
                         (None, Some(writer_err)) => format!("writer: {writer_err}"),
-                        (None, None) => "unknown /dev/tty open error".to_string(),
+                        (None, None) => "unknown stdio duplicate error".to_string(),
                     };
-                    let reader = dup_file(libc::STDIN_FILENO).map_err(|fallback_err| {
-                        io::Error::new(
-                            fallback_err.kind(),
-                            format!(
-                                "failed to open /dev/tty ({tty_err}) or duplicate stdin ({fallback_err})"
-                            ),
-                        )
-                    })?;
-                    let writer = dup_file(libc::STDOUT_FILENO).map_err(|fallback_err| {
-                        io::Error::new(
-                            fallback_err.kind(),
-                            format!(
-                                "failed to open /dev/tty ({tty_err}) or duplicate stdout ({fallback_err})"
-                            ),
-                        )
-                    })?;
+                    let reader =
+                        OpenOptions::new()
+                            .read(true)
+                            .open("/dev/tty")
+                            .map_err(|fallback_err| {
+                                io::Error::new(
+                                    fallback_err.kind(),
+                                    format!(
+                                        "failed to duplicate stdio ({stdio_err}) or open /dev/tty reader ({fallback_err})"
+                                    ),
+                                )
+                            })?;
+                    let writer = OpenOptions::new().write(true).open("/dev/tty").map_err(
+                        |fallback_err| {
+                            io::Error::new(
+                                fallback_err.kind(),
+                                format!(
+                                    "failed to duplicate stdio ({stdio_err}) or open /dev/tty writer ({fallback_err})"
+                                ),
+                            )
+                        },
+                    )?;
                     Self::new(reader, writer)
                 }
             }
@@ -209,19 +214,16 @@ mod imp {
     /// Queries OSC 10 and OSC 11 default colors under one shared deadline.
     ///
     /// Foreground and background are only useful as a pair for palette calculations, so a missing
-    /// response from either slot returns `Ok(None)`. The second query receives only the remaining
-    /// time from the original deadline; unsupported terminals therefore pay one bounded wait, not
-    /// two independent waits.
+    /// response from either slot returns `Ok(None)`. Both queries are sent before reading so a
+    /// terminal that supports palette replies gets the full bounded window to return both values,
+    /// while unsupported terminals still pay one bounded wait instead of one wait per slot.
     pub(crate) fn default_colors(timeout: Duration) -> io::Result<Option<DefaultColors>> {
         let mut tty = Tty::open()?;
-        let deadline = Instant::now() + timeout;
-        let Some(fg) = query_color_slot(&mut tty, /*slot*/ 10, remaining(deadline))? else {
+        tty.write_all(b"\x1B]10;?\x1B\\\x1B]11;?\x1B\\")?;
+        let Some(colors) = read_until(&mut tty, timeout, parse_default_colors)? else {
             return Ok(None);
         };
-        let Some(bg) = query_color_slot(&mut tty, /*slot*/ 11, remaining(deadline))? else {
-            return Ok(None);
-        };
-        Ok(Some(DefaultColors { fg, bg }))
+        Ok(Some(colors))
     }
 
     /// Checks whether the terminal reports support for keyboard enhancement flags.
@@ -234,16 +236,6 @@ mod imp {
         let mut tty = Tty::open()?;
         tty.write_all(b"\x1B[?u\x1B[c")?;
         read_keyboard_enhancement_supported(&mut tty, timeout)
-    }
-
-    fn query_color_slot(
-        tty: &mut Tty,
-        slot: u8,
-        timeout: Duration,
-    ) -> io::Result<Option<(u8, u8, u8)>> {
-        write!(tty.writer, "\x1B]{slot};?\x1B\\")?;
-        tty.writer.flush()?;
-        read_until(tty, timeout, |buffer| parse_osc_color(buffer, slot))
     }
 
     /// Reads available terminal bytes until `parse` recognizes a probe response or time expires.
@@ -271,10 +263,6 @@ mod imp {
                 return Ok(None);
             }
         }
-    }
-
-    fn remaining(deadline: Instant) -> Duration {
-        deadline.saturating_duration_since(Instant::now())
     }
 
     /// Reads keyboard-enhancement responses while giving flags the full bounded window to arrive.
@@ -346,6 +334,12 @@ mod imp {
         let (payload_end, _terminator_len) = osc_payload_end(rest)?;
         let payload = std::str::from_utf8(&rest[..payload_end]).ok()?;
         parse_osc_rgb(payload)
+    }
+
+    fn parse_default_colors(buffer: &[u8]) -> Option<DefaultColors> {
+        let fg = parse_osc_color(buffer, /*slot*/ 10)?;
+        let bg = parse_osc_color(buffer, /*slot*/ 11)?;
+        Some(DefaultColors { fg, bg })
     }
 
     fn osc_payload_end(buffer: &[u8]) -> Option<(usize, usize)> {
@@ -510,6 +504,32 @@ mod imp {
             assert_eq!(
                 parse_osc_rgb("rgba:ffff/8000/0000/ffff"),
                 Some((255, 127, 0))
+            );
+        }
+
+        #[test]
+        fn parses_default_colors_from_one_buffer() {
+            assert_eq!(
+                parse_default_colors(
+                    b"\x1B]10;rgb:eeee/eeee/eeee\x1B\\\x1B]11;rgb:1111/1111/1111\x07"
+                ),
+                Some(DefaultColors {
+                    fg: (238, 238, 238),
+                    bg: (17, 17, 17)
+                })
+            );
+            assert_eq!(
+                parse_default_colors(
+                    b"\x1B]11;rgb:1111/1111/1111\x07\x1B]10;rgb:eeee/eeee/eeee\x1B\\"
+                ),
+                Some(DefaultColors {
+                    fg: (238, 238, 238),
+                    bg: (17, 17, 17)
+                })
+            );
+            assert_eq!(
+                parse_default_colors(b"\x1B]10;rgb:eeee/eeee/eeee\x1B\\"),
+                None
             );
         }
 
