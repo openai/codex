@@ -131,6 +131,9 @@ restarts wait up to one minute for active work before forcing completion. Withou
 user-scoped `systemd`, `bootstrap` falls back to the pidfile backend; that keeps
 the launch settings but does not provide periodic auto-update.
 
+For backend selection details, persisted state, and reload versus restart
+semantics, see [`app-server-daemon/README.md`](../app-server-daemon/README.md).
+
 ## Initialization
 
 Clients must send a single `initialize` request per transport connection before invoking any other method on that connection, then acknowledge with an `initialized` notification. The server returns the user agent string it will present to upstream services, `codexHome` for the server's Codex home directory, and `platformFamily` and `platformOs` strings describing the app-server runtime target; subsequent requests issued before initialization receive a `"Not initialized"` error, and repeated `initialize` calls on the same connection receive an `"Already initialized"` error.
