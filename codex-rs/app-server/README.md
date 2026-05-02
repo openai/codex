@@ -132,7 +132,9 @@ user-scoped `systemd`, `bootstrap` falls back to the pidfile backend; that keeps
 the launch settings but does not provide periodic auto-update.
 
 For backend selection details, persisted state, and reload versus restart
-semantics, see [`app-server-daemon/README.md`](../app-server-daemon/README.md).
+semantics, including how `brew`/`npm`, standalone installs, and out-of-band
+binary updates behave, see
+[`app-server-daemon/README.md`](../app-server-daemon/README.md).
 
 ## Initialization
 
