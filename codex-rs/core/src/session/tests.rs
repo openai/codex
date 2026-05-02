@@ -47,6 +47,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use tracing::Span;
@@ -118,6 +119,8 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::context_snapshot;
@@ -136,6 +139,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_path_buf;
 use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
@@ -1679,9 +1683,6 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
         .fork_thread(
             usize::MAX,
             fork_config.clone(),
-            std::sync::Arc::new(codex_thread_store::LocalThreadStore::new(
-                codex_rollout::RolloutConfig::from_view(&fork_config),
-            )),
             rollout_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -2720,6 +2721,7 @@ async fn wait_for_thread_rollback_failed(rx: &async_channel::Receiver<Event>) ->
 }
 
 async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
+    let config = session.get_config().await;
     let live_thread = LiveThread::create(
         Arc::clone(&session.services.thread_store),
         CreateThreadParams {
@@ -2728,6 +2730,15 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
             source: SessionSource::Exec,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            metadata: ThreadPersistenceMetadata {
+                cwd: Some(config.cwd.to_path_buf()),
+                model_provider: config.model_provider_id.clone(),
+                memory_mode: if config.memories.generate_memories {
+                    ThreadMemoryMode::Enabled
+                } else {
+                    ThreadMemoryMode::Disabled
+                },
+            },
             event_persistence_mode: ThreadEventPersistenceMode::Limited,
         },
     )
@@ -2938,6 +2949,7 @@ fn turn_environments_for_tests(
         environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         environment: Arc::clone(environment),
         cwd: cwd.clone(),
+        shell: "bash".to_string(),
     }]
 }
 
@@ -3279,7 +3291,7 @@ async fn session_configuration_apply_preserves_absolute_cwd_write_root_on_cwd_up
 }
 
 #[tokio::test]
-async fn session_update_settings_keeps_runtime_cwds_absolute() {
+async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
     let (session, turn_context) = make_session_and_context().await;
     let updated_cwd = turn_context.cwd.join("project");
     std::fs::create_dir_all(updated_cwd.as_path()).expect("create project dir");
@@ -3303,6 +3315,91 @@ async fn session_update_settings_keeps_runtime_cwds_absolute() {
     assert_eq!(config.cwd, turn_context.cwd);
     assert_eq!(next_turn.cwd, updated_cwd);
     assert_eq!(next_turn.config.cwd, updated_cwd);
+}
+
+#[tokio::test]
+async fn relative_cwd_update_without_environments_resolves_under_session_cwd() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let original_cwd = {
+        let mut state = session.state.lock().await;
+        state.session_configuration.environments = Vec::new();
+        state.session_configuration.cwd.clone()
+    };
+    let updated_cwd = original_cwd.join("project");
+    std::fs::create_dir_all(updated_cwd.as_path()).expect("create project dir");
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            cwd: Some(PathBuf::from("project")),
+            ..Default::default()
+        })
+        .await
+        .expect("cwd update should succeed");
+
+    let state = session.state.lock().await;
+    assert_eq!(state.session_configuration.cwd, updated_cwd);
+    assert!(state.session_configuration.environments.is_empty());
+}
+
+#[tokio::test]
+async fn cwd_update_does_not_rewrite_sticky_environment_cwd() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let (original_cwd, environment_cwd) = {
+        let mut state = session.state.lock().await;
+        let original_cwd = state.session_configuration.cwd.clone();
+        let environment_cwd = original_cwd.join("environment");
+        state.session_configuration.environments = vec![TurnEnvironmentSelection {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            cwd: environment_cwd.clone(),
+        }];
+        (original_cwd, environment_cwd)
+    };
+    let updated_cwd = original_cwd.join("project");
+    std::fs::create_dir_all(updated_cwd.as_path()).expect("create project dir");
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            cwd: Some(PathBuf::from("project")),
+            ..Default::default()
+        })
+        .await
+        .expect("cwd update should succeed");
+
+    let state = session.state.lock().await;
+    assert_eq!(state.session_configuration.cwd, updated_cwd);
+    assert_eq!(
+        state.session_configuration.environments[0].cwd,
+        environment_cwd
+    );
+}
+
+#[tokio::test]
+async fn absolute_cwd_update_with_turn_environment_is_allowed() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let absolute_cwd = {
+        let state = session.state.lock().await;
+        state.session_configuration.cwd.join("absolute-turn")
+    };
+    std::fs::create_dir_all(absolute_cwd.as_path()).expect("create absolute turn dir");
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate {
+                cwd: Some(absolute_cwd.to_path_buf()),
+                environments: Some(vec![TurnEnvironmentSelection {
+                    environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                    cwd: absolute_cwd.clone(),
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("absolute cwd with explicit environments should succeed");
+
+    assert_eq!(turn_context.cwd, absolute_cwd);
+    assert_eq!(turn_context.config.cwd, absolute_cwd);
+    assert_eq!(turn_context.environments.len(), 1);
 }
 
 #[tokio::test]
@@ -3392,7 +3489,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
-            codex_rollout::RolloutConfig::from_view(config.as_ref()),
+            codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
     )
@@ -3539,7 +3636,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         state_db: None,
         live_thread: None,
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
-            codex_rollout::RolloutConfig::from_view(config.as_ref()),
+            codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
         )),
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
@@ -3558,7 +3655,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
 
     let plugin_outcome = services
         .plugins_manager
-        .plugins_for_config(&per_turn_config)
+        .plugins_for_config(&per_turn_config.plugins_config_input())
         .await;
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_input =
@@ -3584,7 +3681,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         model_info,
         &models_manager,
         /*network*/ None,
-        Some(environment),
         turn_environments,
         session_configuration.cwd.clone(),
         "turn_id".to_string(),
@@ -3711,7 +3807,7 @@ async fn make_session_with_config_and_rx(
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
-            codex_rollout::RolloutConfig::from_view(config.as_ref()),
+            codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
     )
@@ -4323,23 +4419,24 @@ async fn turn_environments_set_primary_environment() {
 
     let turn_environments = &turn_context.environments;
     assert_eq!(turn_environments.len(), 1);
+    let turn_environment = turn_context
+        .primary_environment()
+        .expect("primary environment should be set");
     assert!(std::sync::Arc::ptr_eq(
-        turn_context
-            .environment
-            .as_ref()
-            .expect("primary environment should be set"),
+        &turn_environment.environment,
         &turn_environments[0].environment
     ));
+    assert!(!turn_context.environments.is_empty());
     assert_eq!(turn_context.cwd.as_path(), selected_cwd.as_path());
     assert_eq!(turn_context.config.cwd.as_path(), selected_cwd.as_path());
 }
 
 #[tokio::test]
-async fn default_turn_uses_stored_thread_environments() {
+async fn default_turn_overlays_session_cwd_onto_stored_thread_environments() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let session_cwd = session.get_config().await.cwd.clone();
     let selected_cwd =
-        AbsolutePathBuf::try_from(session.get_config().await.cwd.as_path().join("selected"))
-            .expect("absolute path");
+        AbsolutePathBuf::try_from(session_cwd.as_path().join("selected")).expect("absolute path");
 
     {
         let mut state = session.state.lock().await;
@@ -4353,15 +4450,15 @@ async fn default_turn_uses_stored_thread_environments() {
 
     let turn_environments = &turn_context.environments;
     assert_eq!(turn_environments.len(), 1);
+    let turn_environment = turn_context
+        .primary_environment()
+        .expect("primary environment should be set");
     assert!(std::sync::Arc::ptr_eq(
-        turn_context
-            .environment
-            .as_ref()
-            .expect("primary environment should be set"),
+        &turn_environment.environment,
         &turn_environments[0].environment
     ));
-    assert_eq!(turn_context.cwd, selected_cwd);
-    assert_eq!(turn_context.config.cwd, selected_cwd);
+    assert_eq!(turn_context.cwd, session_cwd);
+    assert_eq!(turn_context.config.cwd, session_cwd);
 }
 
 #[tokio::test]
@@ -4376,54 +4473,43 @@ async fn default_turn_honors_empty_stored_thread_environments() {
 
     let turn_context = session.new_default_turn().await;
 
-    assert!(turn_context.environment.is_none());
+    assert!(turn_context.primary_environment().is_none());
+    assert!(turn_context.environments.is_empty());
     assert_eq!(turn_context.cwd, session_cwd);
     assert_eq!(turn_context.config.cwd, session_cwd);
     assert_eq!(turn_context.environments.len(), 0);
 }
 
 #[tokio::test]
-async fn multiple_turn_environments_use_first_as_primary_environment() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
-    let session_cwd = session.get_config().await.cwd.clone();
-    let first_cwd =
-        AbsolutePathBuf::try_from(session_cwd.as_path().join("first")).expect("absolute path");
-    let second_cwd =
-        AbsolutePathBuf::try_from(session_cwd.as_path().join("second")).expect("absolute path");
+async fn primary_environment_uses_first_turn_environment() {
+    let (_session, mut turn_context) = make_session_and_context().await;
+    let first_environment = turn_context.environments[0].clone();
+    let second_cwd = turn_context.cwd.join("second");
+    turn_context.environments.push(TurnEnvironment {
+        environment_id: "second".to_string(),
+        environment: Arc::clone(&first_environment.environment),
+        cwd: second_cwd.clone(),
+        shell: first_environment.shell.clone(),
+    });
 
-    let turn_context = session
-        .new_turn_with_sub_id(
-            "sub-1".to_string(),
-            SessionSettingsUpdate {
-                environments: Some(vec![
-                    TurnEnvironmentSelection {
-                        environment_id: "local".to_string(),
-                        cwd: first_cwd.clone(),
-                    },
-                    TurnEnvironmentSelection {
-                        environment_id: "local".to_string(),
-                        cwd: second_cwd.clone(),
-                    },
-                ]),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("turn should start");
-
-    let turn_environments = &turn_context.environments;
-    assert_eq!(turn_environments.len(), 2);
-    assert_eq!(turn_environments[0].cwd, first_cwd);
-    assert_eq!(turn_environments[1].cwd, second_cwd);
-    assert!(std::sync::Arc::ptr_eq(
+    assert_eq!(
         turn_context
-            .environment
-            .as_ref()
-            .expect("primary environment should be set"),
-        &turn_environments[0].environment
-    ));
-    assert_eq!(turn_context.cwd, first_cwd);
-    assert_eq!(turn_context.config.cwd, first_cwd);
+            .primary_environment()
+            .expect("primary environment")
+            .environment_id,
+        first_environment.environment_id
+    );
+    assert_eq!(
+        turn_context
+            .environments
+            .iter()
+            .find(|environment| environment.environment_id == "second")
+            .expect("second environment")
+            .cwd,
+        second_cwd
+    );
+    assert_eq!(turn_context.environments.len(), 2);
+    assert_eq!(turn_context.environments[1].cwd, second_cwd);
 }
 
 #[tokio::test]
@@ -4441,15 +4527,19 @@ async fn empty_turn_environments_clear_primary_environment() {
         .await
         .expect("turn should start");
 
-    assert!(turn_context.environment.is_none());
+    assert!(turn_context.primary_environment().is_none());
+    assert!(turn_context.environments.is_empty());
     assert_eq!(turn_context.cwd, session.get_config().await.cwd);
     assert_eq!(turn_context.config.cwd, session.get_config().await.cwd);
-    assert_eq!(turn_context.environments.len(), 0);
 }
 
 #[tokio::test]
 async fn unknown_turn_environment_returns_error() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let original_configuration = {
+        let state = session.state.lock().await;
+        state.session_configuration.clone()
+    };
 
     let err = session
         .new_turn_with_sub_id(
@@ -4457,7 +4547,7 @@ async fn unknown_turn_environment_returns_error() {
             SessionSettingsUpdate {
                 environments: Some(vec![TurnEnvironmentSelection {
                     environment_id: "missing".to_string(),
-                    cwd: session.get_config().await.cwd.clone(),
+                    cwd: original_configuration.cwd.clone(),
                 }]),
                 ..Default::default()
             },
@@ -4465,8 +4555,58 @@ async fn unknown_turn_environment_returns_error() {
         .await
         .expect_err("unknown environment should fail");
 
+    let current_configuration = {
+        let state = session.state.lock().await;
+        state.session_configuration.clone()
+    };
     assert!(matches!(err, CodexErr::InvalidRequest(_)));
     assert!(err.to_string().contains("missing"));
+    assert_eq!(current_configuration.cwd, original_configuration.cwd);
+    assert_eq!(
+        current_configuration.environments,
+        original_configuration.environments
+    );
+}
+
+#[tokio::test]
+async fn duplicate_turn_environment_returns_error_without_mutating_session() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let original_configuration = {
+        let state = session.state.lock().await;
+        state.session_configuration.clone()
+    };
+
+    let err = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate {
+                environments: Some(vec![
+                    TurnEnvironmentSelection {
+                        environment_id: "local".to_string(),
+                        cwd: original_configuration.cwd.clone(),
+                    },
+                    TurnEnvironmentSelection {
+                        environment_id: "local".to_string(),
+                        cwd: original_configuration.cwd.join("second"),
+                    },
+                ]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("duplicate environment should fail");
+
+    let current_configuration = {
+        let state = session.state.lock().await;
+        state.session_configuration.clone()
+    };
+    assert!(matches!(err, CodexErr::InvalidRequest(_)));
+    assert!(err.to_string().contains("duplicate"));
+    assert_eq!(current_configuration.cwd, original_configuration.cwd);
+    assert_eq!(
+        current_configuration.environments,
+        original_configuration.environments
+    );
 }
 
 #[tokio::test]
@@ -4574,6 +4714,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
     let (mut session, _turn_context) = make_session_and_context().await;
     let store = Arc::new(codex_thread_store::InMemoryThreadStore::default());
     let thread_store: Arc<dyn codex_thread_store::ThreadStore> = store.clone();
+    let config = session.get_config().await;
     let live_thread = LiveThread::create(
         Arc::clone(&thread_store),
         CreateThreadParams {
@@ -4582,6 +4723,15 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
             source: SessionSource::Exec,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            metadata: ThreadPersistenceMetadata {
+                cwd: Some(config.cwd.to_path_buf()),
+                model_provider: config.model_provider_id.clone(),
+                memory_mode: if config.memories.generate_memories {
+                    ThreadMemoryMode::Enabled
+                } else {
+                    ThreadMemoryMode::Disabled
+                },
+            },
             event_persistence_mode: ThreadEventPersistenceMode::Limited,
         },
     )
@@ -4968,7 +5118,7 @@ where
         state_db: None,
         live_thread: None,
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
-            codex_rollout::RolloutConfig::from_view(config.as_ref()),
+            codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
         )),
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
@@ -4987,7 +5137,7 @@ where
 
     let plugin_outcome = services
         .plugins_manager
-        .plugins_for_config(&per_turn_config)
+        .plugins_for_config(&per_turn_config.plugins_config_input())
         .await;
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_input =
@@ -5013,7 +5163,6 @@ where
         model_info,
         &models_manager,
         /*network*/ None,
-        Some(environment),
         turn_environments,
         session_configuration.cwd.clone(),
         "turn_id".to_string(),
@@ -6941,7 +7090,7 @@ async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn active_goal_continuation_runs_to_completion_after_turn() -> anyhow::Result<()> {
+async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
         config
@@ -6967,17 +7116,21 @@ async fn active_goal_continuation_runs_to_completion_after_turn() -> anyhow::Res
                 ev_completed("resp-2"),
             ]),
             sse(vec![
-                ev_response_created("resp-3"),
+                ev_assistant_message("msg-2", "I am still working on the benchmark note."),
+                ev_completed("resp-3"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-4"),
                 ev_function_call(
                     "call-complete-goal",
                     "update_goal",
                     r#"{"status":"complete"}"#,
                 ),
-                ev_completed("resp-3"),
+                ev_completed("resp-4"),
             ]),
             sse(vec![
-                ev_assistant_message("msg-2", "Goal complete."),
-                ev_completed("resp-4"),
+                ev_assistant_message("msg-3", "Goal complete."),
+                ev_completed("resp-5"),
             ]),
         ],
     )
@@ -7001,13 +7154,132 @@ async fn active_goal_continuation_runs_to_completion_after_turn() -> anyhow::Res
             let event = test.codex.next_event().await?;
             if matches!(event.msg, EventMsg::TurnComplete(_)) {
                 completed_turns += 1;
-                if completed_turns == 2 {
+                if completed_turns == 3 {
                     return anyhow::Ok(());
                 }
             }
         }
     })
     .await??;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pending_request_user_input_does_not_spawn_extra_goal_continuation() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Goals)
+            .expect("goal mode should be enableable in tests");
+        config
+            .features
+            .enable(Feature::DefaultModeRequestUserInput)
+            .expect("default-mode request_user_input should be enableable in tests");
+    });
+    let test = builder.build(&server).await?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    "call-create-goal",
+                    "create_goal",
+                    r#"{"objective":"write a benchmark note"}"#,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "Draft ready."),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_function_call(
+                    "call-ask-user",
+                    "request_user_input",
+                    r#"{"questions":[{"header":"Choice","id":"next_step","question":"Pick one","options":[{"label":"Outline","description":"Start with an outline."},{"label":"Draft","description":"Write a full draft."}]}]}"#,
+                ),
+                ev_completed("resp-3"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-4"),
+                ev_function_call(
+                    "call-complete-goal",
+                    "update_goal",
+                    r#"{"status":"complete"}"#,
+                ),
+                ev_completed("resp-4"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-2", "Goal complete."),
+                ev_completed("resp-5"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "write a benchmark note".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+
+    let request_user_input_event = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RequestUserInput(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(3, responses.requests().len());
+    assert!(
+        timeout(Duration::from_millis(200), test.codex.next_event())
+            .await
+            .is_err(),
+        "waiting for request_user_input should keep the turn open without emitting more events"
+    );
+    assert_eq!(
+        3,
+        responses.requests().len(),
+        "waiting for request_user_input should not start another continuation request"
+    );
+
+    test.codex
+        .submit(Op::UserInputAnswer {
+            id: request_user_input_event.turn_id,
+            response: RequestUserInputResponse {
+                answers: std::collections::HashMap::from([(
+                    "next_step".to_string(),
+                    RequestUserInputAnswer {
+                        answers: vec!["Outline".to_string()],
+                    },
+                )]),
+            },
+        })
+        .await?;
+
+    let mut completed_turns = 0;
+    timeout(Duration::from_secs(8), async {
+        loop {
+            let event = test.codex.next_event().await?;
+            if matches!(event.msg, EventMsg::TurnComplete(_)) {
+                completed_turns += 1;
+                if completed_turns == 1 {
+                    return anyhow::Ok(());
+                }
+            }
+        }
+    })
+    .await??;
+
+    assert_eq!(5, responses.requests().len());
 
     Ok(())
 }

@@ -1,0 +1,20 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: popup
+---
+  Hooks
+  Lifecycle hooks from config and enabled plugins.
+
+  Issues
+  ⚠ skipped invalid matcher for PreToolUse
+  ■ /tmp/hooks.json: failed to parse hooks config
+
+  Event                 Installed   Active      Description
+  PreToolUse            0           0           Before a tool executes
+  PermissionRequest     0           0           When permission is requested
+  PostToolUse           0           0           After a tool executes
+  SessionStart          0           0           When a new session starts
+  UserPromptSubmit      0           0           When the user submits a prompt
+  Stop                  0           0           Right before Codex ends its turn
+
+  Press enter to view hooks; esc to close

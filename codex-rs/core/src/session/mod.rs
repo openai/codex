@@ -30,8 +30,7 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
-use crate::environment_selection::selected_primary_environment;
-use crate::environment_selection::validate_environment_selections;
+use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
@@ -113,7 +112,6 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
-use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -136,6 +134,7 @@ use codex_thread_store::LiveThreadInitGuard;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadEventPersistenceMode;
+use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_utils_output_truncation::TruncationPolicy;
 use futures::future::BoxFuture;
@@ -184,6 +183,7 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::exec_output::StreamOutput;
 
+mod config_lock;
 mod handlers;
 mod mcp;
 mod multi_agents;
@@ -193,6 +193,8 @@ mod rollout_reconstruction;
 pub(crate) mod session;
 pub(crate) mod turn;
 pub(crate) mod turn_context;
+use self::config_lock::export_config_lock_if_configured;
+use self::config_lock::validate_config_lock_if_configured;
 #[cfg(test)]
 use self::handlers::submission_dispatch_span;
 use self::handlers::submission_loop;
@@ -274,7 +276,6 @@ use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
 use crate::mcp::McpManager;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
-use crate::plugins::PluginsManager;
 use crate::rollout::map_session_init_error;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
@@ -301,6 +302,7 @@ use crate::turn_timing::TurnTimingState;
 use crate::turn_timing::record_turn_ttfm_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
+use codex_core_plugins::PluginsManager;
 use codex_git_utils::get_git_repo_root;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::with_codex_apps_mcp;
@@ -318,7 +320,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::DeprecationNoticeEvent;
@@ -348,6 +349,7 @@ use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
 use codex_protocol::protocol::SkillToolDependency as ProtocolSkillToolDependency;
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -406,7 +408,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) parent_rollout_thread_trace: ThreadTraceContext,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
-    pub(crate) environments: Vec<TurnEnvironmentSelection>,
+    pub(crate) environment_selections: ResolvedTurnEnvironments,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
 }
@@ -463,19 +465,15 @@ impl Codex {
             inherited_exec_policy,
             parent_rollout_thread_trace,
             parent_trace: _,
-            environments,
+            environment_selections,
             analytics_events_client,
             thread_store,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
-        validate_environment_selections(environment_manager.as_ref(), &environments)?;
-        let environment =
-            selected_primary_environment(environment_manager.as_ref(), &environments)?;
-        let fs = environment
-            .as_ref()
-            .map(|environment| environment.get_filesystem());
-        let plugin_outcome = plugins_manager.plugins_for_config(&config).await;
+        let fs = environment_selections.primary_filesystem();
+        let plugins_input = config.plugins_config_input();
+        let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
         let loaded_skills = skills_manager.skills_for_config(&skills_input, fs).await;
@@ -496,8 +494,9 @@ impl Codex {
             let _ = config.features.disable(Feature::Collab);
         }
 
+        let primary_environment = environment_selections.primary_environment();
         let user_instructions = AgentsMdManager::new(&config)
-            .user_instructions(environment.as_deref())
+            .user_instructions(primary_environment.as_deref())
             .await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
@@ -609,7 +608,7 @@ impl Codex {
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
-            environments,
+            environments: environment_selections.to_selections(),
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
             app_server_client_name: None,
@@ -2535,7 +2534,6 @@ impl Session {
     ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
-        let shell = self.user_shell();
         let (
             reference_context_item,
             previous_turn_settings,
@@ -2666,7 +2664,7 @@ impl Session {
         let loaded_plugins = self
             .services
             .plugins_manager
-            .plugins_for_config(&turn_context.config)
+            .plugins_for_config(&turn_context.config.plugins_config_input())
             .await;
         if let Some(plugin_instructions) =
             AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
@@ -2696,7 +2694,7 @@ impl Session {
                 .format_environment_context_subagents(self.conversation_id)
                 .await;
             contextual_user_sections.push(
-                crate::context::EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
+                crate::context::EnvironmentContext::from_turn_context(turn_context)
                     .with_subagents(subagents)
                     .render(),
             );
@@ -2935,17 +2933,6 @@ impl Session {
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
         self.ensure_rollout_materialized().await;
-    }
-
-    pub(crate) async fn notify_background_event(
-        &self,
-        turn_context: &TurnContext,
-        message: impl Into<String>,
-    ) {
-        let event = EventMsg::BackgroundEvent(BackgroundEventEvent {
-            message: message.into(),
-        });
-        self.send_event(turn_context, event).await;
     }
 
     pub(crate) async fn notify_stream_error(
@@ -3362,7 +3349,8 @@ async fn build_hooks_for_config(
     let _ = hook_shell_argv.pop();
     let plugin_hooks_enabled = config.features.enabled(Feature::PluginHooks);
     let (plugin_hook_sources, plugin_hook_load_warnings) = if plugin_hooks_enabled {
-        let plugin_outcome = plugins_manager.plugins_for_config(config).await;
+        let plugins_input = config.plugins_config_input();
+        let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
         (
             plugin_outcome.effective_plugin_hook_sources(),
             plugin_outcome.effective_plugin_hook_warnings(),

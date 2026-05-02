@@ -20,6 +20,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::skills::model::SkillToolDependency;
 use codex_mcp::McpOAuthLoginSupport;
+use codex_mcp::McpPermissionPromptAutoApproveContext;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_mcp::oauth_login_support;
 use codex_mcp::resolve_oauth_scopes;
@@ -135,14 +136,6 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             }
         };
 
-        sess.notify_background_event(
-            turn_context,
-            format!(
-                "Authenticating MCP {name}... Follow instructions in your browser if prompted."
-            ),
-        )
-        .await;
-
         let resolved_scopes = resolve_oauth_scopes(
             /*explicit_scopes*/ None,
             server_config.scopes.clone(),
@@ -163,14 +156,6 @@ pub(crate) async fn maybe_install_mcp_dependencies(
 
         if let Err(err) = first_attempt {
             if should_retry_without_scopes(&resolved_scopes, &err) {
-                sess.notify_background_event(
-                    turn_context,
-                    format!(
-                        "Retrying MCP {name} authentication without scopes after provider rejection."
-                    ),
-                )
-                .await;
-
                 if let Err(err) = perform_oauth_login(
                     &name,
                     &oauth_config.url,
@@ -222,6 +207,7 @@ async fn should_install_mcp_dependencies(
     if mcp_permission_prompt_is_auto_approved(
         turn_context.approval_policy.value(),
         &turn_context.permission_profile(),
+        McpPermissionPromptAutoApproveContext::default(),
     ) {
         return true;
     }

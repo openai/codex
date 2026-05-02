@@ -3,11 +3,11 @@ use std::collections::HashSet;
 use tracing::warn;
 
 use super::PluginCapabilitySummary;
-use super::PluginsManager;
 use crate::config::Config;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::OPENAI_BUNDLED_MARKETPLACE_NAME;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
+use codex_core_plugins::PluginsManager;
 use codex_core_plugins::TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST;
 use codex_features::Feature;
 use codex_tools::DiscoverablePluginInfo;
@@ -25,6 +25,7 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
     }
 
     let plugins_manager = PluginsManager::new(config.codex_home.to_path_buf());
+    let plugins_input = config.plugins_config_input();
     let configured_plugin_ids = config
         .tool_suggest
         .discoverables
@@ -40,7 +41,7 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
         .map(|disabled_tool| disabled_tool.id.as_str())
         .collect::<HashSet<_>>();
     let marketplaces = plugins_manager
-        .list_marketplaces_for_config(config, &[])
+        .list_marketplaces_for_config(&plugins_input, &[])
         .context("failed to list plugin marketplaces for tool suggestions")?
         .marketplaces;
     let mut discoverable_plugins = Vec::<DiscoverablePluginInfo>::new();
@@ -62,7 +63,11 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
             let plugin_id = plugin.id.clone();
 
             match plugins_manager
-                .read_plugin_detail_for_marketplace_plugin(config, &marketplace_name, plugin)
+                .read_plugin_detail_for_marketplace_plugin(
+                    &plugins_input,
+                    &marketplace_name,
+                    plugin,
+                )
                 .await
             {
                 Ok(plugin) => {

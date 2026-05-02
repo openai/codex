@@ -153,6 +153,25 @@ common:ci-macos --config=remote
 common:ci-macos --strategy=remote
 common:ci-macos --strategy=TestRunner=darwin-sandbox,local
 
+# On Windows, use Linux remote execution for build actions but keep test actions
+# on the Windows runner so Bazel's normal test sharding and flaky-test retries
+# still run against Windows binaries.
+common:ci-windows-cross --config=ci-windows
+common:ci-windows-cross --build_metadata=TAG_windows_cross_compile=true
+common:ci-windows-cross --config=remote
+common:ci-windows-cross --host_platform=//:rbe
+common:ci-windows-cross --strategy=remote
+common:ci-windows-cross --strategy=TestRunner=local
+common:ci-windows-cross --local_test_jobs=4
+common:ci-windows-cross --test_env=RUST_TEST_THREADS=1
+# Native Windows CI still covers these tests. The cross-built gnullvm binaries
+# currently crash in V8-backed code-mode tests and hang in PowerShell AST parser
+# tests when those binaries are run on the Windows runner.
+common:ci-windows-cross --test_env=CODEX_BAZEL_TEST_SKIP_FILTERS=suite::code_mode::,powershell
+common:ci-windows-cross --platforms=//:windows_x86_64_gnullvm
+common:ci-windows-cross --extra_execution_platforms=//:rbe,//:windows_x86_64_msvc
+common:ci-windows-cross --extra_toolchains=//:windows_gnullvm_tests_on_msvc_host_toolchain
+
 # Linux-only V8 CI config.
 common:ci-v8 --config=ci
 common:ci-v8 --build_metadata=TAG_workflow=v8

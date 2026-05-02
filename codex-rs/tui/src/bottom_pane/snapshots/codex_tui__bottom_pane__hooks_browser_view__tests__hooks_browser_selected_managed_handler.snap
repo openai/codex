@@ -1,0 +1,18 @@
+---
+source: tui/src/bottom_pane/hooks_browser_view.rs
+expression: "render_lines(&view, 112)"
+---
+                                                                                                                
+  PreToolUse hooks                                                                                              
+  Turn hooks on or off. Your changes are saved automatically.                                                   
+                                                                                                                
+  [x] Hook 1                                                                                                    
+  [x] Hook 2                                                                                                    
+                                                                                                                
+  Event     PreToolUse                                                                                          
+  Matcher   Bash                                                                                                
+  Source    Admin config                                                                                        
+  Command   /enterprise/hooks/pre-tool-use-2.sh                                                                 
+  Timeout   30s                                                                                                 
+                                                                                                                
+  Managed hooks are always on; press esc to go back

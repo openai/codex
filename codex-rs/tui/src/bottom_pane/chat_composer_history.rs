@@ -15,12 +15,11 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::app_command::AppCommand;
+use crate::app_command::AppCommand as Op;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::MentionBinding;
 use crate::mention_codec::decode_history_mentions;
-use codex_protocol::protocol::Op;
 use codex_protocol::user_input::TextElement;
 
 /// A composer history entry that can rehydrate draft state.
@@ -599,9 +598,7 @@ impl ChatComposerHistory {
                         boundary_if_exhausted,
                     });
                 }
-                app_event_tx.send(AppEvent::CodexOp(AppCommand::from(
-                    Op::GetHistoryEntryRequest { offset, log_id },
-                )));
+                app_event_tx.send(AppEvent::CodexOp(Op::history_lookup(offset, log_id)));
                 return HistorySearchResult::Pending;
             }
 
@@ -719,12 +716,7 @@ impl ChatComposerHistory {
             self.last_history_text = Some(entry.text.clone());
             return Some(entry);
         } else if let Some(log_id) = self.history_log_id {
-            app_event_tx.send(AppEvent::CodexOp(AppCommand::from(
-                Op::GetHistoryEntryRequest {
-                    offset: global_idx,
-                    log_id,
-                },
-            )));
+            app_event_tx.send(AppEvent::CodexOp(Op::history_lookup(global_idx, log_id)));
         }
         None
     }

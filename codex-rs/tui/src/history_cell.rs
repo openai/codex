@@ -10,23 +10,26 @@
 //! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
 //! rendered transcript output can change.
 
+use crate::diff_model::FileChange;
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::OutputLinesParams;
 use crate::exec_cell::TOOL_CALL_MAX_LINES;
 use crate::exec_cell::output_lines;
-use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::legacy_core::config::Config;
-use crate::legacy_core::web_search_detail;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
+use crate::motion::MotionMode;
+use crate::motion::ReducedMotionIndicator;
+use crate::motion::activity_indicator;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
+use crate::session_state::ThreadSessionState;
 use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
 #[cfg(test)]
@@ -43,32 +46,33 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::adaptive_wrap_lines;
 use base64::Engine;
+use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::McpAuthStatus;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
+use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
+use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
+use codex_app_server_protocol::PermissionProfileNetworkPermissions;
+use codex_app_server_protocol::ToolRequestUserInputAnswer;
+use codex_app_server_protocol::ToolRequestUserInputQuestion;
+use codex_app_server_protocol::WebSearchAction;
 use codex_config::types::McpServerTransportConfig;
 #[cfg(test)]
 use codex_mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
+use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::approvals::NetworkPolicyAmendment;
 #[cfg(test)]
 use codex_protocol::mcp::Resource;
 #[cfg(test)]
 use codex_protocol::mcp::ResourceTemplate;
-use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::WebSearchAction;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::McpAuthStatus;
-use codex_protocol::protocol::McpInvocation;
-use codex_protocol::protocol::SessionConfiguredEvent;
-use codex_protocol::request_user_input::RequestUserInputAnswer;
-use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::user_input::TextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::format_env_display;
@@ -860,13 +864,28 @@ fn exec_snippet(command: &[String]) -> String {
     truncate_exec_snippet(&full_cmd)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReviewDecision {
+    Approved,
+    ApprovedExecpolicyAmendment {
+        proposed_execpolicy_amendment: ExecPolicyAmendment,
+    },
+    ApprovedForSession,
+    NetworkPolicyAmendment {
+        network_policy_amendment: NetworkPolicyAmendment,
+    },
+    Denied,
+    TimedOut,
+    Abort,
+}
+
 pub fn new_approval_decision_cell(
     command: Vec<String>,
-    decision: codex_protocol::protocol::ReviewDecision,
+    decision: ReviewDecision,
     actor: ApprovalDecisionActor,
 ) -> Box<dyn HistoryCell> {
-    use codex_protocol::protocol::NetworkPolicyRuleAction;
-    use codex_protocol::protocol::ReviewDecision::*;
+    use ReviewDecision::*;
+    use codex_protocol::approvals::NetworkPolicyRuleAction;
 
     let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
         Approved => {
@@ -1231,28 +1250,24 @@ impl HistoryCell for SessionInfoCell {
 pub(crate) fn new_session_info(
     config: &Config,
     requested_model: &str,
-    event: SessionConfiguredEvent,
+    session: &ThreadSessionState,
     is_first_event: bool,
     tooltip_override: Option<String>,
     auth_plan: Option<PlanType>,
     show_fast_status: bool,
 ) -> SessionInfoCell {
-    let SessionConfiguredEvent {
-        model,
-        reasoning_effort,
-        approval_policy,
-        permission_profile,
-        ..
-    } = event;
     // Header box rendered as history (so it appears at the very top)
     let header = SessionHeaderHistoryCell::new(
-        model.clone(),
-        reasoning_effort,
+        session.model.clone(),
+        session.reasoning_effort,
         show_fast_status,
         config.cwd.to_path_buf(),
         CODEX_CLI_VERSION,
     )
-    .with_yolo_mode(has_yolo_permissions(approval_policy, &permission_profile));
+    .with_yolo_mode(has_yolo_permissions(
+        session.approval_policy,
+        &session.permission_profile,
+    ));
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
     if is_first_event {
@@ -1298,11 +1313,11 @@ pub(crate) fn new_session_info(
         {
             parts.push(Box::new(tooltips));
         }
-        if requested_model != model {
+        if requested_model != session.model.as_str() {
             let lines = vec![
                 "model changed:".magenta().bold().into(),
                 format!("requested: {requested_model}").into(),
-                format!("used: {model}").into(),
+                format!("used: {}", session.model).into(),
             ];
             parts.push(Box::new(PlainHistoryCell { lines }));
         }
@@ -1313,7 +1328,7 @@ pub(crate) fn new_session_info(
 
 pub(crate) fn is_yolo_mode(config: &Config) -> bool {
     has_yolo_permissions(
-        config.permissions.approval_policy.value(),
+        AskForApproval::from(config.permissions.approval_policy.value()),
         &config.permissions.permission_profile(),
     )
 }
@@ -1322,15 +1337,25 @@ fn has_yolo_permissions(
     approval_policy: AskForApproval,
     permission_profile: &PermissionProfile,
 ) -> bool {
+    let permission_profile = AppServerPermissionProfile::from(permission_profile.clone());
     approval_policy == AskForApproval::Never
         && matches!(
             permission_profile,
-            PermissionProfile::Disabled
-                | PermissionProfile::Managed {
-                    file_system: ManagedFileSystemPermissions::Unrestricted,
-                    network: codex_protocol::protocol::NetworkSandboxPolicy::Enabled,
+            AppServerPermissionProfile::Disabled
+                | AppServerPermissionProfile::Managed {
+                    file_system: PermissionProfileFileSystemPermissions::Unrestricted,
+                    network: PermissionProfileNetworkPermissions { enabled: true },
                 }
         )
+}
+
+fn mcp_auth_status_label(status: McpAuthStatus) -> &'static str {
+    match status {
+        McpAuthStatus::Unsupported => "Unsupported",
+        McpAuthStatus::NotLoggedIn => "Not logged in",
+        McpAuthStatus::BearerToken => "Bearer token",
+        McpAuthStatus::OAuth => "OAuth",
+    }
 }
 
 pub(crate) fn new_user_prompt(
@@ -1555,6 +1580,13 @@ pub(crate) struct McpToolCallCell {
     animations_enabled: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct McpInvocation {
+    pub(crate) server: String,
+    pub(crate) tool: String,
+    pub(crate) arguments: Option<serde_json::Value>,
+}
+
 impl McpToolCallCell {
     pub(crate) fn new(
         call_id: String,
@@ -1638,7 +1670,12 @@ impl HistoryCell for McpToolCallCell {
         let bullet = match status {
             Some(true) => "•".green().bold(),
             Some(false) => "•".red().bold(),
-            None => spinner(Some(self.start_time), self.animations_enabled),
+            None => activity_indicator(
+                Some(self.start_time),
+                MotionMode::from_animations_enabled(self.animations_enabled),
+                ReducedMotionIndicator::StaticBullet,
+            )
+            .unwrap_or_else(|| "•".dim()),
         };
         let header_text = if status.is_some() {
             "Called"
@@ -1746,6 +1783,42 @@ fn web_search_header(completed: bool) -> &'static str {
     }
 }
 
+fn web_search_action_detail(action: &WebSearchAction) -> String {
+    match action {
+        WebSearchAction::Search { query, queries } => {
+            query.clone().filter(|q| !q.is_empty()).unwrap_or_else(|| {
+                let items = queries.as_ref();
+                let first = items
+                    .and_then(|queries| queries.first())
+                    .cloned()
+                    .unwrap_or_default();
+                if items.is_some_and(|queries| queries.len() > 1) && !first.is_empty() {
+                    format!("{first} ...")
+                } else {
+                    first
+                }
+            })
+        }
+        WebSearchAction::OpenPage { url } => url.clone().unwrap_or_default(),
+        WebSearchAction::FindInPage { url, pattern } => match (pattern, url) {
+            (Some(pattern), Some(url)) => format!("'{pattern}' in {url}"),
+            (Some(pattern), None) => format!("'{pattern}'"),
+            (None, Some(url)) => url.clone(),
+            (None, None) => String::new(),
+        },
+        WebSearchAction::Other => String::new(),
+    }
+}
+
+fn web_search_detail(action: Option<&WebSearchAction>, query: &str) -> String {
+    let detail = action.map(web_search_action_detail).unwrap_or_default();
+    if detail.is_empty() {
+        query.to_string()
+    } else {
+        detail
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct WebSearchCell {
     call_id: String,
@@ -1792,7 +1865,12 @@ impl HistoryCell for WebSearchCell {
         let bullet = if self.completed {
             "•".dim()
         } else {
-            spinner(Some(self.start_time), self.animations_enabled)
+            activity_indicator(
+                Some(self.start_time),
+                MotionMode::from_animations_enabled(self.animations_enabled),
+                ReducedMotionIndicator::StaticBullet,
+            )
+            .unwrap_or_else(|| "•".dim())
         };
         let header = web_search_header(self.completed);
         let detail = web_search_detail(self.action.as_ref(), &self.query);
@@ -2041,7 +2119,13 @@ pub(crate) fn new_mcp_tools_output(
         }
         lines.push(header.into());
         lines.push(vec!["    • Status: ".into(), "enabled".green()].into());
-        lines.push(vec!["    • Auth: ".into(), auth_status.to_string().into()].into());
+        lines.push(
+            vec![
+                "    • Auth: ".into(),
+                mcp_auth_status_label(auth_status).into(),
+            ]
+            .into(),
+        );
 
         match &cfg.transport {
             McpServerTransportConfig::Stdio {
@@ -2219,7 +2303,13 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
                 codex_app_server_protocol::McpAuthStatus::OAuth => McpAuthStatus::OAuth,
             })
             .unwrap_or(McpAuthStatus::Unsupported);
-        lines.push(vec!["    • Auth: ".into(), auth_status.to_string().into()].into());
+        lines.push(
+            vec![
+                "    • Auth: ".into(),
+                mcp_auth_status_label(auth_status).into(),
+            ]
+            .into(),
+        );
 
         if let Some(cfg) = cfg {
             match &cfg.transport {
@@ -2390,7 +2480,12 @@ impl HistoryCell for McpInventoryLoadingCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         vec![
             vec![
-                spinner(Some(self.start_time), self.animations_enabled),
+                activity_indicator(
+                    Some(self.start_time),
+                    MotionMode::from_animations_enabled(self.animations_enabled),
+                    ReducedMotionIndicator::StaticBullet,
+                )
+                .unwrap_or_else(|| "•".dim()),
                 " ".into(),
                 "Loading MCP inventory".bold(),
                 "…".dim(),
@@ -2415,8 +2510,8 @@ pub(crate) fn new_mcp_inventory_loading(animations_enabled: bool) -> McpInventor
 /// Renders a completed (or interrupted) request_user_input exchange in history.
 #[derive(Debug)]
 pub(crate) struct RequestUserInputResultCell {
-    pub(crate) questions: Vec<RequestUserInputQuestion>,
-    pub(crate) answers: HashMap<String, RequestUserInputAnswer>,
+    pub(crate) questions: Vec<ToolRequestUserInputQuestion>,
+    pub(crate) answers: HashMap<String, ToolRequestUserInputAnswer>,
     pub(crate) interrupted: bool,
 }
 
@@ -2540,7 +2635,7 @@ fn wrap_with_prefix(
 /// Split a request_user_input answer into option labels and an optional freeform note.
 /// Notes are encoded as "user_note: <text>" entries in the answers list.
 fn split_request_user_input_answer(
-    answer: &RequestUserInputAnswer,
+    answer: &ToolRequestUserInputAnswer,
 ) -> (Vec<String>, Option<String>) {
     let mut options = Vec::new();
     let mut note = None;
@@ -2992,18 +3087,17 @@ mod tests {
     use crate::exec_cell::ExecCell;
     use crate::legacy_core::config::Config;
     use crate::legacy_core::config::ConfigBuilder;
+    use crate::session_state::ThreadSessionState;
     use crate::wrapping::word_wrap_lines;
+    use codex_app_server_protocol::AskForApproval;
+    use codex_app_server_protocol::McpAuthStatus;
     use codex_config::types::McpServerConfig;
     use codex_config::types::McpServerDisabledReason;
     use codex_otel::RuntimeMetricTotals;
     use codex_otel::RuntimeMetricsSummary;
     use codex_protocol::ThreadId;
     use codex_protocol::account::PlanType;
-    use codex_protocol::models::WebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
-    use codex_protocol::protocol::AskForApproval;
-    use codex_protocol::protocol::McpAuthStatus;
-    use codex_protocol::protocol::SessionConfiguredEvent;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
@@ -3012,9 +3106,9 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
+    use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::mcp::Tool;
-    use codex_protocol::protocol::ExecCommandSource;
     use rmcp::model::Content;
 
     const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
@@ -3183,10 +3277,11 @@ mod tests {
         );
     }
 
-    fn session_configured_event(model: &str) -> SessionConfiguredEvent {
-        SessionConfiguredEvent {
-            session_id: ThreadId::new(),
+    fn session_configured_event(model: &str) -> ThreadSessionState {
+        ThreadSessionState {
+            thread_id: ThreadId::new(),
             forked_from_id: None,
+            fork_parent_title: None,
             thread_name: None,
             model: model.to_string(),
             model_provider_id: "test-provider".to_string(),
@@ -3196,10 +3291,10 @@ mod tests {
             permission_profile: PermissionProfile::read_only(),
             active_permission_profile: None,
             cwd: test_path_buf("/tmp/project").abs(),
+            instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
-            initial_messages: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
         }
@@ -3297,7 +3392,7 @@ mod tests {
         let cell = new_session_info(
             &config,
             "gpt-5",
-            session_configured_event("gpt-5"),
+            &session_configured_event("gpt-5"),
             /*is_first_event*/ false,
             Some("Model just became available".to_string()),
             Some(PlanType::Free),
@@ -3319,7 +3414,7 @@ mod tests {
         let cell = new_session_info(
             &config,
             "gpt-5",
-            session_configured_event("gpt-5"),
+            &session_configured_event("gpt-5"),
             /*is_first_event*/ false,
             Some("Model just became available".to_string()),
             Some(PlanType::Free),
@@ -3336,7 +3431,7 @@ mod tests {
         let cell = new_session_info(
             &config,
             "gpt-5",
-            session_configured_event("gpt-5"),
+            &session_configured_event("gpt-5"),
             /*is_first_event*/ true,
             Some("Model just became available".to_string()),
             Some(PlanType::Free),
@@ -3355,7 +3450,7 @@ mod tests {
         let cell = new_session_info(
             &config,
             "gpt-5",
-            session_configured_event("gpt-5"),
+            &session_configured_event("gpt-5"),
             /*is_first_event*/ false,
             Some("Model just became available".to_string()),
             Some(PlanType::Free),
@@ -3889,6 +3984,16 @@ mod tests {
     }
 
     #[test]
+    fn mcp_inventory_loading_without_animations_is_stable() {
+        let cell = new_mcp_inventory_loading(/*animations_enabled*/ false);
+        let first = render_lines(&cell.display_lines(/*width*/ 80));
+        let second = render_lines(&cell.display_lines(/*width*/ 80));
+
+        assert_eq!(first, second);
+        assert_eq!(first, vec!["• Loading MCP inventory…".to_string()]);
+    }
+
+    #[test]
     fn completed_mcp_tool_call_success_snapshot() {
         let invocation = McpInvocation {
             server: "search".into(),
@@ -4216,10 +4321,11 @@ mod tests {
 
     #[test]
     fn yolo_mode_includes_managed_full_access_profiles() {
-        let permission_profile = PermissionProfile::Managed {
-            file_system: ManagedFileSystemPermissions::Unrestricted,
-            network: codex_protocol::protocol::NetworkSandboxPolicy::Enabled,
-        };
+        let permission_profile: PermissionProfile = AppServerPermissionProfile::Managed {
+            network: PermissionProfileNetworkPermissions { enabled: true },
+            file_system: PermissionProfileFileSystemPermissions::Unrestricted,
+        }
+        .into();
 
         assert!(has_yolo_permissions(
             AskForApproval::Never,
@@ -4229,9 +4335,10 @@ mod tests {
 
     #[test]
     fn yolo_mode_excludes_external_sandbox_profiles() {
-        let permission_profile = PermissionProfile::External {
-            network: codex_protocol::protocol::NetworkSandboxPolicy::Enabled,
-        };
+        let permission_profile: PermissionProfile = AppServerPermissionProfile::External {
+            network: PermissionProfileNetworkPermissions { enabled: true },
+        }
+        .into();
 
         assert!(!has_yolo_permissions(
             AskForApproval::Never,

@@ -8,6 +8,7 @@ members = [
     "ansi-escape",
     "async-utils",
     "app-server",
+    "app-server-transport",
     "app-server-client",
     "app-server-protocol",
     "app-server-test-client",
@@ -127,6 +128,7 @@ codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
 codex-aws-auth = { path = "aws-auth" }
 codex-app-server = { path = "app-server" }
+codex-app-server-transport = { path = "app-server-transport" }
 codex-app-server-client = { path = "app-server-client" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-app-server-test-client = { path = "app-server-test-client" }
@@ -320,6 +322,10 @@ quick-xml = "0.38.4"
 rand = "0.9"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
+rcgen = { version = "0.14.7", default-features = false, features = [
+    "aws_lc_rs",
+    "pem",
+] }
 regex = "1.12.3"
 regex-lite = "0.1.8"
 reqwest = { version = "0.12", features = ["cookies"] }

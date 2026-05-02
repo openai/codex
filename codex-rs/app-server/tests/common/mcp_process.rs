@@ -59,6 +59,7 @@ use codex_app_server_protocol::ModelProviderCapabilitiesReadParams;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginReadParams;
+use codex_app_server_protocol::PluginSkillReadParams;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
@@ -131,6 +132,13 @@ impl McpProcess {
 
     pub async fn new_with_plugin_startup_tasks(codex_home: &Path) -> anyhow::Result<Self> {
         Self::new_with_env_and_args(codex_home, &[], &[]).await
+    }
+
+    pub async fn new_with_env_and_plugin_startup_tasks(
+        codex_home: &Path,
+        env_overrides: &[(&str, Option<&str>)],
+    ) -> anyhow::Result<Self> {
+        Self::new_with_env_and_args(codex_home, env_overrides, &[]).await
     }
 
     pub async fn new_with_args(codex_home: &Path, args: &[&str]) -> anyhow::Result<Self> {
@@ -651,6 +659,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("plugin/read", params).await
+    }
+
+    /// Send a `plugin/skill/read` JSON-RPC request.
+    pub async fn send_plugin_skill_read_request(
+        &mut self,
+        params: PluginSkillReadParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("plugin/skill/read", params).await
     }
 
     /// Send an `mcpServerStatus/list` JSON-RPC request.

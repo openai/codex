@@ -99,10 +99,6 @@ pub mod legacy_core {
         pub use codex_core::personality_migration::*;
     }
 
-    pub mod plugins {
-        pub use codex_core::plugins::PluginsManager;
-    }
-
     pub mod review_format {
         pub use codex_core::review_format::*;
     }
@@ -304,7 +300,15 @@ impl fmt::Display for TypedRequestError {
                 write!(f, "{method} transport error: {source}")
             }
             Self::Server { method, source } => {
-                write!(f, "{method} failed: {}", source.message)
+                write!(
+                    f,
+                    "{method} failed: {} (code {})",
+                    source.message, source.code
+                )?;
+                if let Some(data) = source.data.as_ref() {
+                    write!(f, ", data: {data}")?;
+                }
+                Ok(())
             }
             Self::Deserialize { method, source } => {
                 write!(f, "{method} response decode error: {source}")
@@ -1919,11 +1923,15 @@ mod tests {
             method: "thread/read".to_string(),
             source: JSONRPCErrorError {
                 code: -32603,
-                data: None,
+                data: Some(serde_json::json!({"detail": "config lock mismatch"})),
                 message: "internal".to_string(),
             },
         };
         assert_eq!(std::error::Error::source(&server).is_some(), false);
+        assert_eq!(
+            server.to_string(),
+            "thread/read failed: internal (code -32603), data: {\"detail\":\"config lock mismatch\"}"
+        );
 
         let deserialize = TypedRequestError::Deserialize {
             method: "thread/start".to_string(),

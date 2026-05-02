@@ -1,20 +1,23 @@
 //! MCP startup state and status handling for the chat widget.
 //!
-//! This module is a mechanical extraction from `chatwidget.rs`: it keeps the
-//! buffered startup-round bookkeeping together while preserving the existing
-//! event shapes and rendering behavior.
+//! The app server reports MCP server startup as per-server status updates. This
+//! module keeps the TUI's buffered startup round state coherent and translates
+//! those updates into status headers, warnings, and queued-input release points.
 
 use std::collections::BTreeSet;
 
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
-#[cfg(test)]
-use codex_protocol::protocol::McpStartupCompleteEvent;
-use codex_protocol::protocol::McpStartupStatus;
-#[cfg(test)]
-use codex_protocol::protocol::McpStartupUpdateEvent;
 
 use super::ChatWidget;
+
+#[derive(Debug, Clone)]
+pub(crate) enum McpStartupStatus {
+    Starting,
+    Ready,
+    Failed { error: String },
+    Cancelled,
+}
 
 impl ChatWidget {
     /// Record one MCP startup update, promoting it into either the active startup
@@ -169,11 +172,6 @@ impl ChatWidget {
         self.mcp_startup_expected_servers = Some(server_names.into_iter().collect());
     }
 
-    #[cfg(test)]
-    pub(super) fn on_mcp_startup_update(&mut self, ev: McpStartupUpdateEvent) {
-        self.update_mcp_startup_status(ev.server, ev.status, /*complete_when_settled*/ false);
-    }
-
     pub(super) fn finish_mcp_startup(&mut self, failed: Vec<String>, cancelled: Vec<String>) {
         if !cancelled.is_empty() {
             self.on_warning(format!(
@@ -234,12 +232,6 @@ impl ChatWidget {
         cancelled.sort();
         cancelled.dedup();
         self.finish_mcp_startup(failed, cancelled);
-    }
-
-    #[cfg(test)]
-    pub(super) fn on_mcp_startup_complete(&mut self, ev: McpStartupCompleteEvent) {
-        let failed = ev.failed.into_iter().map(|f| f.server).collect();
-        self.finish_mcp_startup(failed, ev.cancelled);
     }
 
     pub(super) fn on_mcp_server_status_updated(

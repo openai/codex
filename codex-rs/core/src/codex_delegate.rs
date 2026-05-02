@@ -30,6 +30,7 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
+use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian;
@@ -47,7 +48,6 @@ use crate::session::SUBMISSION_CHANNEL_CAPACITY;
 use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use crate::session::turn_context::TurnEnvironment;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::error::CodexErr;
@@ -94,11 +94,9 @@ pub(crate) async fn run_codex_thread_interactive(
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         parent_trace: None,
-        environments: parent_ctx
-            .environments
-            .iter()
-            .map(TurnEnvironment::selection)
-            .collect(),
+        environment_selections: ResolvedTurnEnvironments {
+            turn_environments: parent_ctx.environments.clone(),
+        },
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         thread_store: Arc::clone(&parent_session.services.thread_store),
     }))
@@ -262,11 +260,6 @@ async fn forward_events(
                     Err(_) => break,
                 };
                 match event {
-                    // ignore all legacy delta events
-                    Event {
-                        id: _,
-                        msg: EventMsg::AgentMessageDelta(_) | EventMsg::AgentReasoningDelta(_),
-                    } => {}
                     Event {
                         id: _,
                         msg: EventMsg::TokenCount(_),

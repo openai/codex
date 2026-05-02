@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
+use crossterm::cursor::SetCursorStyle;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
@@ -21,6 +22,7 @@ use crossterm::event::EnableFocusChange;
 use crossterm::event::KeyEvent;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
+#[cfg(not(unix))]
 use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::backend::Backend;
 use ratatui::backend::CrosstermBackend;
@@ -187,7 +189,13 @@ fn restore_common(
     {
         first_error.get_or_insert(err);
     }
-    let _ = execute!(stdout(), crossterm::cursor::Show);
+    if let Err(err) = execute!(
+        stdout(),
+        SetCursorStyle::DefaultUserShape,
+        crossterm::cursor::Show
+    ) {
+        first_error.get_or_insert(err);
+    }
     match first_error {
         Some(err) => Err(err),
         None => Ok(()),
@@ -282,9 +290,55 @@ pub fn init() -> Result<Terminal> {
 
     set_panic_hook();
 
+    #[cfg(unix)]
     let backend = CrosstermBackend::new(stdout());
-    let tui = CustomTerminal::with_options(backend)?;
+
+    #[cfg(unix)]
+    let cursor_pos =
+        match crate::terminal_probe::cursor_position(crate::terminal_probe::DEFAULT_TIMEOUT) {
+            Ok(Some(pos)) => pos,
+            Ok(None) => {
+                tracing::warn!("initial cursor position probe timed out; defaulting to origin");
+                Position { x: 0, y: 0 }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "failed to read initial cursor position; defaulting to origin: {err}"
+                );
+                Position { x: 0, y: 0 }
+            }
+        };
+
+    #[cfg(not(unix))]
+    let mut backend = CrosstermBackend::new(stdout());
+
+    #[cfg(not(unix))]
+    let cursor_pos = cursor_position_with_crossterm(&mut backend);
+
+    let tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
     Ok(tui)
+}
+
+#[cfg(not(unix))]
+fn cursor_position_with_crossterm(backend: &mut CrosstermBackend<Stdout>) -> Position {
+    backend.get_cursor_position().unwrap_or_else(|err| {
+        tracing::warn!("failed to read initial cursor position; defaulting to origin: {err}");
+        Position { x: 0, y: 0 }
+    })
+}
+
+#[cfg(unix)]
+fn detect_keyboard_enhancement_supported() -> bool {
+    crate::terminal_probe::keyboard_enhancement_supported(crate::terminal_probe::DEFAULT_TIMEOUT)
+        .unwrap_or(/*default*/ None)
+        .unwrap_or(/*default*/ false)
+}
+
+#[cfg(not(unix))]
+fn detect_keyboard_enhancement_supported() -> bool {
+    // Non-Unix startup keeps the existing crossterm path because the bounded probe implementation
+    // relies on Unix file descriptors and `/dev/tty` semantics.
+    supports_keyboard_enhancement().unwrap_or(/*default*/ false)
 }
 
 fn set_panic_hook() {
@@ -339,7 +393,7 @@ impl Tui {
         // Detect keyboard enhancement support before any EventStream is created so the
         // crossterm poller can acquire its lock without contention.
         let enhanced_keys_supported = !keyboard_modes::keyboard_enhancement_disabled()
-            && supports_keyboard_enhancement().unwrap_or(false);
+            && detect_keyboard_enhancement_supported();
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
         let _ = crate::terminal_palette::default_colors();

@@ -674,13 +674,16 @@ fn evaluate_intercepted_exec_policy(
 
     let fallback = |cmd: &[String]| {
         crate::exec_policy::render_decision_for_unmatched_command(
-            approval_policy,
-            &permission_profile,
-            file_system_sandbox_policy,
-            sandbox_cwd,
             cmd,
-            sandbox_permissions,
-            used_complex_parsing,
+            crate::exec_policy::UnmatchedCommandContext {
+                approval_policy,
+                permission_profile: &permission_profile,
+                file_system_sandbox_policy,
+                sandbox_cwd,
+                sandbox_permissions,
+                used_complex_parsing,
+                command_origin: crate::exec_policy::ExecPolicyCommandOrigin::Generic,
+            },
         )
     };
 

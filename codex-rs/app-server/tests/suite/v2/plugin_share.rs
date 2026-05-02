@@ -12,6 +12,7 @@ use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInterface;
 use codex_app_server_protocol::PluginShareDeleteResponse;
+use codex_app_server_protocol::PluginShareListItem;
 use codex_app_server_protocol::PluginShareListResponse;
 use codex_app_server_protocol::PluginShareSaveResponse;
 use codex_app_server_protocol::PluginSource;
@@ -49,6 +50,7 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
             .chatgpt_account_id("account-123"),
         AuthCredentialsStoreMode::File,
     )?;
+    write_corrupt_plugin_share_local_path_mapping(codex_home.path())?;
 
     Mock::given(method("POST"))
         .and(path("/backend-api/public/plugins/workspace/upload-url"))
@@ -88,11 +90,12 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let expected_plugin_path = AbsolutePathBuf::try_from(plugin_path.clone())?;
     let request_id = mcp
         .send_raw_request(
             "plugin/share/save",
             Some(json!({
-                "pluginPath": AbsolutePathBuf::try_from(plugin_path)?,
+                "pluginPath": expected_plugin_path.clone(),
             })),
         )
         .await?;
@@ -109,6 +112,62 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
         PluginShareSaveResponse {
             remote_plugin_id: "plugins_123".to_string(),
             share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
+        }
+    );
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/workspace/created"))
+        .and(query_param("limit", "200"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plugins": [remote_plugin_json("plugins_123")],
+            "pagination": empty_pagination_json(),
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("scope", "WORKSPACE"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plugins": [installed_remote_plugin_json("plugins_123")],
+            "pagination": empty_pagination_json(),
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let request_id = mcp
+        .send_raw_request("plugin/share/list", Some(json!({})))
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginShareListResponse = to_response(response)?;
+
+    assert_eq!(
+        response,
+        PluginShareListResponse {
+            data: vec![PluginShareListItem {
+                plugin: PluginSummary {
+                    id: "plugins_123".to_string(),
+                    name: "demo-plugin".to_string(),
+                    source: PluginSource::Remote,
+                    installed: true,
+                    enabled: true,
+                    install_policy: PluginInstallPolicy::Available,
+                    auth_policy: PluginAuthPolicy::OnUse,
+                    availability: codex_app_server_protocol::PluginAvailability::Available,
+                    interface: Some(expected_plugin_interface()),
+                },
+                share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
+                local_plugin_path: Some(expected_plugin_path),
+            }],
         }
     );
     Ok(())
@@ -169,15 +228,20 @@ async fn plugin_share_list_returns_created_workspace_plugins() -> Result<()> {
     assert_eq!(
         response,
         PluginShareListResponse {
-            data: vec![PluginSummary {
-                id: "plugins_123".to_string(),
-                name: "demo-plugin".to_string(),
-                source: PluginSource::Remote,
-                installed: true,
-                enabled: true,
-                install_policy: PluginInstallPolicy::Available,
-                auth_policy: PluginAuthPolicy::OnUse,
-                interface: Some(expected_plugin_interface()),
+            data: vec![PluginShareListItem {
+                plugin: PluginSummary {
+                    id: "plugins_123".to_string(),
+                    name: "demo-plugin".to_string(),
+                    source: PluginSource::Remote,
+                    installed: true,
+                    enabled: true,
+                    install_policy: PluginInstallPolicy::Available,
+                    auth_policy: PluginAuthPolicy::OnUse,
+                    availability: codex_app_server_protocol::PluginAvailability::Available,
+                    interface: Some(expected_plugin_interface()),
+                },
+                share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
+                local_plugin_path: None,
             }],
         }
     );
@@ -197,6 +261,8 @@ async fn plugin_share_delete_removes_created_workspace_plugin() -> Result<()> {
             .chatgpt_account_id("account-123"),
         AuthCredentialsStoreMode::File,
     )?;
+    let local_plugin_path = AbsolutePathBuf::try_from(codex_home.path().join("local-plugin"))?;
+    write_plugin_share_local_path_mapping(codex_home.path(), "plugins_123", &local_plugin_path)?;
 
     Mock::given(method("DELETE"))
         .and(path("/backend-api/public/plugins/workspace/plugins_123"))
@@ -226,6 +292,62 @@ async fn plugin_share_delete_removes_created_workspace_plugin() -> Result<()> {
     let response: PluginShareDeleteResponse = to_response(response)?;
 
     assert_eq!(response, PluginShareDeleteResponse {});
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/workspace/created"))
+        .and(query_param("limit", "200"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plugins": [remote_plugin_json("plugins_123")],
+            "pagination": empty_pagination_json(),
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("scope", "WORKSPACE"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plugins": [installed_remote_plugin_json("plugins_123")],
+            "pagination": empty_pagination_json(),
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let request_id = mcp
+        .send_raw_request("plugin/share/list", Some(json!({})))
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginShareListResponse = to_response(response)?;
+
+    assert_eq!(
+        response,
+        PluginShareListResponse {
+            data: vec![PluginShareListItem {
+                plugin: PluginSummary {
+                    id: "plugins_123".to_string(),
+                    name: "demo-plugin".to_string(),
+                    source: PluginSource::Remote,
+                    installed: true,
+                    enabled: true,
+                    install_policy: PluginInstallPolicy::Available,
+                    auth_policy: PluginAuthPolicy::OnUse,
+                    availability: codex_app_server_protocol::PluginAvailability::Available,
+                    interface: Some(expected_plugin_interface()),
+                },
+                share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
+                local_plugin_path: None,
+            }],
+        }
+    );
     Ok(())
 }
 
@@ -249,6 +371,7 @@ fn remote_plugin_json(plugin_id: &str) -> serde_json::Value {
         "id": plugin_id,
         "name": "demo-plugin",
         "scope": "WORKSPACE",
+        "share_url": "https://chatgpt.example/plugins/share/share-key-1",
         "installation_policy": "AVAILABLE",
         "authentication_policy": "ON_USE",
         "release": {
@@ -312,6 +435,33 @@ fn write_test_plugin(root: &Path, plugin_name: &str) -> std::io::Result<PathBuf>
         "# Example\n\nA test skill.\n",
     )?;
     Ok(plugin_path)
+}
+
+fn write_corrupt_plugin_share_local_path_mapping(codex_home: &Path) -> std::io::Result<()> {
+    write_file(
+        &codex_home.join(".tmp/plugin-share-local-paths-v1.json"),
+        "not-json",
+    )
+}
+
+fn write_plugin_share_local_path_mapping(
+    codex_home: &Path,
+    remote_plugin_id: &str,
+    plugin_path: &AbsolutePathBuf,
+) -> std::io::Result<()> {
+    let mut local_plugin_paths_by_remote_plugin_id = serde_json::Map::new();
+    local_plugin_paths_by_remote_plugin_id.insert(
+        remote_plugin_id.to_string(),
+        serde_json::to_value(plugin_path).map_err(std::io::Error::other)?,
+    );
+    let contents = serde_json::to_string_pretty(&json!({
+        "localPluginPathsByRemotePluginId": local_plugin_paths_by_remote_plugin_id,
+    }))
+    .map_err(std::io::Error::other)?;
+    write_file(
+        &codex_home.join(".tmp/plugin-share-local-paths-v1.json"),
+        &format!("{contents}\n"),
+    )
 }
 
 fn write_file(path: &Path, contents: &str) -> std::io::Result<()> {

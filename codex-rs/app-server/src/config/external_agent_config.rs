@@ -1,9 +1,8 @@
 use codex_config::types::PluginConfig;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
-use codex_core::plugins::PluginId;
-use codex_core::plugins::PluginInstallRequest;
-use codex_core::plugins::PluginsManager;
+use codex_core_plugins::PluginInstallRequest;
+use codex_core_plugins::PluginsManager;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
 use codex_core_plugins::marketplace::find_marketplace_manifest_path;
 use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
@@ -20,6 +19,7 @@ use codex_external_agent_migration::missing_command_names;
 use codex_external_agent_migration::missing_subagent_names;
 use codex_external_agent_sessions::ExternalAgentSessionMigration;
 use codex_external_agent_sessions::detect_recent_sessions;
+use codex_plugin::PluginId;
 use codex_protocol::protocol::Product;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
@@ -1146,8 +1146,9 @@ fn configured_marketplace_plugins(
     config: &Config,
     plugins_manager: &PluginsManager,
 ) -> io::Result<BTreeMap<String, HashSet<String>>> {
+    let plugins_input = config.plugins_config_input();
     let marketplaces = plugins_manager
-        .list_marketplaces_for_config(config, &[])
+        .list_marketplaces_for_config(&plugins_input, &[])
         .map_err(|err| {
             invalid_data_error(format!("failed to list configured marketplaces: {err}"))
         })?;

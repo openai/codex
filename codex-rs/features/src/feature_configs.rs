@@ -30,6 +30,10 @@ impl FeatureConfig for MultiAgentV2ConfigToml {
     fn enabled(&self) -> Option<bool> {
         self.enabled
     }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = Some(enabled);
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -44,5 +48,9 @@ pub struct AppsMcpPathOverrideConfigToml {
 impl FeatureConfig for AppsMcpPathOverrideConfigToml {
     fn enabled(&self) -> Option<bool> {
         self.enabled.or(self.path.as_ref().map(|_| true))
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = Some(enabled);
     }
 }

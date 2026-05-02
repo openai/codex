@@ -838,6 +838,72 @@ fn sanitize_mcp_tool_result_for_model_preserves_image_when_supported() {
     assert_eq!(got, original);
 }
 
+#[test]
+fn truncate_mcp_tool_result_for_event_preserves_small_result() {
+    let original = CallToolResult {
+        content: vec![serde_json::json!({
+            "type": "text",
+            "text": "hello",
+        })],
+        structured_content: Some(serde_json::json!({"x": 1})),
+        is_error: Some(false),
+        meta: Some(serde_json::json!({"k": "v"})),
+    };
+
+    let got = truncate_mcp_tool_result_for_event(&Ok(original.clone()))
+        .expect("small result should remain successful");
+
+    assert_eq!(got, original);
+}
+
+#[test]
+fn truncate_mcp_tool_result_for_event_bounds_large_result() {
+    let original = CallToolResult {
+        content: vec![serde_json::json!({
+            "type": "text",
+            "text": "long-message-with-newlines-\n".repeat(200_000),
+        })],
+        structured_content: Some(serde_json::json!({
+            "structured": "structured-value-".repeat(200_000),
+        })),
+        is_error: Some(false),
+        meta: Some(serde_json::json!({
+            "meta": "meta-value-".repeat(200_000),
+        })),
+    };
+
+    let got = truncate_mcp_tool_result_for_event(&Ok(original))
+        .expect("large result should remain successful");
+    let serialized = serde_json::to_string(&got).expect("truncated result should serialize");
+
+    // The truncated preview is embedded as a JSON string, so quotes and
+    // backslashes can be escaped again. That can roughly double the preview
+    // bytes in the worst case. The extra buffer covers the small result wrapper
+    // and marker.
+    assert!(serialized.len() < MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES * 2 + 1024);
+    assert_eq!(got.structured_content, None);
+    assert_eq!(got.meta, None);
+    assert_eq!(got.is_error, Some(false));
+    assert!(
+        got.content[0]
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|text| text.contains("truncated")),
+        "large event result should contain a truncation marker: {got:?}"
+    );
+}
+
+#[test]
+fn truncate_mcp_tool_result_for_event_bounds_large_error() {
+    let got = truncate_mcp_tool_result_for_event(&Err("error-message-".repeat(200_000)))
+        .expect_err("large error should remain an error");
+
+    // `truncate_text` includes its own marker, so allow a small amount of
+    // overhead beyond the requested byte budget.
+    assert!(got.len() < MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES + 1024);
+    assert!(got.contains("truncated"));
+}
+
 #[tokio::test]
 async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
     let (_, turn_context) = make_session_and_context().await;
@@ -1594,7 +1660,7 @@ enabled = true
     session
         .services
         .plugins_manager
-        .plugins_for_config(&initial_config)
+        .plugins_for_config(&initial_config.plugins_config_input())
         .await;
     std::fs::write(
         codex_home.join(CONFIG_TOML_FILE),
@@ -2556,31 +2622,19 @@ async fn full_access_mode_skips_arc_monitor_for_all_approval_modes() {
 }
 
 #[tokio::test]
-async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_enabled() {
+async fn approve_mode_skips_arc_and_guardian_when_guardian_reviewer_is_enabled() {
     use wiremock::Mock;
     use wiremock::ResponseTemplate;
     use wiremock::matchers::method;
     use wiremock::matchers::path;
 
     let server = start_mock_server().await;
-    let guardian_request_log = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-guardian"),
-            ev_assistant_message(
-                "msg-guardian",
-                &serde_json::json!({
-                    "risk_level": "low",
-                    "user_authorization": "high",
-                    "outcome": "allow",
-                    "rationale": "The user already configured guardian to review escalated approvals for this session.",
-                })
-                .to_string(),
-            ),
-            ev_completed("resp-guardian"),
-        ]),
-    )
-    .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
     Mock::given(method("POST"))
         .and(path("/codex/safety/arc"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -2594,7 +2648,7 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
                 "why": "requires review",
             }],
         })))
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -2653,9 +2707,5 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
     )
     .await;
 
-    assert_eq!(decision, Some(McpToolApprovalDecision::Accept));
-    assert_eq!(
-        guardian_request_log.single_request().path(),
-        "/v1/responses"
-    );
+    assert_eq!(decision, None);
 }

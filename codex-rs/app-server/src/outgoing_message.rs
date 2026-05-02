@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -15,7 +14,6 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_otel::span_w3c_trace_context;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::W3cTraceContext;
-use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -26,21 +24,16 @@ use tracing::warn;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::internal_error;
 use crate::server_request_error::TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON;
+pub(crate) use codex_app_server_transport::ConnectionId;
+pub(crate) use codex_app_server_transport::OutgoingError;
+pub(crate) use codex_app_server_transport::OutgoingMessage;
+pub(crate) use codex_app_server_transport::OutgoingResponse;
+pub(crate) use codex_app_server_transport::QueuedOutgoingMessage;
 
 #[cfg(test)]
 use codex_protocol::account::PlanType;
 
 pub(crate) type ClientRequestResult = std::result::Result<Result, JSONRPCErrorError>;
-
-/// Stable identifier for a transport connection.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct ConnectionId(pub(crate) u64);
-
-impl fmt::Display for ConnectionId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
 
 /// Stable identifier for a client request scoped to a transport connection.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -94,21 +87,6 @@ pub(crate) enum OutgoingEnvelope {
     Broadcast {
         message: OutgoingMessage,
     },
-}
-
-#[derive(Debug)]
-pub(crate) struct QueuedOutgoingMessage {
-    pub(crate) message: OutgoingMessage,
-    pub(crate) write_complete_tx: Option<oneshot::Sender<()>>,
-}
-
-impl QueuedOutgoingMessage {
-    pub(crate) fn new(message: OutgoingMessage) -> Self {
-        Self {
-            message,
-            write_complete_tx: None,
-        }
-    }
 }
 
 /// Sends messages to the client and manages request callbacks.
@@ -663,30 +641,6 @@ impl OutgoingMessageSender {
             warn!("failed to send {message_kind} to client: {err:?}");
         }
     }
-}
-
-/// Outgoing message from the server to the client.
-#[derive(Debug, Clone, Serialize)]
-#[serde(untagged)]
-pub(crate) enum OutgoingMessage {
-    Request(ServerRequest),
-    /// AppServerNotification is specific to the case where this is run as an
-    /// "app server" as opposed to an MCP server.
-    AppServerNotification(ServerNotification),
-    Response(OutgoingResponse),
-    Error(OutgoingError),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct OutgoingResponse {
-    pub id: RequestId,
-    pub result: Result,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct OutgoingError {
-    pub error: JSONRPCErrorError,
-    pub id: RequestId,
 }
 
 #[cfg(test)]

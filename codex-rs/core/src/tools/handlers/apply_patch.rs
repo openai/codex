@@ -33,10 +33,9 @@ use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::sandboxing::ToolCtx;
 use codex_apply_patch::ApplyPatchAction;
-use codex_apply_patch::ApplyPatchArgs;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_apply_patch::Hunk;
-use codex_apply_patch::parse_patch_streaming;
+use codex_apply_patch::StreamingPatchParser;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -56,8 +55,7 @@ pub struct ApplyPatchHandler;
 
 #[derive(Default)]
 struct ApplyPatchArgumentDiffConsumer {
-    input: String,
-    last_progress: Option<Vec<Hunk>>,
+    parser: StreamingPatchParser,
     last_sent_at: Option<Instant>,
     pending: Option<PatchApplyUpdatedEvent>,
 }
@@ -77,26 +75,19 @@ impl ToolArgumentDiffConsumer for ApplyPatchArgumentDiffConsumer {
             .map(EventMsg::PatchApplyUpdated)
     }
 
-    fn flush_on_complete(&mut self) -> Option<EventMsg> {
-        self.flush_update_on_complete()
-            .map(EventMsg::PatchApplyUpdated)
+    fn finish(&mut self) -> Result<Option<EventMsg>, FunctionCallError> {
+        self.finish_update_on_complete()
+            .map(|event| event.map(EventMsg::PatchApplyUpdated))
     }
 }
 
 impl ApplyPatchArgumentDiffConsumer {
     fn push_delta(&mut self, call_id: String, delta: &str) -> Option<PatchApplyUpdatedEvent> {
-        self.input.push_str(delta);
-
-        let ApplyPatchArgs { hunks, .. } = parse_patch_streaming(&self.input).ok()?;
+        let hunks = self.parser.push_delta(delta).ok()?;
         if hunks.is_empty() {
             return None;
         }
-        if self.last_progress.as_ref() == Some(&hunks) {
-            return None;
-        }
-
         let changes = convert_apply_patch_hunks_to_protocol(&hunks);
-        self.last_progress = Some(hunks);
         let event = PatchApplyUpdatedEvent { call_id, changes };
         let now = Instant::now();
         match self.last_sent_at {
@@ -114,12 +105,18 @@ impl ApplyPatchArgumentDiffConsumer {
         }
     }
 
-    fn flush_update_on_complete(&mut self) -> Option<PatchApplyUpdatedEvent> {
+    fn finish_update_on_complete(
+        &mut self,
+    ) -> Result<Option<PatchApplyUpdatedEvent>, FunctionCallError> {
+        self.parser.finish().map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to parse apply_patch: {err}"))
+        })?;
+
         let event = self.pending.take();
         if event.is_some() {
             self.last_sent_at = Some(Instant::now());
         }
-        event
+        Ok(event)
     }
 }
 
@@ -366,13 +363,14 @@ impl ToolHandler for ApplyPatchHandler {
         // Avoid building temporary ExecParams/command vectors; derive directly from inputs.
         let cwd = turn.cwd.clone();
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
-        let Some(environment) = turn.environment.as_ref() else {
+        let Some(turn_environment) = turn.primary_environment() else {
             return Err(FunctionCallError::RespondToModel(
                 "apply_patch is unavailable in this session".to_string(),
             ));
         };
-        let fs = environment.get_filesystem();
-        let sandbox = environment
+        let fs = turn_environment.environment.get_filesystem();
+        let sandbox = turn_environment
+            .environment
             .is_remote()
             .then(|| turn.file_system_sandbox_context(/*additional_permissions*/ None));
         match codex_apply_patch::maybe_parse_apply_patch_verified(
@@ -477,9 +475,8 @@ pub(crate) async fn intercept_apply_patch(
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
     let sandbox = turn
-        .environment
-        .as_ref()
-        .filter(|env| env.is_remote())
+        .primary_environment()
+        .filter(|env| env.environment.is_remote())
         .map(|_| turn.file_system_sandbox_context(/*additional_permissions*/ None));
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, sandbox.as_ref())
         .await

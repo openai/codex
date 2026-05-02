@@ -13,9 +13,11 @@ clap = { workspace = true, features = ["derive"] }
 codex-app-server-protocol = { workspace = true }
 codex-connectors = { workspace = true }
 codex-core = { workspace = true }
+codex-core-plugins = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
+codex-plugin = { workspace = true }
 codex-utils-cli = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["full"] }

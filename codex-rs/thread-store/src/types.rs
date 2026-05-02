@@ -26,6 +26,19 @@ pub enum ThreadEventPersistenceMode {
     Extended,
 }
 
+/// Thread-scoped metadata used when opening live persistence.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadPersistenceMetadata {
+    /// Effective working directory for environment-backed threads.
+    ///
+    /// `None` means the thread has no filesystem/environment context.
+    pub cwd: Option<PathBuf>,
+    /// Model provider associated with the thread.
+    pub model_provider: String,
+    /// Memory mode associated with the live thread.
+    pub memory_mode: MemoryMode,
+}
+
 /// Parameters required to create a persisted thread.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateThreadParams {
@@ -39,6 +52,8 @@ pub struct CreateThreadParams {
     pub base_instructions: BaseInstructions,
     /// Dynamic tools available to the thread at startup.
     pub dynamic_tools: Vec<DynamicToolSpec>,
+    /// Metadata captured for the newly created thread.
+    pub metadata: ThreadPersistenceMetadata,
     /// Whether persistence should include the extended event surface.
     pub event_persistence_mode: ThreadEventPersistenceMode,
 }
@@ -54,6 +69,8 @@ pub struct ResumeThreadParams {
     pub history: Option<Vec<RolloutItem>>,
     /// Whether archived threads may be reopened.
     pub include_archived: bool,
+    /// Metadata for future writes appended to the resumed live thread.
+    pub metadata: ThreadPersistenceMetadata,
     /// Whether persistence should include the extended event surface.
     pub event_persistence_mode: ThreadEventPersistenceMode,
 }

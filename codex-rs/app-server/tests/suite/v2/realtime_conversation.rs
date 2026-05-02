@@ -313,7 +313,7 @@ impl RealtimeE2eHarness {
                 thread_id: self.thread_id.clone(),
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(Some("backend prompt".to_string())),
-                session_id: None,
+                realtime_session_id: None,
                 transport: Some(ThreadRealtimeStartTransport::Webrtc {
                     sdp: offer_sdp.to_string(),
                 }),
@@ -440,10 +440,10 @@ fn open_realtime_sideband_connection(
     }
 }
 
-fn session_updated(session_id: &str) -> Value {
+fn session_updated(realtime_session_id: &str) -> Value {
     json!({
         "type": "session.updated",
-        "session": { "id": session_id, "instructions": "backend prompt" }
+        "session": { "id": realtime_session_id, "instructions": "backend prompt" }
     })
 }
 
@@ -558,7 +558,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             thread_id: thread_start.thread.id.clone(),
             output_modality: RealtimeOutputModality::Audio,
             prompt: None,
-            session_id: None,
+            realtime_session_id: None,
             transport: None,
             voice: Some(RealtimeVoice::Cedar),
         })
@@ -574,7 +574,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         read_notification::<ThreadRealtimeStartedNotification>(&mut mcp, "thread/realtime/started")
             .await?;
     assert_eq!(started.thread_id, thread_start.thread.id);
-    assert!(started.session_id.is_some());
+    assert!(started.realtime_session_id.is_some());
     assert_eq!(started.version, RealtimeConversationVersion::V2);
 
     let startup_context_request = realtime_server
@@ -807,7 +807,7 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
             thread_id: thread_start.thread.id.clone(),
             output_modality: RealtimeOutputModality::Text,
             prompt: None,
-            session_id: None,
+            realtime_session_id: None,
             transport: None,
             voice: None,
         })
@@ -981,7 +981,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
             thread_id: thread_start.thread.id.clone(),
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
-            session_id: None,
+            realtime_session_id: None,
             transport: None,
             voice: None,
         })
@@ -1078,7 +1078,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
             thread_id: thread_id.clone(),
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
-            session_id: None,
+            realtime_session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
             }),
@@ -1208,7 +1208,7 @@ async fn webrtc_v1_start_posts_offer_returns_sdp_and_joins_sideband() -> Result<
         StartedWebrtcRealtime {
             started: ThreadRealtimeStartedNotification {
                 thread_id: harness.thread_id.clone(),
-                session_id: Some(harness.thread_id.clone()),
+                realtime_session_id: Some(harness.thread_id.clone()),
                 version: RealtimeConversationVersion::V1,
             },
             sdp: ThreadRealtimeSdpNotification {
@@ -1993,7 +1993,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
             thread_id: thread_start.thread.id,
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
-            session_id: None,
+            realtime_session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
             }),
@@ -2052,7 +2052,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
             thread_id: thread_start.thread.id.clone(),
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
-            session_id: None,
+            realtime_session_id: None,
             transport: None,
             voice: None,
         })

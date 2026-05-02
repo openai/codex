@@ -46,10 +46,11 @@ use uuid::Uuid;
 use crate::LoginStatus;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
+use crate::motion::MotionMode;
+use crate::motion::shimmer_text;
 use crate::onboarding::keys;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
-use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 
 /// Marks buffer cells that have cyan+underlined style as an OSC 8 hyperlink.
@@ -511,7 +512,10 @@ impl AuthModeWidget {
             // Schedule a follow-up frame to keep the shimmer animation going.
             self.request_frame
                 .schedule_frame_in(std::time::Duration::from_millis(100));
-            spans.extend(shimmer_spans("Finish signing in via your browser"));
+            spans.extend(shimmer_text(
+                "Finish signing in via your browser",
+                MotionMode::Animated,
+            ));
         } else {
             spans.push("Finish signing in via your browser".into());
         }
@@ -1018,7 +1022,6 @@ mod tests {
     use codex_cloud_requirements::cloud_requirements_loader_for_storage;
     use codex_config::types::AuthCredentialsStoreMode;
 
-    use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -1049,7 +1052,8 @@ mod tests {
                 codex_app_server_client::EnvironmentManager::default_for_tests(),
             ),
             config_warnings: Vec::new(),
-            session_source: SessionSource::Cli,
+            session_source: serde_json::from_value(serde_json::json!("cli"))
+                .expect("cli session source should deserialize"),
             enable_codex_api_key_env: false,
             client_name: "test".to_string(),
             client_version: "test".to_string(),

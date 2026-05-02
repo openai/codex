@@ -3,6 +3,8 @@
 #![deny(private_bounds, private_interfaces, unreachable_pub)]
 
 pub use codex_analytics::AnalyticsEventsClient;
+pub use codex_app_server_protocol::ServerNotification;
+pub use codex_app_server_protocol::item_event_to_server_notification;
 pub use codex_arg0::Arg0DispatchPaths;
 pub use codex_arg0::arg0_dispatch_or_else;
 pub use codex_config::ConfigLayerStack;
@@ -35,13 +37,13 @@ pub use codex_core::config::Permissions;
 pub use codex_core::config::TerminalResizeReflowConfig;
 pub use codex_core::config::ThreadStoreConfig;
 pub use codex_core::config::find_codex_home;
-pub use codex_core::plugins::PluginsManager;
 pub use codex_core::skills::SkillsManager;
 pub use codex_core::thread_store_from_config;
 pub use codex_exec_server::EnvironmentManager;
 pub use codex_exec_server::EnvironmentManagerArgs;
 pub use codex_exec_server::ExecServerRuntimePaths;
 pub use codex_features::Feature;
+pub use codex_features::Features;
 pub use codex_login::AuthManager;
 pub use codex_login::default_client::set_default_originator;
 pub use codex_model_provider_info::OPENAI_PROVIDER_ID;

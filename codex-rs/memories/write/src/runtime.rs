@@ -8,7 +8,6 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::content_items_to_text;
 use codex_core::resolve_installation_id;
-use codex_core::thread_store_from_config;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -237,7 +236,6 @@ impl MemoryStartupContext {
         } = self
             .thread_manager
             .start_thread_with_options(StartThreadOptions {
-                thread_store: thread_store_from_config(&config),
                 config,
                 initial_history: InitialHistory::New,
                 session_source: Some(SessionSource::Internal(

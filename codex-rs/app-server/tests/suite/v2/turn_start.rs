@@ -24,7 +24,6 @@ use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::FileChangeApprovalDecision;
-use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangePatchUpdatedNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
@@ -2198,9 +2197,8 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     )
     .await?;
     let mut saw_resolved = false;
-    let mut output_delta: Option<FileChangeOutputDeltaNotification> = None;
     let mut completed_file_change: Option<ThreadItem> = None;
-    while !(output_delta.is_some() && completed_file_change.is_some()) {
+    while completed_file_change.is_none() {
         let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
         let JSONRPCMessage::Notification(notification) = message else {
             continue;
@@ -2217,16 +2215,6 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
                 assert_eq!(resolved.request_id, resolved_request_id);
                 saw_resolved = true;
             }
-            "item/fileChange/outputDelta" => {
-                assert!(saw_resolved, "serverRequest/resolved should arrive first");
-                let notification: FileChangeOutputDeltaNotification = serde_json::from_value(
-                    notification
-                        .params
-                        .clone()
-                        .expect("item/fileChange/outputDelta params"),
-                )?;
-                output_delta = Some(notification);
-            }
             "item/completed" => {
                 let completed: ItemCompletedNotification = serde_json::from_value(
                     notification.params.clone().expect("item/completed params"),
@@ -2239,16 +2227,6 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
             _ => {}
         }
     }
-    let output_delta = output_delta.expect("file change output delta should be observed");
-    assert_eq!(output_delta.thread_id, thread.id);
-    assert_eq!(output_delta.turn_id, turn.id);
-    assert_eq!(output_delta.item_id, "patch-call");
-    assert!(
-        !output_delta.delta.is_empty(),
-        "expected delta to be non-empty, got: {}",
-        output_delta.delta
-    );
-
     let completed_file_change =
         completed_file_change.expect("file change completion should be observed");
     let ThreadItem::FileChange { ref id, status, .. } = completed_file_change else {
@@ -3002,11 +2980,6 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("item/fileChange/outputDelta"),
-    )
-    .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("item/completed"),
     )
     .await??;
@@ -3058,11 +3031,6 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
 
     // If the server incorrectly emits FileChangeRequestApproval, the helper below will error
     // (it bails on unexpected JSONRPCMessage::Request), causing the test to fail.
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("item/fileChange/outputDelta"),
-    )
-    .await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("item/completed"),

@@ -1,8 +1,7 @@
 use crate::app_event_sender::AppEventSender;
 use crate::legacy_core::config::Config;
 use base64::Engine;
-use codex_protocol::protocol::ConversationAudioParams;
-use codex_protocol::protocol::RealtimeAudioFrame;
+use codex_app_server_protocol::ThreadRealtimeAudioChunk;
 use cpal::traits::DeviceTrait;
 use cpal::traits::StreamTrait;
 use std::collections::VecDeque;
@@ -219,14 +218,12 @@ fn send_realtime_audio_chunk(
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
     let samples_per_channel = (samples.len() / usize::from(MODEL_AUDIO_CHANNELS)) as u32;
 
-    tx.realtime_conversation_audio(ConversationAudioParams {
-        frame: RealtimeAudioFrame {
-            data: encoded,
-            sample_rate: MODEL_AUDIO_SAMPLE_RATE,
-            num_channels: MODEL_AUDIO_CHANNELS,
-            samples_per_channel: Some(samples_per_channel),
-            item_id: None,
-        },
+    tx.realtime_conversation_audio(ThreadRealtimeAudioChunk {
+        data: encoded,
+        sample_rate: MODEL_AUDIO_SAMPLE_RATE,
+        num_channels: MODEL_AUDIO_CHANNELS,
+        samples_per_channel: Some(samples_per_channel),
+        item_id: None,
     });
 }
 
@@ -306,7 +303,7 @@ impl RealtimeAudioPlayer {
         })
     }
 
-    pub(crate) fn enqueue_frame(&self, frame: &RealtimeAudioFrame) -> Result<(), String> {
+    pub(crate) fn enqueue_frame(&self, frame: &ThreadRealtimeAudioChunk) -> Result<(), String> {
         if frame.num_channels == 0 || frame.sample_rate == 0 {
             return Err("invalid realtime audio frame format".to_string());
         }
