@@ -21,8 +21,22 @@ exitCode: number,
  */
 stdout: string,
 /**
+ * Whether stdout reached `outputBytesCap`.
+ *
+ * In streaming mode, stdout is empty and cap state is also reported on the
+ * final stdout `process/outputDelta` notification.
+ */
+stdoutCapReached: boolean,
+/**
  * Buffered stderr capture.
  *
  * Empty when stderr was streamed via `process/outputDelta`.
  */
-stderr: string, };
+stderr: string,
+/**
+ * Whether stderr reached `outputBytesCap`.
+ *
+ * In streaming mode, stderr is empty and cap state is also reported on the
+ * final stderr `process/outputDelta` notification.
+ */
+stderrCapReached: boolean, };

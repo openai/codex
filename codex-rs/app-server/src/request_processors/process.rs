@@ -241,6 +241,12 @@ struct SpawnProcessOutputParams {
     output_bytes_cap: Option<usize>,
 }
 
+#[derive(Default)]
+struct ProcessOutputCapture {
+    text: String,
+    cap_reached: bool,
+}
+
 impl ProcessExecManager {
     async fn start(&self, params: StartProcessParams) -> Result<(), JSONRPCErrorError> {
         let StartProcessParams {
@@ -570,14 +576,18 @@ async fn run_process(params: RunProcessParams) {
             ServerNotification::ProcessExited(ProcessExitedNotification {
                 process_handle,
                 exit_code,
-                stdout,
-                stderr,
+                stdout: stdout.text,
+                stdout_cap_reached: stdout.cap_reached,
+                stderr: stderr.text,
+                stderr_cap_reached: stderr.cap_reached,
             }),
         )
         .await;
 }
 
-fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHandle<String> {
+fn spawn_process_output(
+    params: SpawnProcessOutputParams,
+) -> tokio::task::JoinHandle<ProcessOutputCapture> {
     let SpawnProcessOutputParams {
         connection_id,
         process_handle,
@@ -591,6 +601,7 @@ fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHa
     tokio::spawn(async move {
         let mut buffer: Vec<u8> = Vec::new();
         let mut observed_num_bytes = 0usize;
+        let mut cap_reached = false;
         loop {
             let mut chunk = tokio::select! {
                 chunk = output_rx.recv() => match chunk {
@@ -614,7 +625,7 @@ fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHa
                 }
                 None => chunk.as_slice(),
             };
-            let cap_reached = Some(observed_num_bytes) == output_bytes_cap;
+            cap_reached = Some(observed_num_bytes) == output_bytes_cap;
             if stream_output {
                 outgoing
                     .send_server_notification_to_connection_and_wait(
@@ -634,7 +645,10 @@ fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHa
                 break;
             }
         }
-        bytes_to_string_smart(&buffer)
+        ProcessOutputCapture {
+            text: bytes_to_string_smart(&buffer),
+            cap_reached,
+        }
     })
 }
 

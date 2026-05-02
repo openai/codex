@@ -2266,7 +2266,6 @@
       "type": "object"
     },
     "ProcessKillParams": {
-      "additionalProperties": false,
       "description": "Terminate a running `process/spawn` session.",
       "properties": {
         "processHandle": {
@@ -2280,7 +2279,6 @@
       "type": "object"
     },
     "ProcessResizePtyParams": {
-      "additionalProperties": false,
       "description": "Resize a running PTY-backed `process/spawn` session.",
       "properties": {
         "processHandle": {
@@ -2303,7 +2301,6 @@
       "type": "object"
     },
     "ProcessSpawnParams": {
-      "additionalProperties": false,
       "description": "Spawn a standalone process (argv vector) without a Codex sandbox.\n\n`process/spawn` returns after the process has started and the connection-scoped `processHandle` has been registered. Process output and exit are reported via `process/outputDelta` and `process/exited` notifications.",
       "properties": {
         "command": {
@@ -2409,7 +2406,6 @@
       "type": "object"
     },
     "ProcessWriteStdinParams": {
-      "additionalProperties": false,
       "description": "Write stdin bytes to a running `process/spawn` session, close stdin, or both.",
       "properties": {
         "closeStdin": {

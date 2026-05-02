@@ -1,6 +1,5 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "additionalProperties": false,
   "description": "Write stdin bytes to a running `process/spawn` session, close stdin, or both.",
   "properties": {
     "closeStdin": {

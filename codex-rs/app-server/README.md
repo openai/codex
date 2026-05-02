@@ -1030,7 +1030,9 @@ Use `process/spawn` to start a standalone argv-based process without the Codex s
     "processHandle": "cargo-check-1",
     "exitCode": 0,
     "stdout": "...",
-    "stderr": ""
+    "stdoutCapReached": false,
+    "stderr": "",
+    "stderrCapReached": false
 } }
 ```
 
@@ -1069,16 +1071,18 @@ For interactive or streaming processes, set `tty: true` or `streamStdoutStderr: 
     "processHandle": "bash-1",
     "exitCode": 137,
     "stdout": "",
-    "stderr": ""
+    "stdoutCapReached": false,
+    "stderr": "",
+    "stderrCapReached": false
 } }
 ```
 
 - Empty `command` arrays and empty `processHandle` strings are rejected.
 - `cwd` is required and must be absolute.
-- `process/spawn` is intentionally unsandboxed and rejects sandbox-selection fields such as `sandboxPolicy` and `permissionProfile`.
+- `process/spawn` is intentionally unsandboxed and does not define sandbox-selection fields such as `sandboxPolicy` or `permissionProfile`.
 - `tty: true` implies PTY mode plus `streamStdin: true` and `streamStdoutStderr: true`.
 - `process/writeStdin` accepts either `deltaBase64`, `closeStdin`, or both.
-- `outputBytesCap` applies independently to `stdout` and `stderr`, and streamed bytes are not duplicated into `process/exited`.
+- `outputBytesCap` applies independently to `stdout` and `stderr`; `process/exited.stdoutCapReached` and `stderrCapReached` report whether each stream reached the cap. Streamed bytes are not duplicated into `process/exited`.
 - `process/outputDelta` and `process/exited` notifications are connection-scoped. If the originating connection closes, the server terminates the process.
 
 ### Example: Filesystem utilities

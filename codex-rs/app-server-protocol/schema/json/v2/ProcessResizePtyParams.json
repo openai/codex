@@ -1,6 +1,5 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "additionalProperties": false,
   "definitions": {
     "ProcessTerminalSize": {
       "description": "PTY size in character cells for `process/spawn` PTY sessions.",
