@@ -1,10 +1,12 @@
 use codex_models_manager::model_info::BASE_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -46,7 +48,11 @@ fn gpt_5_4_cmb_bedrock_model(priority: i32) -> ModelInfo {
         visibility: ModelVisibility::List,
         supported_in_api: true,
         priority,
-        additional_speed_tiers: vec!["fast".to_string()],
+        service_tiers: vec![ModelServiceTier {
+            id: ServiceTier::priority(),
+            name: "Fast".to_string(),
+            description: "Fast tier".to_string(),
+        }],
         availability_nux: None,
         upgrade: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),
@@ -86,7 +92,7 @@ fn bedrock_oss_model(slug: &str, display_name: &str, priority: i32) -> ModelInfo
         visibility: ModelVisibility::List,
         supported_in_api: true,
         priority,
-        additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
         availability_nux: None,
         upgrade: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),

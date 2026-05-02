@@ -2578,12 +2578,10 @@ impl Config {
             None => config_profile.service_tier.or(cfg.service_tier),
         };
         let service_tier = match service_tier {
-            Some(ServiceTier::Fast) if features.enabled(Feature::FastMode) => {
-                Some(ServiceTier::Fast)
+            Some(service_tier) if service_tier.is_priority() && !features.enabled(Feature::FastMode) => {
+                None
             }
-            Some(ServiceTier::Fast) => None,
-            Some(ServiceTier::Flex) => Some(ServiceTier::Flex),
-            None => None,
+            other => other,
         };
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {

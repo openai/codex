@@ -586,7 +586,7 @@ impl Codex {
             .auth_cached()
             .and_then(|auth| auth.account_plan_type());
         let service_tier = get_service_tier(
-            config.service_tier,
+            config.service_tier.clone(),
             config.notices.fast_default_opt_out.unwrap_or(false),
             account_plan_type,
             config.features.enabled(Feature::FastMode),
@@ -789,7 +789,7 @@ fn get_service_tier(
 
     account_plan_type
         .is_some_and(is_enterprise_default_service_tier_plan)
-        .then_some(ServiceTier::Fast)
+        .then(ServiceTier::priority)
 }
 
 fn is_enterprise_default_service_tier_plan(plan_type: AccountPlanType) -> bool {

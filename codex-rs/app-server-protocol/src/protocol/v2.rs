@@ -25,7 +25,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
-use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::ServiceTier as CoreServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
@@ -119,6 +119,47 @@ use serde_json::Value as JsonValue;
 use serde_with::serde_as;
 use thiserror::Error;
 use ts_rs::TS;
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum ServiceTier {
+    Fast,
+    Flex,
+}
+
+impl ServiceTier {
+    pub fn fast() -> Self {
+        Self::Fast
+    }
+
+    pub fn flex() -> Self {
+        Self::Flex
+    }
+
+    pub fn to_core(self) -> CoreServiceTier {
+        match self {
+            Self::Fast => CoreServiceTier::priority(),
+            Self::Flex => CoreServiceTier::flex(),
+        }
+    }
+
+    pub fn from_core(service_tier: &CoreServiceTier) -> Option<Self> {
+        if service_tier.is_priority() {
+            Some(Self::Fast)
+        } else if service_tier.is_flex() {
+            Some(Self::Flex)
+        } else {
+            None
+        }
+    }
+}
+
+impl From<ServiceTier> for CoreServiceTier {
+    fn from(value: ServiceTier) -> Self {
+        value.to_core()
+    }
+}
 
 // Macro to declare a camelCased API v2 enum mirroring a core enum which
 // tends to use either snake_case or kebab-case.

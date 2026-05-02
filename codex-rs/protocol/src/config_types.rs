@@ -347,12 +347,88 @@ impl From<WebSearchToolConfig> for WebSearchConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
-pub enum ServiceTier {
-    Fast,
-    Flex,
+pub const SERVICE_TIER_PRIORITY: &str = "priority";
+pub const SERVICE_TIER_FLEX: &str = "flex";
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, TS)]
+#[serde(transparent)]
+#[ts(type = "string")]
+pub struct ServiceTier(String);
+
+impl ServiceTier {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    pub fn priority() -> Self {
+        Self::new(SERVICE_TIER_PRIORITY)
+    }
+
+    pub fn flex() -> Self {
+        Self::new(SERVICE_TIER_FLEX)
+    }
+
+    pub fn is_priority(&self) -> bool {
+        self.as_str() == SERVICE_TIER_PRIORITY
+    }
+
+    pub fn is_flex(&self) -> bool {
+        self.as_str() == SERVICE_TIER_FLEX
+    }
+}
+
+impl AsRef<str> for ServiceTier {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl From<&str> for ServiceTier {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<String> for ServiceTier {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ServiceTier> for String {
+    fn from(value: ServiceTier) -> Self {
+        value.0
+    }
+}
+
+impl std::fmt::Display for ServiceTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl JsonSchema for ServiceTier {
+    fn schema_name() -> String {
+        "ServiceTier".to_string()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        Schema::Object(SchemaObject {
+            instance_type: Some(InstanceType::String.into()),
+            metadata: Some(Box::new(Metadata {
+                description: Some(
+                    "String-backed service tier identifier. Known values include `priority` and `flex`, but other backend-provided ids are allowed."
+                        .to_string(),
+                ),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]

@@ -13,6 +13,7 @@ use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_app_server_protocol::RequestId;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelServiceTier as CoreModelServiceTier;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -50,9 +51,16 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
         // cache report `supports_personality = false`.
         // todo(sayan): fix, maybe make roundtrip use ModelInfo only
         supports_personality: false,
-        additional_speed_tiers: preset.additional_speed_tiers.clone(),
+        additional_speed_tiers: legacy_additional_speed_tiers(&preset.service_tiers),
         is_default: preset.is_default,
     }
+}
+
+fn legacy_additional_speed_tiers(service_tiers: &[CoreModelServiceTier]) -> Vec<String> {
+    service_tiers
+        .iter()
+        .filter_map(|tier| tier.id.is_priority().then_some("fast".to_string()))
+        .collect()
 }
 
 fn expected_visible_models() -> Vec<Model> {

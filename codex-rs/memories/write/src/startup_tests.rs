@@ -253,14 +253,14 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
             model: None,
             effort: None,
             summary: None,
-            service_tier: Some(Some(ServiceTier::Fast)),
+            service_tier: Some(Some(ServiceTier::priority())),
             collaboration_mode: None,
             personality: None,
         })
         .await?;
 
-    let config_snapshot = wait_for_service_tier(&test, Some(ServiceTier::Fast)).await?;
-    assert_eq!(config_snapshot.service_tier, Some(ServiceTier::Fast));
+    let config_snapshot = wait_for_service_tier(&test, Some(ServiceTier::priority())).await?;
+    assert_eq!(config_snapshot.service_tier, Some(ServiceTier::priority()));
 
     let context = crate::runtime::MemoryStartupContext::new(
         Arc::clone(&test.thread_manager),
@@ -277,7 +277,7 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
             ReasoningEffort::Low,
         )
         .await;
-    assert_eq!(request_context.service_tier, Some(ServiceTier::Fast));
+    assert_eq!(request_context.service_tier, Some(ServiceTier::priority()));
 
     shutdown_test_codex(&test).await?;
     Ok(())

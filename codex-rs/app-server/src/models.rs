@@ -6,6 +6,7 @@ use codex_app_server_protocol::ReasoningEffortOption;
 use codex_core::ThreadManager;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelServiceTier as CoreModelServiceTier;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 
 pub async fn supported_models(
@@ -22,6 +23,7 @@ pub async fn supported_models(
 }
 
 fn model_from_preset(preset: ModelPreset) -> Model {
+    let additional_speed_tiers = legacy_additional_speed_tiers(&preset.service_tiers);
     Model {
         id: preset.id.to_string(),
         model: preset.model.to_string(),
@@ -42,9 +44,16 @@ fn model_from_preset(preset: ModelPreset) -> Model {
         default_reasoning_effort: preset.default_reasoning_effort,
         input_modalities: preset.input_modalities,
         supports_personality: preset.supports_personality,
-        additional_speed_tiers: preset.additional_speed_tiers,
+        additional_speed_tiers,
         is_default: preset.is_default,
     }
+}
+
+fn legacy_additional_speed_tiers(service_tiers: &[CoreModelServiceTier]) -> Vec<String> {
+    service_tiers
+        .iter()
+        .filter_map(|tier| tier.id.is_priority().then_some("fast".to_string()))
+        .collect()
 }
 
 fn reasoning_efforts_from_preset(

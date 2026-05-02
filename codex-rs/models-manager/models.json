@@ -82,8 +82,12 @@
         "team"
       ],
       "supports_search_tool": true,
-      "additional_speed_tiers": [
-        "fast"
+      "service_tiers": [
+        {
+          "id": "priority",
+          "name": "Fast",
+          "description": "Fast tier"
+        }
       ],
       "supports_reasoning_summaries": true
     },
@@ -164,8 +168,12 @@
         "team"
       ],
       "supports_search_tool": true,
-      "additional_speed_tiers": [
-        "fast"
+      "service_tiers": [
+        {
+          "id": "priority",
+          "name": "Fast",
+          "description": "Fast tier"
+        }
       ],
       "supports_reasoning_summaries": true
     },
@@ -249,7 +257,7 @@
         "team"
       ],
       "supports_search_tool": true,
-      "additional_speed_tiers": [],
+      "service_tiers": [],
       "supports_reasoning_summaries": true
     },
     {
@@ -332,7 +340,7 @@
         "team"
       ],
       "supports_search_tool": true,
-      "additional_speed_tiers": [],
+      "service_tiers": [],
       "supports_reasoning_summaries": true
     },
     {
@@ -411,7 +419,7 @@
         "team"
       ],
       "supports_search_tool": true,
-      "additional_speed_tiers": [],
+      "service_tiers": [],
       "supports_reasoning_summaries": true
     },
     {
@@ -491,7 +499,7 @@
         "team"
       ],
       "supports_search_tool": true,
-      "additional_speed_tiers": [],
+      "service_tiers": [],
       "supports_reasoning_summaries": true
     }
   ]

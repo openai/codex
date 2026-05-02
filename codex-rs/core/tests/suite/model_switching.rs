@@ -105,7 +105,7 @@ fn test_model_info(
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         priority: 1,
-        additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
@@ -297,7 +297,7 @@ async fn service_tier_change_is_applied_on_next_http_turn() -> Result<()> {
 
     let test = test_codex().build(&server).await?;
 
-    test.submit_turn_with_service_tier("fast turn", Some(ServiceTier::Fast))
+    test.submit_turn_with_service_tier("fast turn", Some(ServiceTier::priority()))
         .await?;
     test.submit_turn_with_service_tier("standard turn", /*service_tier*/ None)
         .await?;
@@ -323,7 +323,7 @@ async fn flex_service_tier_is_applied_to_http_turn() -> Result<()> {
 
     let test = test_codex().build(&server).await?;
 
-    test.submit_turn_with_service_tier("flex turn", Some(ServiceTier::Flex))
+    test.submit_turn_with_service_tier("flex turn", Some(ServiceTier::flex()))
         .await?;
 
     let request = resp_mock.single_request();
@@ -817,7 +817,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         priority: 1,
-        additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,

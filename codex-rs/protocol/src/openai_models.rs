@@ -17,10 +17,10 @@ use ts_rs::TS;
 
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary;
+use crate::config_types::ServiceTier;
 use crate::config_types::Verbosity;
 
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
-pub const SPEED_TIER_FAST: &str = "fast";
 
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
 #[derive(
@@ -115,6 +115,13 @@ pub struct ModelAvailabilityNux {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+pub struct ModelServiceTier {
+    pub id: ServiceTier,
+    pub name: String,
+    pub description: String,
+}
+
 /// Metadata describing a Codex-supported model.
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct ModelPreset {
@@ -133,9 +140,9 @@ pub struct ModelPreset {
     /// Whether this model supports personality-specific instructions.
     #[serde(default)]
     pub supports_personality: bool,
-    /// Additional speed tiers this model can run with beyond the standard path.
+    /// User-selectable service tiers supported by this model.
     #[serde(default)]
-    pub additional_speed_tiers: Vec<String>,
+    pub service_tiers: Vec<ModelServiceTier>,
     /// Whether this is the default model for new users.
     pub is_default: bool,
     /// recommended upgrade model
@@ -257,7 +264,7 @@ pub struct ModelInfo {
     pub supported_in_api: bool,
     pub priority: i32,
     #[serde(default)]
-    pub additional_speed_tiers: Vec<String>,
+    pub service_tiers: Vec<ModelServiceTier>,
     pub availability_nux: Option<ModelAvailabilityNux>,
     pub upgrade: Option<ModelInfoUpgrade>,
     pub base_instructions: String,
@@ -441,7 +448,7 @@ impl From<ModelInfo> for ModelPreset {
                 .unwrap_or(ReasoningEffort::None),
             supported_reasoning_efforts: info.supported_reasoning_levels.clone(),
             supports_personality,
-            additional_speed_tiers: info.additional_speed_tiers,
+            service_tiers: info.service_tiers,
             is_default: false, // default is the highest priority available model
             upgrade: info.upgrade.as_ref().map(|upgrade| ModelUpgrade {
                 id: upgrade.model.clone(),
@@ -463,10 +470,16 @@ impl From<ModelInfo> for ModelPreset {
 }
 
 impl ModelPreset {
-    pub fn supports_fast_mode(&self) -> bool {
-        self.additional_speed_tiers
+    pub fn supports_service_tier(&self, service_tier: &ServiceTier) -> bool {
+        self.service_tiers
             .iter()
-            .any(|tier| tier == SPEED_TIER_FAST)
+            .any(|tier| tier.id == *service_tier)
+    }
+
+    pub fn service_tier(&self, service_tier: &ServiceTier) -> Option<&ModelServiceTier> {
+        self.service_tiers
+            .iter()
+            .find(|tier| tier.id == *service_tier)
     }
 
     /// Filter models based on authentication mode.
@@ -547,7 +560,7 @@ mod tests {
             visibility: ModelVisibility::List,
             supported_in_api: true,
             priority: 1,
-            additional_speed_tiers: Vec::new(),
+            service_tiers: Vec::new(),
             availability_nux: None,
             upgrade: None,
             base_instructions: "base".to_string(),
@@ -817,7 +830,11 @@ mod tests {
             availability_nux: Some(ModelAvailabilityNux {
                 message: "Try Spark.".to_string(),
             }),
-            additional_speed_tiers: vec![SPEED_TIER_FAST.to_string()],
+            service_tiers: vec![ModelServiceTier {
+                id: ServiceTier::priority(),
+                name: "Fast".to_string(),
+                description: "Fast tier".to_string(),
+            }],
             ..test_model(/*spec*/ None)
         });
 
@@ -827,6 +844,6 @@ mod tests {
                 message: "Try Spark.".to_string(),
             })
         );
-        assert!(preset.supports_fast_mode());
+        assert!(preset.supports_service_tier(&ServiceTier::priority()));
     }
 }

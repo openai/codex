@@ -889,11 +889,7 @@ impl ModelClientSession {
             store: provider.is_azure_responses_endpoint(),
             stream: true,
             include,
-            service_tier: match service_tier {
-                Some(ServiceTier::Fast) => Some("priority".to_string()),
-                Some(service_tier) => Some(service_tier.to_string()),
-                None => None,
-            },
+            service_tier: service_tier.map(|service_tier| service_tier.to_string()),
             prompt_cache_key,
             text,
             client_metadata: Some(HashMap::from([(

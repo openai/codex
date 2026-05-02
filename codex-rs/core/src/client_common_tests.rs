@@ -155,7 +155,7 @@ fn serializes_flex_service_tier_when_set() {
         stream: true,
         include: vec![],
         prompt_cache_key: None,
-        service_tier: Some(ServiceTier::Flex.to_string()),
+        service_tier: Some(ServiceTier::flex().to_string()),
         text: None,
         client_metadata: None,
     };
