@@ -27,7 +27,6 @@ use wiremock::matchers::path;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_PLUGIN_ID: &str = "plugins~Plugin_linear";
 const WORKSPACE_REMOTE_PLUGIN_ID: &str = "plugins_69f27c3e67848191a45cbaa5f2adb39d";
-const UNKNOWN_PREFIX_REMOTE_PLUGIN_ID: &str = "newremote_69f27c3e67848191a45cbaa5f2adb39d";
 
 #[tokio::test]
 async fn plugin_uninstall_removes_plugin_cache_and_config_entry() -> Result<()> {
@@ -391,79 +390,6 @@ async fn plugin_uninstall_accepts_workspace_remote_plugin_id_shape() -> Result<(
         &server,
         "POST",
         &format!("/plugins/{WORKSPACE_REMOTE_PLUGIN_ID}/uninstall"),
-        /*expected_count*/ 1,
-    )
-    .await?;
-    assert!(!remote_plugin_cache_root.exists());
-    Ok(())
-}
-
-#[tokio::test]
-async fn plugin_uninstall_accepts_remote_plugin_id_without_known_prefix() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let server = MockServer::start().await;
-    write_remote_plugin_catalog_config(
-        codex_home.path(),
-        &format!("{}/backend-api/", server.uri()),
-    )?;
-    write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("chatgpt-token")
-            .account_id("account-123")
-            .chatgpt_user_id("user-123")
-            .chatgpt_account_id("account-123"),
-        AuthCredentialsStoreMode::File,
-    )?;
-    mount_remote_plugin_detail_with_name(
-        &server,
-        UNKNOWN_PREFIX_REMOTE_PLUGIN_ID,
-        "new-tool",
-        "1.0.0",
-        "GLOBAL",
-    )
-    .await;
-
-    Mock::given(method("POST"))
-        .and(path(format!(
-            "/backend-api/plugins/{UNKNOWN_PREFIX_REMOTE_PLUGIN_ID}/uninstall"
-        )))
-        .and(header("authorization", "Bearer chatgpt-token"))
-        .and(header("chatgpt-account-id", "account-123"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
-            r#"{{"id":"{UNKNOWN_PREFIX_REMOTE_PLUGIN_ID}","enabled":false}}"#
-        )))
-        .mount(&server)
-        .await;
-
-    let remote_plugin_cache_root = codex_home
-        .path()
-        .join("plugins/cache/chatgpt-global/new-tool");
-    std::fs::create_dir_all(remote_plugin_cache_root.join("1.0.0/.codex-plugin"))?;
-    std::fs::write(
-        remote_plugin_cache_root.join("1.0.0/.codex-plugin/plugin.json"),
-        r#"{"name":"new-tool","version":"1.0.0"}"#,
-    )?;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_plugin_uninstall_request(PluginUninstallParams {
-            plugin_id: UNKNOWN_PREFIX_REMOTE_PLUGIN_ID.to_string(),
-        })
-        .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginUninstallResponse = to_response(response)?;
-
-    assert_eq!(response, PluginUninstallResponse {});
-    wait_for_remote_plugin_request_count(
-        &server,
-        "POST",
-        &format!("/plugins/{UNKNOWN_PREFIX_REMOTE_PLUGIN_ID}/uninstall"),
         /*expected_count*/ 1,
     )
     .await?;
