@@ -28,7 +28,13 @@ fn write_minimal_rollout_with_id_in_subdir(codex_home: &Path, subdir: &str, id: 
     std::fs::create_dir_all(&sessions).unwrap();
 
     let file = sessions.join(format!("rollout-2024-01-01T00-00-00-{id}.jsonl"));
-    let mut f = std::fs::File::create(&file).unwrap();
+    write_minimal_rollout_with_id_at_path(&file, id);
+
+    file
+}
+
+fn write_minimal_rollout_with_id_at_path(file: &Path, id: Uuid) {
+    let mut f = std::fs::File::create(file).unwrap();
     // Minimal first line: session_meta with the id so content search can find it
     writeln!(
         f,
@@ -47,8 +53,6 @@ fn write_minimal_rollout_with_id_in_subdir(codex_home: &Path, subdir: &str, id: 
         })
     )
     .unwrap();
-
-    file
 }
 
 /// Create sessions/YYYY/MM/DD and write a minimal rollout file containing the
@@ -121,7 +125,7 @@ async fn find_prefers_sqlite_path_by_id() {
         "sessions/2030/12/30/rollout-2030-12-30T00-00-00-{id}.jsonl"
     ));
     std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
-    std::fs::write(&db_path, "").unwrap();
+    write_minimal_rollout_with_id_at_path(&db_path, id);
     write_minimal_rollout_with_id(home.path(), id);
     let state_db = upsert_thread_metadata(home.path(), thread_id, db_path.clone()).await;
 
