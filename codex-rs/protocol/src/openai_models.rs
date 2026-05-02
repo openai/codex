@@ -17,9 +17,9 @@ use ts_rs::TS;
 
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary;
+use crate::config_types::SERVICE_TIER_PRIORITY;
 use crate::config_types::ServiceTier;
 use crate::config_types::Verbosity;
-use crate::config_types::priority_service_tier;
 
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 
@@ -837,7 +837,7 @@ mod tests {
                 message: "Try Spark.".to_string(),
             }),
             service_tiers: vec![ModelServiceTier {
-                id: priority_service_tier(),
+                id: SERVICE_TIER_PRIORITY.into(),
                 name: "Fast".to_string(),
                 description: "Fast tier".to_string(),
             }],
@@ -852,7 +852,7 @@ mod tests {
         );
         assert!(model_supports_service_tier(
             &preset,
-            &priority_service_tier()
+            &SERVICE_TIER_PRIORITY.into()
         ));
     }
 }

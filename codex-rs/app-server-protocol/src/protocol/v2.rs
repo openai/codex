@@ -24,15 +24,13 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::SERVICE_TIER_FLEX;
+use codex_protocol::config_types::SERVICE_TIER_PRIORITY;
 use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
 use codex_protocol::config_types::ServiceTier as CoreServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
-use codex_protocol::config_types::flex_service_tier;
-use codex_protocol::config_types::is_flex_service_tier;
-use codex_protocol::config_types::is_priority_service_tier;
-use codex_protocol::config_types::priority_service_tier;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::CallToolResult as CoreMcpCallToolResult;
@@ -132,26 +130,26 @@ pub enum ServiceTier {
     Flex,
 }
 
-pub fn service_tier_to_core(service_tier: ServiceTier) -> CoreServiceTier {
-    match service_tier {
-        ServiceTier::Fast => priority_service_tier(),
-        ServiceTier::Flex => flex_service_tier(),
-    }
-}
-
-pub fn service_tier_from_core(service_tier: &CoreServiceTier) -> Option<ServiceTier> {
-    if is_priority_service_tier(service_tier) {
-        Some(ServiceTier::Fast)
-    } else if is_flex_service_tier(service_tier) {
-        Some(ServiceTier::Flex)
-    } else {
-        None
-    }
-}
-
 impl From<ServiceTier> for CoreServiceTier {
     fn from(value: ServiceTier) -> Self {
-        service_tier_to_core(value)
+        match value {
+            ServiceTier::Fast => SERVICE_TIER_PRIORITY.into(),
+            ServiceTier::Flex => SERVICE_TIER_FLEX.into(),
+        }
+    }
+}
+
+impl TryFrom<&CoreServiceTier> for ServiceTier {
+    type Error = ();
+
+    fn try_from(value: &CoreServiceTier) -> Result<Self, Self::Error> {
+        if value.as_ref() == SERVICE_TIER_PRIORITY {
+            Ok(ServiceTier::Fast)
+        } else if value.as_ref() == SERVICE_TIER_FLEX {
+            Ok(ServiceTier::Flex)
+        } else {
+            Err(())
+        }
     }
 }
 

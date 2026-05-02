@@ -2,8 +2,8 @@ use codex_api::OpenAiVerbosity;
 use codex_api::ResponsesApiRequest;
 use codex_api::TextControls;
 use codex_api::create_text_param_for_request;
+use codex_protocol::config_types::SERVICE_TIER_FLEX;
 use codex_protocol::config_types::ServiceTier;
-use codex_protocol::config_types::flex_service_tier;
 use codex_protocol::models::FunctionCallOutputPayload;
 use pretty_assertions::assert_eq;
 
@@ -156,7 +156,7 @@ fn serializes_flex_service_tier_when_set() {
         stream: true,
         include: vec![],
         prompt_cache_key: None,
-        service_tier: Some(flex_service_tier().to_string()),
+        service_tier: Some(ServiceTier::from(SERVICE_TIER_FLEX).to_string()),
         text: None,
         client_metadata: None,
     };

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use codex_features::Feature;
+use codex_protocol::config_types::SERVICE_TIER_PRIORITY;
 use codex_protocol::config_types::ServiceTier;
-use codex_protocol::config_types::priority_service_tier;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -270,7 +270,7 @@ async fn websocket_v2_first_turn_uses_updated_fast_tier_after_startup_prewarm() 
     assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert_eq!(warmup.get("service_tier"), None);
 
-    test.submit_turn_with_service_tier("hello", Some(priority_service_tier()))
+    test.submit_turn_with_service_tier("hello", Some(SERVICE_TIER_PRIORITY.into()))
         .await?;
 
     assert_eq!(server.handshakes().len(), 1);
@@ -314,7 +314,7 @@ async fn websocket_v2_first_turn_drops_fast_tier_after_startup_prewarm() -> Resu
             .features
             .enable(Feature::ResponsesWebsocketsV2)
             .expect("test config should allow feature update");
-        config.service_tier = Some(priority_service_tier());
+        config.service_tier = Some(SERVICE_TIER_PRIORITY.into());
     });
     let test = builder.build_with_websocket_server(&server).await?;
 
@@ -386,7 +386,7 @@ async fn websocket_v2_next_turn_uses_updated_service_tier() -> Result<()> {
     assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert_eq!(warmup.get("service_tier"), None);
 
-    test.submit_turn_with_service_tier("first", Some(priority_service_tier()))
+    test.submit_turn_with_service_tier("first", Some(SERVICE_TIER_PRIORITY.into()))
         .await?;
     test.submit_turn_with_service_tier("second", /*service_tier*/ None)
         .await?;

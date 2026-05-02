@@ -78,6 +78,7 @@ use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::SERVICE_TIER_PRIORITY;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
@@ -86,7 +87,6 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::config_types::is_priority_service_tier;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::PermissionProfile;
@@ -2580,7 +2580,7 @@ impl Config {
         };
         let service_tier = match service_tier {
             Some(service_tier)
-                if is_priority_service_tier(&service_tier)
+                if service_tier.as_ref() == SERVICE_TIER_PRIORITY
                     && !features.enabled(Feature::FastMode) =>
             {
                 None

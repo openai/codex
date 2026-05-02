@@ -237,8 +237,6 @@ use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
 use codex_app_server_protocol::build_turns_from_rollout_items;
-use codex_app_server_protocol::service_tier_from_core;
-use codex_app_server_protocol::service_tier_to_core;
 use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::AddCreditsNudgeCreditType as BackendAddCreditsNudgeCreditType;
 use codex_backend_client::Client as BackendClient;
@@ -338,6 +336,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ServiceTier as CoreServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
@@ -2894,7 +2893,7 @@ impl CodexMessageProcessor {
                 service_tier: config_snapshot
                     .service_tier
                     .as_ref()
-                    .and_then(service_tier_from_core),
+                    .and_then(|service_tier| ServiceTier::try_from(service_tier).ok()),
                 cwd: config_snapshot.cwd,
                 instruction_sources,
                 approval_policy: config_snapshot.approval_policy.into(),
@@ -2975,8 +2974,8 @@ impl CodexMessageProcessor {
 
     fn resolve_service_tier_override(
         service_tier: Option<Option<ServiceTier>>,
-    ) -> Option<Option<codex_protocol::config_types::ServiceTier>> {
-        service_tier.map(|service_tier| service_tier.map(service_tier_to_core))
+    ) -> Option<Option<CoreServiceTier>> {
+        service_tier.map(|service_tier| service_tier.map(Into::into))
     }
 
     async fn thread_archive(&self, request_id: ConnectionRequestId, params: ThreadArchiveParams) {
@@ -4446,7 +4445,7 @@ impl CodexMessageProcessor {
                     service_tier: session_configured
                         .service_tier
                         .as_ref()
-                        .and_then(service_tier_from_core),
+                        .and_then(|service_tier| ServiceTier::try_from(service_tier).ok()),
                     cwd: session_configured.cwd,
                     instruction_sources,
                     approval_policy: session_configured.approval_policy.into(),
@@ -5043,7 +5042,7 @@ impl CodexMessageProcessor {
                 service_tier: session_configured
                     .service_tier
                     .as_ref()
-                    .and_then(service_tier_from_core),
+                    .and_then(|service_tier| ServiceTier::try_from(service_tier).ok()),
                 cwd: session_configured.cwd,
                 instruction_sources,
                 approval_policy: session_configured.approval_policy.into(),
@@ -8412,7 +8411,9 @@ async fn handle_pending_thread_resume_request(
         thread,
         model,
         model_provider: model_provider_id,
-        service_tier: service_tier.as_ref().and_then(service_tier_from_core),
+        service_tier: service_tier
+            .as_ref()
+            .and_then(|service_tier| ServiceTier::try_from(service_tier).ok()),
         cwd,
         instruction_sources,
         approval_policy: approval_policy.into(),
@@ -8588,13 +8589,13 @@ fn collect_resume_override_mismatches(
         ));
     }
     if let Some(requested_service_tier) = request.service_tier.as_ref()
-        && requested_service_tier.map(service_tier_to_core).as_ref()
+        && requested_service_tier.map(CoreServiceTier::from).as_ref()
             != config_snapshot.service_tier.as_ref()
     {
         let active_service_tier = config_snapshot
             .service_tier
             .as_ref()
-            .and_then(service_tier_from_core);
+            .and_then(|service_tier| ServiceTier::try_from(service_tier).ok());
         mismatch_details.push(format!(
             "service_tier requested={requested_service_tier:?} active={active_service_tier:?}"
         ));
@@ -9930,7 +9931,7 @@ mod tests {
     use codex_model_provider_info::ModelProviderInfo;
     use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
-    use codex_protocol::config_types::flex_service_tier;
+    use codex_protocol::config_types::SERVICE_TIER_FLEX;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
@@ -10391,7 +10392,7 @@ mod tests {
         let config_snapshot = ThreadConfigSnapshot {
             model: "gpt-5".to_string(),
             model_provider_id: "openai".to_string(),
-            service_tier: Some(flex_service_tier()),
+            service_tier: Some(SERVICE_TIER_FLEX.into()),
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             permission_profile: codex_protocol::models::PermissionProfile::Disabled,
