@@ -44,6 +44,7 @@ use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
 use codex_config::types::SandboxWorkspaceWrite;
+use codex_config::types::SessionPickerViewMode;
 use codex_config::types::SkillsConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
@@ -556,6 +557,7 @@ fn config_toml_deserializes_model_availability_nux() {
             status_line_use_colors: true,
             terminal_title: None,
             theme: None,
+            session_picker_view: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig {
                 shown_count: HashMap::from([
@@ -2157,6 +2159,31 @@ fn tui_theme_defaults_to_none() {
 }
 
 #[test]
+fn tui_session_picker_view_deserializes_from_toml() {
+    let cfg = r#"
+[tui]
+session_picker_view = "dense"
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().and_then(|t| t.session_picker_view),
+        Some(SessionPickerViewMode::Dense),
+    );
+}
+
+#[test]
+fn tui_session_picker_view_defaults_to_none() {
+    let cfg = r#"
+[tui]
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().and_then(|t| t.session_picker_view),
+        None,
+    );
+}
+
+#[test]
 fn tui_config_missing_notifications_field_defaults_to_enabled() {
     let cfg = r#"
 [tui]
@@ -2179,6 +2206,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             status_line_use_colors: true,
             terminal_title: None,
             theme: None,
+            session_picker_view: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow_max_rows: None,
@@ -2242,6 +2270,38 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
         cfg.terminal_resize_reflow.max_rows,
         TerminalResizeReflowMaxRows::Disabled
     );
+}
+
+#[tokio::test]
+async fn runtime_config_resolves_session_picker_view_default_and_override() {
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load default config");
+
+    assert_eq!(
+        cfg.tui_session_picker_view,
+        SessionPickerViewMode::Comfortable
+    );
+
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            tui: Some(Tui {
+                session_picker_view: Some(SessionPickerViewMode::Dense),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load overridden config");
+
+    assert_eq!(cfg.tui_session_picker_view, SessionPickerViewMode::Dense);
 }
 
 #[tokio::test]
@@ -6511,6 +6571,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tui_status_line_use_colors: true,
             tui_terminal_title: None,
             tui_theme: None,
+            tui_session_picker_view: SessionPickerViewMode::Comfortable,
             otel: OtelConfig::default(),
         },
         o3_profile_config
@@ -6714,6 +6775,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_session_picker_view: SessionPickerViewMode::Comfortable,
         otel: OtelConfig::default(),
     };
 
@@ -6871,6 +6933,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_session_picker_view: SessionPickerViewMode::Comfortable,
         otel: OtelConfig::default(),
     };
 
@@ -7013,6 +7076,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_session_picker_view: SessionPickerViewMode::Comfortable,
         otel: OtelConfig::default(),
     };
 

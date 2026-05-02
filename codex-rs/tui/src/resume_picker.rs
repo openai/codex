@@ -7,6 +7,7 @@ use std::sync::Arc;
 use crate::app_server_session::AppServerSession;
 use crate::color::is_light;
 use crate::legacy_core::config::Config;
+use crate::legacy_core::config::edit::ConfigEditsBuilder;
 use crate::markdown::append_markdown;
 use crate::session_resume::resolve_session_thread_id;
 use crate::status::format_directory_display;
@@ -23,6 +24,7 @@ use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
+use codex_config::types::SessionPickerViewMode;
 use codex_protocol::ThreadId;
 use codex_utils_path as path_utils;
 use color_eyre::eyre::Result;
@@ -194,6 +196,24 @@ impl SessionListDensity {
     }
 }
 
+impl From<SessionPickerViewMode> for SessionListDensity {
+    fn from(mode: SessionPickerViewMode) -> Self {
+        match mode {
+            SessionPickerViewMode::Comfortable => Self::Comfortable,
+            SessionPickerViewMode::Dense => Self::Dense,
+        }
+    }
+}
+
+impl From<SessionListDensity> for SessionPickerViewMode {
+    fn from(density: SessionListDensity) -> Self {
+        match density {
+            SessionListDensity::Comfortable => Self::Comfortable,
+            SessionListDensity::Dense => Self::Dense,
+        }
+    }
+}
+
 type PickerLoader = Arc<dyn Fn(PickerLoadRequest) + Send + Sync>;
 
 enum BackgroundEvent {
@@ -218,6 +238,21 @@ struct PickerPage {
     next_cursor: Option<PageCursor>,
     num_scanned_files: usize,
     reached_scan_cap: bool,
+}
+
+#[derive(Clone)]
+struct SessionPickerViewPersistence {
+    codex_home: PathBuf,
+    active_profile: Option<String>,
+}
+
+struct SessionPickerRunOptions {
+    show_all: bool,
+    filter_cwd: Option<PathBuf>,
+    action: SessionPickerAction,
+    provider_filter: ProviderFilter,
+    initial_density: SessionListDensity,
+    view_persistence: Option<SessionPickerViewPersistence>,
 }
 
 /// Interactive session picker that lists app-server threads with simple search,
@@ -252,12 +287,20 @@ pub async fn run_resume_picker_with_app_server(
         app_server.remote_cwd_override(),
     );
     let provider_filter = picker_provider_filter(config, is_remote);
+    let options = SessionPickerRunOptions {
+        show_all,
+        filter_cwd: cwd_filter,
+        action: SessionPickerAction::Resume,
+        provider_filter,
+        initial_density: SessionListDensity::from(config.tui_session_picker_view),
+        view_persistence: Some(SessionPickerViewPersistence {
+            codex_home: config.codex_home.to_path_buf(),
+            active_profile: config.active_profile.clone(),
+        }),
+    };
     run_session_picker_with_loader(
         tui,
-        show_all,
-        cwd_filter,
-        SessionPickerAction::Resume,
-        provider_filter,
+        options,
         spawn_app_server_page_loader(app_server, include_non_interactive, bg_tx),
         bg_rx,
     )
@@ -279,12 +322,20 @@ pub async fn run_fork_picker_with_app_server(
         app_server.remote_cwd_override(),
     );
     let provider_filter = picker_provider_filter(config, is_remote);
+    let options = SessionPickerRunOptions {
+        show_all,
+        filter_cwd: cwd_filter,
+        action: SessionPickerAction::Fork,
+        provider_filter,
+        initial_density: SessionListDensity::from(config.tui_session_picker_view),
+        view_persistence: Some(SessionPickerViewPersistence {
+            codex_home: config.codex_home.to_path_buf(),
+            active_profile: config.active_profile.clone(),
+        }),
+    };
     run_session_picker_with_loader(
         tui,
-        show_all,
-        cwd_filter,
-        SessionPickerAction::Fork,
-        provider_filter,
+        options,
         spawn_app_server_page_loader(app_server, /*include_non_interactive*/ false, bg_tx),
         bg_rx,
     )
@@ -293,10 +344,7 @@ pub async fn run_fork_picker_with_app_server(
 
 async fn run_session_picker_with_loader(
     tui: &mut Tui,
-    show_all: bool,
-    filter_cwd: Option<PathBuf>,
-    action: SessionPickerAction,
-    provider_filter: ProviderFilter,
+    options: SessionPickerRunOptions,
     picker_loader: PickerLoader,
     bg_rx: mpsc::UnboundedReceiver<BackgroundEvent>,
 ) -> Result<SessionSelection> {
@@ -304,11 +352,13 @@ async fn run_session_picker_with_loader(
     let mut state = PickerState::new(
         alt.tui.frame_requester(),
         picker_loader,
-        provider_filter,
-        show_all,
-        filter_cwd,
-        action,
+        options.provider_filter,
+        options.show_all,
+        options.filter_cwd,
+        options.action,
     );
+    state.density = options.initial_density;
+    state.view_persistence = options.view_persistence;
     state.start_initial_load();
     state.request_frame();
 
@@ -463,6 +513,7 @@ struct PickerState {
     filter_cwd: Option<PathBuf>,
     toolbar_focus: ToolbarControl,
     density: SessionListDensity,
+    view_persistence: Option<SessionPickerViewPersistence>,
     dense_path_column_override: Option<bool>,
     action: SessionPickerAction,
     sort_key: ThreadSortKey,
@@ -720,6 +771,7 @@ impl PickerState {
             filter_cwd,
             toolbar_focus: ToolbarControl::Sort,
             density: SessionListDensity::Comfortable,
+            view_persistence: None,
             dense_path_column_override: None,
             action,
             sort_key: ThreadSortKey::UpdatedAt,
@@ -756,14 +808,14 @@ impl PickerState {
                 modifiers,
                 ..
             } if modifiers.contains(KeyModifiers::CONTROL) => {
-                self.toggle_density();
+                self.toggle_density().await;
             }
             KeyEvent {
                 code: KeyCode::Char('\u{0014}'),
                 modifiers: KeyModifiers::NONE,
                 ..
             } /* ^T */ => {
-                self.toggle_density();
+                self.toggle_density().await;
             }
             KeyEvent {
                 code: KeyCode::Char('o'),
@@ -1277,10 +1329,29 @@ impl PickerState {
         }
     }
 
-    fn toggle_density(&mut self) {
+    async fn toggle_density(&mut self) {
         self.density = self.density.toggle();
         self.ensure_selected_visible();
+        if let Err(err) = self.persist_density().await {
+            warn!(error = %err, "failed to persist session picker view mode");
+            self.inline_error = Some(format!("Failed to save view mode: {err}"));
+        }
         self.request_frame();
+    }
+
+    async fn persist_density(&self) -> Result<()> {
+        let Some(persistence) = &self.view_persistence else {
+            return Ok(());
+        };
+
+        ConfigEditsBuilder::new(&persistence.codex_home)
+            .with_profile(persistence.active_profile.as_deref())
+            .set_session_picker_view(SessionPickerViewMode::from(self.density))
+            .apply()
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!("failed to write config.toml: {err}"))?;
+
+        Ok(())
     }
 
     fn toggle_dense_path_column(&mut self) {
@@ -1734,9 +1805,10 @@ fn hint_line(state: &PickerState, width: u16) -> Line<'static> {
     .filter(|hint| hint.key != "ctrl+o" || state.dense_path_toggle_available())
     .collect::<Vec<_>>();
     if width >= FOOTER_COMPACT_BREAKPOINT
-        && let Some(line) = fit_footer_hints(&hints, FooterHintLabelMode::Wide, width) {
-            return line;
-        }
+        && let Some(line) = fit_footer_hints(&hints, FooterHintLabelMode::Wide, width)
+    {
+        return line;
+    }
     if let Some(line) = fit_footer_hints(&hints, FooterHintLabelMode::Compact, width) {
         return line;
     }
@@ -2455,6 +2527,7 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
 mod tests {
     use super::*;
     use chrono::Duration;
+    use codex_config::CONFIG_TOML_FILE;
     use codex_protocol::ThreadId;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
@@ -2468,6 +2541,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex;
+    use tempfile::tempdir;
 
     fn page(
         rows: Vec<Row>,
@@ -3008,6 +3082,107 @@ mod tests {
 
         assert_eq!(state.density, SessionListDensity::Dense);
         assert_eq!(state.query, "pick");
+    }
+
+    #[tokio::test]
+    async fn ctrl_t_persists_density_preference() {
+        let tmp = tempdir().expect("tmpdir");
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.view_persistence = Some(SessionPickerViewPersistence {
+            codex_home: tmp.path().to_path_buf(),
+            active_profile: None,
+        });
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert_eq!(state.density, SessionListDensity::Dense);
+        let contents =
+            std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
+        assert_eq!(
+            contents,
+            r#"[tui]
+session_picker_view = "dense"
+"#
+        );
+    }
+
+    #[tokio::test]
+    async fn ctrl_t_persists_density_preference_for_active_profile() {
+        let tmp = tempdir().expect("tmpdir");
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.view_persistence = Some(SessionPickerViewPersistence {
+            codex_home: tmp.path().to_path_buf(),
+            active_profile: Some(String::from("work")),
+        });
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert_eq!(state.density, SessionListDensity::Dense);
+        let contents =
+            std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
+        assert_eq!(
+            contents,
+            r#"[profiles.work.tui]
+session_picker_view = "dense"
+"#
+        );
+    }
+
+    #[tokio::test]
+    async fn ctrl_t_keeps_toggled_density_when_persistence_fails() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home_file = tmp.path().join("codex-home-file");
+        std::fs::write(&codex_home_file, "not a directory").expect("write codex home file");
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.view_persistence = Some(SessionPickerViewPersistence {
+            codex_home: codex_home_file,
+            active_profile: None,
+        });
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert_eq!(state.density, SessionListDensity::Dense);
+        assert!(
+            state
+                .inline_error
+                .as_deref()
+                .is_some_and(|error| error.contains("Failed to save view mode")),
+            "expected persistence error, got {:?}",
+            state.inline_error
+        );
     }
 
     #[tokio::test]

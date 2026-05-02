@@ -2160,6 +2160,14 @@
       ],
       "type": "string"
     },
+    "SessionPickerViewMode": {
+      "description": "Preferred layout for the resume/fork session picker.",
+      "enum": [
+        "comfortable",
+        "dense"
+      ],
+      "type": "string"
+    },
     "ShellEnvironmentPolicyInherit": {
       "oneOf": [
         {
@@ -2563,6 +2571,15 @@
           "default": false,
           "description": "Start the TUI in raw scrollback mode for copy-friendly transcript output. Defaults to `false`.",
           "type": "boolean"
+        },
+        "session_picker_view": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SessionPickerViewMode"
+            }
+          ],
+          "default": null,
+          "description": "Preferred layout for resume/fork session picker results."
         },
         "show_tooltips": {
           "default": true,
