@@ -1020,8 +1020,8 @@ Use `process/spawn` to start a standalone argv-based process without the Codex s
     "processHandle": "cargo-check-1",
     "cwd": "/Users/me/project",                    // required absolute path
     "env": { "RUST_LOG": null },                    // optional; override or unset inherited env vars
-    "outputBytesCap": 1048576,                     // optional; per-stream capture cap
-    "timeoutMs": 10000                             // optional; ms timeout; defaults to server timeout
+    "outputBytesCap": 1048576,                     // optional; omit for default, null disables
+    "timeoutMs": 10000                             // optional; omit for default, null disables
 } }
 { "id": 40, "result": {
     "processHandle": "cargo-check-1"
@@ -1044,7 +1044,9 @@ For interactive or streaming processes, set `tty: true` or `streamStdoutStderr: 
     "processHandle": "bash-1",
     "cwd": "/Users/me/project",
     "tty": true,
-    "size": { "rows": 40, "cols": 120 }
+    "size": { "rows": 40, "cols": 120 },
+    "outputBytesCap": null,
+    "timeoutMs": null
 } }
 { "id": 41, "result": { "processHandle": "bash-1" } }
 { "method": "process/outputDelta", "params": {
@@ -1082,6 +1084,7 @@ For interactive or streaming processes, set `tty: true` or `streamStdoutStderr: 
 - `process/spawn` is intentionally unsandboxed and does not define sandbox-selection fields such as `sandboxPolicy` or `permissionProfile`.
 - `tty: true` implies PTY mode plus `streamStdin: true` and `streamStdoutStderr: true`.
 - `process/writeStdin` accepts either `deltaBase64`, `closeStdin`, or both.
+- When omitted, `timeoutMs` and `outputBytesCap` fall back to server defaults. Set either field to `null` to disable that limit for terminal-style sessions.
 - `outputBytesCap` applies independently to `stdout` and `stderr`; `process/exited.stdoutCapReached` and `stderrCapReached` report whether each stream reached the cap. Streamed bytes are not duplicated into `process/exited`.
 - `process/outputDelta` and `process/exited` notifications are connection-scoped. If the originating connection closes, the server terminates the process.
 

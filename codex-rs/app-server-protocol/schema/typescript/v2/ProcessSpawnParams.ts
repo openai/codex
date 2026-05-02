@@ -43,13 +43,15 @@ streamStdoutStderr?: boolean,
 /**
  * Optional per-stream stdout/stderr capture cap in bytes.
  *
- * When omitted, the server default applies.
+ * When omitted, the server default applies. Set to `null` to disable the
+ * cap.
  */
 outputBytesCap?: number | null,
 /**
  * Optional timeout in milliseconds.
  *
- * When omitted, the server default applies.
+ * When omitted, the server default applies. Set to `null` to disable the
+ * timeout.
  */
 timeoutMs?: number | null,
 /**

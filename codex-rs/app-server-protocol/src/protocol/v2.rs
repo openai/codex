@@ -3599,16 +3599,30 @@ pub struct ProcessSpawnParams {
     pub stream_stdout_stderr: bool,
     /// Optional per-stream stdout/stderr capture cap in bytes.
     ///
-    /// When omitted, the server default applies.
+    /// When omitted, the server default applies. Set to `null` to disable the
+    /// cap.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(type = "number | null")]
     #[ts(optional = nullable)]
-    pub output_bytes_cap: Option<usize>,
+    pub output_bytes_cap: Option<Option<usize>>,
     /// Optional timeout in milliseconds.
     ///
-    /// When omitted, the server default applies.
+    /// When omitted, the server default applies. Set to `null` to disable the
+    /// timeout.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(type = "number | null")]
     #[ts(optional = nullable)]
-    pub timeout_ms: Option<i64>,
+    pub timeout_ms: Option<Option<i64>>,
     /// Optional environment overrides merged into the server-computed
     /// environment.
     ///
@@ -9343,16 +9357,73 @@ mod tests {
                 "command": ["sleep", "30"],
                 "processHandle": "sleep-1",
                 "cwd": absolute_path_string("readable"),
-                "timeoutMs": null,
                 "env": null,
                 "size": null,
-                "outputBytesCap": null,
             })
         );
 
         let decoded =
             serde_json::from_value::<ProcessSpawnParams>(value).expect("deserialize round-trip");
         assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn process_spawn_params_distinguish_omitted_null_and_value_limits() {
+        let base = json!({
+            "command": ["sleep", "30"],
+            "processHandle": "sleep-1",
+            "cwd": absolute_path_string("readable"),
+        });
+
+        let expected_omitted = ProcessSpawnParams {
+            command: vec!["sleep".to_string(), "30".to_string()],
+            process_handle: "sleep-1".to_string(),
+            cwd: test_absolute_path(),
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            timeout_ms: None,
+            env: None,
+            size: None,
+        };
+        let decoded =
+            serde_json::from_value::<ProcessSpawnParams>(base).expect("deserialize omitted limits");
+        assert_eq!(decoded, expected_omitted);
+
+        let decoded = serde_json::from_value::<ProcessSpawnParams>(json!({
+            "command": ["sleep", "30"],
+            "processHandle": "sleep-1",
+            "cwd": absolute_path_string("readable"),
+            "outputBytesCap": null,
+            "timeoutMs": null,
+        }))
+        .expect("deserialize disabled limits");
+        assert_eq!(
+            decoded,
+            ProcessSpawnParams {
+                output_bytes_cap: Some(None),
+                timeout_ms: Some(None),
+                ..expected_omitted.clone()
+            }
+        );
+
+        let decoded = serde_json::from_value::<ProcessSpawnParams>(json!({
+            "command": ["sleep", "30"],
+            "processHandle": "sleep-1",
+            "cwd": absolute_path_string("readable"),
+            "outputBytesCap": 123,
+            "timeoutMs": 456,
+        }))
+        .expect("deserialize explicit limits");
+        assert_eq!(
+            decoded,
+            ProcessSpawnParams {
+                output_bytes_cap: Some(Some(123)),
+                timeout_ms: Some(Some(456)),
+                ..expected_omitted
+            }
+        );
     }
 
     #[test]

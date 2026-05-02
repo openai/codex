@@ -2332,7 +2332,7 @@
           ]
         },
         "outputBytesCap": {
-          "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies.",
+          "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Set to `null` to disable the cap.",
           "format": "uint",
           "minimum": 0.0,
           "type": [
@@ -2364,7 +2364,7 @@
           "type": "boolean"
         },
         "timeoutMs": {
-          "description": "Optional timeout in milliseconds.\n\nWhen omitted, the server default applies.",
+          "description": "Optional timeout in milliseconds.\n\nWhen omitted, the server default applies. Set to `null` to disable the timeout.",
           "format": "int64",
           "type": [
             "integer",

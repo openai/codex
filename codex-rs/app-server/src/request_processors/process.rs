@@ -33,6 +33,7 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 use crate::error_code::internal_error;
 use crate::error_code::invalid_params;
@@ -100,22 +101,22 @@ impl CodexMessageProcessor {
                 }
             }
         }
-        let timeout_ms = match timeout_ms {
-            Some(timeout_ms) => match u64::try_from(timeout_ms) {
-                Ok(timeout_ms) => Some(timeout_ms),
+        let expiration = match timeout_ms {
+            Some(Some(timeout_ms)) => match u64::try_from(timeout_ms) {
+                Ok(timeout_ms) => timeout_ms.into(),
                 Err(_) => {
                     return Err(invalid_params(format!(
                         "{method_name} timeoutMs must be non-negative, got {timeout_ms}"
                     )));
                 }
             },
-            None => None,
-        };
-        let expiration = match timeout_ms {
-            Some(timeout_ms) => timeout_ms.into(),
+            Some(None) => ExecExpiration::Cancellation(CancellationToken::new()),
             None => ExecExpiration::DefaultTimeout,
         };
-        let output_bytes_cap = Some(output_bytes_cap.unwrap_or(DEFAULT_OUTPUT_BYTES_CAP));
+        let output_bytes_cap = match output_bytes_cap {
+            Some(output_bytes_cap) => output_bytes_cap,
+            None => Some(DEFAULT_OUTPUT_BYTES_CAP),
+        };
         let size = match size.map(terminal_size_from_protocol) {
             Some(Ok(size)) => Some(size),
             Some(Err(error)) => return Err(error),
