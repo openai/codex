@@ -2217,6 +2217,25 @@
       ],
       "type": "object"
     },
+    "PluginSkillReadParams": {
+      "properties": {
+        "remoteMarketplaceName": {
+          "type": "string"
+        },
+        "remotePluginId": {
+          "type": "string"
+        },
+        "skillName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "remoteMarketplaceName",
+        "remotePluginId",
+        "skillName"
+      ],
+      "type": "object"
+    },
     "PluginUninstallParams": {
       "properties": {
         "pluginId": {
@@ -5034,6 +5053,30 @@
         "params"
       ],
       "title": "Plugin/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/skill/read"
+          ],
+          "title": "Plugin/skill/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginSkillReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/skill/readRequest",
       "type": "object"
     },
     {

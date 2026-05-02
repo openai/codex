@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use crate::RequestId;
 use crate::protocol::common::AuthMode;
+use crate::protocol::item_builders::convert_patch_changes;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::account::PlanType;
 use codex_protocol::account::ProviderAccount;
@@ -4612,6 +4613,22 @@ pub struct PluginReadResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct PluginSkillReadParams {
+    pub remote_marketplace_name: String,
+    pub remote_plugin_id: String,
+    pub skill_name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginSkillReadResponse {
+    pub contents: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct PluginShareSaveParams {
     pub plugin_path: AbsolutePathBuf,
     #[ts(optional = nullable)]
@@ -4635,7 +4652,7 @@ pub struct PluginShareListParams {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginShareListResponse {
-    pub data: Vec<PluginSummary>,
+    pub data: Vec<PluginShareListItem>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4649,6 +4666,15 @@ pub struct PluginShareDeleteParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginShareDeleteResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareListItem {
+    pub plugin: PluginSummary,
+    pub share_url: String,
+    pub local_plugin_path: Option<AbsolutePathBuf>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
@@ -6437,12 +6463,25 @@ impl From<CoreTurnItem> for ThreadItem {
                 query: search.query,
                 action: Some(WebSearchAction::from(search.action)),
             },
+            CoreTurnItem::ImageView(image) => ThreadItem::ImageView {
+                id: image.id,
+                path: image.path,
+            },
             CoreTurnItem::ImageGeneration(image) => ThreadItem::ImageGeneration {
                 id: image.id,
                 status: image.status,
                 revised_prompt: image.revised_prompt,
                 result: image.result,
                 saved_path: image.saved_path,
+            },
+            CoreTurnItem::FileChange(file_change) => ThreadItem::FileChange {
+                id: file_change.id,
+                changes: convert_patch_changes(&file_change.changes),
+                status: file_change
+                    .status
+                    .as_ref()
+                    .map(PatchApplyStatus::from)
+                    .unwrap_or(PatchApplyStatus::InProgress),
             },
             CoreTurnItem::ContextCompaction(compaction) => {
                 ThreadItem::ContextCompaction { id: compaction.id }
@@ -8053,6 +8092,8 @@ mod tests {
     use super::*;
     use codex_protocol::items::AgentMessageContent;
     use codex_protocol::items::AgentMessageItem;
+    use codex_protocol::items::FileChangeItem;
+    use codex_protocol::items::ImageViewItem;
     use codex_protocol::items::ReasoningItem;
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
@@ -10333,6 +10374,48 @@ mod tests {
                 }),
             }
         );
+
+        let image_view_item = TurnItem::ImageView(ImageViewItem {
+            id: "view-image-1".to_string(),
+            path: test_path_buf("/tmp/view-image.png").abs(),
+        });
+
+        assert_eq!(
+            ThreadItem::from(image_view_item),
+            ThreadItem::ImageView {
+                id: "view-image-1".to_string(),
+                path: test_path_buf("/tmp/view-image.png").abs(),
+            }
+        );
+
+        let file_change_item = TurnItem::FileChange(FileChangeItem {
+            id: "patch-1".to_string(),
+            changes: [(
+                PathBuf::from("README.md"),
+                codex_protocol::protocol::FileChange::Add {
+                    content: "hello\n".to_string(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            status: Some(codex_protocol::protocol::PatchApplyStatus::Completed),
+            auto_approved: None,
+            stdout: Some("Done!".to_string()),
+            stderr: Some(String::new()),
+        });
+
+        assert_eq!(
+            ThreadItem::from(file_change_item),
+            ThreadItem::FileChange {
+                id: "patch-1".to_string(),
+                changes: vec![FileUpdateChange {
+                    path: "README.md".to_string(),
+                    kind: PatchChangeKind::Add,
+                    diff: "hello\n".to_string(),
+                }],
+                status: PatchApplyStatus::Completed,
+            }
+        );
     }
 
     #[test]
@@ -10668,6 +10751,23 @@ mod tests {
     }
 
     #[test]
+    fn plugin_skill_read_params_serialization_uses_remote_plugin_id() {
+        assert_eq!(
+            serde_json::to_value(PluginSkillReadParams {
+                remote_marketplace_name: "chatgpt-global".to_string(),
+                remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                skill_name: "plan-work".to_string(),
+            })
+            .unwrap(),
+            json!({
+                "remoteMarketplaceName": "chatgpt-global",
+                "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+                "skillName": "plan-work",
+            }),
+        );
+    }
+
+    #[test]
     fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
         let plugin_path = if cfg!(windows) {
             r"C:\plugins\gmail"
@@ -10732,33 +10832,41 @@ mod tests {
     }
 
     #[test]
-    fn plugin_share_list_response_serializes_plugin_summaries() {
+    fn plugin_share_list_response_serializes_share_items() {
         assert_eq!(
             serde_json::to_value(PluginShareListResponse {
-                data: vec![PluginSummary {
-                    id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
-                    name: "gmail".to_string(),
-                    source: PluginSource::Remote,
-                    installed: false,
-                    enabled: false,
-                    install_policy: PluginInstallPolicy::Available,
-                    auth_policy: PluginAuthPolicy::OnUse,
-                    availability: PluginAvailability::Available,
-                    interface: None,
+                data: vec![PluginShareListItem {
+                    plugin: PluginSummary {
+                        id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                        name: "gmail".to_string(),
+                        source: PluginSource::Remote,
+                        installed: false,
+                        enabled: false,
+                        install_policy: PluginInstallPolicy::Available,
+                        auth_policy: PluginAuthPolicy::OnUse,
+                        availability: PluginAvailability::Available,
+                        interface: None,
+                    },
+                    share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
+                    local_plugin_path: None,
                 }],
             })
             .unwrap(),
             json!({
                 "data": [{
-                    "id": "plugins~Plugin_00000000000000000000000000000000",
-                    "name": "gmail",
-                    "source": { "type": "remote" },
-                    "installed": false,
-                    "enabled": false,
-                    "installPolicy": "AVAILABLE",
-                    "authPolicy": "ON_USE",
-                    "availability": "AVAILABLE",
-                    "interface": null,
+                    "plugin": {
+                        "id": "plugins~Plugin_00000000000000000000000000000000",
+                        "name": "gmail",
+                        "source": { "type": "remote" },
+                        "installed": false,
+                        "enabled": false,
+                        "installPolicy": "AVAILABLE",
+                        "authPolicy": "ON_USE",
+                        "availability": "AVAILABLE",
+                        "interface": null,
+                    },
+                    "shareUrl": "https://chatgpt.example/plugins/share/share-key-1",
+                    "localPluginPath": null,
                 }],
             }),
         );

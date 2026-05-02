@@ -400,7 +400,7 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
 }
 
 #[tokio::test]
-async fn replayed_user_message_with_only_local_images_does_not_render_history_cell() {
+async fn replayed_user_message_with_only_local_images_renders_history_cell() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
     let local_images = [PathBuf::from("/tmp/replay-local-only.png")];
@@ -438,17 +438,20 @@ async fn replayed_user_message_with_only_local_images_does_not_render_history_ce
         ReplayKind::ResumeInitialMessages,
     );
 
-    let mut found_user_history_cell = false;
+    let mut user_cell = None;
     while let Ok(ev) = rx.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = ev
-            && cell.as_any().downcast_ref::<UserHistoryCell>().is_some()
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
         {
-            found_user_history_cell = true;
+            user_cell = Some((cell.message.clone(), cell.local_image_paths.clone()));
             break;
         }
     }
 
-    assert!(!found_user_history_cell);
+    let (stored_message, stored_local_images) =
+        user_cell.expect("expected a replayed local-image-only user history cell");
+    assert!(stored_message.is_empty());
+    assert_eq!(stored_local_images, local_images);
 }
 
 #[tokio::test]

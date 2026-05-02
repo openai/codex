@@ -17,13 +17,10 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 jobs:
   test:
-    # Even though a no-cache-hit Windows build seems to exceed the 30-minute
-    # limit on occasion, the more common reason for exceeding the limit is a
-    # true test failure in a rust_test() marked "flaky" that gets run 3x.
-    # In that case, extra time generally does not give us more signal.
-    #
-    # Ultimately we need true distributed builds (e.g.,
-    # https://www.buildbuddy.io/docs/rbe-setup/) to speed things up.
+    # PRs use a fast Windows cross-compiled test leg for pre-merge signal.
+    # Post-merge pushes to main also run the native Windows test job below,
+    # which keeps V8/code-mode coverage without putting PR latency back on the
+    # critical path.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -47,13 +44,16 @@ jobs:
           # - os: ubuntu-24.04-arm
           #   target: aarch64-unknown-linux-gnu
 
-          # Windows
+          # Windows fast path: build the windows-gnullvm binaries with Linux
+          # RBE, then run the resulting Windows tests on the Windows runner.
+          # The main-only native Windows job below preserves full V8/code-mode
+          # coverage post-merge.
           - os: windows-latest
             target: x86_64-pc-windows-gnullvm
     runs-on: ${{ matrix.os }}
 
     # Configure a human readable name for each job
-    name: Local Bazel build on ${{ matrix.os }} for ${{ matrix.target }}
+    name: Bazel test on ${{ matrix.os }} for ${{ matrix.target }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -91,6 +91,7 @@ jobs:
           )
 
           bazel_wrapper_args=(
+            --print-failed-action-summary
             --print-failed-test-logs
           )
           bazel_test_args=(
@@ -100,8 +101,19 @@ jobs:
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
           )
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            bazel_wrapper_args+=(--windows-msvc-host-platform)
-            bazel_test_args+=(--jobs=8)
+            bazel_wrapper_args+=(
+              --windows-cross-compile
+              --remote-download-toplevel
+            )
+            # Tradeoff: the Linux-RBE-built windows-gnullvm V8 archive
+            # currently crashes during direct V8/code-mode smoke tests on the
+            # Windows runner. Keep the broader fast Windows suite in PR CI and
+            # rely on the main-only native Windows job below for full
+            # V8/code-mode signal while we investigate the cross-built archive.
+            bazel_targets+=(
+              -//codex-rs/code-mode:code-mode-unit-tests
+              -//codex-rs/v8-poc:v8-poc-unit-tests
+            )
           fi
 
           ./.github/scripts/run-bazel-ci.sh \
@@ -117,6 +129,75 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: bazel-execution-logs-test-${{ matrix.target }}
+          path: ${{ runner.temp }}/bazel-execution-logs
+          if-no-files-found: ignore
+
+      # Save the job-scoped Bazel repository cache after cache misses. Keep the
+      # upload non-fatal so cache service issues never fail the job itself.
+      - name: Save bazel repository cache
+        if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
+          key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}
+
+  test-windows-native-main:
+    # Native Windows Bazel tests are slower and frequently approach the
+    # 30-minute PR budget, but they provide the full V8/code-mode signal that
+    # the fast cross-compiled PR leg intentionally trades away. Run this only
+    # for post-merge commits to main and give it a larger timeout.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 40
+    runs-on: windows-latest
+    name: Bazel test on windows-latest for x86_64-pc-windows-gnullvm (native main)
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Prepare Bazel CI
+        id: prepare_bazel
+        uses: ./.github/actions/prepare-bazel-ci
+        with:
+          target: x86_64-pc-windows-gnullvm
+          cache-scope: bazel-${{ github.job }}
+          install-test-prereqs: "true"
+
+      - name: bazel test //...
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          bazel_targets=(
+            //...
+            # Keep standalone V8 library targets out of the ordinary Bazel CI
+            # path. V8 consumers under `//codex-rs/...` still participate
+            # transitively through `//...`.
+            -//third_party/v8:all
+          )
+
+          bazel_test_args=(
+            test
+            --test_tag_filters=-argument-comment-lint
+            --test_verbose_timeout_warnings
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA}
+            --build_metadata=TAG_windows_native_main=true
+          )
+
+          ./.github/scripts/run-bazel-ci.sh \
+            --print-failed-action-summary \
+            --print-failed-test-logs \
+            -- \
+            "${bazel_test_args[@]}" \
+            -- \
+            "${bazel_targets[@]}"
+
+      - name: Upload Bazel execution logs
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: bazel-execution-logs-test-windows-native-x86_64-pc-windows-gnullvm
           path: ${{ runner.temp }}/bazel-execution-logs
           if-no-files-found: ignore
 
@@ -170,17 +251,24 @@ jobs:
             --build_metadata=TAG_job=clippy
           )
           bazel_wrapper_args=()
+          bazel_target_list_args=()
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            # Keep this aligned with the Windows Bazel test job. With the
-            # default `//:local_windows` host platform, Windows `rust_test`
-            # targets such as `//codex-rs/core:core-all-test` can be skipped
-            # by `--skip_incompatible_explicit_targets`, which hides clippy
-            # diagnostics from integration-test modules.
-            bazel_wrapper_args+=(--windows-msvc-host-platform)
-            bazel_clippy_args+=(--skip_incompatible_explicit_targets)
+            # Keep this aligned with the fast Windows Bazel test job: use
+            # Linux RBE for clippy build actions while targeting Windows
+            # gnullvm. Fork/community PRs without the BuildBuddy secret fall
+            # back inside `run-bazel-ci.sh` to the previous local Windows MSVC
+            # host-platform shape.
+            bazel_wrapper_args+=(--windows-cross-compile)
+            bazel_target_list_args+=(--windows-cross-compile)
+            if [[ -z "${BUILDBUDDY_API_KEY:-}" ]]; then
+              # The fork fallback can see incompatible explicit Windows-cross
+              # internal test binaries in the generated target list. Preserve
+              # the old local-fallback behavior there.
+              bazel_clippy_args+=(--skip_incompatible_explicit_targets)
+            fi
           fi
 
-          bazel_target_lines="$(./scripts/list-bazel-clippy-targets.sh)"
+          bazel_target_lines="$(./scripts/list-bazel-clippy-targets.sh "${bazel_target_list_args[@]}")"
           bazel_targets=()
           while IFS= read -r target; do
             bazel_targets+=("${target}")
@@ -252,7 +340,12 @@ jobs:
           # Rust debug assertions explicitly.
           bazel_wrapper_args=()
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            bazel_wrapper_args+=(--windows-msvc-host-platform)
+            # This is build-only signal, so use the same Linux-RBE
+            # cross-compile path as the fast Windows test and clippy jobs.
+            # Fork/community PRs without the BuildBuddy secret fall back
+            # inside `run-bazel-ci.sh` to the previous local Windows MSVC
+            # host-platform shape.
+            bazel_wrapper_args+=(--windows-cross-compile)
           fi
 
           bazel_build_args=(

@@ -299,12 +299,26 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         ))
         .await?;
 
-    let mut tool_event = None;
+    let mut item_started = None;
+    let mut item_completed = None;
+    let mut legacy_event = None;
     wait_for_event_with_timeout(
         codex,
         |event| match event {
-            EventMsg::ViewImageToolCall(_) => {
-                tool_event = Some(event.clone());
+            EventMsg::ItemStarted(event) => {
+                if matches!(&event.item, codex_protocol::items::TurnItem::ImageView(_)) {
+                    item_started = Some(event.item.clone());
+                }
+                false
+            }
+            EventMsg::ItemCompleted(event) => {
+                if matches!(&event.item, codex_protocol::items::TurnItem::ImageView(_)) {
+                    item_completed = Some(event.item.clone());
+                }
+                false
+            }
+            EventMsg::ViewImageToolCall(event) => {
+                legacy_event = Some(event.clone());
                 false
             }
             EventMsg::TurnComplete(_) => true,
@@ -316,12 +330,23 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     )
     .await;
 
-    let tool_event = match tool_event.expect("view image tool event emitted") {
-        EventMsg::ViewImageToolCall(event) => event,
-        _ => unreachable!("stored event must be ViewImageToolCall"),
-    };
-    assert_eq!(tool_event.call_id, call_id);
-    assert_eq!(tool_event.path, abs_path);
+    match item_started.expect("view image item started event emitted") {
+        codex_protocol::items::TurnItem::ImageView(item) => {
+            assert_eq!(item.id, call_id);
+            assert_eq!(item.path, abs_path);
+        }
+        other => panic!("expected ImageView item, got {other:?}"),
+    }
+    match item_completed.expect("view image item completed event emitted") {
+        codex_protocol::items::TurnItem::ImageView(item) => {
+            assert_eq!(item.id, call_id);
+            assert_eq!(item.path, abs_path);
+        }
+        other => panic!("expected ImageView item, got {other:?}"),
+    }
+    let legacy_event = legacy_event.expect("legacy view image event emitted");
+    assert_eq!(legacy_event.call_id, call_id);
+    assert_eq!(legacy_event.path, abs_path);
 
     let req = mock.single_request();
     let body = req.body_json();

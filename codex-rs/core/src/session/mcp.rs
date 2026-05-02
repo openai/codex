@@ -221,6 +221,19 @@ impl Session {
         let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
         let auth_statuses =
             compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
+        let mcp_runtime_environment = match turn_context.primary_environment() {
+            Some(turn_environment) => McpRuntimeEnvironment::new(
+                Arc::clone(&turn_environment.environment),
+                turn_environment.cwd.to_path_buf(),
+            ),
+            None => McpRuntimeEnvironment::new(
+                self.services
+                    .environment_manager
+                    .default_environment()
+                    .unwrap_or_else(|| self.services.environment_manager.local_environment()),
+                turn_context.cwd.to_path_buf(),
+            ),
+        };
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             guard.cancel();
@@ -234,13 +247,7 @@ impl Session {
             turn_context.sub_id.clone(),
             self.get_tx_event(),
             turn_context.permission_profile(),
-            McpRuntimeEnvironment::new(
-                turn_context
-                    .environment
-                    .clone()
-                    .unwrap_or_else(|| self.services.environment_manager.local_environment()),
-                turn_context.cwd.to_path_buf(),
-            ),
+            mcp_runtime_environment,
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
             tool_plugin_provenance,

@@ -249,6 +249,7 @@ pub(super) async fn make_chatwidget_manual(
         newly_installed_marketplace_tab_id: None,
         connectors_prefetch_in_flight: false,
         connectors_force_refetch_pending: false,
+        ide_context: super::super::ide_context::IdeContextState::default(),
         plugins_cache: PluginsCacheState::default(),
         plugins_fetch_state: PluginListFetchState::default(),
         interrupts: InterruptManager::new(),

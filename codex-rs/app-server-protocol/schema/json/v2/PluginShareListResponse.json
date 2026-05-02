@@ -167,6 +167,31 @@
       ],
       "type": "object"
     },
+    "PluginShareListItem": {
+      "properties": {
+        "localPluginPath": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plugin": {
+          "$ref": "#/definitions/PluginSummary"
+        },
+        "shareUrl": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plugin",
+        "shareUrl"
+      ],
+      "type": "object"
+    },
     "PluginSource": {
       "oneOf": [
         {
@@ -304,7 +329,7 @@
   "properties": {
     "data": {
       "items": {
-        "$ref": "#/definitions/PluginSummary"
+        "$ref": "#/definitions/PluginShareListItem"
       },
       "type": "array"
     }

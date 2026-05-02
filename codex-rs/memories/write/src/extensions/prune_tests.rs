@@ -1,4 +1,5 @@
 use super::*;
+use crate::memory_extensions_root;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 

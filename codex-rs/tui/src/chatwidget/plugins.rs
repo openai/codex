@@ -16,13 +16,15 @@ use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::history_cell;
 use crate::key_hint;
 use crate::legacy_core::config::Config;
+use crate::motion::MotionMode;
+use crate::motion::shimmer_text;
 use crate::onboarding::mark_url_hyperlink;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
+use codex_app_server_protocol::MarketplaceUpgradeResponse;
 use codex_app_server_protocol::PluginDetail;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInstallResponse;
@@ -36,6 +38,7 @@ use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
@@ -100,7 +103,10 @@ impl Renderable for DelayedLoadingHeader {
         } else if self.animations_enabled {
             self.frame_requester
                 .schedule_frame_in(LOADING_ANIMATION_INTERVAL);
-            lines.push(Line::from(shimmer_spans(self.loading_text.as_str())));
+            lines.push(Line::from(shimmer_text(
+                self.loading_text.as_str(),
+                MotionMode::Animated,
+            )));
         } else {
             lines.push(Line::from(self.loading_text.as_str().dim()));
         }
@@ -304,6 +310,26 @@ impl ChatWidget {
         {
             self.bottom_pane
                 .show_selection_view(self.marketplace_add_loading_popup_params());
+        }
+    }
+
+    pub(crate) fn open_marketplace_upgrade_loading_popup(
+        &mut self,
+        marketplace_name: Option<&str>,
+    ) {
+        self.plugins_active_tab_id = self
+            .bottom_pane
+            .active_tab_id_for_active_view(PLUGINS_SELECTION_VIEW_ID)
+            .map(str::to_string)
+            .or_else(|| self.plugins_active_tab_id.clone());
+        let params = self.marketplace_upgrade_loading_popup_params(marketplace_name);
+        if !self
+            .bottom_pane
+            .replace_selection_view_if_active(PLUGINS_SELECTION_VIEW_ID, params)
+        {
+            self.bottom_pane.show_selection_view(
+                self.marketplace_upgrade_loading_popup_params(marketplace_name),
+            );
         }
     }
 
@@ -565,8 +591,101 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn on_marketplace_upgrade_loaded(
+        &mut self,
+        cwd: PathBuf,
+        result: Result<MarketplaceUpgradeResponse, String>,
+    ) {
+        if self.config.cwd.as_path() != cwd.as_path() {
+            return;
+        }
+
+        match result {
+            Ok(response) => {
+                if response.upgraded_roots.len() == 1 {
+                    self.plugins_active_tab_id =
+                        Some(marketplace_tab_id_from_path(&response.upgraded_roots[0]));
+                }
+
+                let selected_count = response.selected_marketplaces.len();
+                let upgraded_count = response.upgraded_roots.len();
+                let error_count = response.errors.len();
+                if selected_count == 0 {
+                    self.add_info_message(
+                        "No configured Git marketplaces to upgrade.".to_string(),
+                        Some("Only configured Git marketplaces can be upgraded.".to_string()),
+                    );
+                    return;
+                }
+
+                if upgraded_count == 0 && error_count == 0 {
+                    let message = if selected_count == 1 {
+                        format!(
+                            "Marketplace {} is already up to date.",
+                            response.selected_marketplaces[0]
+                        )
+                    } else {
+                        format!(
+                            "Checked {selected_count} marketplaces; all are already up to date."
+                        )
+                    };
+                    self.add_info_message(
+                        message,
+                        Some(format!(
+                            "Checked: {}",
+                            response.selected_marketplaces.join(", ")
+                        )),
+                    );
+                    return;
+                }
+
+                if upgraded_count > 0 {
+                    let noun = if upgraded_count == 1 {
+                        "marketplace"
+                    } else {
+                        "marketplaces"
+                    };
+                    self.add_info_message(
+                        format!("Upgraded {upgraded_count} {noun}."),
+                        Some(format!(
+                            "Updated roots: {}",
+                            response
+                                .upgraded_roots
+                                .iter()
+                                .map(|root| root.as_path().display().to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )),
+                    );
+                }
+
+                if error_count > 0 {
+                    let noun = if error_count == 1 {
+                        "marketplace"
+                    } else {
+                        "marketplaces"
+                    };
+                    self.add_error_message(format!(
+                        "Failed to upgrade {error_count} {noun}: {}",
+                        response
+                            .errors
+                            .iter()
+                            .map(|err| format!("{}: {}", err.marketplace_name, err.message))
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    ));
+                }
+            }
+            Err(err) => {
+                self.add_error_message(err);
+            }
+        }
+    }
+
     pub(crate) fn handle_plugins_popup_key_event(&mut self, key_event: KeyEvent) -> bool {
-        if !key_hint::ctrl(KeyCode::Char('r')).is_press(key_event) {
+        let remove_marketplace = key_hint::ctrl(KeyCode::Char('r')).is_press(key_event);
+        let upgrade_marketplace = key_hint::ctrl(KeyCode::Char('u')).is_press(key_event);
+        if !remove_marketplace && !upgrade_marketplace {
             return false;
         }
 
@@ -587,10 +706,33 @@ impl ChatWidget {
             return false;
         };
 
-        self.open_marketplace_remove_confirmation(
-            marketplace.name.clone(),
-            marketplace_display_name(marketplace),
-        );
+        if remove_marketplace {
+            self.open_marketplace_remove_confirmation(
+                marketplace.name.clone(),
+                marketplace_display_name(marketplace),
+            );
+            return true;
+        }
+        if marketplace.path.is_none()
+            || !marketplace_is_user_configured_git(&self.config, &marketplace.name)
+        {
+            return false;
+        }
+        if key_event.kind != KeyEventKind::Press {
+            return true;
+        }
+
+        let cwd = self.config.cwd.to_path_buf();
+        let marketplace_name = Some(marketplace.name.clone());
+        self.open_marketplace_upgrade_loading_popup(marketplace_name.as_deref());
+        self.app_event_tx
+            .send(AppEvent::OpenMarketplaceUpgradeLoading {
+                marketplace_name: marketplace_name.clone(),
+            });
+        self.app_event_tx.send(AppEvent::FetchMarketplaceUpgrade {
+            cwd,
+            marketplace_name,
+        });
         true
     }
 
@@ -1006,6 +1148,31 @@ impl ChatWidget {
         }
     }
 
+    fn marketplace_upgrade_loading_popup_params(
+        &self,
+        marketplace_name: Option<&str>,
+    ) -> SelectionViewParams {
+        let loading_text = marketplace_name
+            .map(|name| format!("Upgrading {name} marketplace..."))
+            .unwrap_or_else(|| "Upgrading marketplaces...".to_string());
+        SelectionViewParams {
+            view_id: Some(PLUGINS_SELECTION_VIEW_ID),
+            header: Box::new(DelayedLoadingHeader::new(
+                self.frame_requester.clone(),
+                self.config.animations,
+                loading_text.clone(),
+                /*note*/ None,
+            )),
+            items: vec![SelectionItem {
+                name: loading_text,
+                description: Some("This updates when marketplace upgrade completes.".to_string()),
+                is_disabled: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
     fn plugin_detail_loading_popup_params(&self, plugin_display_name: &str) -> SelectionViewParams {
         SelectionViewParams {
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
@@ -1354,10 +1521,17 @@ impl ChatWidget {
                 .filter(|(_, plugin, _)| plugin.installed)
                 .count();
             let tab_id = marketplace_tab_id(marketplace);
-            if marketplace_is_user_configured(&self.config, &marketplace.name) {
+            let can_remove_marketplace =
+                marketplace_is_user_configured(&self.config, &marketplace.name);
+            let can_upgrade_marketplace = marketplace.path.is_some()
+                && marketplace_is_user_configured_git(&self.config, &marketplace.name);
+            if can_remove_marketplace || can_upgrade_marketplace {
                 tab_footer_hints.push((
                     tab_id.clone(),
-                    plugins_popup_hint_line(/*can_remove_marketplace*/ true),
+                    plugins_popup_hint_line(
+                        /*can_remove_marketplace*/ can_remove_marketplace,
+                        /*can_upgrade_marketplace*/ can_upgrade_marketplace,
+                    ),
                 ));
             }
             let header = if self.newly_installed_marketplace_tab_id.as_deref() == Some(&tab_id) {
@@ -1393,7 +1567,7 @@ impl ChatWidget {
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(()),
             footer_hint: Some(plugins_popup_hint_line(
-                /*can_remove_marketplace*/ false,
+                /*can_remove_marketplace*/ false, /*can_upgrade_marketplace*/ false,
             )),
             tab_footer_hints,
             tabs,
@@ -1683,13 +1857,23 @@ impl ChatWidget {
     }
 }
 
-fn plugins_popup_hint_line(can_remove_marketplace: bool) -> Line<'static> {
-    if can_remove_marketplace {
-        Line::from(
-            "space enable/disable · ←/→ select marketplace · enter view details · ctrl + r remove marketplace · esc close",
-        )
-    } else {
-        Line::from("space enable/disable · ←/→ select marketplace · enter view details · esc close")
+fn plugins_popup_hint_line(
+    can_remove_marketplace: bool,
+    can_upgrade_marketplace: bool,
+) -> Line<'static> {
+    match (can_remove_marketplace, can_upgrade_marketplace) {
+        (true, true) => Line::from(
+            "ctrl + u upgrade · ctrl + r remove · space toggle · ←/→ tabs · enter details · esc close",
+        ),
+        (true, false) => {
+            Line::from("ctrl + r remove · space toggle · ←/→ tabs · enter details · esc close")
+        }
+        (false, true) => {
+            Line::from("ctrl + u upgrade · space toggle · ←/→ tabs · enter details · esc close")
+        }
+        (false, false) => Line::from(
+            "space enable/disable · ←/→ select marketplace · enter view details · esc close",
+        ),
     }
 }
 
@@ -1827,6 +2011,19 @@ fn marketplace_is_user_configured(config: &Config, marketplace_name: &str) -> bo
         .and_then(|user_layer| user_layer.config.get("marketplaces"))
         .and_then(toml::Value::as_table)
         .is_some_and(|marketplaces| marketplaces.contains_key(marketplace_name))
+}
+
+fn marketplace_is_user_configured_git(config: &Config, marketplace_name: &str) -> bool {
+    config
+        .config_layer_stack
+        .get_user_layer()
+        .and_then(|user_layer| user_layer.config.get("marketplaces"))
+        .and_then(toml::Value::as_table)
+        .and_then(|marketplaces| marketplaces.get(marketplace_name))
+        .and_then(toml::Value::as_table)
+        .and_then(|marketplace| marketplace.get("source_type"))
+        .and_then(toml::Value::as_str)
+        .is_some_and(|source_type| source_type == "git")
 }
 
 fn plugin_display_name(plugin: &PluginSummary) -> String {

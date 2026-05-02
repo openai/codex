@@ -77,6 +77,8 @@ pub(super) use codex_app_server_protocol::ItemGuardianApprovalReviewStartedNotif
 pub(super) use codex_app_server_protocol::ItemStartedNotification;
 pub(super) use codex_app_server_protocol::MarketplaceAddResponse;
 pub(super) use codex_app_server_protocol::MarketplaceInterface;
+pub(super) use codex_app_server_protocol::MarketplaceUpgradeErrorInfo;
+pub(super) use codex_app_server_protocol::MarketplaceUpgradeResponse;
 pub(super) use codex_app_server_protocol::McpServerStartupState;
 pub(super) use codex_app_server_protocol::McpServerStatusDetail;
 pub(super) use codex_app_server_protocol::McpServerStatusUpdatedNotification;

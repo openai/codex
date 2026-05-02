@@ -53,6 +53,7 @@ mod mcp_server_elicitation;
 mod multi_select_picker;
 mod request_user_input;
 mod status_line_setup;
+mod status_line_style;
 mod status_surface_preview;
 mod title_setup;
 pub(crate) use action_required_title::ACTION_REQUIRED_PREVIEW_PREFIX;
@@ -67,6 +68,7 @@ pub(crate) use approval_overlay::format_requested_permissions_rule;
 pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
 pub(crate) use request_user_input::RequestUserInputOverlay;
+pub(crate) use status_line_style::status_line_from_segments;
 mod bottom_pane_view;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -375,6 +377,11 @@ impl BottomPane {
 
     pub fn set_goal_status_indicator(&mut self, indicator: Option<GoalStatusIndicator>) {
         self.composer.set_goal_status_indicator(indicator);
+        self.request_redraw();
+    }
+
+    pub fn set_ide_context_active(&mut self, active: bool) {
+        self.composer.set_ide_context_active(active);
         self.request_redraw();
     }
 

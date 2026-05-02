@@ -196,12 +196,12 @@ impl ToolHandler for UnifiedExecHandler {
             }
         };
 
-        let Some(environment) = turn.environment.as_ref() else {
+        let Some(turn_environment) = turn.primary_environment() else {
             return Err(FunctionCallError::RespondToModel(
                 "unified exec is unavailable in this session".to_string(),
             ));
         };
-        let fs = environment.get_filesystem();
+        let fs = turn_environment.environment.get_filesystem();
 
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
         let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());

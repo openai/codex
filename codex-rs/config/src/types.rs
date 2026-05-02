@@ -136,6 +136,7 @@ impl UriBasedFileOpener {
 
 /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[serde(default)]
 #[schemars(deny_unknown_fields)]
 pub struct History {
     /// If true, history entries will not be written to disk.
@@ -262,7 +263,7 @@ pub struct MemoriesToml {
 }
 
 /// Effective memories settings after defaults are applied.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MemoriesConfig {
     pub disable_on_external_context: bool,
     pub generate_memories: bool,
@@ -633,6 +634,11 @@ pub struct Tui {
     /// When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.
     #[serde(default)]
     pub status_line: Option<Vec<String>>,
+
+    /// Color status line items with colors derived from the active syntax theme.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub status_line_use_colors: bool,
 
     /// Ordered list of terminal title item identifiers.
     ///

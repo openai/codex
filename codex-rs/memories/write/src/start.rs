@@ -1,4 +1,6 @@
+use crate::extensions::seed_extension_instructions;
 use crate::guard;
+use crate::memory_root;
 use crate::metrics::MEMORY_STARTUP;
 use crate::phase1;
 use crate::phase2;
@@ -47,6 +49,11 @@ pub fn start_memories_startup_task(
     }
 
     tokio::spawn(async move {
+        let root = memory_root(&config.codex_home);
+        if let Err(err) = seed_extension_instructions(&root).await {
+            warn!("failed seeding memory extension instructions: {err}");
+        }
+
         // Clean memories to make preserve DB size. This does not consume tokens so can be
         // done before the quota check.
         phase1::prune(context.as_ref(), &config).await;

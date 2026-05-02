@@ -387,8 +387,6 @@ pub struct PluginsManager {
     configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
     cached_enabled_outcome: RwLock<Option<CachedPluginLoadOutcome>>,
-    // TODO(remote plugins): reset this cache when ChatGPT auth/account state changes so stale
-    // remote installed state cannot remain effective for a different account.
     remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     remote_sync_lock: Semaphore,

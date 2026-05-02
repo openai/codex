@@ -131,7 +131,12 @@ libc = { workspace = true }
 which = { workspace = true }
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
 ] }
 winsplit = "0.1"
 

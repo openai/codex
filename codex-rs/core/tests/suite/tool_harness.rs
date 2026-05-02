@@ -4,6 +4,7 @@ use std::fs;
 
 use assert_matches::assert_matches;
 use codex_features::Feature;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::protocol::AskForApproval;
@@ -365,9 +366,30 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
         })
         .await?;
 
+    let mut saw_file_change_started = false;
+    let mut saw_file_change_completed = false;
     let mut saw_patch_begin = false;
     let mut patch_end_success = None;
     wait_for_event(&codex, |event| match event {
+        EventMsg::ItemStarted(started) => {
+            if let TurnItem::FileChange(item) = &started.item {
+                saw_file_change_started = true;
+                assert_eq!(item.id, call_id);
+                assert_eq!(item.status, None);
+            }
+            false
+        }
+        EventMsg::ItemCompleted(completed) => {
+            if let TurnItem::FileChange(item) = &completed.item {
+                saw_file_change_completed = true;
+                assert_eq!(item.id, call_id);
+                assert_eq!(
+                    item.status,
+                    Some(codex_protocol::protocol::PatchApplyStatus::Completed)
+                );
+            }
+            false
+        }
         EventMsg::PatchApplyBegin(begin) => {
             saw_patch_begin = true;
             assert_eq!(begin.call_id, call_id);
@@ -383,6 +405,14 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
     })
     .await;
 
+    assert!(
+        saw_file_change_started,
+        "expected ItemStarted for TurnItem::FileChange"
+    );
+    assert!(
+        saw_file_change_completed,
+        "expected ItemCompleted for TurnItem::FileChange"
+    );
     assert!(saw_patch_begin, "expected PatchApplyBegin event");
     let patch_end_success =
         patch_end_success.expect("expected PatchApplyEnd event to capture success flag");

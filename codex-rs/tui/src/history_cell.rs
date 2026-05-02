@@ -17,12 +17,14 @@ use crate::exec_cell::CommandOutput;
 use crate::exec_cell::OutputLinesParams;
 use crate::exec_cell::TOOL_CALL_MAX_LINES;
 use crate::exec_cell::output_lines;
-use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::legacy_core::config::Config;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
+use crate::motion::MotionMode;
+use crate::motion::ReducedMotionIndicator;
+use crate::motion::activity_indicator;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
@@ -1668,7 +1670,12 @@ impl HistoryCell for McpToolCallCell {
         let bullet = match status {
             Some(true) => "•".green().bold(),
             Some(false) => "•".red().bold(),
-            None => spinner(Some(self.start_time), self.animations_enabled),
+            None => activity_indicator(
+                Some(self.start_time),
+                MotionMode::from_animations_enabled(self.animations_enabled),
+                ReducedMotionIndicator::StaticBullet,
+            )
+            .unwrap_or_else(|| "•".dim()),
         };
         let header_text = if status.is_some() {
             "Called"
@@ -1858,7 +1865,12 @@ impl HistoryCell for WebSearchCell {
         let bullet = if self.completed {
             "•".dim()
         } else {
-            spinner(Some(self.start_time), self.animations_enabled)
+            activity_indicator(
+                Some(self.start_time),
+                MotionMode::from_animations_enabled(self.animations_enabled),
+                ReducedMotionIndicator::StaticBullet,
+            )
+            .unwrap_or_else(|| "•".dim())
         };
         let header = web_search_header(self.completed);
         let detail = web_search_detail(self.action.as_ref(), &self.query);
@@ -2468,7 +2480,12 @@ impl HistoryCell for McpInventoryLoadingCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         vec![
             vec![
-                spinner(Some(self.start_time), self.animations_enabled),
+                activity_indicator(
+                    Some(self.start_time),
+                    MotionMode::from_animations_enabled(self.animations_enabled),
+                    ReducedMotionIndicator::StaticBullet,
+                )
+                .unwrap_or_else(|| "•".dim()),
                 " ".into(),
                 "Loading MCP inventory".bold(),
                 "…".dim(),
@@ -3964,6 +3981,16 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
 
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn mcp_inventory_loading_without_animations_is_stable() {
+        let cell = new_mcp_inventory_loading(/*animations_enabled*/ false);
+        let first = render_lines(&cell.display_lines(/*width*/ 80));
+        let second = render_lines(&cell.display_lines(/*width*/ 80));
+
+        assert_eq!(first, second);
+        assert_eq!(first, vec!["• Loading MCP inventory…".to_string()]);
     }
 
     #[test]

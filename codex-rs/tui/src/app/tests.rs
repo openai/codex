@@ -1199,8 +1199,10 @@ async fn replayed_interrupted_turn_restores_queued_input_to_composer() {
 #[tokio::test]
 async fn token_usage_update_refreshes_status_line_with_runtime_context_window() {
     let mut app = make_test_app().await;
-    app.chat_widget
-        .setup_status_line(vec![crate::bottom_pane::StatusLineItem::ContextWindowSize]);
+    app.chat_widget.setup_status_line(
+        vec![crate::bottom_pane::StatusLineItem::ContextWindowSize],
+        /*use_theme_colors*/ true,
+    );
 
     assert_eq!(app.chat_widget.status_line_text(), None);
 
@@ -1592,6 +1594,7 @@ fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
         let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
+        app.config.sqlite_home = codex_home.path().to_path_buf();
         // Seed the previous setting so this test exercises the thread-mode update path.
         app.config.memories.generate_memories = true;
 

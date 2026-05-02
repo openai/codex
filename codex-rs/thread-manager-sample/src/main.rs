@@ -118,12 +118,13 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         SessionSource::Exec,
         environment_manager,
         /*analytics_events_client*/ None,
+        Arc::clone(&thread_store),
     );
 
     let NewThread {
         thread_id, thread, ..
     } = thread_manager
-        .start_thread(config, thread_store)
+        .start_thread(config)
         .await
         .context("start Codex thread")?;
 
@@ -190,6 +191,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
@@ -213,6 +215,10 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         memories: MemoriesConfig::default(),
         sqlite_home: codex_home.to_path_buf(),
         log_dir: codex_home.join("log").to_path_buf(),
+        config_lock_export_dir: None,
+        config_lock_allow_codex_version_mismatch: false,
+        config_lock_save_fields_resolved_from_model_catalog: true,
+        config_lock_toml: None,
         codex_home,
         history: History::default(),
         ephemeral: true,

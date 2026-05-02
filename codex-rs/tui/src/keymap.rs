@@ -557,7 +557,8 @@ impl RuntimeKeymap {
                     ctrl(KeyCode::Char('j')),
                     ctrl(KeyCode::Char('m')),
                     plain(KeyCode::Enter),
-                    shift(KeyCode::Enter)
+                    shift(KeyCode::Enter),
+                    alt(KeyCode::Enter)
                 ],
                 move_left: default_bindings![plain(KeyCode::Left), ctrl(KeyCode::Char('b'))],
                 move_right: default_bindings![plain(KeyCode::Right), ctrl(KeyCode::Char('f'))],
@@ -1516,7 +1517,7 @@ mod tests {
 
         keymap.composer.submit = Some(KeybindingsSpec::Many(vec![
             KeybindingSpec("ctrl-enter".to_string()),
-            KeybindingSpec("alt-enter".to_string()),
+            KeybindingSpec("ctrl-shift-enter".to_string()),
         ]));
 
         let runtime = RuntimeKeymap::from_config(&keymap).expect("valid multi-binding");
@@ -1529,7 +1530,7 @@ mod tests {
         keymap.composer.submit = Some(KeybindingsSpec::Many(vec![
             KeybindingSpec("ctrl-enter".to_string()),
             KeybindingSpec("ctrl-enter".to_string()),
-            KeybindingSpec("alt-enter".to_string()),
+            KeybindingSpec("ctrl-shift-enter".to_string()),
         ]));
 
         let runtime = RuntimeKeymap::from_config(&keymap).expect("valid multi-binding");
@@ -1537,7 +1538,7 @@ mod tests {
             runtime.composer.submit,
             vec![
                 key_hint::ctrl(KeyCode::Enter),
-                key_hint::alt(KeyCode::Enter)
+                KeyBinding::new(KeyCode::Enter, KeyModifiers::CONTROL | KeyModifiers::SHIFT)
             ]
         );
     }
@@ -1798,13 +1799,17 @@ mod tests {
     }
 
     #[test]
-    fn default_editor_insert_newline_includes_shift_enter() {
+    fn default_editor_insert_newline_includes_current_aliases() {
         let runtime = RuntimeKeymap::defaults();
-        assert!(
-            runtime
-                .editor
-                .insert_newline
-                .contains(&key_hint::shift(KeyCode::Enter))
+        assert_eq!(
+            runtime.editor.insert_newline,
+            vec![
+                key_hint::ctrl(KeyCode::Char('j')),
+                key_hint::ctrl(KeyCode::Char('m')),
+                key_hint::plain(KeyCode::Enter),
+                key_hint::shift(KeyCode::Enter),
+                key_hint::alt(KeyCode::Enter),
+            ]
         );
     }
 

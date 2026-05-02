@@ -99,7 +99,7 @@ async fn token_usage_update_uses_runtime_context_window() {
     );
 
     assert_eq!(
-        chat.status_line_value_for_item(&crate::bottom_pane::StatusLineItem::ContextWindowSize),
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::ContextWindowSize),
         Some("950K window".to_string())
     );
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(100));
@@ -1332,6 +1332,32 @@ async fn status_line_branch_refreshes_after_interrupt() {
 }
 
 #[tokio::test]
+async fn interrupted_turn_clears_visible_running_hook() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            "pre-tool-use:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PreToolUse,
+            Some("checking command policy"),
+        ),
+    );
+    reveal_running_hooks(&mut chat);
+    let before_interrupt = active_hook_blob(&chat);
+
+    handle_turn_interrupted(&mut chat, "turn-1");
+
+    assert_chatwidget_snapshot!(
+        "interrupted_turn_clears_visible_running_hook",
+        format!(
+            "before interrupt:\n{before_interrupt}after interrupt:\n{}",
+            active_hook_blob(&chat)
+        )
+    );
+}
+
+#[tokio::test]
 async fn status_line_fast_mode_renders_on_and_off() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.tui_status_line = Some(vec!["fast-mode".to_string()]);
@@ -1626,16 +1652,18 @@ async fn status_line_goal_complete_elapsed_footer_snapshot() {
     chat.show_welcome_banner = false;
     chat.config.tui_status_line = Some(vec!["model-name".to_string()]);
     chat.refresh_status_line();
+    let mut goal = test_thread_goal(
+        codex_app_server_protocol::ThreadGoalStatus::Complete,
+        /*token_budget*/ None,
+        /*tokens_used*/ 40_000,
+    );
+    goal.time_used_seconds = 2 * 24 * 60 * 60 + 23 * 60 * 60 + 42 * 60;
     chat.handle_server_notification(
         ServerNotification::ThreadGoalUpdated(
             codex_app_server_protocol::ThreadGoalUpdatedNotification {
                 thread_id: "thread-1".to_string(),
                 turn_id: None,
-                goal: test_thread_goal(
-                    codex_app_server_protocol::ThreadGoalStatus::Complete,
-                    /*token_budget*/ None,
-                    /*tokens_used*/ 40_000,
-                ),
+                goal,
             },
         ),
         /*replay_kind*/ None,

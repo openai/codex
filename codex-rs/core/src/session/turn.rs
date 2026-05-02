@@ -71,6 +71,7 @@ use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
 use codex_hooks::HookResult;
+use codex_otel::LEGACY_NOTIFY_RUN_METRIC;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -575,6 +576,13 @@ pub(crate) async fn run_turn(
                             },
                         })
                         .await;
+                    if !hook_outcomes.is_empty() {
+                        turn_context.session_telemetry.counter(
+                            LEGACY_NOTIFY_RUN_METRIC,
+                            /*inc*/ 1,
+                            &[],
+                        );
+                    }
 
                     let mut abort_message = None;
                     for hook_outcome in hook_outcomes {
@@ -1462,9 +1470,9 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::PatchApplyBegin(_)
         | EventMsg::PatchApplyUpdated(_)
         | EventMsg::PatchApplyEnd(_)
-        | EventMsg::ViewImageToolCall(_)
         | EventMsg::ImageGenerationBegin(_)
         | EventMsg::ImageGenerationEnd(_)
+        | EventMsg::ViewImageToolCall(_)
         | EventMsg::ExecApprovalRequest(_)
         | EventMsg::RequestPermissions(_)
         | EventMsg::RequestUserInput(_)

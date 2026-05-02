@@ -1528,6 +1528,30 @@
             },
             "method": {
               "enum": [
+                "plugin/skill/read"
+              ],
+              "title": "Plugin/skill/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PluginSkillReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/skill/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/share/save"
               ],
               "title": "Plugin/share/saveRequestMethod",
@@ -8987,6 +9011,31 @@
       "title": "PluginShareDeleteResponse",
       "type": "object"
     },
+    "PluginShareListItem": {
+      "properties": {
+        "localPluginPath": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plugin": {
+          "$ref": "#/definitions/PluginSummary"
+        },
+        "shareUrl": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plugin",
+        "shareUrl"
+      ],
+      "type": "object"
+    },
     "PluginShareListParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "PluginShareListParams",
@@ -8997,7 +9046,7 @@
       "properties": {
         "data": {
           "items": {
-            "$ref": "#/definitions/PluginSummary"
+            "$ref": "#/definitions/PluginShareListItem"
           },
           "type": "array"
         }
@@ -9042,6 +9091,40 @@
         "shareUrl"
       ],
       "title": "PluginShareSaveResponse",
+      "type": "object"
+    },
+    "PluginSkillReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "remoteMarketplaceName": {
+          "type": "string"
+        },
+        "remotePluginId": {
+          "type": "string"
+        },
+        "skillName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "remoteMarketplaceName",
+        "remotePluginId",
+        "skillName"
+      ],
+      "title": "PluginSkillReadParams",
+      "type": "object"
+    },
+    "PluginSkillReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "contents": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "PluginSkillReadResponse",
       "type": "object"
     },
     "PluginSource": {

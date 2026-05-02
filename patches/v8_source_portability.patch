@@ -83,9 +83,21 @@ index 420df0b..6f47969 100644
      return __libc_stack_end;
    }
 diff --git a/orig/v8-14.6.202.11/src/base/platform/platform-win32.cc b/mod/v8-14.6.202.11/src/base/platform/platform-win32.cc
-index f5d9ddc..542ea1a 100644
+index f5d9ddc..1c08b0f 100644
 --- a/orig/v8-14.6.202.11/src/base/platform/platform-win32.cc
 +++ b/mod/v8-14.6.202.11/src/base/platform/platform-win32.cc
+@@ -20,7 +20,11 @@
+ #include <windows.h>
+ 
+ // This has to come after windows.h.
++#ifdef __MINGW32__
++#include <versionhelpers.h>
++#else
+ #include <VersionHelpers.h>
++#endif
+ #include <dbghelp.h>            // For SymLoadModule64 and al.
+ #include <malloc.h>             // For _msize()
+ #include <mmsystem.h>           // For timeGetTime().
 @@ -69,9 +69,7 @@ static_assert(offsetof(V8_CRITICAL_SECTION, SpinCount) ==
  // Extra functions for MinGW. Most of these are the _s functions which are in
  // the Microsoft Visual Studio C++ CRT.
@@ -171,7 +183,7 @@ diff --git a/orig/v8-14.6.202.11/src/heap/base/asm/x64/push_registers_masm.asm b
 index d0d0563..72e230b 100644
 --- a/orig/v8-14.6.202.11/src/heap/base/asm/x64/push_registers_masm.asm
 +++ b/mod/v8-14.6.202.11/src/heap/base/asm/x64/push_registers_masm.asm
-@@ -1,70 +1,30 @@
+@@ -1,70 +1,47 @@
 -;; Copyright 2020 the V8 project authors. All rights reserved.
 -;; Use of this source code is governed by a BSD-style license that can be
 -;; found in the LICENSE file.

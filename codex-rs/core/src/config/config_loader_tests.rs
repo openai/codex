@@ -1431,6 +1431,30 @@ async fn cli_override_model_instructions_file_sets_base_instructions() -> std::i
 }
 
 #[tokio::test]
+async fn inline_instructions_set_base_instructions() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"instructions = "snapshot instructions""#,
+    )
+    .await?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home)
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.base_instructions.as_deref(),
+        Some("snapshot instructions")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");

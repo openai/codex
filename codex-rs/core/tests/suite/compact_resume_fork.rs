@@ -149,6 +149,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         "compact+resume test expects base path {base_path:?} to exist",
     );
 
+    shutdown_conversation(&base).await;
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
     let resumed_path = fetch_conversation_path(&resumed);
@@ -304,6 +305,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         "second compact test expects base path {base_path:?} to exist",
     );
 
+    shutdown_conversation(&base).await;
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
     let resumed_path = fetch_conversation_path(&resumed);
@@ -323,6 +325,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         "second compact test expects forked path {forked_path:?} to exist",
     );
 
+    shutdown_conversation(&forked).await;
     let resumed_again = resume_conversation(&manager, &config, forked_path).await;
     user_turn(&resumed_again, AFTER_SECOND_RESUME).await;
 
@@ -815,6 +818,13 @@ fn fetch_conversation_path(conversation: &Arc<CodexThread>) -> std::path::PathBu
     conversation.rollout_path().expect("rollout path")
 }
 
+async fn shutdown_conversation(conversation: &Arc<CodexThread>) {
+    conversation
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown conversation");
+}
+
 async fn resume_conversation(
     manager: &ThreadManager,
     config: &Config,
@@ -825,7 +835,6 @@ async fn resume_conversation(
     );
     Box::pin(manager.resume_thread_from_rollout(
         config.clone(),
-        codex_core::thread_store_from_config(config),
         path,
         auth_manager,
         /*parent_trace*/ None,
@@ -845,7 +854,6 @@ async fn fork_thread(
     Box::pin(manager.fork_thread(
         nth_user_message,
         config.clone(),
-        codex_core::thread_store_from_config(config),
         path,
         /*persist_extended_history*/ false,
         /*parent_trace*/ None,
