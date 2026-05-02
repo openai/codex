@@ -2,4 +2,4 @@
 source: tui/src/resume_picker.rs
 expression: terminal.backend().to_string()
 ---
-Type to search                                         Sort: [Updated] Created    Filter: [Cwd] All
+Type to search                                         Filter: [Cwd] All    Sort: [Updated] Created

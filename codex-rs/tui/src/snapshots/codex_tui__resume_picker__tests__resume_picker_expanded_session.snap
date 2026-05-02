@@ -2,7 +2,7 @@
 source: tui/src/resume_picker.rs
 expression: terminal.backend().to_string()
 ---
-▾ Investigate picker expansion
+⌄ Investigate picker expansion
   │ Show me the recent transcript                                                         
   └ Here are the last few lines.                                                          
   15m ago       ⌁ /tmp/codex                           fcoury/session-picker

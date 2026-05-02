@@ -1,5 +1,5 @@
 ---
 source: tui/src/resume_picker.rs
-expression: "render_dense_row_snapshot(true, None, 120)"
+expression: "render_dense_row_snapshot(true, None, 120, None,)"
 ---
-▸ 15m ago      fcoury/session-picker      ⌁ ~/code/codex.fcoury-session-picke... Propose session picker redesign wit...
+❯ 15m ago      fcoury/session-picker      ⌁ ~/code/codex.fcoury-session-picke... Propose session picker redesign wit...

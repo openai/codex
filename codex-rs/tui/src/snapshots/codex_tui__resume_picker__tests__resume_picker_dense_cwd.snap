@@ -1,5 +1,5 @@
 ---
 source: tui/src/resume_picker.rs
-expression: "render_dense_row_snapshot(false,\nSome(PathBuf::from(\"/Users/felipe.coury/code/codex.fcoury-session-picker/codex-rs\")),\n100,)"
+expression: "render_dense_row_snapshot(false,\nSome(PathBuf::from(\"/Users/felipe.coury/code/codex.fcoury-session-picker/codex-rs\")),\n100, None,)"
 ---
-▸ 15m ago      fcoury/session-picker Propose session picker redesign with enough title text to e...
+❯ 15m ago      fcoury/session-picker Propose session picker redesign with enough title text to e...

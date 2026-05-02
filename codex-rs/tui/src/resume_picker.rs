@@ -36,6 +36,8 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui::style::Style;
+use ratatui::style::Styled as _;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -161,22 +163,22 @@ impl SessionFilterMode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ToolbarControl {
-    Sort,
     Filter,
+    Sort,
 }
 
 impl ToolbarControl {
     fn previous(self) -> Self {
         match self {
-            Self::Sort => Self::Filter,
             Self::Filter => Self::Sort,
+            Self::Sort => Self::Filter,
         }
     }
 
     fn next(self) -> Self {
         match self {
-            Self::Sort => Self::Filter,
             Self::Filter => Self::Sort,
+            Self::Sort => Self::Filter,
         }
     }
 }
@@ -769,7 +771,7 @@ impl PickerState {
             provider_filter,
             filter_mode: SessionFilterMode::from_show_all(show_all, filter_cwd.as_deref()),
             filter_cwd,
-            toolbar_focus: ToolbarControl::Sort,
+            toolbar_focus: ToolbarControl::Filter,
             density: SessionListDensity::Comfortable,
             view_persistence: None,
             dense_path_column_override: None,
@@ -1635,9 +1637,9 @@ fn search_line(state: &PickerState, width: u16) -> Line<'_> {
 
 fn toolbar_line(state: &PickerState, compact: bool) -> Line<'static> {
     let mut spans = Vec::new();
-    spans.extend(sort_control_spans(state, compact));
-    spans.push("   ".dim());
     spans.extend(filter_control_spans(state, compact));
+    spans.push("   ".dim());
+    spans.extend(sort_control_spans(state, compact));
     spans.into()
 }
 
@@ -1975,6 +1977,10 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
             && y < content_area.y.saturating_add(content_area.height)
             && start + idx + 1 < rows.len()
         {
+            frame.render_widget_ref(
+                session_separator_line(area.width),
+                Rect::new(area.x, y, area.width, /*height*/ 1),
+            );
             y = y.saturating_add(1);
         }
     }
@@ -2008,6 +2014,11 @@ fn more_line(label: &'static str) -> Line<'static> {
     vec![label.dim()].into()
 }
 
+fn session_separator_line(width: u16) -> Line<'static> {
+    let line_width = width.saturating_sub(2) as usize;
+    vec!["  ".into(), "─".repeat(line_width).dark_gray()].into()
+}
+
 fn render_session_lines(
     row: &Row,
     state: &PickerState,
@@ -2032,11 +2043,7 @@ fn render_comfortable_session_lines(
     is_expanded: bool,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let marker = match (is_selected, is_expanded) {
-        (true, true) => "▾ ".bold().cyan(),
-        (true, false) => "▸ ".bold().cyan(),
-        (false, _) => "  ".into(),
-    };
+    let marker = selection_marker(is_selected, is_expanded);
     let reference = state.relative_time_reference.unwrap_or_else(Utc::now);
     let created = format_relative_time(reference, row.created_at);
     let updated = format_relative_time(reference, row.updated_at.or(row.created_at));
@@ -2074,11 +2081,7 @@ fn render_dense_session_lines(
     is_expanded: bool,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let marker = match (is_selected, is_expanded) {
-        (true, true) => "▾ ".bold().cyan(),
-        (true, false) => "▸ ".bold().cyan(),
-        (false, _) => "  ".into(),
-    };
+    let marker = selection_marker(is_selected, is_expanded);
     let reference = state.relative_time_reference.unwrap_or_else(Utc::now);
     let created = format_relative_time(reference, row.created_at);
     let updated = format_relative_time(reference, row.updated_at.or(row.created_at));
@@ -2148,10 +2151,11 @@ fn dense_summary_line(input: DenseSummaryInput<'_>) -> Line<'static> {
         title.into()
     };
 
-    let mut spans = vec![
+    let spans = vec![
         input.marker,
         dense_column_text(input.date, columns.date_width).dim(),
     ];
+    let mut spans = spans;
     if let Some(branch) = branch {
         spans.push(branch.dim());
     }
@@ -2159,7 +2163,16 @@ fn dense_summary_line(input: DenseSummaryInput<'_>) -> Line<'static> {
         spans.push(cwd.dim());
     }
     spans.push(title);
-    spans.into()
+    let mut line = Line::from(spans);
+    if input.is_selected {
+        let padding = (input.width as usize).saturating_sub(line.width());
+        if padding > 0 {
+            line.spans
+                .push(" ".repeat(padding).set_style(selected_session_style()));
+        }
+        line = line.style(selected_session_style());
+    }
+    line
 }
 
 struct DenseColumns {
@@ -2210,12 +2223,24 @@ fn dense_column_text(text: &str, width: usize) -> String {
     format!("{text}{}", " ".repeat(padding))
 }
 
-fn selected_session_title_span(title: String) -> Span<'static> {
-    if default_bg().is_some_and(is_light) {
-        title.magenta()
-    } else {
-        title.yellow()
+fn selection_marker(is_selected: bool, is_expanded: bool) -> Span<'static> {
+    match (is_selected, is_expanded) {
+        (true, true) => "⌄ ".set_style(selected_session_style().bold()),
+        (true, false) => "❯ ".set_style(selected_session_style().bold()),
+        (false, _) => "  ".into(),
     }
+}
+
+fn selected_session_style() -> Style {
+    if default_bg().is_some_and(is_light) {
+        Style::default().fg(Color::Magenta)
+    } else {
+        Style::default().fg(Color::Yellow)
+    }
+}
+
+fn selected_session_title_span(title: String) -> Span<'static> {
+    title.set_style(selected_session_style())
 }
 
 fn render_footer_lines(
@@ -2481,6 +2506,9 @@ fn format_relative_time(reference: DateTime<Utc>, ts: Option<DateTime<Utc>>) -> 
         return "-".to_string();
     };
     let seconds = (reference - ts).num_seconds().max(0);
+    if seconds == 0 {
+        return "now".to_string();
+    }
     if seconds < 60 {
         return format!("{seconds}s ago");
     }
@@ -2635,6 +2663,19 @@ mod tests {
         assert!(row.matches_query("session-picker"));
         assert!(row.matches_query("fcoury"));
         assert!(row.matches_query(&thread_id.to_string()[..8]));
+    }
+
+    #[test]
+    fn relative_time_formats_zero_seconds_as_now() {
+        let reference = DateTime::parse_from_rfc3339("2026-05-02T12:00:00Z")
+            .expect("valid timestamp")
+            .with_timezone(&Utc);
+
+        assert_eq!(format_relative_time(reference, Some(reference)), "now");
+        assert_eq!(
+            format_relative_time(reference, Some(reference - Duration::seconds(1))),
+            "1s ago"
+        );
     }
 
     #[test]
@@ -3298,8 +3339,9 @@ session_picker_view = "dense"
 
         let line = search_line(&state, /*width*/ 40).to_string();
 
-        assert!(line.contains("Sort:[Updated]"));
         assert!(line.contains("Filter:[Cwd]"));
+        assert!(line.contains("Sort:[Updated]"));
+        assert!(line.find("Filter:[Cwd]") < line.find("Sort:[Updated]"));
     }
 
     fn dense_snapshot_row() -> Row {
@@ -3420,6 +3462,25 @@ session_picker_view = "dense"
                 /*dense_path_column_override*/ None,
             )
         );
+    }
+
+    #[test]
+    fn dense_selected_summary_line_uses_full_width_selection_style() {
+        let line = dense_summary_line(DenseSummaryInput {
+            marker: selection_marker(/*is_selected*/ true, /*is_expanded*/ false),
+            date: "15m ago",
+            branch: Some("fcoury/session-picker"),
+            cwd: Some("~/code/codex"),
+            show_cwd: true,
+            preserve_cwd: false,
+            title: "Selected dense row",
+            is_selected: true,
+            width: 80,
+        });
+
+        assert_eq!(line.width(), 80);
+        assert_eq!(line.style.fg, selected_session_style().fg);
+        assert_eq!(line.spans[0].content, "❯ ");
     }
 
     #[test]
@@ -3804,6 +3865,10 @@ session_picker_view = "dense"
         }
 
         state
+            .handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        state
             .handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
             .await
             .unwrap();
@@ -3814,7 +3879,7 @@ session_picker_view = "dense"
     }
 
     #[tokio::test]
-    async fn tab_focuses_filter_and_arrows_reload_with_new_filter() {
+    async fn default_filter_focus_arrows_reload_with_new_filter() {
         let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let request_sink = recorded_requests.clone();
         let loader = page_only_loader(move |req: PageLoadRequest| {
@@ -3837,10 +3902,6 @@ session_picker_view = "dense"
             assert_eq!(guard[0].cwd_filter, Some(PathBuf::from("/tmp/project")));
         }
 
-        state
-            .handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
-            .await
-            .unwrap();
         state
             .handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
             .await
@@ -3875,10 +3936,6 @@ session_picker_view = "dense"
             assert_eq!(guard[0].cwd_filter, None);
         }
 
-        state
-            .handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
-            .await
-            .unwrap();
         state
             .handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
             .await
@@ -3915,10 +3972,6 @@ session_picker_view = "dense"
         );
 
         state.start_initial_load();
-        state
-            .handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
-            .await
-            .unwrap();
         state
             .handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
             .await
