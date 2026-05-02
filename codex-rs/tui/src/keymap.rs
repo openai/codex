@@ -63,6 +63,8 @@ pub(crate) struct AppKeymap {
     pub(crate) clear_terminal: Vec<KeyBinding>,
     /// Toggle Vim mode for the composer input.
     pub(crate) toggle_vim_mode: Vec<KeyBinding>,
+    /// Toggle Fast mode.
+    pub(crate) toggle_fast_mode: Vec<KeyBinding>,
 }
 
 /// Chat-level keybindings evaluated at the app event layer.
@@ -120,6 +122,7 @@ pub(crate) struct EditorKeymap {
     pub(crate) delete_backward_word: Vec<KeyBinding>,
     pub(crate) delete_forward_word: Vec<KeyBinding>,
     pub(crate) kill_line_start: Vec<KeyBinding>,
+    pub(crate) kill_whole_line: Vec<KeyBinding>,
     pub(crate) kill_line_end: Vec<KeyBinding>,
     pub(crate) yank: Vec<KeyBinding>,
 }
@@ -369,6 +372,11 @@ impl RuntimeKeymap {
                 &defaults.app.toggle_vim_mode,
                 "tui.keymap.global.toggle_vim_mode",
             )?,
+            toggle_fast_mode: resolve_bindings(
+                keymap.global.toggle_fast_mode.as_ref(),
+                &defaults.app.toggle_fast_mode,
+                "tui.keymap.global.toggle_fast_mode",
+            )?,
         };
 
         let chat = ChatKeymap {
@@ -417,6 +425,7 @@ impl RuntimeKeymap {
             delete_backward_word: resolve_local!(keymap, defaults, editor, delete_backward_word),
             delete_forward_word: resolve_local!(keymap, defaults, editor, delete_forward_word),
             kill_line_start: resolve_local!(keymap, defaults, editor, kill_line_start),
+            kill_whole_line: resolve_local!(keymap, defaults, editor, kill_whole_line),
             kill_line_end: resolve_local!(keymap, defaults, editor, kill_line_end),
             yank: resolve_local!(keymap, defaults, editor, yank),
         };
@@ -536,6 +545,7 @@ impl RuntimeKeymap {
                 copy: default_bindings![ctrl(KeyCode::Char('o'))],
                 clear_terminal: default_bindings![ctrl(KeyCode::Char('l'))],
                 toggle_vim_mode: default_bindings![],
+                toggle_fast_mode: default_bindings![],
             },
             chat: ChatKeymap {
                 decrease_reasoning_effort: default_bindings![alt(KeyCode::Char(','))],
@@ -594,6 +604,7 @@ impl RuntimeKeymap {
                     alt(KeyCode::Char('d'))
                 ],
                 kill_line_start: default_bindings![ctrl(KeyCode::Char('u'))],
+                kill_whole_line: default_bindings![],
                 kill_line_end: default_bindings![ctrl(KeyCode::Char('k'))],
                 yank: default_bindings![ctrl(KeyCode::Char('y'))],
             },
@@ -727,6 +738,7 @@ impl RuntimeKeymap {
                 ("copy", self.app.copy.as_slice()),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
+                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 (
                     "chat.decrease_reasoning_effort",
                     self.chat.decrease_reasoning_effort.as_slice(),
@@ -767,6 +779,7 @@ impl RuntimeKeymap {
                 ("copy", self.app.copy.as_slice()),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
+                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 (
                     "chat.decrease_reasoning_effort",
                     self.chat.decrease_reasoning_effort.as_slice(),
@@ -808,6 +821,7 @@ impl RuntimeKeymap {
                 ("copy", self.app.copy.as_slice()),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
+                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
             ],
             [
                 ("list.move_up", self.list.move_up.as_slice()),
@@ -856,6 +870,7 @@ impl RuntimeKeymap {
                 ),
                 ("composer.submit", self.composer.submit.as_slice()),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
+                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 (
                     "composer.history_search_previous",
                     self.composer.history_search_previous.as_slice(),
@@ -903,6 +918,10 @@ impl RuntimeKeymap {
                     "editor.kill_line_start",
                     self.editor.kill_line_start.as_slice(),
                 ),
+                (
+                    "editor.kill_whole_line",
+                    self.editor.kill_whole_line.as_slice(),
+                ),
                 ("editor.kill_line_end", self.editor.kill_line_end.as_slice()),
                 ("editor.yank", self.editor.yank.as_slice()),
             ],
@@ -936,6 +955,7 @@ impl RuntimeKeymap {
                     self.editor.delete_forward_word.as_slice(),
                 ),
                 ("kill_line_start", self.editor.kill_line_start.as_slice()),
+                ("kill_whole_line", self.editor.kill_whole_line.as_slice()),
                 ("kill_line_end", self.editor.kill_line_end.as_slice()),
                 ("yank", self.editor.yank.as_slice()),
             ],
@@ -1587,6 +1607,7 @@ mod tests {
             runtime.app.clear_terminal,
             vec![key_hint::ctrl(KeyCode::Char('l'))]
         );
+        assert_eq!(runtime.app.toggle_fast_mode, Vec::new());
         assert_eq!(
             runtime.chat.decrease_reasoning_effort,
             vec![key_hint::alt(KeyCode::Char(','))]
@@ -1607,6 +1628,7 @@ mod tests {
             runtime.composer.history_search_next,
             vec![key_hint::ctrl(KeyCode::Char('s'))]
         );
+        assert_eq!(runtime.editor.kill_whole_line, Vec::new());
     }
 
     #[test]
@@ -1730,6 +1752,61 @@ mod tests {
         keymap.chat.increase_reasoning_effort = Some(KeybindingsSpec::Many(vec![]));
         let runtime = RuntimeKeymap::from_config(&keymap).expect("remapped key should be free");
         assert_eq!(runtime.app.copy, vec![key_hint::alt(KeyCode::Char('.'))]);
+    }
+
+    #[test]
+    fn kill_whole_line_can_be_assigned_without_default_binding() {
+        let mut keymap = TuiKeymap::default();
+        keymap.editor.kill_whole_line = Some(one("ctrl-shift-u"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
+
+        assert_eq!(
+            runtime.editor.kill_whole_line,
+            vec![KeyBinding::new(
+                KeyCode::Char('u'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            )]
+        );
+    }
+
+    #[test]
+    fn kill_whole_line_conflicts_until_kill_line_start_is_unbound() {
+        let mut keymap = TuiKeymap::default();
+        keymap.editor.kill_whole_line = Some(one("ctrl-u"));
+
+        expect_conflict(&keymap, "kill_line_start", "kill_whole_line");
+
+        keymap.editor.kill_line_start = Some(KeybindingsSpec::Many(vec![]));
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("remapped key should be free");
+        assert_eq!(
+            runtime.editor.kill_whole_line,
+            vec![key_hint::ctrl(KeyCode::Char('u'))]
+        );
+    }
+
+    #[test]
+    fn toggle_fast_mode_can_be_assigned_without_default_binding() {
+        let mut keymap = TuiKeymap::default();
+        keymap.global.toggle_fast_mode = Some(one("ctrl-shift-f"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
+
+        assert_eq!(
+            runtime.app.toggle_fast_mode,
+            vec![KeyBinding::new(
+                KeyCode::Char('f'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            )]
+        );
+    }
+
+    #[test]
+    fn toggle_fast_mode_conflicts_with_existing_main_surface_bindings() {
+        let mut keymap = TuiKeymap::default();
+        keymap.global.toggle_fast_mode = Some(one("ctrl-l"));
+
+        expect_conflict(&keymap, "clear_terminal", "toggle_fast_mode");
     }
 
     #[test]

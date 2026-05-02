@@ -9267,6 +9267,12 @@ impl ChatWidget {
         self.config.features.enabled(Feature::FastMode)
     }
 
+    pub(crate) fn can_toggle_fast_mode_from_keybinding(&self) -> bool {
+        self.fast_mode_enabled()
+            && !self.is_user_turn_pending_or_running()
+            && self.bottom_pane.no_modal_or_popup_active()
+    }
+
     pub(crate) fn set_realtime_audio_device(
         &mut self,
         kind: RealtimeAudioDeviceKind,
@@ -9319,6 +9325,15 @@ impl ChatWidget {
             )));
         self.app_event_tx
             .send(AppEvent::PersistServiceTierSelection { service_tier });
+    }
+
+    pub(crate) fn toggle_fast_mode_from_ui(&mut self) {
+        let next_tier = if matches!(self.current_service_tier(), Some(ServiceTier::Fast)) {
+            None
+        } else {
+            Some(ServiceTier::Fast)
+        };
+        self.set_service_tier_selection(next_tier);
     }
 
     pub(crate) fn current_model(&self) -> &str {

@@ -1818,6 +1818,51 @@ async fn fast_slash_command_updates_and_persists_local_service_tier() {
 }
 
 #[tokio::test]
+async fn fast_keybinding_toggle_uses_same_events_as_fast_slash_command() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
+
+    chat.toggle_fast_mode_from_ui();
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                service_tier: Some(Some(ServiceTier::Fast)),
+                ..
+            })
+        )),
+        "expected fast-mode override app event; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistServiceTierSelection {
+                service_tier: Some(ServiceTier::Fast),
+            }
+        )),
+        "expected fast-mode persistence app event; events: {events:?}"
+    );
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn fast_keybinding_toggle_requires_feature_and_idle_surface() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ false);
+
+    assert!(!chat.can_toggle_fast_mode_from_keybinding());
+
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
+    assert!(chat.can_toggle_fast_mode_from_keybinding());
+
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    assert!(!chat.can_toggle_fast_mode_from_keybinding());
+}
+
+#[tokio::test]
 async fn user_turn_carries_service_tier_after_fast_toggle() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.thread_id = Some(ThreadId::new());
