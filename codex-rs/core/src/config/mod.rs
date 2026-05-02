@@ -86,6 +86,7 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::config_types::is_priority_service_tier;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::PermissionProfile;
@@ -2578,7 +2579,10 @@ impl Config {
             None => config_profile.service_tier.or(cfg.service_tier),
         };
         let service_tier = match service_tier {
-            Some(service_tier) if service_tier.is_priority() && !features.enabled(Feature::FastMode) => {
+            Some(service_tier)
+                if is_priority_service_tier(&service_tier)
+                    && !features.enabled(Feature::FastMode) =>
+            {
                 None
             }
             other => other,

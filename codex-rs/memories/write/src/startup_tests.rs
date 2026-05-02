@@ -4,6 +4,7 @@ use codex_git_utils::diff_since_latest_init;
 use codex_git_utils::reset_git_repository;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::priority_service_tier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -253,14 +254,14 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
             model: None,
             effort: None,
             summary: None,
-            service_tier: Some(Some(ServiceTier::priority())),
+            service_tier: Some(Some(priority_service_tier())),
             collaboration_mode: None,
             personality: None,
         })
         .await?;
 
-    let config_snapshot = wait_for_service_tier(&test, Some(ServiceTier::priority())).await?;
-    assert_eq!(config_snapshot.service_tier, Some(ServiceTier::priority()));
+    let config_snapshot = wait_for_service_tier(&test, Some(priority_service_tier())).await?;
+    assert_eq!(config_snapshot.service_tier, Some(priority_service_tier()));
 
     let context = crate::runtime::MemoryStartupContext::new(
         Arc::clone(&test.thread_manager),
@@ -277,7 +278,7 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
             ReasoningEffort::Low,
         )
         .await;
-    assert_eq!(request_context.service_tier, Some(ServiceTier::priority()));
+    assert_eq!(request_context.service_tier, Some(priority_service_tier()));
 
     shutdown_test_codex(&test).await?;
     Ok(())

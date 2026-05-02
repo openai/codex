@@ -19,6 +19,7 @@ use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary;
 use crate::config_types::ServiceTier;
 use crate::config_types::Verbosity;
+use crate::config_types::priority_service_tier;
 
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 
@@ -469,19 +470,24 @@ impl From<ModelInfo> for ModelPreset {
     }
 }
 
+pub fn model_supports_service_tier(model: &ModelPreset, service_tier: &ServiceTier) -> bool {
+    model
+        .service_tiers
+        .iter()
+        .any(|tier| tier.id == *service_tier)
+}
+
+pub fn model_service_tier<'a>(
+    model: &'a ModelPreset,
+    service_tier: &ServiceTier,
+) -> Option<&'a ModelServiceTier> {
+    model
+        .service_tiers
+        .iter()
+        .find(|tier| tier.id == *service_tier)
+}
+
 impl ModelPreset {
-    pub fn supports_service_tier(&self, service_tier: &ServiceTier) -> bool {
-        self.service_tiers
-            .iter()
-            .any(|tier| tier.id == *service_tier)
-    }
-
-    pub fn service_tier(&self, service_tier: &ServiceTier) -> Option<&ModelServiceTier> {
-        self.service_tiers
-            .iter()
-            .find(|tier| tier.id == *service_tier)
-    }
-
     /// Filter models based on authentication mode.
     ///
     /// In ChatGPT mode, all models are visible. Otherwise, only API-supported models are shown.
@@ -831,7 +837,7 @@ mod tests {
                 message: "Try Spark.".to_string(),
             }),
             service_tiers: vec![ModelServiceTier {
-                id: ServiceTier::priority(),
+                id: priority_service_tier(),
                 name: "Fast".to_string(),
                 description: "Fast tier".to_string(),
             }],
@@ -844,6 +850,9 @@ mod tests {
                 message: "Try Spark.".to_string(),
             })
         );
-        assert!(preset.supports_service_tier(&ServiceTier::priority()));
+        assert!(model_supports_service_tier(
+            &preset,
+            &priority_service_tier()
+        ));
     }
 }

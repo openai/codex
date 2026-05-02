@@ -312,6 +312,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::config_types::priority_service_tier;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -789,7 +790,7 @@ fn get_service_tier(
 
     account_plan_type
         .is_some_and(is_enterprise_default_service_tier_plan)
-        .then(ServiceTier::priority)
+        .then(priority_service_tier)
 }
 
 fn is_enterprise_default_service_tier_plan(plan_type: AccountPlanType) -> bool {

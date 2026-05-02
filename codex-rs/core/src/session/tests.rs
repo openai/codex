@@ -34,6 +34,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
+use codex_protocol::config_types::priority_service_tier;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -2790,7 +2791,7 @@ fn get_service_tier_defaults_enterprise_accounts_to_fast() {
             Some(AccountPlanType::Enterprise),
             /*fast_mode_enabled*/ true,
         ),
-        Some(ServiceTier::priority())
+        Some(priority_service_tier())
     );
     assert_eq!(
         get_service_tier(
@@ -2799,7 +2800,7 @@ fn get_service_tier_defaults_enterprise_accounts_to_fast() {
             Some(AccountPlanType::EnterpriseCbpUsageBased),
             /*fast_mode_enabled*/ true,
         ),
-        Some(ServiceTier::priority())
+        Some(priority_service_tier())
     );
     assert_eq!(
         get_service_tier(
@@ -2808,7 +2809,7 @@ fn get_service_tier_defaults_enterprise_accounts_to_fast() {
             Some(AccountPlanType::Business),
             /*fast_mode_enabled*/ true,
         ),
-        Some(ServiceTier::priority())
+        Some(priority_service_tier())
     );
     assert_eq!(
         get_service_tier(
@@ -2817,7 +2818,7 @@ fn get_service_tier_defaults_enterprise_accounts_to_fast() {
             Some(AccountPlanType::Team),
             /*fast_mode_enabled*/ true,
         ),
-        Some(ServiceTier::priority())
+        Some(priority_service_tier())
     );
     assert_eq!(
         get_service_tier(
@@ -2826,7 +2827,7 @@ fn get_service_tier_defaults_enterprise_accounts_to_fast() {
             Some(AccountPlanType::SelfServeBusinessUsageBased),
             /*fast_mode_enabled*/ true,
         ),
-        Some(ServiceTier::priority())
+        Some(priority_service_tier())
     );
 }
 

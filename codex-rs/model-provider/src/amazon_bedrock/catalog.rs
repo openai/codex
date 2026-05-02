@@ -1,7 +1,7 @@
 use codex_models_manager::model_info::BASE_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::config_types::priority_service_tier;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -49,7 +49,7 @@ fn gpt_5_4_cmb_bedrock_model(priority: i32) -> ModelInfo {
         supported_in_api: true,
         priority,
         service_tiers: vec![ModelServiceTier {
-            id: ServiceTier::priority(),
+            id: priority_service_tier(),
             name: "Fast".to_string(),
             description: "Fast tier".to_string(),
         }],

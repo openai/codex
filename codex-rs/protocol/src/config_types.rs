@@ -355,47 +355,41 @@ pub const SERVICE_TIER_FLEX: &str = "flex";
 #[ts(type = "string")]
 pub struct ServiceTier(String);
 
-impl ServiceTier {
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
+pub fn priority_service_tier() -> ServiceTier {
+    ServiceTier::from(SERVICE_TIER_PRIORITY)
+}
 
-    pub fn as_str(&self) -> &str {
-        self.0.as_str()
-    }
+pub fn flex_service_tier() -> ServiceTier {
+    ServiceTier::from(SERVICE_TIER_FLEX)
+}
 
-    pub fn priority() -> Self {
-        Self::new(SERVICE_TIER_PRIORITY)
-    }
+pub fn service_tier_id(service_tier: &ServiceTier) -> &str {
+    service_tier.as_ref()
+}
 
-    pub fn flex() -> Self {
-        Self::new(SERVICE_TIER_FLEX)
-    }
+pub fn is_priority_service_tier(service_tier: &ServiceTier) -> bool {
+    service_tier_id(service_tier) == SERVICE_TIER_PRIORITY
+}
 
-    pub fn is_priority(&self) -> bool {
-        self.as_str() == SERVICE_TIER_PRIORITY
-    }
-
-    pub fn is_flex(&self) -> bool {
-        self.as_str() == SERVICE_TIER_FLEX
-    }
+pub fn is_flex_service_tier(service_tier: &ServiceTier) -> bool {
+    service_tier_id(service_tier) == SERVICE_TIER_FLEX
 }
 
 impl AsRef<str> for ServiceTier {
     fn as_ref(&self) -> &str {
-        self.as_str()
+        self.0.as_str()
     }
 }
 
 impl From<&str> for ServiceTier {
     fn from(value: &str) -> Self {
-        Self::new(value)
+        Self(value.to_string())
     }
 }
 
 impl From<String> for ServiceTier {
     fn from(value: String) -> Self {
-        Self::new(value)
+        Self(value)
     }
 }
 
@@ -407,7 +401,7 @@ impl From<ServiceTier> for String {
 
 impl std::fmt::Display for ServiceTier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(service_tier_id(self))
     }
 }
 

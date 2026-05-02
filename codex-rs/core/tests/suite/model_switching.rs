@@ -5,6 +5,8 @@ use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::flex_service_tier;
+use codex_protocol::config_types::priority_service_tier;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -297,7 +299,7 @@ async fn service_tier_change_is_applied_on_next_http_turn() -> Result<()> {
 
     let test = test_codex().build(&server).await?;
 
-    test.submit_turn_with_service_tier("fast turn", Some(ServiceTier::priority()))
+    test.submit_turn_with_service_tier("fast turn", Some(priority_service_tier()))
         .await?;
     test.submit_turn_with_service_tier("standard turn", /*service_tier*/ None)
         .await?;
@@ -323,7 +325,7 @@ async fn flex_service_tier_is_applied_to_http_turn() -> Result<()> {
 
     let test = test_codex().build(&server).await?;
 
-    test.submit_turn_with_service_tier("flex turn", Some(ServiceTier::flex()))
+    test.submit_turn_with_service_tier("flex turn", Some(flex_service_tier()))
         .await?;
 
     let request = resp_mock.single_request();

@@ -5,6 +5,7 @@ use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_core::ThreadManager;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_protocol::config_types::is_priority_service_tier;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelServiceTier as CoreModelServiceTier;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -52,7 +53,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
 fn legacy_additional_speed_tiers(service_tiers: &[CoreModelServiceTier]) -> Vec<String> {
     service_tiers
         .iter()
-        .filter_map(|tier| tier.id.is_priority().then_some("fast".to_string()))
+        .filter_map(|tier| is_priority_service_tier(&tier.id).then_some("fast".to_string()))
         .collect()
 }
 

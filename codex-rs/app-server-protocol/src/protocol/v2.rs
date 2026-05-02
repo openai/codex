@@ -29,6 +29,10 @@ use codex_protocol::config_types::ServiceTier as CoreServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
+use codex_protocol::config_types::flex_service_tier;
+use codex_protocol::config_types::is_flex_service_tier;
+use codex_protocol::config_types::is_priority_service_tier;
+use codex_protocol::config_types::priority_service_tier;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::CallToolResult as CoreMcpCallToolResult;
@@ -128,36 +132,26 @@ pub enum ServiceTier {
     Flex,
 }
 
-impl ServiceTier {
-    pub fn fast() -> Self {
-        Self::Fast
+pub fn service_tier_to_core(service_tier: ServiceTier) -> CoreServiceTier {
+    match service_tier {
+        ServiceTier::Fast => priority_service_tier(),
+        ServiceTier::Flex => flex_service_tier(),
     }
+}
 
-    pub fn flex() -> Self {
-        Self::Flex
-    }
-
-    pub fn to_core(self) -> CoreServiceTier {
-        match self {
-            Self::Fast => CoreServiceTier::priority(),
-            Self::Flex => CoreServiceTier::flex(),
-        }
-    }
-
-    pub fn from_core(service_tier: &CoreServiceTier) -> Option<Self> {
-        if service_tier.is_priority() {
-            Some(Self::Fast)
-        } else if service_tier.is_flex() {
-            Some(Self::Flex)
-        } else {
-            None
-        }
+pub fn service_tier_from_core(service_tier: &CoreServiceTier) -> Option<ServiceTier> {
+    if is_priority_service_tier(service_tier) {
+        Some(ServiceTier::Fast)
+    } else if is_flex_service_tier(service_tier) {
+        Some(ServiceTier::Flex)
+    } else {
+        None
     }
 }
 
 impl From<ServiceTier> for CoreServiceTier {
     fn from(value: ServiceTier) -> Self {
-        value.to_core()
+        service_tier_to_core(value)
     }
 }
 

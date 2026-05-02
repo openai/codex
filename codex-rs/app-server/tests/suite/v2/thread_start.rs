@@ -340,7 +340,7 @@ async fn thread_start_accepts_flex_service_tier() -> Result<()> {
 
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            service_tier: Some(Some(ServiceTier::flex())),
+            service_tier: Some(Some(ServiceTier::Flex)),
             ..Default::default()
         })
         .await?;
@@ -352,7 +352,7 @@ async fn thread_start_accepts_flex_service_tier() -> Result<()> {
     .await??;
     let ThreadStartResponse { service_tier, .. } = to_response::<ThreadStartResponse>(resp)?;
 
-    assert_eq!(service_tier, Some(ServiceTier::flex()));
+    assert_eq!(service_tier, Some(ServiceTier::Flex));
     Ok(())
 }
 
