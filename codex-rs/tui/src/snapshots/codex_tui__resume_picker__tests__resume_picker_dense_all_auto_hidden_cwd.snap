@@ -1,0 +1,5 @@
+---
+source: tui/src/resume_picker.rs
+expression: "render_dense_row_snapshot(true, None, 100, None,)"
+---
+▸ 15m ago      fcoury/session-picker Propose session picker redesign with enough title text to e...

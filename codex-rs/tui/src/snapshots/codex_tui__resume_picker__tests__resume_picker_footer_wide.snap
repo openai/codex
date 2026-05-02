@@ -1,0 +1,5 @@
+---
+source: tui/src/resume_picker.rs
+expression: "hint_line(&state, 160).to_string()"
+---
+enter resume      esc start new      ctrl+c quit      tab focus sort/filter      ←/→ change option      ctrl+t dense view      space expand      ↑/↓ browse

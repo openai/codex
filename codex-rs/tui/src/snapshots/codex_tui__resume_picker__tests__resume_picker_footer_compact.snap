@@ -1,0 +1,5 @@
+---
+source: tui/src/resume_picker.rs
+expression: "hint_line(&state, 96).to_string()"
+---
+enter       esc       ctrl+c       tab       ←/→       ctrl+t       ctrl+o       space       ↑/↓

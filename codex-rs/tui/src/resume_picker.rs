@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use crate::app_server_session::AppServerSession;
 use crate::color::is_light;
-use crate::key_hint;
 use crate::legacy_core::config::Config;
 use crate::markdown::append_markdown;
 use crate::session_resume::resolve_session_thread_id;
@@ -38,6 +37,8 @@ use ratatui::style::Color;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use ratatui::widgets::Clear;
+use ratatui::widgets::Widget;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -53,6 +54,10 @@ const SESSION_META_MIN_CWD_WIDTH: usize = 30;
 const SESSION_META_MAX_CWD_WIDTH: usize = 72;
 const SESSION_META_BRANCH_ICON: &str = "";
 const SESSION_META_CWD_ICON: &str = "⌁";
+const FOOTER_COMPACT_BREAKPOINT: u16 = 120;
+const FOOTER_WIDE_MIN_GAP: usize = 4;
+const FOOTER_COMPACT_MIN_GAP: usize = 2;
+const DENSE_PATH_AUTO_HIDE_BREAKPOINT: u16 = 120;
 
 #[derive(Debug, Clone)]
 pub struct SessionTarget {
@@ -170,6 +175,21 @@ impl ToolbarControl {
         match self {
             Self::Sort => Self::Filter,
             Self::Filter => Self::Sort,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionListDensity {
+    Comfortable,
+    Dense,
+}
+
+impl SessionListDensity {
+    fn toggle(self) -> Self {
+        match self {
+            Self::Comfortable => Self::Dense,
+            Self::Dense => Self::Comfortable,
         }
     }
 }
@@ -442,6 +462,8 @@ struct PickerState {
     filter_mode: SessionFilterMode,
     filter_cwd: Option<PathBuf>,
     toolbar_focus: ToolbarControl,
+    density: SessionListDensity,
+    dense_path_column_override: Option<bool>,
     action: SessionPickerAction,
     sort_key: ThreadSortKey,
     inline_error: Option<String>,
@@ -697,6 +719,8 @@ impl PickerState {
             filter_mode: SessionFilterMode::from_show_all(show_all, filter_cwd.as_deref()),
             filter_cwd,
             toolbar_focus: ToolbarControl::Sort,
+            density: SessionListDensity::Comfortable,
+            dense_path_column_override: None,
             action,
             sort_key: ThreadSortKey::UpdatedAt,
             inline_error: None,
@@ -726,6 +750,34 @@ impl PickerState {
                 ..
             } if modifiers.contains(KeyModifiers::CONTROL) => {
                 return Ok(Some(SessionSelection::Exit));
+            }
+            KeyEvent {
+                code: KeyCode::Char('t'),
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_density();
+            }
+            KeyEvent {
+                code: KeyCode::Char('\u{0014}'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } /* ^T */ => {
+                self.toggle_density();
+            }
+            KeyEvent {
+                code: KeyCode::Char('o'),
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_dense_path_column();
+            }
+            KeyEvent {
+                code: KeyCode::Char('\u{000f}'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } /* ^O */ => {
+                self.toggle_dense_path_column();
             }
             KeyEvent {
                 code: KeyCode::Enter,
@@ -1225,6 +1277,32 @@ impl PickerState {
         }
     }
 
+    fn toggle_density(&mut self) {
+        self.density = self.density.toggle();
+        self.ensure_selected_visible();
+        self.request_frame();
+    }
+
+    fn toggle_dense_path_column(&mut self) {
+        if self.density != SessionListDensity::Dense || self.filter_mode != SessionFilterMode::All {
+            return;
+        }
+        let width = self.view_width.unwrap_or(u16::MAX);
+        let automatic = width >= DENSE_PATH_AUTO_HIDE_BREAKPOINT;
+        let next = !self.dense_path_column_visible(width);
+        self.dense_path_column_override = (next != automatic).then_some(next);
+        self.ensure_selected_visible();
+        self.request_frame();
+    }
+
+    fn dense_path_column_visible(&self, width: u16) -> bool {
+        if self.density != SessionListDensity::Dense || self.filter_mode != SessionFilterMode::All {
+            return false;
+        }
+        self.dense_path_column_override
+            .unwrap_or(width >= DENSE_PATH_AUTO_HIDE_BREAKPOINT)
+    }
+
     fn toggle_selected_expansion(&mut self) {
         let Some(row) = self.filtered_rows.get(self.selected) else {
             return;
@@ -1269,7 +1347,7 @@ impl PickerState {
                 .len()
             })
             .sum::<usize>()
-            + end_inclusive.saturating_sub(start)
+            + self.row_separator_height() * end_inclusive.saturating_sub(start)
     }
 
     fn has_more_above(&self) -> bool {
@@ -1298,7 +1376,7 @@ impl PickerState {
                 self.view_width.unwrap_or(u16::MAX),
             )
             .len();
-            let separator_height = usize::from(offset > 0);
+            let separator_height = usize::from(offset > 0) * self.row_separator_height();
             if used + separator_height + row_height > capacity {
                 return true;
             }
@@ -1315,6 +1393,13 @@ impl PickerState {
                     || self.selected + 1 < self.filtered_rows.len(),
             ))
             .max(1)
+    }
+
+    fn row_separator_height(&self) -> usize {
+        match self.density {
+            SessionListDensity::Comfortable => 1,
+            SessionListDensity::Dense => 0,
+        }
     }
 }
 
@@ -1436,7 +1521,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         render_list(frame, list, state);
 
         // Hint line
-        frame.render_widget_ref(hint_line(state), hint);
+        frame.render_widget_ref(hint_line(state, hint.width), hint);
     })
 }
 
@@ -1559,46 +1644,219 @@ fn filter_mode_label(filter_mode: SessionFilterMode) -> &'static str {
     }
 }
 
-fn hint_line(state: &PickerState) -> Line<'_> {
+struct PickerFooterHint {
+    key: &'static str,
+    wide_label: String,
+    compact_label: String,
+    priority: u8,
+}
+
+fn hint_line(state: &PickerState, width: u16) -> Line<'static> {
     let action_label = state.action.action_label();
     let esc_label = if state.query.is_empty() {
-        " to start new "
+        "start new"
     } else {
-        " to clear search "
+        "clear search"
     };
-    vec![
-        key_hint::plain(KeyCode::Enter).into(),
-        format!(" to {action_label} ").dim(),
-        "    ".dim(),
-        key_hint::plain(KeyCode::Esc).into(),
-        esc_label.dim(),
-        "    ".dim(),
-        key_hint::ctrl(KeyCode::Char('c')).into(),
-        " to quit ".dim(),
-        "    ".dim(),
-        key_hint::plain(KeyCode::Tab).into(),
-        " focus sort/filter ".dim(),
-        "    ".dim(),
-        key_hint::plain(KeyCode::Left).into(),
-        "/".dim(),
-        key_hint::plain(KeyCode::Right).into(),
-        " change option ".dim(),
-        "    ".dim(),
-        key_hint::plain(KeyCode::Char(' ')).into(),
-        " to expand ".dim(),
-        "    ".dim(),
-        key_hint::plain(KeyCode::Up).into(),
-        "/".dim(),
-        key_hint::plain(KeyCode::Down).into(),
-        " to browse".dim(),
+    let density_label = match state.density {
+        SessionListDensity::Comfortable => "dense view",
+        SessionListDensity::Dense => "comfortable view",
+    };
+    let density_compact_label = match state.density {
+        SessionListDensity::Comfortable => "dense",
+        SessionListDensity::Dense => "comfy",
+    };
+    let hints = vec![
+        PickerFooterHint {
+            key: "enter",
+            wide_label: action_label.to_string(),
+            compact_label: action_label.to_string(),
+            priority: 0,
+        },
+        PickerFooterHint {
+            key: "esc",
+            wide_label: esc_label.to_string(),
+            compact_label: if state.query.is_empty() {
+                String::from("new")
+            } else {
+                String::from("clear")
+            },
+            priority: 1,
+        },
+        PickerFooterHint {
+            key: "ctrl+c",
+            wide_label: String::from("quit"),
+            compact_label: String::from("quit"),
+            priority: 2,
+        },
+        PickerFooterHint {
+            key: "tab",
+            wide_label: String::from("focus sort/filter"),
+            compact_label: String::from("focus"),
+            priority: 7,
+        },
+        PickerFooterHint {
+            key: "←/→",
+            wide_label: String::from("change option"),
+            compact_label: String::from("option"),
+            priority: 8,
+        },
+        PickerFooterHint {
+            key: "ctrl+t",
+            wide_label: density_label.to_string(),
+            compact_label: density_compact_label.to_string(),
+            priority: 3,
+        },
+        PickerFooterHint {
+            key: "ctrl+o",
+            wide_label: if state.dense_path_column_visible(width) {
+                String::from("hide path")
+            } else {
+                String::from("show path")
+            },
+            compact_label: String::from("path"),
+            priority: 4,
+        },
+        PickerFooterHint {
+            key: "space",
+            wide_label: String::from("expand"),
+            compact_label: String::from("exp"),
+            priority: 5,
+        },
+        PickerFooterHint {
+            key: "↑/↓",
+            wide_label: String::from("browse"),
+            compact_label: String::from("browse"),
+            priority: 6,
+        },
     ]
-    .into()
+    .into_iter()
+    .filter(|hint| hint.key != "ctrl+o" || state.dense_path_toggle_available())
+    .collect::<Vec<_>>();
+    if width >= FOOTER_COMPACT_BREAKPOINT
+        && let Some(line) = fit_footer_hints(&hints, FooterHintLabelMode::Wide, width) {
+            return line;
+        }
+    if let Some(line) = fit_footer_hints(&hints, FooterHintLabelMode::Compact, width) {
+        return line;
+    }
+    if let Some(line) = fit_footer_hints(&hints, FooterHintLabelMode::KeyOnly, width) {
+        return line;
+    }
+
+    let mut retained = (0..hints.len()).collect::<Vec<_>>();
+    retained.sort_by_key(|idx| hints[*idx].priority);
+    for retain_count in (1..=retained.len()).rev() {
+        let mut candidate_indices = retained[..retain_count].to_vec();
+        candidate_indices.sort_unstable();
+        let candidate = candidate_indices
+            .iter()
+            .map(|idx| &hints[*idx])
+            .collect::<Vec<_>>();
+        if let Some(line) = fit_footer_hint_refs(&candidate, FooterHintLabelMode::KeyOnly, width) {
+            return line;
+        }
+    }
+    Line::default()
+}
+
+impl PickerState {
+    fn dense_path_toggle_available(&self) -> bool {
+        self.density == SessionListDensity::Dense && self.filter_mode == SessionFilterMode::All
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FooterHintLabelMode {
+    Wide,
+    Compact,
+    KeyOnly,
+}
+
+fn fit_footer_hints(
+    hints: &[PickerFooterHint],
+    mode: FooterHintLabelMode,
+    width: u16,
+) -> Option<Line<'static>> {
+    let hint_refs = hints.iter().collect::<Vec<_>>();
+    fit_footer_hint_refs(&hint_refs, mode, width)
+}
+
+fn fit_footer_hint_refs(
+    hints: &[&PickerFooterHint],
+    mode: FooterHintLabelMode,
+    width: u16,
+) -> Option<Line<'static>> {
+    let min_gap = match mode {
+        FooterHintLabelMode::Wide => FOOTER_WIDE_MIN_GAP,
+        FooterHintLabelMode::Compact | FooterHintLabelMode::KeyOnly => FOOTER_COMPACT_MIN_GAP,
+    };
+    let total_hint_width = footer_hints_width(hints, mode, /*gap_width*/ 0);
+    let gap_count = hints.len().saturating_sub(1);
+    let gap_width = if gap_count == 0 {
+        0
+    } else {
+        let remaining_width = width.saturating_sub(total_hint_width as u16) as usize;
+        if remaining_width >= min_gap * gap_count {
+            remaining_width / gap_count
+        } else {
+            min_gap
+        }
+    };
+    if footer_hints_width(hints, mode, gap_width) > width as usize {
+        return None;
+    }
+
+    let mut spans = Vec::new();
+    for (idx, hint) in hints.iter().enumerate() {
+        if idx > 0 {
+            spans.push(" ".repeat(gap_width).dim());
+        }
+        spans.push(hint.key.into());
+        let label = match mode {
+            FooterHintLabelMode::Wide => Some(hint.wide_label.as_str()),
+            FooterHintLabelMode::Compact => Some(hint.compact_label.as_str()),
+            FooterHintLabelMode::KeyOnly => None,
+        };
+        if let Some(label) = label {
+            spans.push(" ".dim());
+            spans.push(label.to_string().dim());
+        }
+    }
+    Some(spans.into())
+}
+
+fn footer_hints_width(
+    hints: &[&PickerFooterHint],
+    mode: FooterHintLabelMode,
+    gap_width: usize,
+) -> usize {
+    hints
+        .iter()
+        .enumerate()
+        .map(|(idx, hint)| {
+            let label_width = match mode {
+                FooterHintLabelMode::Wide => 1 + UnicodeWidthStr::width(hint.wide_label.as_str()),
+                FooterHintLabelMode::Compact => {
+                    1 + UnicodeWidthStr::width(hint.compact_label.as_str())
+                }
+                FooterHintLabelMode::KeyOnly => 0,
+            };
+            let hint_width = UnicodeWidthStr::width(hint.key) + label_width;
+            if idx == 0 {
+                hint_width
+            } else {
+                hint_width + gap_width
+            }
+        })
+        .sum()
 }
 
 fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &PickerState) {
     if area.height == 0 {
         return;
     }
+    Clear.render(area, frame.buffer);
 
     let rows = &state.filtered_rows;
     if rows.is_empty() {
@@ -1641,7 +1899,10 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
             frame.render_widget_ref(line, Rect::new(area.x, y, area.width, 1));
             y = y.saturating_add(1);
         }
-        if y < content_area.y.saturating_add(content_area.height) && start + idx + 1 < rows.len() {
+        if state.density == SessionListDensity::Comfortable
+            && y < content_area.y.saturating_add(content_area.height)
+            && start + idx + 1 < rows.len()
+        {
             y = y.saturating_add(1);
         }
     }
@@ -1682,6 +1943,23 @@ fn render_session_lines(
     is_expanded: bool,
     width: u16,
 ) -> Vec<Line<'static>> {
+    match state.density {
+        SessionListDensity::Comfortable => {
+            render_comfortable_session_lines(row, state, is_selected, is_expanded, width)
+        }
+        SessionListDensity::Dense => {
+            render_dense_session_lines(row, state, is_selected, is_expanded, width)
+        }
+    }
+}
+
+fn render_comfortable_session_lines(
+    row: &Row,
+    state: &PickerState,
+    is_selected: bool,
+    is_expanded: bool,
+    width: u16,
+) -> Vec<Line<'static>> {
     let marker = match (is_selected, is_expanded) {
         (true, true) => "▾ ".bold().cyan(),
         (true, false) => "▸ ".bold().cyan(),
@@ -1697,11 +1975,7 @@ fn render_session_lines(
         .map(|path| format_directory_display(path, /*max_width*/ None));
     let title = truncate_text(row.display_preview(), width.saturating_sub(2) as usize);
     let title = if is_selected {
-        if default_bg().is_some_and(is_light) {
-            title.magenta()
-        } else {
-            title.yellow()
-        }
+        selected_session_title_span(title)
     } else {
         title.into()
     };
@@ -1719,6 +1993,157 @@ fn render_session_lines(
         width,
     ));
     lines
+}
+
+fn render_dense_session_lines(
+    row: &Row,
+    state: &PickerState,
+    is_selected: bool,
+    is_expanded: bool,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let marker = match (is_selected, is_expanded) {
+        (true, true) => "▾ ".bold().cyan(),
+        (true, false) => "▸ ".bold().cyan(),
+        (false, _) => "  ".into(),
+    };
+    let reference = state.relative_time_reference.unwrap_or_else(Utc::now);
+    let created = format_relative_time(reference, row.created_at);
+    let updated = format_relative_time(reference, row.updated_at.or(row.created_at));
+    let date = match state.sort_key {
+        ThreadSortKey::CreatedAt => created,
+        ThreadSortKey::UpdatedAt => updated,
+    };
+    let cwd = row
+        .cwd
+        .as_ref()
+        .map(|path| format_directory_display(path, /*max_width*/ None));
+    let show_cwd = state.dense_path_column_visible(width);
+    let mut lines = vec![dense_summary_line(DenseSummaryInput {
+        marker,
+        date: &date,
+        branch: row.git_branch.as_deref(),
+        cwd: cwd.as_deref(),
+        show_cwd,
+        preserve_cwd: state.dense_path_column_override == Some(true) && show_cwd,
+        title: row.display_preview(),
+        is_selected,
+        width,
+    })];
+    if is_expanded {
+        lines.extend(render_transcript_preview_lines(row, state, width));
+    }
+    lines
+}
+
+struct DenseSummaryInput<'a> {
+    marker: Span<'static>,
+    date: &'a str,
+    branch: Option<&'a str>,
+    cwd: Option<&'a str>,
+    show_cwd: bool,
+    preserve_cwd: bool,
+    title: &'a str,
+    is_selected: bool,
+    width: u16,
+}
+
+fn dense_summary_line(input: DenseSummaryInput<'_>) -> Line<'static> {
+    let branch = Some(format!(
+        "{SESSION_META_BRANCH_ICON} {}",
+        input.branch.unwrap_or("no branch")
+    ));
+    let cwd = input
+        .show_cwd
+        .then(|| format!("{SESSION_META_CWD_ICON} {}", input.cwd.unwrap_or("no cwd")));
+
+    let marker_width = input.marker.width();
+    let available = (input.width as usize).saturating_sub(marker_width);
+    let columns = dense_columns(available, input.show_cwd, input.preserve_cwd);
+    let branch = columns.branch_width.and_then(|width| {
+        branch
+            .as_deref()
+            .map(|branch| dense_column_text(branch, width))
+    });
+    let cwd = columns
+        .cwd_width
+        .and_then(|width| cwd.as_deref().map(|cwd| dense_column_text(cwd, width)));
+    let title_width = columns.title_width;
+    let title = truncate_text(input.title, title_width);
+    let title = if input.is_selected {
+        selected_session_title_span(title)
+    } else {
+        title.into()
+    };
+
+    let mut spans = vec![
+        input.marker,
+        dense_column_text(input.date, columns.date_width).dim(),
+    ];
+    if let Some(branch) = branch {
+        spans.push(branch.dim());
+    }
+    if let Some(cwd) = cwd {
+        spans.push(cwd.dim());
+    }
+    spans.push(title);
+    spans.into()
+}
+
+struct DenseColumns {
+    date_width: usize,
+    branch_width: Option<usize>,
+    cwd_width: Option<usize>,
+    title_width: usize,
+}
+
+fn dense_columns(width: usize, show_cwd: bool, preserve_cwd: bool) -> DenseColumns {
+    let date_width = SESSION_META_DATE_WIDTH;
+    let minimum_title_width = 12;
+    let mut branch_width = Some((width / 4).clamp(14, 32));
+    let mut cwd_width = show_cwd.then(|| (width / 3).clamp(18, 48));
+
+    loop {
+        let metadata_width = date_width + branch_width.unwrap_or(0) + cwd_width.unwrap_or(0);
+        if width.saturating_sub(metadata_width) >= minimum_title_width {
+            break;
+        }
+        if preserve_cwd && branch_width.is_some() {
+            branch_width = None;
+            continue;
+        }
+        if cwd_width.is_some() {
+            cwd_width = None;
+            continue;
+        }
+        if branch_width.is_some() {
+            branch_width = None;
+            continue;
+        }
+        break;
+    }
+
+    let metadata_width = date_width + branch_width.unwrap_or(0) + cwd_width.unwrap_or(0);
+    DenseColumns {
+        date_width,
+        branch_width,
+        cwd_width,
+        title_width: width.saturating_sub(metadata_width),
+    }
+}
+
+fn dense_column_text(text: &str, width: usize) -> String {
+    let text = truncate_text(text, width.saturating_sub(1));
+    let padding = width.saturating_sub(UnicodeWidthStr::width(text.as_str()));
+    format!("{text}{}", " ".repeat(padding))
+}
+
+fn selected_session_title_span(title: String) -> Span<'static> {
+    if default_bg().is_some_and(is_light) {
+        title.magenta()
+    } else {
+        title.yellow()
+    }
 }
 
 fn render_footer_lines(
@@ -2435,15 +2860,220 @@ mod tests {
             SessionPickerAction::Resume,
         );
 
-        assert!(hint_line(&state).to_string().contains("esc to start new"));
+        assert!(
+            hint_line(&state, /*width*/ 160)
+                .to_string()
+                .contains("esc start new")
+        );
 
         state.query = String::from("picker");
 
         assert!(
-            hint_line(&state)
+            hint_line(&state, /*width*/ 160)
                 .to_string()
-                .contains("esc to clear search")
+                .contains("esc clear search")
         );
+    }
+
+    #[test]
+    fn hint_line_switches_density_label() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+
+        assert!(
+            hint_line(&state, /*width*/ 160)
+                .to_string()
+                .contains("ctrl+t dense view")
+        );
+
+        state.density = SessionListDensity::Dense;
+
+        assert!(
+            hint_line(&state, /*width*/ 220)
+                .to_string()
+                .contains("ctrl+t comfortable view")
+        );
+    }
+
+    #[test]
+    fn hint_line_compacts_on_narrow_width() {
+        let loader = page_only_loader(|_| {});
+        let state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+
+        let rendered = hint_line(&state, /*width*/ 96).to_string();
+
+        assert!(rendered.contains("esc new"));
+        assert!(rendered.contains("tab focus"));
+        assert!(rendered.contains("←/→ option"));
+        assert!(rendered.contains("ctrl+t dense"));
+        assert!(!rendered.contains("focus sort/filter"));
+    }
+
+    #[test]
+    fn hint_line_snapshot_uses_distributed_wide_footer() {
+        let loader = page_only_loader(|_| {});
+        let state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+
+        assert_snapshot!(
+            "resume_picker_footer_wide",
+            hint_line(&state, /*width*/ 160).to_string()
+        );
+    }
+
+    #[test]
+    fn hint_line_snapshot_uses_compact_footer() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.query = String::from("picker");
+        state.density = SessionListDensity::Dense;
+
+        assert_snapshot!(
+            "resume_picker_footer_compact",
+            hint_line(&state, /*width*/ 96).to_string()
+        );
+    }
+
+    #[test]
+    fn hint_line_prioritizes_keybinds_when_very_narrow() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.density = SessionListDensity::Dense;
+
+        let width = 38;
+        let line = hint_line(&state, width);
+        let rendered = line.to_string();
+
+        assert!(line.width() <= width as usize);
+        assert!(rendered.contains("enter"));
+        assert!(rendered.contains("esc"));
+        assert!(rendered.contains("ctrl+c"));
+        assert!(rendered.contains("ctrl+t"));
+        assert!(rendered.contains("ctrl+o"));
+        assert!(!rendered.contains("space"));
+        assert!(!rendered.contains("↑/↓"));
+    }
+
+    #[tokio::test]
+    async fn ctrl_t_toggles_density_without_typing_into_search() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.query = String::from("pick");
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert_eq!(state.density, SessionListDensity::Dense);
+        assert_eq!(state.query, "pick");
+    }
+
+    #[tokio::test]
+    async fn ctrl_o_toggles_dense_path_column_override() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.density = SessionListDensity::Dense;
+        state.update_viewport(/*rows*/ 10, /*width*/ 80);
+
+        assert!(!state.dense_path_column_visible(/*width*/ 80));
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert_eq!(state.dense_path_column_override, Some(true));
+        assert!(state.dense_path_column_visible(/*width*/ 80));
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert_eq!(state.dense_path_column_override, None);
+        assert!(!state.dense_path_column_visible(/*width*/ 80));
+    }
+
+    #[tokio::test]
+    async fn ctrl_o_is_ignored_outside_dense_all_mode() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ false,
+            Some(PathBuf::from("/tmp/project")),
+            SessionPickerAction::Resume,
+        );
+        state.density = SessionListDensity::Dense;
+        state.update_viewport(/*rows*/ 10, /*width*/ 80);
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert_eq!(state.dense_path_column_override, None);
+        assert!(!state.dense_path_column_visible(/*width*/ 80));
+
+        state.filter_mode = SessionFilterMode::All;
+        state.density = SessionListDensity::Comfortable;
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert_eq!(state.dense_path_column_override, None);
     }
 
     #[test]
@@ -2495,6 +3125,171 @@ mod tests {
 
         assert!(line.contains("Sort:[Updated]"));
         assert!(line.contains("Filter:[Cwd]"));
+    }
+
+    fn dense_snapshot_row() -> Row {
+        Row {
+            path: Some(PathBuf::from("/tmp/a.jsonl")),
+            preview: String::from(
+                "Propose session picker redesign with enough title text to exercise truncation",
+            ),
+            thread_id: Some(
+                ThreadId::from_string("019dabc1-0ef5-7431-b81c-03037f51f62c").expect("thread id"),
+            ),
+            thread_name: None,
+            created_at: parse_timestamp_str("2026-04-28T16:30:00Z"),
+            updated_at: parse_timestamp_str("2026-04-28T17:45:00Z"),
+            cwd: Some(PathBuf::from(
+                "/Users/felipe.coury/code/codex.fcoury-session-picker/codex-rs",
+            )),
+            git_branch: Some(String::from("fcoury/session-picker")),
+        }
+    }
+
+    fn render_dense_row_snapshot(
+        show_all: bool,
+        filter_cwd: Option<PathBuf>,
+        width: u16,
+        dense_path_column_override: Option<bool>,
+    ) -> String {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+
+        let loader = page_only_loader(|_| {});
+        let row = dense_snapshot_row();
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            show_all,
+            filter_cwd,
+            SessionPickerAction::Resume,
+        );
+        state.density = SessionListDensity::Dense;
+        state.dense_path_column_override = dense_path_column_override;
+        state.all_rows = vec![row.clone()];
+        state.filtered_rows = vec![row];
+        state.relative_time_reference =
+            Some(parse_timestamp_str("2026-04-28T18:00:00Z").expect("timestamp"));
+
+        let backend = VT100Backend::new(width, /*height*/ 3);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, 3));
+
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            render_list(&mut frame, area, &state);
+        }
+        terminal.flush().expect("flush");
+
+        terminal.backend().to_string()
+    }
+
+    #[test]
+    fn dense_session_snapshot_omits_cwd_in_cwd_filter() {
+        assert_snapshot!(
+            "resume_picker_dense_cwd",
+            render_dense_row_snapshot(
+                /*show_all*/ false,
+                Some(PathBuf::from(
+                    "/Users/felipe.coury/code/codex.fcoury-session-picker/codex-rs"
+                )),
+                /*width*/ 100,
+                /*dense_path_column_override*/ None,
+            )
+        );
+    }
+
+    #[test]
+    fn dense_session_snapshot_includes_cwd_in_all_filter() {
+        assert_snapshot!(
+            "resume_picker_dense_all",
+            render_dense_row_snapshot(
+                /*show_all*/ true, /*filter_cwd*/ None, /*width*/ 120,
+                /*dense_path_column_override*/ None,
+            )
+        );
+    }
+
+    #[test]
+    fn dense_session_snapshot_auto_hides_cwd_when_narrow() {
+        assert_snapshot!(
+            "resume_picker_dense_all_auto_hidden_cwd",
+            render_dense_row_snapshot(
+                /*show_all*/ true, /*filter_cwd*/ None, /*width*/ 100,
+                /*dense_path_column_override*/ None,
+            )
+        );
+    }
+
+    #[test]
+    fn dense_session_snapshot_forces_cwd_when_narrow() {
+        assert_snapshot!(
+            "resume_picker_dense_all_forced_cwd",
+            render_dense_row_snapshot(
+                /*show_all*/ true,
+                /*filter_cwd*/ None,
+                /*width*/ 48,
+                /*dense_path_column_override*/ Some(true),
+            )
+        );
+    }
+
+    #[test]
+    fn dense_session_snapshot_drops_metadata_when_narrow() {
+        assert_snapshot!(
+            "resume_picker_dense_narrow",
+            render_dense_row_snapshot(
+                /*show_all*/ true, /*filter_cwd*/ None, /*width*/ 48,
+                /*dense_path_column_override*/ None,
+            )
+        );
+    }
+
+    #[test]
+    fn dense_session_snapshot_uses_no_blank_lines_between_rows() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+
+        let loader = page_only_loader(|_| {});
+        let mut first = dense_snapshot_row();
+        first.preview = String::from("First dense row");
+        let mut second = dense_snapshot_row();
+        second.preview = String::from("Second dense row");
+        second.git_branch = Some(String::from("fcoury/other-branch"));
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ false,
+            Some(PathBuf::from(
+                "/Users/felipe.coury/code/codex.fcoury-session-picker/codex-rs",
+            )),
+            SessionPickerAction::Resume,
+        );
+        state.density = SessionListDensity::Dense;
+        state.all_rows = vec![first.clone(), second.clone()];
+        state.filtered_rows = vec![first, second];
+        state.selected = 1;
+        state.relative_time_reference =
+            Some(parse_timestamp_str("2026-04-28T18:00:00Z").expect("timestamp"));
+
+        let backend = VT100Backend::new(/*width*/ 80, /*height*/ 2);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 80, 2));
+
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            render_list(&mut frame, area, &state);
+        }
+        terminal.flush().expect("flush");
+
+        assert_snapshot!(
+            "resume_picker_dense_no_blank_lines",
+            terminal.backend().to_string()
+        );
     }
 
     #[test]
@@ -2661,6 +3456,63 @@ mod tests {
             "resume_picker_more_indicators",
             terminal.backend().to_string()
         );
+    }
+
+    #[test]
+    fn density_toggle_clears_stale_more_indicator() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        let now = parse_timestamp_str("2026-04-28T16:30:00Z").expect("timestamp");
+        state.all_rows = (0..4)
+            .map(|idx| Row {
+                path: Some(PathBuf::from(format!("/tmp/{idx}.jsonl"))),
+                preview: format!("item-{idx}"),
+                thread_id: None,
+                thread_name: None,
+                created_at: Some(now - Duration::hours(idx)),
+                updated_at: Some(now - Duration::minutes(idx * 5)),
+                cwd: None,
+                git_branch: None,
+            })
+            .collect();
+        state.filtered_rows = state.all_rows.clone();
+        state.relative_time_reference = Some(now);
+
+        let width: u16 = 80;
+        let height: u16 = 6;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+        state.update_viewport(height as usize, width);
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            render_list(&mut frame, area, &state);
+        }
+        terminal.flush().expect("flush");
+        assert!(terminal.backend().to_string().contains("↓ more"));
+
+        state.density = SessionListDensity::Dense;
+        state.update_viewport(height as usize, width);
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            render_list(&mut frame, area, &state);
+        }
+        terminal.flush().expect("flush");
+
+        assert!(!terminal.backend().to_string().contains("↓ more"));
     }
 
     #[test]
