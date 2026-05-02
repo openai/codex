@@ -1409,6 +1409,7 @@ fn parse_keybinding(spec: &str) -> Option<KeyBinding> {
         "page-up" => KeyCode::PageUp,
         "page-down" => KeyCode::PageDown,
         "space" => KeyCode::Char(' '),
+        "minus" => KeyCode::Char('-'),
         other if other.len() == 1 => KeyCode::Char(char::from(other.as_bytes()[0])),
         other if other.starts_with('f') => {
             let number = other[1..].parse::<u8>().ok()?;
@@ -1850,6 +1851,7 @@ mod tests {
             ("page-up", KeyCode::PageUp),
             ("page-down", KeyCode::PageDown),
             ("space", KeyCode::Char(' ')),
+            ("minus", KeyCode::Char('-')),
         ];
 
         for (spec, expected_key) in cases {
@@ -1865,6 +1867,22 @@ mod tests {
     fn rejects_modifier_only_and_nonnumeric_function_key_specs() {
         assert_eq!(parse_keybinding("ctrl"), None);
         assert_eq!(parse_keybinding("ff"), None);
+    }
+
+    #[test]
+    fn parses_minus_alias_and_legacy_literal_minus() {
+        assert_eq!(
+            parse_keybinding("alt-minus").map(|binding| binding.parts()),
+            Some((KeyCode::Char('-'), KeyModifiers::ALT))
+        );
+        assert_eq!(
+            parse_keybinding("alt--").map(|binding| binding.parts()),
+            Some((KeyCode::Char('-'), KeyModifiers::ALT))
+        );
+        assert_eq!(
+            parse_keybinding("-").map(|binding| binding.parts()),
+            Some((KeyCode::Char('-'), KeyModifiers::NONE))
+        );
     }
 
     #[test]
