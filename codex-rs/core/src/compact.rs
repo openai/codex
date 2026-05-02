@@ -420,7 +420,13 @@ pub(crate) fn insert_initial_context_before_last_real_user_or_summary(
         .iter()
         .enumerate()
         .rev()
-        .find_map(|(i, item)| matches!(item, ResponseItem::Compaction { .. }).then_some(i));
+        .find_map(|(i, item)| {
+            matches!(
+                item,
+                ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
+            )
+            .then_some(i)
+        });
     let insertion_index = last_real_user_index
         .or(last_user_or_summary_index)
         .or(last_compaction_index);

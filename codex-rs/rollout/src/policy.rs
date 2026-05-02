@@ -37,7 +37,8 @@ pub fn should_persist_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
-        | ResponseItem::Compaction { .. } => true,
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::Other => false,
     }
 }
@@ -58,6 +59,7 @@ pub fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
         ResponseItem::Reasoning { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCompaction { .. }
         | ResponseItem::Other => false,
     }
 }

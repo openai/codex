@@ -875,9 +875,10 @@ impl Session {
         let beta_features_header = FEATURES
             .iter()
             .filter_map(|spec| {
-                if spec.stage.experimental_menu_description().is_some()
-                    && config.features.enabled(spec.id)
-                {
+                let advertise_in_model_client_header =
+                    spec.stage.experimental_menu_description().is_some()
+                        || spec.id == Feature::RemoteCompactionV2;
+                if advertise_in_model_client_header && config.features.enabled(spec.id) {
                     Some(spec.key)
                 } else {
                     None

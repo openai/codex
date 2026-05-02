@@ -1,0 +1,454 @@
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use crate::Prompt;
+use crate::ResponseStream;
+use crate::client::ModelClientSession;
+use crate::client_common::ResponseEvent;
+use crate::compact::CompactionAnalyticsAttempt;
+use crate::compact::InitialContextInjection;
+use crate::compact::compaction_status_from_result;
+use crate::compact_remote::build_compact_request_log_data;
+use crate::compact_remote::log_remote_compact_failure;
+use crate::compact_remote::process_compacted_history;
+use crate::compact_remote::trim_function_call_history_to_fit_context_window;
+use crate::session::session::Session;
+use crate::session::turn::built_tools;
+use crate::session::turn_context::TurnContext;
+use codex_analytics::CompactionImplementation;
+use codex_analytics::CompactionPhase;
+use codex_analytics::CompactionReason;
+use codex_analytics::CompactionTrigger;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
+use codex_protocol::items::ContextCompactionItem;
+use codex_protocol::items::TurnItem;
+use codex_protocol::models::MessagePhase;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::protocol::CompactedItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TurnStartedEvent;
+use codex_rollout_trace::CompactionCheckpointTracePayload;
+use codex_rollout_trace::InferenceTraceContext;
+use futures::StreamExt;
+use futures::TryFutureExt;
+use tokio_util::sync::CancellationToken;
+use tracing::info;
+
+pub(crate) async fn run_inline_remote_auto_compact_task(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    client_session: &mut ModelClientSession,
+    initial_context_injection: InitialContextInjection,
+    reason: CompactionReason,
+    phase: CompactionPhase,
+) -> CodexResult<()> {
+    run_remote_compact_task_inner(
+        &sess,
+        &turn_context,
+        Some(client_session),
+        initial_context_injection,
+        CompactionTrigger::Auto,
+        reason,
+        phase,
+    )
+    .await
+}
+
+pub(crate) async fn run_remote_compact_task(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+) -> CodexResult<()> {
+    let start_event = EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: turn_context.sub_id.clone(),
+        started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
+        model_context_window: turn_context.model_context_window(),
+        collaboration_mode_kind: turn_context.collaboration_mode.mode,
+    });
+    sess.send_event(&turn_context, start_event).await;
+
+    run_remote_compact_task_inner(
+        &sess,
+        &turn_context,
+        None,
+        InitialContextInjection::DoNotInject,
+        CompactionTrigger::Manual,
+        CompactionReason::UserRequested,
+        CompactionPhase::StandaloneTurn,
+    )
+    .await
+}
+
+async fn run_remote_compact_task_inner(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    client_session: Option<&mut ModelClientSession>,
+    initial_context_injection: InitialContextInjection,
+    trigger: CompactionTrigger,
+    reason: CompactionReason,
+    phase: CompactionPhase,
+) -> CodexResult<()> {
+    let attempt = CompactionAnalyticsAttempt::begin(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        trigger,
+        reason,
+        CompactionImplementation::Responses,
+        phase,
+    )
+    .await;
+    let result = run_remote_compact_task_inner_impl(
+        sess,
+        turn_context,
+        client_session,
+        initial_context_injection,
+    )
+    .await;
+    attempt
+        .track(
+            sess.as_ref(),
+            compaction_status_from_result(&result),
+            result.as_ref().err().map(ToString::to_string),
+        )
+        .await;
+    if let Err(err) = result {
+        let event = EventMsg::Error(
+            err.to_error_event(Some("Error running remote compact task".to_string())),
+        );
+        sess.send_event(turn_context, event).await;
+        return Err(err);
+    }
+    Ok(())
+}
+
+async fn run_remote_compact_task_inner_impl(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    client_session: Option<&mut ModelClientSession>,
+    initial_context_injection: InitialContextInjection,
+) -> CodexResult<()> {
+    let context_compaction_item = ContextCompactionItem::new();
+    let compaction_trace = sess.services.rollout_thread_trace.compaction_trace_context(
+        turn_context.sub_id.as_str(),
+        context_compaction_item.id.as_str(),
+        turn_context.model_info.slug.as_str(),
+        turn_context.provider.info().name.as_str(),
+    );
+    let compaction_item = TurnItem::ContextCompaction(context_compaction_item);
+    sess.emit_turn_item_started(turn_context, &compaction_item)
+        .await;
+
+    let mut history = sess.clone_history().await;
+    let base_instructions = sess.get_base_instructions().await;
+    let deleted_items = trim_function_call_history_to_fit_context_window(
+        &mut history,
+        turn_context.as_ref(),
+        &base_instructions,
+    );
+    if deleted_items > 0 {
+        info!(
+            turn_id = %turn_context.sub_id,
+            deleted_items,
+            "trimmed history items before remote compaction v2"
+        );
+    }
+
+    let trace_input_history = history.raw_items().to_vec();
+    let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
+    let tool_router = built_tools(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        &prompt_input,
+        &HashSet::new(),
+        /*skills_outcome*/ None,
+        &CancellationToken::new(),
+    )
+    .await?;
+    let mut input = prompt_input.clone();
+    input.push(ResponseItem::ContextCompaction {
+        encrypted_content: None,
+    });
+    let prompt = Prompt {
+        input,
+        tools: tool_router.model_visible_specs(),
+        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+        base_instructions,
+        personality: turn_context.personality,
+        output_schema: None,
+        output_schema_strict: true,
+    };
+
+    let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
+    let trace_attempt = compaction_trace.start_attempt(&serde_json::json!({
+        "model": turn_context.model_info.slug.as_str(),
+        "instructions": prompt.base_instructions.text.as_str(),
+        "input": &prompt.input,
+        "parallel_tool_calls": prompt.parallel_tool_calls,
+    }));
+
+    let compaction_output_result = if let Some(client_session) = client_session {
+        run_remote_compaction_request_v2(
+            sess,
+            turn_context,
+            client_session,
+            &prompt,
+            turn_metadata_header.as_deref(),
+        )
+        .await
+    } else {
+        let mut owned_client_session = sess.services.model_client.new_session();
+        run_remote_compaction_request_v2(
+            sess,
+            turn_context,
+            &mut owned_client_session,
+            &prompt,
+            turn_metadata_header.as_deref(),
+        )
+        .await
+    };
+
+    trace_attempt.record_result(
+        compaction_output_result
+            .as_ref()
+            .map(|item| std::slice::from_ref(item)),
+    );
+    let compaction_output = compaction_output_result?;
+    let compacted_history =
+        build_v2_compacted_history(&prompt_input, compaction_output, &turn_context.model_info);
+    let new_history = process_compacted_history(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        compacted_history,
+        initial_context_injection,
+    )
+    .await;
+
+    let reference_context_item = match initial_context_injection {
+        InitialContextInjection::DoNotInject => None,
+        InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
+    };
+    let compacted_item = CompactedItem {
+        message: String::new(),
+        replacement_history: Some(new_history.clone()),
+    };
+    compaction_trace.record_installed(&CompactionCheckpointTracePayload {
+        input_history: &trace_input_history,
+        replacement_history: &new_history,
+    });
+    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
+        .await;
+    sess.recompute_token_usage(turn_context).await;
+
+    sess.emit_turn_item_completed(turn_context, compaction_item)
+        .await;
+    Ok(())
+}
+
+async fn run_remote_compaction_request_v2(
+    sess: &Session,
+    turn_context: &TurnContext,
+    client_session: &mut ModelClientSession,
+    prompt: &Prompt,
+    turn_metadata_header: Option<&str>,
+) -> CodexResult<ResponseItem> {
+    let stream = client_session
+        .stream(
+            prompt,
+            &turn_context.model_info,
+            &turn_context.session_telemetry,
+            turn_context.reasoning_effort,
+            turn_context.reasoning_summary,
+            turn_context.config.service_tier,
+            turn_metadata_header,
+            &InferenceTraceContext::disabled(),
+        )
+        .or_else(|err| async {
+            let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
+            let compact_request_log_data =
+                build_compact_request_log_data(&prompt.input, &prompt.base_instructions.text);
+            log_remote_compact_failure(
+                turn_context,
+                &compact_request_log_data,
+                total_usage_breakdown,
+                &err,
+            );
+            Err(err)
+        })
+        .await?;
+    collect_context_compaction_output(stream).await
+}
+
+async fn collect_context_compaction_output(
+    mut stream: ResponseStream,
+) -> CodexResult<ResponseItem> {
+    let mut output_items = Vec::new();
+    let mut completed = false;
+    while let Some(event) = stream.next().await {
+        match event? {
+            ResponseEvent::OutputItemDone(item) => output_items.push(item),
+            ResponseEvent::Completed { .. } => {
+                completed = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    if !completed {
+        return Err(CodexErr::Fatal(
+            "remote compaction v2 stream closed before response.completed".to_string(),
+        ));
+    }
+
+    let [item] = output_items.as_slice() else {
+        return Err(CodexErr::Fatal(format!(
+            "remote compaction v2 expected exactly one output item, got {}",
+            output_items.len()
+        )));
+    };
+    match item {
+        ResponseItem::ContextCompaction {
+            encrypted_content: Some(_),
+        } => Ok(item.clone()),
+        ResponseItem::ContextCompaction {
+            encrypted_content: None,
+        } => Err(CodexErr::Fatal(
+            "remote compaction v2 returned context_compaction without encrypted_content"
+                .to_string(),
+        )),
+        other => Err(CodexErr::Fatal(format!(
+            "remote compaction v2 returned unexpected output item: {other:?}"
+        ))),
+    }
+}
+
+fn build_v2_compacted_history(
+    prompt_input: &[ResponseItem],
+    compaction_output: ResponseItem,
+    model_info: &ModelInfo,
+) -> Vec<ResponseItem> {
+    let mut retained = prompt_input
+        .iter()
+        .filter(|item| is_retained_for_remote_compaction_v2(item, model_info))
+        .cloned()
+        .collect::<Vec<_>>();
+    retained.push(compaction_output);
+    retained
+}
+
+fn is_retained_for_remote_compaction_v2(item: &ResponseItem, model_info: &ModelInfo) -> bool {
+    let ResponseItem::Message { role, phase, .. } = item else {
+        return false;
+    };
+
+    match role.as_str() {
+        "user" | "developer" | "system" => true,
+        "assistant" => {
+            model_retains_final_assistant_messages_for_remote_compaction_v2(model_info)
+                && *phase == Some(MessagePhase::FinalAnswer)
+        }
+        _ => false,
+    }
+}
+
+fn model_retains_final_assistant_messages_for_remote_compaction_v2(model_info: &ModelInfo) -> bool {
+    model_info.slug.starts_with("gpt-5.4")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::config_types::ReasoningSummary;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::openai_models::ConfigShellToolType;
+    use codex_protocol::openai_models::ModelVisibility;
+    use codex_protocol::openai_models::TruncationPolicyConfig;
+    use codex_protocol::openai_models::WebSearchToolType;
+    use codex_protocol::openai_models::default_input_modalities;
+    use pretty_assertions::assert_eq;
+
+    fn message(role: &str, text: &str, phase: Option<MessagePhase>) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: role.to_string(),
+            content: vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            phase,
+        }
+    }
+
+    fn model(slug: &str) -> ModelInfo {
+        ModelInfo {
+            slug: slug.to_string(),
+            display_name: slug.to_string(),
+            description: None,
+            default_reasoning_level: None,
+            supported_reasoning_levels: Vec::new(),
+            shell_type: ConfigShellToolType::ShellCommand,
+            visibility: ModelVisibility::List,
+            supported_in_api: true,
+            priority: 1,
+            additional_speed_tiers: Vec::new(),
+            availability_nux: None,
+            upgrade: None,
+            base_instructions: String::new(),
+            model_messages: None,
+            supports_reasoning_summaries: false,
+            default_reasoning_summary: ReasoningSummary::Auto,
+            support_verbosity: false,
+            default_verbosity: None,
+            apply_patch_tool_type: None,
+            web_search_tool_type: WebSearchToolType::Text,
+            truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
+            supports_parallel_tool_calls: false,
+            supports_image_detail_original: false,
+            context_window: None,
+            max_context_window: None,
+            auto_compact_token_limit: None,
+            effective_context_window_percent: 95,
+            experimental_supported_tools: Vec::new(),
+            input_modalities: default_input_modalities(),
+            used_fallback_model_metadata: false,
+            supports_search_tool: false,
+        }
+    }
+
+    #[test]
+    fn build_v2_compacted_history_matches_prod_retention_shape() {
+        let input = vec![
+            message("developer", "dev", None),
+            message("system", "sys", None),
+            message("user", "user", None),
+            message("assistant", "commentary", Some(MessagePhase::Commentary)),
+            message("assistant", "final", Some(MessagePhase::FinalAnswer)),
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "shell".to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
+                call_id: "call_1".to_string(),
+            },
+            ResponseItem::Compaction {
+                encrypted_content: "old".to_string(),
+            },
+        ];
+        let output = ResponseItem::ContextCompaction {
+            encrypted_content: Some("new".to_string()),
+        };
+
+        let history = build_v2_compacted_history(&input, output.clone(), &model("gpt-5.4"));
+
+        assert_eq!(
+            history,
+            vec![
+                message("developer", "dev", None),
+                message("system", "sys", None),
+                message("user", "user", None),
+                message("assistant", "final", Some(MessagePhase::FinalAnswer)),
+                output,
+            ]
+        );
+    }
+}

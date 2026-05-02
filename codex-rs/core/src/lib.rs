@@ -17,6 +17,7 @@ pub(crate) mod session;
 pub use session::SteerInputError;
 mod codex_thread;
 mod compact_remote;
+mod compact_remote_v2;
 mod config_lock;
 pub use codex_thread::CodexThread;
 pub use codex_thread::CodexThreadTurnContextOverrides;

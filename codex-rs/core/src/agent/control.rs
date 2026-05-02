@@ -115,6 +115,7 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::Compaction { .. }
+            | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other,
         ) => false,
         // A forked child gets its own runtime config, including spawned-agent
