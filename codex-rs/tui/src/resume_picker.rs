@@ -1951,7 +1951,7 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
         let is_selected = row_idx == state.selected;
         let is_expanded =
             is_selected && row.thread_id.is_some() && state.expanded_thread_id == row.thread_id;
-        let is_zebra = state.density == SessionListDensity::Dense && row_idx.is_multiple_of(2);
+        let is_zebra = row_idx.is_multiple_of(2);
         for line in render_session_lines(row, state, is_selected, is_expanded, is_zebra, area.width)
         {
             if y >= content_area.y.saturating_add(content_area.height) {
@@ -2007,7 +2007,7 @@ fn render_session_lines(
 ) -> Vec<Line<'static>> {
     match state.density {
         SessionListDensity::Comfortable => {
-            render_comfortable_session_lines(row, state, is_selected, is_expanded, width)
+            render_comfortable_session_lines(row, state, is_selected, is_expanded, is_zebra, width)
         }
         SessionListDensity::Dense => {
             render_dense_session_lines(row, state, is_selected, is_expanded, is_zebra, width)
@@ -2020,9 +2020,33 @@ fn render_comfortable_session_lines(
     state: &PickerState,
     is_selected: bool,
     is_expanded: bool,
+    is_zebra: bool,
     width: u16,
 ) -> Vec<Line<'static>> {
     let marker = selection_marker(is_selected, is_expanded);
+    let title = truncate_text(row.display_preview(), width.saturating_sub(2) as usize);
+    let title = if is_selected {
+        selected_session_title_span(title)
+    } else {
+        title.into()
+    };
+    let title_line = Line::from(vec![marker, title]);
+    let mut lines = vec![title_line];
+    let row_style = if is_selected {
+        Some(dense_selected_style())
+    } else if is_zebra {
+        Some(dense_zebra_style())
+    } else {
+        None
+    };
+    if let Some(style) = row_style {
+        lines = apply_session_row_background(lines, style, width);
+    }
+    if is_expanded {
+        lines.extend(render_transcript_preview_lines(row, state, width));
+        return lines;
+    }
+
     let reference = state.relative_time_reference.unwrap_or_else(Utc::now);
     let created = format_relative_time(reference, row.created_at);
     let updated = format_relative_time(reference, row.updated_at.or(row.created_at));
@@ -2031,17 +2055,7 @@ fn render_comfortable_session_lines(
         .cwd
         .as_ref()
         .map(|path| format_directory_display(path, /*max_width*/ None));
-    let title = truncate_text(row.display_preview(), width.saturating_sub(2) as usize);
-    let title = if is_selected {
-        selected_session_title_span(title)
-    } else {
-        title.into()
-    };
-    let mut lines = vec![vec![marker, title].into()];
-    if is_expanded {
-        lines.extend(render_transcript_preview_lines(row, state, width));
-    }
-    lines.extend(render_footer_lines(
+    let footer_lines = render_footer_lines(
         state.sort_key,
         &created,
         &updated,
@@ -2049,8 +2063,36 @@ fn render_comfortable_session_lines(
         cwd.as_deref(),
         state.filter_mode == SessionFilterMode::All,
         width,
-    ));
+    );
+    if let Some(style) = row_style {
+        lines.extend(apply_session_row_background(footer_lines, style, width));
+    } else {
+        lines.extend(footer_lines);
+    }
     lines
+}
+
+fn apply_session_row_background(
+    lines: Vec<Line<'static>>,
+    style: Style,
+    width: u16,
+) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .map(|line| apply_line_background(line, style, width))
+        .collect()
+}
+
+fn apply_line_background(mut line: Line<'static>, style: Style, width: u16) -> Line<'static> {
+    let padding = (width as usize).saturating_sub(line.width());
+    if padding > 0 {
+        line.spans.push(" ".repeat(padding).set_style(style));
+    }
+    line.style = line.style.patch(style);
+    for span in &mut line.spans {
+        span.style = span.style.patch(style);
+    }
+    line
 }
 
 fn render_dense_session_lines(
@@ -3626,6 +3668,39 @@ session_picker_view = "dense"
 
         assert_eq!(line.width(), 80);
         assert_eq!(line.style.bg, dense_zebra_style().bg);
+    }
+
+    #[test]
+    fn comfortable_zebra_lines_use_full_width_background() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.relative_time_reference =
+            Some(parse_timestamp_str("2026-05-02T12:00:00Z").expect("timestamp"));
+        let row = make_row(
+            "/tmp/a.jsonl",
+            "2026-05-02T11:45:00Z",
+            "Zebra comfortable row",
+        );
+
+        let lines = render_comfortable_session_lines(
+            &row, &state, /*is_selected*/ false, /*is_expanded*/ false,
+            /*is_zebra*/ true, /*width*/ 100,
+        );
+
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|line| line.width() == 100));
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.style.bg == dense_zebra_style().bg)
+        );
     }
 
     #[test]
