@@ -1013,12 +1013,13 @@ impl PluginRequestProcessor {
         params: PluginUninstallParams,
     ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
         let PluginUninstallParams { plugin_id } = params;
-        match codex_plugin::PluginId::parse(&plugin_id) {
-            Ok(_) => {}
-            Err(_) if is_valid_remote_plugin_id(&plugin_id) => {
-                return self.remote_plugin_uninstall_response(plugin_id).await;
-            }
-            Err(_) => return Err(invalid_request("invalid remote plugin id")),
+        if codex_plugin::PluginId::parse(&plugin_id).is_err()
+            && !is_valid_remote_plugin_id(&plugin_id)
+        {
+            return Err(invalid_request("invalid remote plugin id"));
+        }
+        if codex_plugin::PluginId::parse(&plugin_id).is_err() {
+            return self.remote_plugin_uninstall_response(plugin_id).await;
         }
         let plugins_manager = self.thread_manager.plugins_manager();
 
