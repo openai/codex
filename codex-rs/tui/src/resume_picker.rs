@@ -16,6 +16,8 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
+use crate::wrapping::RtOptions;
+use crate::wrapping::adaptive_wrap_lines;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_app_server_protocol::Thread;
@@ -61,7 +63,6 @@ const SESSION_META_CWD_ICON: &str = "⌁";
 const FOOTER_COMPACT_BREAKPOINT: u16 = 120;
 const FOOTER_WIDE_MIN_GAP: usize = 4;
 const FOOTER_COMPACT_MIN_GAP: usize = 2;
-const DENSE_PATH_AUTO_HIDE_BREAKPOINT: u16 = 120;
 
 #[derive(Debug, Clone)]
 pub struct SessionTarget {
@@ -516,7 +517,6 @@ struct PickerState {
     toolbar_focus: ToolbarControl,
     density: SessionListDensity,
     view_persistence: Option<SessionPickerViewPersistence>,
-    dense_path_column_override: Option<bool>,
     action: SessionPickerAction,
     sort_key: ThreadSortKey,
     inline_error: Option<String>,
@@ -774,7 +774,6 @@ impl PickerState {
             toolbar_focus: ToolbarControl::Filter,
             density: SessionListDensity::Comfortable,
             view_persistence: None,
-            dense_path_column_override: None,
             action,
             sort_key: ThreadSortKey::UpdatedAt,
             inline_error: None,
@@ -1357,23 +1356,8 @@ impl PickerState {
     }
 
     fn toggle_dense_path_column(&mut self) {
-        if self.density != SessionListDensity::Dense || self.filter_mode != SessionFilterMode::All {
-            return;
-        }
-        let width = self.view_width.unwrap_or(u16::MAX);
-        let automatic = width >= DENSE_PATH_AUTO_HIDE_BREAKPOINT;
-        let next = !self.dense_path_column_visible(width);
-        self.dense_path_column_override = (next != automatic).then_some(next);
-        self.ensure_selected_visible();
-        self.request_frame();
-    }
-
-    fn dense_path_column_visible(&self, width: u16) -> bool {
-        if self.density != SessionListDensity::Dense || self.filter_mode != SessionFilterMode::All {
-            return false;
-        }
-        self.dense_path_column_override
-            .unwrap_or(width >= DENSE_PATH_AUTO_HIDE_BREAKPOINT)
+        // Dense mode no longer has a secondary path column. Keep consuming the
+        // legacy key so it does not leak into search input.
     }
 
     fn toggle_selected_expansion(&mut self) {
@@ -1415,6 +1399,7 @@ impl PickerState {
                     self,
                     is_selected,
                     is_expanded,
+                    /*is_zebra*/ false,
                     self.view_width.unwrap_or(u16::MAX),
                 )
                 .len()
@@ -1446,6 +1431,7 @@ impl PickerState {
                 self,
                 is_selected,
                 is_expanded,
+                /*is_zebra*/ false,
                 self.view_width.unwrap_or(u16::MAX),
             )
             .len();
@@ -1781,16 +1767,6 @@ fn hint_line(state: &PickerState, width: u16) -> Line<'static> {
             priority: 3,
         },
         PickerFooterHint {
-            key: "ctrl+o",
-            wide_label: if state.dense_path_column_visible(width) {
-                String::from("hide path")
-            } else {
-                String::from("show path")
-            },
-            compact_label: String::from("path"),
-            priority: 4,
-        },
-        PickerFooterHint {
             key: "space",
             wide_label: String::from("expand"),
             compact_label: String::from("exp"),
@@ -1804,7 +1780,6 @@ fn hint_line(state: &PickerState, width: u16) -> Line<'static> {
         },
     ]
     .into_iter()
-    .filter(|hint| hint.key != "ctrl+o" || state.dense_path_toggle_available())
     .collect::<Vec<_>>();
     if width >= FOOTER_COMPACT_BREAKPOINT
         && let Some(line) = fit_footer_hints(&hints, FooterHintLabelMode::Wide, width)
@@ -1832,12 +1807,6 @@ fn hint_line(state: &PickerState, width: u16) -> Line<'static> {
         }
     }
     Line::default()
-}
-
-impl PickerState {
-    fn dense_path_toggle_available(&self) -> bool {
-        self.density == SessionListDensity::Dense && self.filter_mode == SessionFilterMode::All
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -1884,20 +1853,36 @@ fn fit_footer_hint_refs(
     let mut spans = Vec::new();
     for (idx, hint) in hints.iter().enumerate() {
         if idx > 0 {
-            spans.push(" ".repeat(gap_width).dim());
+            spans.push(" ".repeat(gap_width).set_style(footer_hint_label_style()));
         }
-        spans.push(hint.key.into());
+        spans.push(hint.key.set_style(footer_hint_key_style()));
         let label = match mode {
             FooterHintLabelMode::Wide => Some(hint.wide_label.as_str()),
             FooterHintLabelMode::Compact => Some(hint.compact_label.as_str()),
             FooterHintLabelMode::KeyOnly => None,
         };
         if let Some(label) = label {
-            spans.push(" ".dim());
-            spans.push(label.to_string().dim());
+            spans.push(" ".set_style(footer_hint_label_style()));
+            spans.push(label.to_string().set_style(footer_hint_label_style()));
         }
     }
     Some(spans.into())
+}
+
+fn footer_hint_key_style() -> Style {
+    if default_bg().is_some_and(is_light) {
+        Style::default().fg(Color::Black)
+    } else {
+        Style::default()
+    }
+}
+
+fn footer_hint_label_style() -> Style {
+    if default_bg().is_some_and(is_light) {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().dim()
+    }
 }
 
 fn footer_hints_width(
@@ -1966,7 +1951,9 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
         let is_selected = row_idx == state.selected;
         let is_expanded =
             is_selected && row.thread_id.is_some() && state.expanded_thread_id == row.thread_id;
-        for line in render_session_lines(row, state, is_selected, is_expanded, area.width) {
+        let is_zebra = state.density == SessionListDensity::Dense && row_idx.is_multiple_of(2);
+        for line in render_session_lines(row, state, is_selected, is_expanded, is_zebra, area.width)
+        {
             if y >= content_area.y.saturating_add(content_area.height) {
                 break;
             }
@@ -1977,10 +1964,6 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
             && y < content_area.y.saturating_add(content_area.height)
             && start + idx + 1 < rows.len()
         {
-            frame.render_widget_ref(
-                session_separator_line(area.width),
-                Rect::new(area.x, y, area.width, /*height*/ 1),
-            );
             y = y.saturating_add(1);
         }
     }
@@ -2014,16 +1997,12 @@ fn more_line(label: &'static str) -> Line<'static> {
     vec![label.dim()].into()
 }
 
-fn session_separator_line(width: u16) -> Line<'static> {
-    let line_width = width.saturating_sub(2) as usize;
-    vec!["  ".into(), "─".repeat(line_width).dark_gray()].into()
-}
-
 fn render_session_lines(
     row: &Row,
     state: &PickerState,
     is_selected: bool,
     is_expanded: bool,
+    is_zebra: bool,
     width: u16,
 ) -> Vec<Line<'static>> {
     match state.density {
@@ -2031,7 +2010,7 @@ fn render_session_lines(
             render_comfortable_session_lines(row, state, is_selected, is_expanded, width)
         }
         SessionListDensity::Dense => {
-            render_dense_session_lines(row, state, is_selected, is_expanded, width)
+            render_dense_session_lines(row, state, is_selected, is_expanded, is_zebra, width)
         }
     }
 }
@@ -2079,6 +2058,7 @@ fn render_dense_session_lines(
     state: &PickerState,
     is_selected: bool,
     is_expanded: bool,
+    is_zebra: bool,
     width: u16,
 ) -> Vec<Line<'static>> {
     let marker = selection_marker(is_selected, is_expanded);
@@ -2089,20 +2069,12 @@ fn render_dense_session_lines(
         ThreadSortKey::CreatedAt => created,
         ThreadSortKey::UpdatedAt => updated,
     };
-    let cwd = row
-        .cwd
-        .as_ref()
-        .map(|path| format_directory_display(path, /*max_width*/ None));
-    let show_cwd = state.dense_path_column_visible(width);
     let mut lines = vec![dense_summary_line(DenseSummaryInput {
         marker,
         date: &date,
-        branch: row.git_branch.as_deref(),
-        cwd: cwd.as_deref(),
-        show_cwd,
-        preserve_cwd: state.dense_path_column_override == Some(true) && show_cwd,
-        title: row.display_preview(),
+        title: &row.preview,
         is_selected,
+        is_zebra,
         width,
     })];
     if is_expanded {
@@ -2114,106 +2086,72 @@ fn render_dense_session_lines(
 struct DenseSummaryInput<'a> {
     marker: Span<'static>,
     date: &'a str,
-    branch: Option<&'a str>,
-    cwd: Option<&'a str>,
-    show_cwd: bool,
-    preserve_cwd: bool,
     title: &'a str,
     is_selected: bool,
+    is_zebra: bool,
     width: u16,
 }
 
 fn dense_summary_line(input: DenseSummaryInput<'_>) -> Line<'static> {
-    let branch = Some(format!(
-        "{SESSION_META_BRANCH_ICON} {}",
-        input.branch.unwrap_or("no branch")
-    ));
-    let cwd = input
-        .show_cwd
-        .then(|| format!("{SESSION_META_CWD_ICON} {}", input.cwd.unwrap_or("no cwd")));
-
     let marker_width = input.marker.width();
     let available = (input.width as usize).saturating_sub(marker_width);
-    let columns = dense_columns(available, input.show_cwd, input.preserve_cwd);
-    let branch = columns.branch_width.and_then(|width| {
-        branch
-            .as_deref()
-            .map(|branch| dense_column_text(branch, width))
-    });
-    let cwd = columns
-        .cwd_width
-        .and_then(|width| cwd.as_deref().map(|cwd| dense_column_text(cwd, width)));
-    let title_width = columns.title_width;
-    let title = truncate_text(input.title, title_width);
+    let columns = dense_columns(available);
     let title = if input.is_selected {
-        selected_session_title_span(title)
+        selected_session_title_span(dense_column_text(input.title, columns.title_width))
     } else {
-        title.into()
+        dense_column_text(input.title, columns.title_width).into()
     };
 
     let spans = vec![
         input.marker,
         dense_column_text(input.date, columns.date_width).dim(),
+        title,
     ];
-    let mut spans = spans;
-    if let Some(branch) = branch {
-        spans.push(branch.dim());
-    }
-    if let Some(cwd) = cwd {
-        spans.push(cwd.dim());
-    }
-    spans.push(title);
     let mut line = Line::from(spans);
     if input.is_selected {
         let padding = (input.width as usize).saturating_sub(line.width());
         if padding > 0 {
             line.spans
-                .push(" ".repeat(padding).set_style(selected_session_style()));
+                .push(" ".repeat(padding).set_style(dense_selected_style()));
         }
-        line = line.style(selected_session_style());
+        line = line.style(dense_selected_style());
+    } else if input.is_zebra {
+        let padding = (input.width as usize).saturating_sub(line.width());
+        if padding > 0 {
+            line.spans
+                .push(" ".repeat(padding).set_style(dense_zebra_style()));
+        }
+        line = line.style(dense_zebra_style());
     }
     line
 }
 
 struct DenseColumns {
     date_width: usize,
-    branch_width: Option<usize>,
-    cwd_width: Option<usize>,
     title_width: usize,
 }
 
-fn dense_columns(width: usize, show_cwd: bool, preserve_cwd: bool) -> DenseColumns {
+fn dense_columns(width: usize) -> DenseColumns {
     let date_width = SESSION_META_DATE_WIDTH;
-    let minimum_title_width = 12;
-    let mut branch_width = Some((width / 4).clamp(14, 32));
-    let mut cwd_width = show_cwd.then(|| (width / 3).clamp(18, 48));
-
-    loop {
-        let metadata_width = date_width + branch_width.unwrap_or(0) + cwd_width.unwrap_or(0);
-        if width.saturating_sub(metadata_width) >= minimum_title_width {
-            break;
-        }
-        if preserve_cwd && branch_width.is_some() {
-            branch_width = None;
-            continue;
-        }
-        if cwd_width.is_some() {
-            cwd_width = None;
-            continue;
-        }
-        if branch_width.is_some() {
-            branch_width = None;
-            continue;
-        }
-        break;
-    }
-
-    let metadata_width = date_width + branch_width.unwrap_or(0) + cwd_width.unwrap_or(0);
     DenseColumns {
         date_width,
-        branch_width,
-        cwd_width,
-        title_width: width.saturating_sub(metadata_width),
+        title_width: width.saturating_sub(date_width),
+    }
+}
+
+fn dense_zebra_style() -> Style {
+    if default_bg().is_some_and(is_light) {
+        Style::default().bg(Color::Rgb(238, 238, 238))
+    } else {
+        Style::default().bg(Color::Rgb(28, 28, 28))
+    }
+}
+
+fn dense_selected_style() -> Style {
+    if default_bg().is_some_and(is_light) {
+        selected_session_style().bg(Color::Rgb(220, 220, 220))
+    } else {
+        selected_session_style().bg(Color::Rgb(48, 48, 48))
     }
 }
 
@@ -2426,10 +2364,11 @@ fn render_transcript_preview_lines(
     state: &PickerState,
     width: u16,
 ) -> Vec<Line<'static>> {
+    let mut details = render_expanded_session_details(row, state, width);
     let Some(thread_id) = row.thread_id else {
-        return Vec::new();
+        return details;
     };
-    match state.transcript_previews.get(&thread_id) {
+    let preview_lines = match state.transcript_previews.get(&thread_id) {
         Some(TranscriptPreviewState::Loading) => {
             vec![vec!["  │ ".dim(), "Loading recent transcript...".italic().dim()].into()]
         }
@@ -2440,65 +2379,187 @@ fn render_transcript_preview_lines(
             ]
             .into(),
         ],
-        Some(TranscriptPreviewState::Loaded(lines)) if lines.is_empty() => vec![
+        Some(TranscriptPreviewState::Loaded(lines)) => {
+            render_conversation_preview_lines(lines, width)
+        }
+        None => Vec::new(),
+    };
+    details.extend(preview_lines);
+    details
+}
+
+fn render_expanded_session_details(
+    row: &Row,
+    state: &PickerState,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let reference = state.relative_time_reference.unwrap_or_else(Utc::now);
+    let session = row
+        .thread_name
+        .as_deref()
+        .map(str::to_string)
+        .or_else(|| row.thread_id.map(|thread_id| thread_id.to_string()))
+        .unwrap_or_else(|| "-".to_string());
+    let directory = row
+        .cwd
+        .as_ref()
+        .map(|path| format_directory_display(path, /*max_width*/ None))
+        .unwrap_or_else(|| "-".to_string());
+    let branch = row
+        .git_branch
+        .as_ref()
+        .map(|branch| format!("{SESSION_META_BRANCH_ICON} {branch}"))
+        .unwrap_or_else(|| format!("{SESSION_META_BRANCH_ICON} no branch"));
+
+    vec![
+        expanded_detail_line("Session:", &session, width),
+        expanded_time_detail_line("Created:", reference, row.created_at, width),
+        expanded_time_detail_line(
+            "Updated:",
+            reference,
+            row.updated_at.or(row.created_at),
+            width,
+        ),
+        expanded_detail_line("Directory:", &directory, width),
+        expanded_detail_line("Branch:", &branch, width),
+        vec!["  │".dim()].into(),
+        vec!["  │ ".dim(), "Conversation:".dim()].into(),
+    ]
+}
+
+fn render_conversation_preview_lines(
+    lines: &[TranscriptPreviewLine],
+    width: u16,
+) -> Vec<Line<'static>> {
+    if lines.is_empty() {
+        return vec![
             vec![
                 "  └ ".dim(),
                 "No transcript preview available".italic().dim(),
             ]
             .into(),
-        ],
-        Some(TranscriptPreviewState::Loaded(lines)) => {
-            let mut rendered = Vec::new();
-            for line in lines {
-                rendered.extend(render_transcript_content_lines(line, width));
-            }
-            let rendered_len = rendered.len();
-            rendered
-                .into_iter()
-                .enumerate()
-                .map(|(idx, line)| {
-                    let prefix = if idx + 1 == rendered_len {
-                        "  └ "
-                    } else {
-                        "  │ "
-                    };
-                    prefix_transcript_line(prefix, line)
-                })
-                .collect()
-        }
-        None => Vec::new(),
+        ];
     }
+
+    let mut rendered = Vec::new();
+    for line in lines {
+        rendered.extend(render_transcript_content_lines(line, width));
+    }
+    let rendered_len = rendered.len();
+    rendered
+        .into_iter()
+        .enumerate()
+        .map(|(idx, line)| {
+            let prefix = if idx + 1 == rendered_len {
+                "  └ "
+            } else {
+                "  │ "
+            };
+            prefix_transcript_line(prefix, line)
+        })
+        .collect()
 }
 
 fn render_transcript_content_lines(line: &TranscriptPreviewLine, width: u16) -> Vec<Line<'static>> {
     let content_width = width.saturating_sub(4) as usize;
-    match line.speaker {
-        TranscriptPreviewSpeaker::User => vec![
-            Line::from(truncate_text(&line.text, content_width))
-                .cyan()
-                .dim()
-                .italic(),
-        ],
+    let lines = match line.speaker {
+        TranscriptPreviewSpeaker::User => vec![conversation_content_line(
+            Line::from(line.text.clone()),
+            conversation_user_style(),
+        )],
         TranscriptPreviewSpeaker::Assistant => {
             let mut lines = Vec::new();
             append_markdown(
-                &line.text,
-                Some(content_width),
-                /*cwd*/ None,
-                &mut lines,
+                &line.text, /*width*/ None, /*cwd*/ None, &mut lines,
             );
             for line in &mut lines {
-                *line = line.clone().dim();
+                *line = conversation_content_line(line.clone(), conversation_assistant_style());
             }
             lines
         }
+    };
+    adaptive_wrap_lines(lines, RtOptions::new(content_width.max(/*other*/ 1)))
+}
+
+fn conversation_content_line(mut line: Line<'static>, style: Style) -> Line<'static> {
+    line.style = line.style.patch(style);
+    for span in &mut line.spans {
+        span.style = span.style.patch(style);
     }
+    line
 }
 
 fn prefix_transcript_line(prefix: &'static str, line: Line<'static>) -> Line<'static> {
-    let mut spans = vec![prefix.dim()];
+    let mut spans = vec![prefix.set_style(transcript_prefix_style(&line))];
     spans.extend(line.spans);
     Line::from(spans).style(line.style)
+}
+
+fn transcript_prefix_style(line: &Line<'_>) -> Style {
+    let style = line
+        .spans
+        .iter()
+        .find(|span| !span.content.trim().is_empty())
+        .map(|span| line.style.patch(span.style))
+        .unwrap_or(line.style);
+    connector_style_from_content(style)
+}
+
+fn connector_style_from_content(style: Style) -> Style {
+    Style {
+        fg: style.fg,
+        bg: style.bg,
+        ..Style::default()
+    }
+}
+
+fn conversation_assistant_style() -> Style {
+    if default_bg().is_some_and(is_light) {
+        Style::default().fg(Color::Gray)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    }
+}
+
+fn conversation_user_style() -> Style {
+    if default_bg().is_some_and(is_light) {
+        Style::default().fg(Color::DarkGray).italic()
+    } else {
+        Style::default().fg(Color::Gray).italic()
+    }
+}
+
+fn expanded_detail_line(label: &'static str, value: &str, width: u16) -> Line<'static> {
+    const LABEL_WIDTH: usize = 10;
+    let prefix_width = 4;
+    let gap_width = 2;
+    let value_width = (width as usize)
+        .saturating_sub(prefix_width + LABEL_WIDTH + gap_width)
+        .max(1);
+    vec![
+        "  │ ".dim(),
+        format!("{label:<LABEL_WIDTH$}").dim(),
+        "  ".dim(),
+        truncate_text(value, value_width).into(),
+    ]
+    .into()
+}
+
+fn expanded_time_detail_line(
+    label: &'static str,
+    reference: DateTime<Utc>,
+    ts: Option<DateTime<Utc>>,
+    width: u16,
+) -> Line<'static> {
+    let Some(ts) = ts else {
+        return expanded_detail_line(label, "-", width);
+    };
+    let value = format!(
+        "{} · {}",
+        format_relative_time_long(reference, ts),
+        format_timestamp(ts)
+    );
+    expanded_detail_line(label, &value, width)
 }
 
 fn format_relative_time(reference: DateTime<Utc>, ts: Option<DateTime<Utc>>) -> String {
@@ -2522,6 +2583,37 @@ fn format_relative_time(reference: DateTime<Utc>, ts: Option<DateTime<Utc>>) -> 
     }
     let days = hours / 24;
     format!("{days}d ago")
+}
+
+fn format_relative_time_long(reference: DateTime<Utc>, ts: DateTime<Utc>) -> String {
+    let seconds = (reference - ts).num_seconds().max(0);
+    if seconds == 0 {
+        return "now".to_string();
+    }
+    if seconds < 60 {
+        return plural_time(seconds, "second");
+    }
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return plural_time(minutes, "minute");
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        return plural_time(hours, "hour");
+    }
+    plural_time(hours / 24, "day")
+}
+
+fn plural_time(value: i64, unit: &str) -> String {
+    if value == 1 {
+        format!("1 {unit} ago")
+    } else {
+        format!("{value} {unit}s ago")
+    }
+}
+
+fn format_timestamp(ts: DateTime<Utc>) -> String {
+    ts.format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 fn render_empty_state_line(state: &PickerState) -> Line<'static> {
@@ -2676,6 +2768,62 @@ mod tests {
             format_relative_time(reference, Some(reference - Duration::seconds(1))),
             "1s ago"
         );
+    }
+
+    #[test]
+    fn long_relative_time_uses_words() {
+        let reference = DateTime::parse_from_rfc3339("2026-05-02T12:00:00Z")
+            .expect("valid timestamp")
+            .with_timezone(&Utc);
+
+        assert_eq!(format_relative_time_long(reference, reference), "now");
+        assert_eq!(
+            format_relative_time_long(reference, reference - Duration::minutes(20)),
+            "20 minutes ago"
+        );
+        assert_eq!(
+            format_relative_time_long(reference, reference - Duration::hours(1)),
+            "1 hour ago"
+        );
+    }
+
+    #[test]
+    fn expanded_session_details_include_metadata() {
+        let thread_id =
+            ThreadId::from_string("019dabc1-0ef5-7431-b81c-03037f51f62c").expect("thread id");
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.relative_time_reference = parse_timestamp_str("2026-05-02T14:48:19Z");
+        let row = Row {
+            path: Some(PathBuf::from("/tmp/a.jsonl")),
+            preview: String::from("first message"),
+            thread_id: Some(thread_id),
+            thread_name: Some(String::from("feat(tui): add raw scrollback mode")),
+            created_at: parse_timestamp_str("2026-05-02T14:31:08Z"),
+            updated_at: parse_timestamp_str("2026-05-02T14:48:19Z"),
+            cwd: Some(PathBuf::from("/Users/felipe.coury/code/codex")),
+            git_branch: Some(String::from("codex/raw-scrollback-mode")),
+        };
+
+        let rendered = render_expanded_session_details(&row, &state, /*width*/ 120)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Session:    feat(tui): add raw scrollback mode"));
+        assert!(rendered.contains("Created:    17 minutes ago · 2026-05-02 14:31:08"));
+        assert!(rendered.contains("Updated:    now · 2026-05-02 14:48:19"));
+        assert!(rendered.contains("Directory:  ~/code/codex"));
+        assert!(rendered.contains("Branch:      codex/raw-scrollback-mode"));
+        assert!(rendered.contains("Conversation:"));
     }
 
     #[test]
@@ -3098,9 +3246,8 @@ mod tests {
         assert!(rendered.contains("esc"));
         assert!(rendered.contains("ctrl+c"));
         assert!(rendered.contains("ctrl+t"));
-        assert!(rendered.contains("ctrl+o"));
-        assert!(!rendered.contains("space"));
-        assert!(!rendered.contains("↑/↓"));
+        assert!(rendered.contains("space"));
+        assert!(rendered.contains("↑/↓"));
     }
 
     #[tokio::test]
@@ -3227,7 +3374,7 @@ session_picker_view = "dense"
     }
 
     #[tokio::test]
-    async fn ctrl_o_toggles_dense_path_column_override() {
+    async fn ctrl_o_is_consumed_in_dense_mode() {
         let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
@@ -3240,27 +3387,23 @@ session_picker_view = "dense"
         state.density = SessionListDensity::Dense;
         state.update_viewport(/*rows*/ 10, /*width*/ 80);
 
-        assert!(!state.dense_path_column_visible(/*width*/ 80));
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert_eq!(state.query, "");
 
         state
             .handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))
             .await
             .unwrap();
 
-        assert_eq!(state.dense_path_column_override, Some(true));
-        assert!(state.dense_path_column_visible(/*width*/ 80));
-
-        state
-            .handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))
-            .await
-            .unwrap();
-
-        assert_eq!(state.dense_path_column_override, None);
-        assert!(!state.dense_path_column_visible(/*width*/ 80));
+        assert_eq!(state.query, "");
     }
 
     #[tokio::test]
-    async fn ctrl_o_is_ignored_outside_dense_all_mode() {
+    async fn ctrl_o_is_consumed_outside_dense_mode() {
         let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
@@ -3278,8 +3421,7 @@ session_picker_view = "dense"
             .await
             .unwrap();
 
-        assert_eq!(state.dense_path_column_override, None);
-        assert!(!state.dense_path_column_visible(/*width*/ 80));
+        assert_eq!(state.query, "");
 
         state.filter_mode = SessionFilterMode::All;
         state.density = SessionListDensity::Comfortable;
@@ -3289,7 +3431,7 @@ session_picker_view = "dense"
             .await
             .unwrap();
 
-        assert_eq!(state.dense_path_column_override, None);
+        assert_eq!(state.query, "");
     }
 
     #[test]
@@ -3367,7 +3509,6 @@ session_picker_view = "dense"
         show_all: bool,
         filter_cwd: Option<PathBuf>,
         width: u16,
-        dense_path_column_override: Option<bool>,
     ) -> String {
         use crate::custom_terminal::Terminal;
         use crate::test_backend::VT100Backend;
@@ -3383,7 +3524,6 @@ session_picker_view = "dense"
             SessionPickerAction::Resume,
         );
         state.density = SessionListDensity::Dense;
-        state.dense_path_column_override = dense_path_column_override;
         state.all_rows = vec![row.clone()];
         state.filtered_rows = vec![row];
         state.relative_time_reference =
@@ -3413,7 +3553,6 @@ session_picker_view = "dense"
                     "/Users/felipe.coury/code/codex.fcoury-session-picker/codex-rs"
                 )),
                 /*width*/ 100,
-                /*dense_path_column_override*/ None,
             )
         );
     }
@@ -3424,7 +3563,6 @@ session_picker_view = "dense"
             "resume_picker_dense_all",
             render_dense_row_snapshot(
                 /*show_all*/ true, /*filter_cwd*/ None, /*width*/ 120,
-                /*dense_path_column_override*/ None,
             )
         );
     }
@@ -3435,7 +3573,6 @@ session_picker_view = "dense"
             "resume_picker_dense_all_auto_hidden_cwd",
             render_dense_row_snapshot(
                 /*show_all*/ true, /*filter_cwd*/ None, /*width*/ 100,
-                /*dense_path_column_override*/ None,
             )
         );
     }
@@ -3445,10 +3582,7 @@ session_picker_view = "dense"
         assert_snapshot!(
             "resume_picker_dense_all_forced_cwd",
             render_dense_row_snapshot(
-                /*show_all*/ true,
-                /*filter_cwd*/ None,
-                /*width*/ 48,
-                /*dense_path_column_override*/ Some(true),
+                /*show_all*/ true, /*filter_cwd*/ None, /*width*/ 48,
             )
         );
     }
@@ -3459,7 +3593,6 @@ session_picker_view = "dense"
             "resume_picker_dense_narrow",
             render_dense_row_snapshot(
                 /*show_all*/ true, /*filter_cwd*/ None, /*width*/ 48,
-                /*dense_path_column_override*/ None,
             )
         );
     }
@@ -3469,18 +3602,30 @@ session_picker_view = "dense"
         let line = dense_summary_line(DenseSummaryInput {
             marker: selection_marker(/*is_selected*/ true, /*is_expanded*/ false),
             date: "15m ago",
-            branch: Some("fcoury/session-picker"),
-            cwd: Some("~/code/codex"),
-            show_cwd: true,
-            preserve_cwd: false,
             title: "Selected dense row",
             is_selected: true,
+            is_zebra: false,
             width: 80,
         });
 
         assert_eq!(line.width(), 80);
         assert_eq!(line.style.fg, selected_session_style().fg);
         assert_eq!(line.spans[0].content, "❯ ");
+    }
+
+    #[test]
+    fn dense_zebra_summary_line_uses_full_width_background() {
+        let line = dense_summary_line(DenseSummaryInput {
+            marker: selection_marker(/*is_selected*/ false, /*is_expanded*/ false),
+            date: "15m ago",
+            title: "Zebra dense row",
+            is_selected: false,
+            is_zebra: true,
+            width: 80,
+        });
+
+        assert_eq!(line.width(), 80);
+        assert_eq!(line.style.bg, dense_zebra_style().bg);
     }
 
     #[test]
@@ -3574,7 +3719,7 @@ session_picker_view = "dense"
         );
 
         let width: u16 = 90;
-        let height: u16 = 6;
+        let height: u16 = 11;
         let backend = VT100Backend::new(width, height);
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, width, height));

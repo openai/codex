@@ -3,6 +3,13 @@ source: tui/src/resume_picker.rs
 expression: terminal.backend().to_string()
 ---
 ⌄ Investigate picker expansion
+  │ Session:    019dabc1-0ef5-7431-b81c-03037f51f62c
+  │ Created:    1 hour ago · 2026-04-28 16:30:00
+  │ Updated:    15 minutes ago · 2026-04-28 17:45:00
+  │ Directory:  /tmp/codex
+  │ Branch:      fcoury/session-picker
+  │
+  │ Conversation:
   │ Show me the recent transcript                                                         
-  └ Here are the last few lines.                                                          
+  └ Here are the last few lines.
   15m ago       ⌁ /tmp/codex                           fcoury/session-picker
