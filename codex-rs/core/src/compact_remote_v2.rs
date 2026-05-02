@@ -71,7 +71,7 @@ pub(crate) async fn run_remote_compact_task(
     run_remote_compact_task_inner(
         &sess,
         &turn_context,
-        None,
+        /*client_session*/ None,
         InitialContextInjection::DoNotInject,
         CompactionTrigger::Manual,
         CompactionReason::UserRequested,
@@ -208,11 +208,7 @@ async fn run_remote_compact_task_inner_impl(
         .await
     };
 
-    trace_attempt.record_result(
-        compaction_output_result
-            .as_ref()
-            .map(|item| std::slice::from_ref(item)),
-    );
+    trace_attempt.record_result(compaction_output_result.as_ref().map(std::slice::from_ref));
     let compaction_output = compaction_output_result?;
     let compacted_history =
         build_v2_compacted_history(&prompt_input, compaction_output, &turn_context.model_info);
@@ -418,9 +414,9 @@ mod tests {
     #[test]
     fn build_v2_compacted_history_matches_prod_retention_shape() {
         let input = vec![
-            message("developer", "dev", None),
-            message("system", "sys", None),
-            message("user", "user", None),
+            message("developer", "dev", /*phase*/ None),
+            message("system", "sys", /*phase*/ None),
+            message("user", "user", /*phase*/ None),
             message("assistant", "commentary", Some(MessagePhase::Commentary)),
             message("assistant", "final", Some(MessagePhase::FinalAnswer)),
             ResponseItem::FunctionCall {
@@ -443,9 +439,9 @@ mod tests {
         assert_eq!(
             history,
             vec![
-                message("developer", "dev", None),
-                message("system", "sys", None),
-                message("user", "user", None),
+                message("developer", "dev", /*phase*/ None),
+                message("system", "sys", /*phase*/ None),
+                message("user", "user", /*phase*/ None),
                 message("assistant", "final", Some(MessagePhase::FinalAnswer)),
                 output,
             ]
