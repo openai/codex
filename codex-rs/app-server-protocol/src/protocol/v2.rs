@@ -51,6 +51,7 @@ use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelAvailabilityNux as CoreModelAvailabilityNux;
+use codex_protocol::openai_models::ModelServiceTier as CoreModelServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
@@ -150,6 +151,29 @@ impl TryFrom<&CoreServiceTier> for ServiceTier {
         } else {
             Err(())
         }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(transparent)]
+#[ts(type = "string", export_to = "v2/")]
+pub struct ServiceTierId(pub String);
+
+impl ServiceTierId {
+    pub fn into_core(self) -> CoreServiceTier {
+        CoreServiceTier::new(self.0)
+    }
+}
+
+impl From<CoreServiceTier> for ServiceTierId {
+    fn from(value: CoreServiceTier) -> Self {
+        Self(value.to_string())
+    }
+}
+
+impl From<&CoreServiceTier> for ServiceTierId {
+    fn from(value: &CoreServiceTier) -> Self {
+        Self(value.to_string())
     }
 }
 
@@ -2541,6 +2565,35 @@ impl From<CoreModelAvailabilityNux> for ModelAvailabilityNux {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelServiceTier {
+    pub id: ServiceTierId,
+    pub name: String,
+    pub description: String,
+}
+
+impl From<CoreModelServiceTier> for ModelServiceTier {
+    fn from(value: CoreModelServiceTier) -> Self {
+        Self {
+            id: value.id.into(),
+            name: value.name,
+            description: value.description,
+        }
+    }
+}
+
+impl From<ModelServiceTier> for CoreModelServiceTier {
+    fn from(value: ModelServiceTier) -> Self {
+        Self {
+            id: value.id.into_core(),
+            name: value.name,
+            description: value.description,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -2559,8 +2612,13 @@ pub struct Model {
     pub input_modalities: Vec<InputModality>,
     #[serde(default)]
     pub supports_personality: bool,
+    /// Deprecated: use `serviceTiers` for structured service-tier metadata.
+    ///
+    /// @deprecated use `serviceTiers` instead.
     #[serde(default)]
     pub additional_speed_tiers: Vec<String>,
+    #[serde(default)]
+    pub service_tiers: Vec<ModelServiceTier>,
     // Only one model should be marked as default.
     pub is_default: bool,
 }

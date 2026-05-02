@@ -53,6 +53,12 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
         // todo(sayan): fix, maybe make roundtrip use ModelInfo only
         supports_personality: false,
         additional_speed_tiers: legacy_additional_speed_tiers(&preset.service_tiers),
+        service_tiers: preset
+            .service_tiers
+            .clone()
+            .into_iter()
+            .map(Into::into)
+            .collect(),
         is_default: preset.is_default,
     }
 }

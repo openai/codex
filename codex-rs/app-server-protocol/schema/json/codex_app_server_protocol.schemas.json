@@ -11210,8 +11210,17 @@
         "properties": {
           "additionalSpeedTiers": {
             "default": [],
+            "deprecated": true,
+            "description": "Deprecated: use `serviceTiers` for structured service-tier metadata.\n\n@deprecated use `serviceTiers` instead.",
             "items": {
               "type": "string"
+            },
+            "type": "array"
+          },
+          "serviceTiers": {
+            "default": [],
+            "items": {
+              "$ref": "#/definitions/v2/ModelServiceTier"
             },
             "type": "array"
           },
@@ -11303,6 +11312,25 @@
         },
         "required": [
           "message"
+        ],
+        "type": "object"
+      },
+      "ModelServiceTier": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/definitions/v2/ServiceTierId"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "id",
+          "name"
         ],
         "type": "object"
       },
@@ -14147,6 +14175,9 @@
           "fast",
           "flex"
         ],
+        "type": "string"
+      },
+      "ServiceTierId": {
         "type": "string"
       },
       "SessionMigration": {
