@@ -12,4 +12,3 @@ expression: terminal.backend().to_string()
   │ Conversation:
   │ Show me the recent transcript                                                         
   └ Here are the last few lines.
-  15m ago       ⌁ /tmp/codex                           fcoury/session-picker

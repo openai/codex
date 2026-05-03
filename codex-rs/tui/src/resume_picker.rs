@@ -4,13 +4,20 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+mod transcript;
+
 use crate::app_server_session::AppServerSession;
+use crate::color::blend;
 use crate::color::is_light;
+use crate::keymap::PagerKeymap;
+use crate::keymap::RuntimeKeymap;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
 use crate::markdown::append_markdown;
+use crate::pager_overlay::Overlay;
 use crate::session_resume::resolve_session_thread_id;
 use crate::status::format_directory_display;
+use crate::terminal_palette::best_color;
 use crate::terminal_palette::default_bg;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
@@ -49,6 +56,8 @@ use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;
+use transcript::TranscriptCells;
+use transcript::load_session_transcript;
 use unicode_width::UnicodeWidthStr;
 
 const PAGE_SIZE: usize = 25;
@@ -130,6 +139,7 @@ struct PageLoadRequest {
 enum PickerLoadRequest {
     Page(PageLoadRequest),
     Preview { thread_id: ThreadId },
+    Transcript { thread_id: ThreadId },
 }
 
 #[derive(Clone)]
@@ -218,16 +228,19 @@ impl From<SessionListDensity> for SessionPickerViewMode {
 }
 
 type PickerLoader = Arc<dyn Fn(PickerLoadRequest) + Send + Sync>;
-
 enum BackgroundEvent {
-    PageLoaded {
+    Page {
         request_token: usize,
         search_token: Option<usize>,
         page: std::io::Result<PickerPage>,
     },
-    PreviewLoaded {
+    Preview {
         thread_id: ThreadId,
         preview: std::io::Result<Vec<TranscriptPreviewLine>>,
+    },
+    Transcript {
+        thread_id: ThreadId,
+        transcript: std::io::Result<TranscriptCells>,
     },
 }
 
@@ -256,6 +269,7 @@ struct SessionPickerRunOptions {
     provider_filter: ProviderFilter,
     initial_density: SessionListDensity,
     view_persistence: Option<SessionPickerViewPersistence>,
+    pager_keymap: PagerKeymap,
 }
 
 /// Interactive session picker that lists app-server threads with simple search,
@@ -290,6 +304,7 @@ pub async fn run_resume_picker_with_app_server(
         app_server.remote_cwd_override(),
     );
     let provider_filter = picker_provider_filter(config, is_remote);
+    let pager_keymap = picker_pager_keymap(config)?;
     let options = SessionPickerRunOptions {
         show_all,
         filter_cwd: cwd_filter,
@@ -300,6 +315,7 @@ pub async fn run_resume_picker_with_app_server(
             codex_home: config.codex_home.to_path_buf(),
             active_profile: config.active_profile.clone(),
         }),
+        pager_keymap,
     };
     run_session_picker_with_loader(
         tui,
@@ -325,6 +341,7 @@ pub async fn run_fork_picker_with_app_server(
         app_server.remote_cwd_override(),
     );
     let provider_filter = picker_provider_filter(config, is_remote);
+    let pager_keymap = picker_pager_keymap(config)?;
     let options = SessionPickerRunOptions {
         show_all,
         filter_cwd: cwd_filter,
@@ -335,6 +352,7 @@ pub async fn run_fork_picker_with_app_server(
             codex_home: config.codex_home.to_path_buf(),
             active_profile: config.active_profile.clone(),
         }),
+        pager_keymap,
     };
     run_session_picker_with_loader(
         tui,
@@ -362,6 +380,7 @@ async fn run_session_picker_with_loader(
     );
     state.density = options.initial_density;
     state.view_persistence = options.view_persistence;
+    state.pager_keymap = options.pager_keymap;
     state.start_initial_load();
     state.request_frame();
 
@@ -371,6 +390,10 @@ async fn run_session_picker_with_loader(
     loop {
         tokio::select! {
             Some(ev) = tui_events.next() => {
+                if state.overlay.is_some() {
+                    state.handle_overlay_event(alt.tui, ev)?;
+                    continue;
+                }
                 match ev {
                     TuiEvent::Key(key) => {
                         if matches!(key.kind, KeyEventKind::Release) {
@@ -410,6 +433,12 @@ fn picker_provider_filter(config: &Config, is_remote: bool) -> ProviderFilter {
     }
 }
 
+fn picker_pager_keymap(config: &Config) -> Result<PagerKeymap> {
+    RuntimeKeymap::from_config(&config.tui_keymap)
+        .map(|keymap| keymap.pager)
+        .map_err(|err| color_eyre::eyre::eyre!("invalid keymap configuration: {err}"))
+}
+
 fn picker_cwd_filter(
     config_cwd: &Path,
     show_all: bool,
@@ -447,7 +476,7 @@ fn spawn_app_server_page_loader(
                         include_non_interactive,
                     )
                     .await;
-                    let _ = bg_tx.send(BackgroundEvent::PageLoaded {
+                    let _ = bg_tx.send(BackgroundEvent::Page {
                         request_token: request.request_token,
                         search_token: request.search_token,
                         page,
@@ -455,7 +484,14 @@ fn spawn_app_server_page_loader(
                 }
                 PickerLoadRequest::Preview { thread_id } => {
                     let preview = load_transcript_preview(&mut app_server, thread_id).await;
-                    let _ = bg_tx.send(BackgroundEvent::PreviewLoaded { thread_id, preview });
+                    let _ = bg_tx.send(BackgroundEvent::Preview { thread_id, preview });
+                }
+                PickerLoadRequest::Transcript { thread_id } => {
+                    let transcript = load_session_transcript(&mut app_server, thread_id).await;
+                    let _ = bg_tx.send(BackgroundEvent::Transcript {
+                        thread_id,
+                        transcript,
+                    });
                 }
             }
         }
@@ -522,6 +558,10 @@ struct PickerState {
     inline_error: Option<String>,
     expanded_thread_id: Option<ThreadId>,
     transcript_previews: HashMap<ThreadId, TranscriptPreviewState>,
+    transcript_cells: HashMap<ThreadId, SessionTranscriptState>,
+    pending_transcript_open: Option<ThreadId>,
+    overlay: Option<Overlay>,
+    pager_keymap: PagerKeymap,
 }
 
 struct PaginationState {
@@ -553,6 +593,12 @@ enum SearchState {
 enum TranscriptPreviewState {
     Loading,
     Loaded(Vec<TranscriptPreviewLine>),
+    Failed,
+}
+
+enum SessionTranscriptState {
+    Loading,
+    Loaded(TranscriptCells),
     Failed,
 }
 
@@ -779,11 +825,57 @@ impl PickerState {
             inline_error: None,
             expanded_thread_id: None,
             transcript_previews: HashMap::new(),
+            transcript_cells: HashMap::new(),
+            pending_transcript_open: None,
+            overlay: None,
+            pager_keymap: RuntimeKeymap::defaults().pager,
         }
     }
 
     fn request_frame(&self) {
         self.requester.schedule_frame();
+    }
+
+    fn handle_overlay_event(&mut self, tui: &mut Tui, event: TuiEvent) -> Result<()> {
+        let Some(overlay) = &mut self.overlay else {
+            return Ok(());
+        };
+        overlay.handle_event(tui, event)?;
+        if overlay.is_done() {
+            self.overlay = None;
+            self.request_frame();
+        }
+        Ok(())
+    }
+
+    fn open_selected_transcript(&mut self) {
+        let Some(row) = self.filtered_rows.get(self.selected) else {
+            return;
+        };
+        let Some(thread_id) = row.thread_id else {
+            self.inline_error = Some("No transcript available for this session".to_string());
+            self.request_frame();
+            return;
+        };
+
+        match self.transcript_cells.get(&thread_id) {
+            Some(SessionTranscriptState::Loaded(cells)) => {
+                self.overlay = Some(Overlay::new_transcript(
+                    cells.clone(),
+                    self.pager_keymap.clone(),
+                ));
+                self.request_frame();
+            }
+            Some(SessionTranscriptState::Loading) => {
+                self.pending_transcript_open = Some(thread_id);
+            }
+            Some(SessionTranscriptState::Failed) | None => {
+                self.transcript_cells
+                    .insert(thread_id, SessionTranscriptState::Loading);
+                self.pending_transcript_open = Some(thread_id);
+                (self.picker_loader)(PickerLoadRequest::Transcript { thread_id });
+            }
+        }
     }
 
     async fn handle_key(&mut self, key: KeyEvent) -> Result<Option<SessionSelection>> {
@@ -808,15 +900,22 @@ impl PickerState {
                 code: KeyCode::Char('t'),
                 modifiers,
                 ..
-            } if modifiers.contains(KeyModifiers::CONTROL) => {
+            } if modifiers.contains(KeyModifiers::ALT) && !modifiers.contains(KeyModifiers::CONTROL) => {
                 self.toggle_density().await;
+            }
+            KeyEvent {
+                code: KeyCode::Char('t'),
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.open_selected_transcript();
             }
             KeyEvent {
                 code: KeyCode::Char('\u{0014}'),
                 modifiers: KeyModifiers::NONE,
                 ..
             } /* ^T */ => {
-                self.toggle_density().await;
+                self.open_selected_transcript();
             }
             KeyEvent {
                 code: KeyCode::Char('o'),
@@ -1019,7 +1118,7 @@ impl PickerState {
 
     async fn handle_background_event(&mut self, event: BackgroundEvent) -> Result<()> {
         match event {
-            BackgroundEvent::PageLoaded {
+            BackgroundEvent::Page {
                 request_token,
                 search_token,
                 page,
@@ -1037,7 +1136,7 @@ impl PickerState {
                 let completed_token = pending.search_token.or(search_token);
                 self.continue_search_if_token_matches(completed_token);
             }
-            BackgroundEvent::PreviewLoaded { thread_id, preview } => {
+            BackgroundEvent::Preview { thread_id, preview } => {
                 self.transcript_previews.insert(
                     thread_id,
                     match preview {
@@ -1047,6 +1146,31 @@ impl PickerState {
                 );
                 self.request_frame();
             }
+            BackgroundEvent::Transcript {
+                thread_id,
+                transcript,
+            } => match transcript {
+                Ok(cells) => {
+                    let should_open = self.pending_transcript_open == Some(thread_id);
+                    self.transcript_cells
+                        .insert(thread_id, SessionTranscriptState::Loaded(cells.clone()));
+                    if should_open {
+                        self.pending_transcript_open = None;
+                        self.overlay =
+                            Some(Overlay::new_transcript(cells, self.pager_keymap.clone()));
+                    }
+                    self.request_frame();
+                }
+                Err(_) => {
+                    self.transcript_cells
+                        .insert(thread_id, SessionTranscriptState::Failed);
+                    if self.pending_transcript_open == Some(thread_id) {
+                        self.pending_transcript_open = None;
+                        self.inline_error = Some("Could not load transcript preview".to_string());
+                    }
+                    self.request_frame();
+                }
+            },
         }
         Ok(())
     }
@@ -1560,7 +1684,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
 
         // Header
         let header_title = if default_bg().is_some_and(is_light) {
-            state.action.title().bold().fg(Color::Indexed(22))
+            state.action.title().bold().green()
         } else {
             state.action.title().bold().cyan()
         };
@@ -1761,22 +1885,28 @@ fn hint_line(state: &PickerState, width: u16) -> Line<'static> {
             priority: 8,
         },
         PickerFooterHint {
-            key: "ctrl+t",
+            key: "alt+t",
             wide_label: density_label.to_string(),
             compact_label: density_compact_label.to_string(),
             priority: 3,
         },
         PickerFooterHint {
+            key: "ctrl+t",
+            wide_label: String::from("transcript"),
+            compact_label: String::from("preview"),
+            priority: 4,
+        },
+        PickerFooterHint {
             key: "space",
             wide_label: String::from("expand"),
             compact_label: String::from("exp"),
-            priority: 5,
+            priority: 6,
         },
         PickerFooterHint {
             key: "↑/↓",
             wide_label: String::from("browse"),
             compact_label: String::from("browse"),
-            priority: 6,
+            priority: 5,
         },
     ]
     .into_iter()
@@ -2182,19 +2312,23 @@ fn dense_columns(width: usize) -> DenseColumns {
 }
 
 fn dense_zebra_style() -> Style {
-    if default_bg().is_some_and(is_light) {
-        Style::default().bg(Color::Rgb(238, 238, 238))
-    } else {
-        Style::default().bg(Color::Rgb(28, 28, 28))
-    }
+    dense_row_background_style(/*selected*/ false)
 }
 
 fn dense_selected_style() -> Style {
-    if default_bg().is_some_and(is_light) {
-        selected_session_style().bg(Color::Rgb(220, 220, 220))
+    selected_session_style().patch(dense_row_background_style(/*selected*/ true))
+}
+
+fn dense_row_background_style(selected: bool) -> Style {
+    let Some(bg) = default_bg() else {
+        return Style::default();
+    };
+    let (overlay, alpha) = if is_light(bg) {
+        ((0, 0, 0), if selected { 0.12 } else { 0.04 })
     } else {
-        selected_session_style().bg(Color::Rgb(48, 48, 48))
-    }
+        ((255, 255, 255), if selected { 0.12 } else { 0.055 })
+    };
+    Style::default().bg(best_color(blend(overlay, bg, alpha)))
 }
 
 fn dense_column_text(text: &str, width: usize) -> String {
@@ -3166,7 +3300,7 @@ mod tests {
         );
 
         assert!(
-            hint_line(&state, /*width*/ 160)
+            hint_line(&state, /*width*/ 220)
                 .to_string()
                 .contains("esc start new")
         );
@@ -3174,7 +3308,7 @@ mod tests {
         state.query = String::from("picker");
 
         assert!(
-            hint_line(&state, /*width*/ 160)
+            hint_line(&state, /*width*/ 220)
                 .to_string()
                 .contains("esc clear search")
         );
@@ -3193,9 +3327,14 @@ mod tests {
         );
 
         assert!(
-            hint_line(&state, /*width*/ 160)
+            hint_line(&state, /*width*/ 220)
                 .to_string()
-                .contains("ctrl+t dense view")
+                .contains("alt+t dense view")
+        );
+        assert!(
+            hint_line(&state, /*width*/ 220)
+                .to_string()
+                .contains("ctrl+t transcript")
         );
 
         state.density = SessionListDensity::Dense;
@@ -3203,7 +3342,7 @@ mod tests {
         assert!(
             hint_line(&state, /*width*/ 220)
                 .to_string()
-                .contains("ctrl+t comfortable view")
+                .contains("alt+t comfortable view")
         );
     }
 
@@ -3219,12 +3358,13 @@ mod tests {
             SessionPickerAction::Resume,
         );
 
-        let rendered = hint_line(&state, /*width*/ 96).to_string();
+        let rendered = hint_line(&state, /*width*/ 120).to_string();
 
         assert!(rendered.contains("esc new"));
         assert!(rendered.contains("tab focus"));
         assert!(rendered.contains("←/→ option"));
-        assert!(rendered.contains("ctrl+t dense"));
+        assert!(rendered.contains("alt+t dense"));
+        assert!(rendered.contains("ctrl+t preview"));
         assert!(!rendered.contains("focus sort/filter"));
     }
 
@@ -3242,7 +3382,7 @@ mod tests {
 
         assert_snapshot!(
             "resume_picker_footer_wide",
-            hint_line(&state, /*width*/ 160).to_string()
+            hint_line(&state, /*width*/ 220).to_string()
         );
     }
 
@@ -3287,13 +3427,14 @@ mod tests {
         assert!(rendered.contains("enter"));
         assert!(rendered.contains("esc"));
         assert!(rendered.contains("ctrl+c"));
+        assert!(rendered.contains("alt+t"));
         assert!(rendered.contains("ctrl+t"));
-        assert!(rendered.contains("space"));
         assert!(rendered.contains("↑/↓"));
+        assert!(!rendered.contains("space"));
     }
 
     #[tokio::test]
-    async fn ctrl_t_toggles_density_without_typing_into_search() {
+    async fn alt_t_toggles_density_without_typing_into_search() {
         let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
@@ -3306,7 +3447,7 @@ mod tests {
         state.query = String::from("pick");
 
         state
-            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL))
+            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT))
             .await
             .unwrap();
 
@@ -3315,7 +3456,154 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ctrl_t_persists_density_preference() {
+    async fn ctrl_t_requests_selected_session_transcript() {
+        let thread_id = ThreadId::new();
+        let recorded_requests: Arc<Mutex<Vec<ThreadId>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader: PickerLoader = Arc::new(move |request| {
+            if let PickerLoadRequest::Transcript { thread_id } = request {
+                request_sink.lock().unwrap().push(thread_id);
+            }
+        });
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.filtered_rows = vec![Row {
+            path: None,
+            preview: String::from("preview"),
+            thread_id: Some(thread_id),
+            thread_name: None,
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+        }];
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert_eq!(state.density, SessionListDensity::Comfortable);
+        assert_eq!(*recorded_requests.lock().unwrap(), vec![thread_id]);
+        assert_eq!(state.pending_transcript_open, Some(thread_id));
+        assert!(matches!(
+            state.transcript_cells.get(&thread_id),
+            Some(SessionTranscriptState::Loading)
+        ));
+    }
+
+    #[tokio::test]
+    async fn raw_ctrl_t_requests_selected_session_transcript() {
+        let thread_id = ThreadId::new();
+        let recorded_requests: Arc<Mutex<Vec<ThreadId>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader: PickerLoader = Arc::new(move |request| {
+            if let PickerLoadRequest::Transcript { thread_id } = request {
+                request_sink.lock().unwrap().push(thread_id);
+            }
+        });
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.filtered_rows = vec![Row {
+            path: None,
+            preview: String::from("preview"),
+            thread_id: Some(thread_id),
+            thread_name: None,
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+        }];
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('\u{0014}'), KeyModifiers::NONE))
+            .await
+            .unwrap();
+
+        assert_eq!(*recorded_requests.lock().unwrap(), vec![thread_id]);
+    }
+
+    #[tokio::test]
+    async fn ctrl_t_on_row_without_thread_id_shows_inline_error() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.filtered_rows = vec![Row {
+            path: Some(PathBuf::from("/tmp/a.jsonl")),
+            preview: String::from("preview"),
+            thread_id: None,
+            thread_name: None,
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+        }];
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            state.inline_error.as_deref(),
+            Some("No transcript available for this session")
+        );
+    }
+
+    #[tokio::test]
+    async fn loaded_transcript_opens_overlay_when_requested() {
+        use crate::history_cell::PlainHistoryCell;
+
+        let thread_id = ThreadId::new();
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.pending_transcript_open = Some(thread_id);
+        let cells: TranscriptCells =
+            vec![Arc::new(PlainHistoryCell::new(vec!["transcript".into()]))];
+
+        state
+            .handle_background_event(BackgroundEvent::Transcript {
+                thread_id,
+                transcript: Ok(cells),
+            })
+            .await
+            .unwrap();
+
+        assert!(matches!(state.overlay, Some(Overlay::Transcript(_))));
+        assert_eq!(state.pending_transcript_open, None);
+        assert!(matches!(
+            state.transcript_cells.get(&thread_id),
+            Some(SessionTranscriptState::Loaded(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn alt_t_persists_density_preference() {
         let tmp = tempdir().expect("tmpdir");
         let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
@@ -3332,7 +3620,7 @@ mod tests {
         });
 
         state
-            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL))
+            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT))
             .await
             .unwrap();
 
@@ -3348,7 +3636,7 @@ session_picker_view = "dense"
     }
 
     #[tokio::test]
-    async fn ctrl_t_persists_density_preference_for_active_profile() {
+    async fn alt_t_persists_density_preference_for_active_profile() {
         let tmp = tempdir().expect("tmpdir");
         let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
@@ -3365,7 +3653,7 @@ session_picker_view = "dense"
         });
 
         state
-            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL))
+            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT))
             .await
             .unwrap();
 
@@ -3381,7 +3669,7 @@ session_picker_view = "dense"
     }
 
     #[tokio::test]
-    async fn ctrl_t_keeps_toggled_density_when_persistence_fails() {
+    async fn alt_t_keeps_toggled_density_when_persistence_fails() {
         let tmp = tempdir().expect("tmpdir");
         let codex_home_file = tmp.path().join("codex-home-file");
         std::fs::write(&codex_home_file, "not a directory").expect("write codex home file");
@@ -3400,7 +3688,7 @@ session_picker_view = "dense"
         });
 
         state
-            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL))
+            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT))
             .await
             .unwrap();
 
@@ -4357,6 +4645,70 @@ session_picker_view = "dense"
         assert_eq!(row.thread_name, Some(String::from("Named thread")));
     }
 
+    #[test]
+    fn thread_to_transcript_cells_renders_core_message_types() {
+        use transcript::thread_to_transcript_cells;
+
+        let thread_id = ThreadId::new();
+        let thread = Thread {
+            id: thread_id.to_string(),
+            forked_from_id: None,
+            preview: String::from("preview"),
+            ephemeral: false,
+            model_provider: String::from("openai"),
+            created_at: 1,
+            updated_at: 2,
+            status: codex_app_server_protocol::ThreadStatus::Idle,
+            path: None,
+            cwd: test_path_buf("/tmp").abs(),
+            cli_version: String::from("0.0.0"),
+            source: codex_app_server_protocol::SessionSource::Cli,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: None,
+            turns: vec![codex_app_server_protocol::Turn {
+                id: String::from("turn-1"),
+                items: vec![
+                    ThreadItem::UserMessage {
+                        id: String::from("user-1"),
+                        content: vec![codex_app_server_protocol::UserInput::Text {
+                            text: String::from("hello from user"),
+                            text_elements: Vec::new(),
+                        }],
+                    },
+                    ThreadItem::AgentMessage {
+                        id: String::from("agent-1"),
+                        text: String::from("hello from assistant"),
+                        phase: None,
+                        memory_citation: None,
+                    },
+                    ThreadItem::Plan {
+                        id: String::from("plan-1"),
+                        text: String::from("1. Do the thing"),
+                    },
+                ],
+                status: codex_app_server_protocol::TurnStatus::Completed,
+                error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            }],
+        };
+
+        let rendered = thread_to_transcript_cells(&thread)
+            .into_iter()
+            .flat_map(|cell| cell.transcript_lines(/*width*/ 80))
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("hello from user"));
+        assert!(rendered.contains("hello from assistant"));
+        assert!(rendered.contains("Proposed Plan"));
+        assert!(rendered.contains("Do the thing"));
+    }
+
     #[tokio::test]
     async fn moving_to_last_card_scrolls_when_cards_exceed_viewport() {
         let loader = page_only_loader(|_| {});
@@ -4552,7 +4904,7 @@ session_picker_view = "dense"
         };
 
         state
-            .handle_background_event(BackgroundEvent::PageLoaded {
+            .handle_background_event(BackgroundEvent::Page {
                 request_token: first_request.request_token,
                 search_token: first_request.search_token,
                 page: Ok(page(
@@ -4574,7 +4926,7 @@ session_picker_view = "dense"
         assert!(state.filtered_rows.is_empty());
 
         state
-            .handle_background_event(BackgroundEvent::PageLoaded {
+            .handle_background_event(BackgroundEvent::Page {
                 request_token: second_request.request_token,
                 search_token: second_request.search_token,
                 page: Ok(page(
@@ -4603,7 +4955,7 @@ session_picker_view = "dense"
         };
 
         state
-            .handle_background_event(BackgroundEvent::PageLoaded {
+            .handle_background_event(BackgroundEvent::Page {
                 request_token: second_request.request_token,
                 search_token: second_request.search_token,
                 page: Ok(page(
@@ -4618,7 +4970,7 @@ session_picker_view = "dense"
         assert_eq!(recorded_requests.lock().unwrap().len(), 1);
 
         state
-            .handle_background_event(BackgroundEvent::PageLoaded {
+            .handle_background_event(BackgroundEvent::Page {
                 request_token: active_request.request_token,
                 search_token: active_request.search_token,
                 page: Ok(page(
