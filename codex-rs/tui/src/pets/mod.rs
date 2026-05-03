@@ -1,17 +1,20 @@
 //! Ambient terminal pets configured from the /pets slash command.
 //!
-//! The Codex app stores custom pets under $CODEX_HOME/pets/<pet-id>/pet.json.
+//! The Codex app stores default pets as bundled spritesheet assets and custom pets under
+//! $CODEX_HOME/pets/<pet-id>/pet.json.
 //! This module keeps that package shape intact while rendering the selected pet inline in the TUI.
 
 use std::io::Write;
 
-use anyhow::Context;
-use anyhow::Result;
 mod ambient;
+mod catalog;
 mod frames;
 mod image_protocol;
 mod model;
 mod picker;
+
+use anyhow::Context;
+use anyhow::Result;
 
 pub(crate) use ambient::AmbientPet;
 pub(crate) use ambient::AmbientPetDraw;

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -7,6 +8,8 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use serde::Deserialize;
+
+use super::catalog;
 
 #[derive(Debug, Clone)]
 pub struct Animation {
@@ -30,58 +33,20 @@ pub struct Pet {
 }
 
 impl Pet {
-    pub(super) fn load(value: &str) -> Result<Self> {
-        Self::load_with_codex_home(
-            value,
-            crate::legacy_core::config::find_codex_home()
-                .ok()
-                .as_deref(),
-        )
-    }
-
     pub(super) fn load_with_codex_home(value: &str, codex_home: Option<&Path>) -> Result<Self> {
-        let pet_dir = resolve_pet_dir(value, codex_home)?;
-        let config_path = pet_dir.join("pet.json");
-        let raw = fs::read_to_string(&config_path)
-            .with_context(|| format!("read {}", config_path.display()))?;
-        let mut file: PetFile = serde_json::from_str(&raw)
-            .with_context(|| format!("parse {}", config_path.display()))?;
-
-        if file.id.is_empty() {
-            file.id = pet_dir
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("pet")
-                .to_string();
-        }
-        if file.display_name.is_empty() {
-            file.display_name.clone_from(&file.id);
-        }
-        if file.spritesheet_path.is_empty() {
-            file.spritesheet_path = "spritesheet.webp".to_string();
+        if path_like(value) {
+            return load_pet_path(value);
         }
 
-        let frame = file.frame.unwrap_or_default();
-        let spritesheet_path = if Path::new(&file.spritesheet_path).is_absolute() {
-            PathBuf::from(&file.spritesheet_path)
-        } else {
-            pet_dir.join(&file.spritesheet_path)
-        };
-        if !spritesheet_path.exists() {
-            bail!("missing spritesheet {}", spritesheet_path.display());
+        if let Some(custom_id) = value.strip_prefix(CUSTOM_PET_PREFIX) {
+            return load_custom_pet(custom_id, codex_home);
         }
 
-        Ok(Self {
-            id: file.id,
-            display_name: file.display_name,
-            description: file.description,
-            spritesheet_path,
-            frame_width: frame.width,
-            frame_height: frame.height,
-            columns: frame.columns,
-            rows: frame.rows,
-            animations: load_animations(file.animations),
-        })
+        if let Some(builtin) = catalog::builtin_pet(value) {
+            return load_builtin_pet(builtin);
+        }
+
+        load_custom_pet(value, codex_home)
     }
 
     pub fn frame_count(&self) -> usize {
@@ -89,16 +54,18 @@ impl Pet {
     }
 }
 
+pub(super) const CUSTOM_PET_PREFIX: &str = "custom:";
+
 #[derive(Debug, Deserialize)]
 struct PetFile {
     #[serde(default)]
-    id: String,
+    id: Option<String>,
     #[serde(default, rename = "displayName")]
-    display_name: String,
+    display_name: Option<String>,
     #[serde(default)]
-    description: String,
+    description: Option<String>,
     #[serde(default, rename = "spritesheetPath")]
-    spritesheet_path: String,
+    spritesheet_path: Option<String>,
     frame: Option<FrameSpec>,
     #[serde(default)]
     animations: HashMap<String, AnimationSpec>,
@@ -115,12 +82,16 @@ struct FrameSpec {
 impl Default for FrameSpec {
     fn default() -> Self {
         Self {
-            width: 192,
-            height: 208,
-            columns: 8,
-            rows: 9,
+            width: catalog::DEFAULT_FRAME_WIDTH,
+            height: catalog::DEFAULT_FRAME_HEIGHT,
+            columns: catalog::DEFAULT_FRAME_COLUMNS,
+            rows: catalog::DEFAULT_FRAME_ROWS,
         }
     }
+}
+
+pub(super) fn custom_pet_selector(id: &str) -> String {
+    format!("{CUSTOM_PET_PREFIX}{id}")
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,37 +105,160 @@ struct AnimationSpec {
     fallback: String,
 }
 
-fn resolve_pet_dir(value: &str, codex_home: Option<&Path>) -> Result<PathBuf> {
-    if path_like(value) {
-        let path = expand_path(value)?;
-        let metadata =
-            fs::metadata(&path).with_context(|| format!("pet path {}", path.display()))?;
-        let dir = if metadata.is_dir() {
-            path
-        } else {
-            path.parent()
-                .context("pet json path has no containing directory")?
-                .to_path_buf()
-        };
-        return dir
-            .canonicalize()
-            .with_context(|| format!("resolve {}", dir.display()));
+fn load_builtin_pet(pet: catalog::BuiltinPet) -> Result<Pet> {
+    let spritesheet_path = catalog::builtin_spritesheet_path(pet.spritesheet_file);
+    if !spritesheet_path.exists() {
+        bail!("missing spritesheet {}", spritesheet_path.display());
     }
 
-    Ok(resolve_named_pet_dir(value, codex_home))
+    Ok(Pet {
+        id: pet.id.to_string(),
+        display_name: pet.display_name.to_string(),
+        description: pet.description.to_string(),
+        spritesheet_path,
+        frame_width: catalog::DEFAULT_FRAME_WIDTH,
+        frame_height: catalog::DEFAULT_FRAME_HEIGHT,
+        columns: catalog::DEFAULT_FRAME_COLUMNS,
+        rows: catalog::DEFAULT_FRAME_ROWS,
+        animations: default_animations(),
+    })
 }
 
-fn resolve_named_pet_dir(value: &str, codex_home: Option<&Path>) -> PathBuf {
-    if let Some(codex_home) = codex_home {
-        let installed_pet = codex_home.join("pets").join(value);
-        if installed_pet.join("pet.json").is_file() {
-            return installed_pet;
-        }
+fn load_custom_pet(value: &str, codex_home: Option<&Path>) -> Result<Pet> {
+    let codex_home = codex_home.context("CODEX_HOME is not available")?;
+    let pet_dir = codex_home.join("pets").join(value);
+    if pet_dir.join("pet.json").is_file() {
+        return load_pet_manifest(&pet_dir, "pet.json", value, &custom_pet_cache_id(value));
     }
 
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("pets")
-        .join(value)
+    let avatar_dir = codex_home.join("avatars").join(value);
+    if avatar_dir.join("avatar.json").is_file() {
+        return load_pet_manifest(
+            &avatar_dir,
+            "avatar.json",
+            value,
+            &custom_pet_cache_id(value),
+        );
+    }
+
+    bail!("unknown pet {value}")
+}
+
+fn load_pet_path(value: &str) -> Result<Pet> {
+    let path = expand_path(value)?;
+    let metadata = fs::metadata(&path).with_context(|| format!("pet path {}", path.display()))?;
+    let dir = if metadata.is_dir() {
+        path
+    } else {
+        path.parent()
+            .context("pet json path has no containing directory")?
+            .to_path_buf()
+    };
+    let pet_dir = dir
+        .canonicalize()
+        .with_context(|| format!("resolve {}", dir.display()))?;
+    let manifest_file = if pet_dir.join("pet.json").is_file() {
+        "pet.json"
+    } else if pet_dir.join("avatar.json").is_file() {
+        "avatar.json"
+    } else {
+        bail!("missing pet.json or avatar.json in {}", pet_dir.display());
+    };
+    let fallback_id = pet_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("pet");
+    load_pet_manifest(&pet_dir, manifest_file, fallback_id, fallback_id)
+}
+
+fn load_pet_manifest(
+    pet_dir: &Path,
+    manifest_file: &str,
+    fallback_id: &str,
+    cache_id: &str,
+) -> Result<Pet> {
+    let config_path = pet_dir.join(manifest_file);
+    let raw = fs::read_to_string(&config_path)
+        .with_context(|| format!("read {}", config_path.display()))?;
+    let file: PetFile =
+        serde_json::from_str(&raw).with_context(|| format!("parse {}", config_path.display()))?;
+
+    let manifest_id = file
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    let display_name = file
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .or(manifest_id)
+        .unwrap_or(fallback_id)
+        .to_string();
+    let pet_id = if cache_id == fallback_id {
+        manifest_id.unwrap_or(fallback_id).to_string()
+    } else {
+        cache_id.to_string()
+    };
+    let description = file
+        .description
+        .map(|description| description.trim().to_string())
+        .unwrap_or_default();
+    let spritesheet_path = resolve_spritesheet_path(
+        pet_dir,
+        file.spritesheet_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .unwrap_or("spritesheet.webp"),
+    )?;
+    if !spritesheet_path.exists() {
+        bail!("missing spritesheet {}", spritesheet_path.display());
+    }
+    validate_app_spritesheet_dimensions(&spritesheet_path)?;
+
+    let frame = file.frame.unwrap_or_default();
+    Ok(Pet {
+        id: pet_id,
+        display_name,
+        description,
+        spritesheet_path,
+        frame_width: frame.width,
+        frame_height: frame.height,
+        columns: frame.columns,
+        rows: frame.rows,
+        animations: load_animations(file.animations),
+    })
+}
+
+fn resolve_spritesheet_path(pet_dir: &Path, spritesheet_path: &str) -> Result<PathBuf> {
+    let path = Path::new(spritesheet_path);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
+    {
+        bail!("spritesheet path must stay inside {}", pet_dir.display());
+    }
+    Ok(pet_dir.join(path))
+}
+
+fn validate_app_spritesheet_dimensions(path: &Path) -> Result<()> {
+    let (width, height) =
+        image::image_dimensions(path).with_context(|| format!("read {}", path.display()))?;
+    if width != catalog::SPRITESHEET_WIDTH || height != catalog::SPRITESHEET_HEIGHT {
+        bail!(
+            "spritesheet must be {}x{} pixels",
+            catalog::SPRITESHEET_WIDTH,
+            catalog::SPRITESHEET_HEIGHT
+        );
+    }
+    Ok(())
+}
+
+fn custom_pet_cache_id(id: &str) -> String {
+    format!("custom-{id}")
 }
 
 fn path_like(value: &str) -> bool {
@@ -277,8 +371,6 @@ fn idle_animation() -> Animation {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
     use super::*;
 
     fn write_minimal_pet() -> tempfile::TempDir {
@@ -293,18 +385,40 @@ mod tests {
             }"#,
         )
         .unwrap();
-        fs::File::create(dir.path().join("spritesheet.webp"))
-            .unwrap()
-            .write_all(b"not-used-by-loader")
-            .unwrap();
+        fs::copy(
+            catalog::builtin_spritesheet_path("codex-spritesheet-v3.webp"),
+            dir.path().join("spritesheet.webp"),
+        )
+        .unwrap();
         dir
     }
 
     #[test]
-    fn load_pet_directory_uses_installed_pet_defaults() {
+    fn load_builtin_pet_uses_app_catalog_storage() {
+        let codex_home = tempfile::tempdir().unwrap();
+
+        let pet =
+            Pet::load_with_codex_home("dewey", /*codex_home*/ Some(codex_home.path())).unwrap();
+
+        assert_eq!(pet.id, "dewey");
+        assert_eq!(pet.display_name, "Dewey");
+        assert_eq!(pet.description, "A tidy duck for calm workspace days.");
+        assert_eq!(
+            pet.spritesheet_path,
+            catalog::builtin_spritesheet_path("dewey-spritesheet-v3.webp")
+        );
+        assert_eq!(pet.frame_width, 192);
+        assert_eq!(pet.frame_height, 208);
+        assert_eq!(pet.columns, 8);
+        assert_eq!(pet.rows, 9);
+    }
+
+    #[test]
+    fn load_pet_directory_uses_app_pet_manifest_defaults() {
         let dir = write_minimal_pet();
 
-        let pet = Pet::load(dir.path().to_str().unwrap()).unwrap();
+        let pet =
+            Pet::load_with_codex_home(dir.path().to_str().unwrap(), /*codex_home*/ None).unwrap();
 
         assert_eq!(pet.id, "chefito");
         assert_eq!(pet.display_name, "Chefito");
@@ -319,14 +433,18 @@ mod tests {
     fn load_pet_json_path_uses_containing_directory() {
         let dir = write_minimal_pet();
 
-        let pet = Pet::load(dir.path().join("pet.json").to_str().unwrap()).unwrap();
+        let pet = Pet::load_with_codex_home(
+            dir.path().join("pet.json").to_str().unwrap(),
+            /*codex_home*/ None,
+        )
+        .unwrap();
         let expected = dir.path().join("spritesheet.webp").canonicalize().unwrap();
 
         assert_eq!(pet.spritesheet_path, expected);
     }
 
     #[test]
-    fn named_pet_prefers_codex_home_installation() {
+    fn custom_pet_selector_loads_codex_home_pet_manifest() {
         let dir = write_minimal_pet();
         let codex_home = tempfile::tempdir().unwrap();
         let pet_dir = codex_home.path().join("pets").join("chefito");
@@ -338,9 +456,62 @@ mod tests {
         )
         .unwrap();
 
-        let pet = Pet::load_with_codex_home("chefito", Some(codex_home.path())).unwrap();
+        let pet = Pet::load_with_codex_home(
+            &custom_pet_selector("chefito"),
+            /*codex_home*/ Some(codex_home.path()),
+        )
+        .unwrap();
 
-        assert_eq!(pet.id, "chefito");
+        assert_eq!(pet.id, "custom-chefito");
         assert_eq!(pet.spritesheet_path, pet_dir.join("spritesheet.webp"),);
+    }
+
+    #[test]
+    fn custom_pet_selector_falls_back_to_legacy_avatar_manifest() {
+        let dir = write_minimal_pet();
+        let codex_home = tempfile::tempdir().unwrap();
+        let avatar_dir = codex_home.path().join("avatars").join("legacy");
+        fs::create_dir_all(&avatar_dir).unwrap();
+        fs::copy(dir.path().join("pet.json"), avatar_dir.join("avatar.json")).unwrap();
+        fs::copy(
+            dir.path().join("spritesheet.webp"),
+            avatar_dir.join("spritesheet.webp"),
+        )
+        .unwrap();
+
+        let pet = Pet::load_with_codex_home(
+            &custom_pet_selector("legacy"),
+            /*codex_home*/ Some(codex_home.path()),
+        )
+        .unwrap();
+
+        assert_eq!(pet.id, "custom-legacy");
+        assert_eq!(pet.display_name, "Chefito");
+    }
+
+    #[test]
+    fn custom_pet_rejects_spritesheet_path_escape() {
+        let codex_home = tempfile::tempdir().unwrap();
+        let pet_dir = codex_home.path().join("pets").join("escape");
+        fs::create_dir_all(&pet_dir).unwrap();
+        fs::write(
+            pet_dir.join("pet.json"),
+            r#"{
+                "displayName": "Escape",
+                "spritesheetPath": "../spritesheet.webp"
+            }"#,
+        )
+        .unwrap();
+
+        let err = Pet::load_with_codex_home(
+            &custom_pet_selector("escape"),
+            /*codex_home*/ Some(codex_home.path()),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("spritesheet path must stay inside")
+        );
     }
 }

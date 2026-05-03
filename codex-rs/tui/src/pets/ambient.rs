@@ -125,9 +125,11 @@ impl AmbientPet {
         codex_home: &std::path::Path,
         frame_requester: FrameRequester,
     ) -> Result<Self> {
-        let pet =
-            Pet::load_with_codex_home(selected_pet.unwrap_or(DEFAULT_PET_ID), Some(codex_home))
-                .with_context(|| "load ambient pet")?;
+        let pet = Pet::load_with_codex_home(
+            selected_pet.unwrap_or(DEFAULT_PET_ID),
+            /*codex_home*/ Some(codex_home),
+        )
+        .with_context(|| "load ambient pet")?;
         let cache_dir = frames::cache_dir().join("tui-pets").join(&pet.id);
         let frame_dir = cache_dir.join("frames");
         let sixel_dir = cache_dir.join("sixel");

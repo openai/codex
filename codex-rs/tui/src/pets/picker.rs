@@ -1,5 +1,6 @@
 //! Builds the /pets picker dialog for the TUI.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -11,11 +12,15 @@ use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 
 use super::DEFAULT_PET_ID;
 use super::DISABLED_PET_ID;
+use super::catalog;
+use super::model::CUSTOM_PET_PREFIX;
 use super::model::Pet;
+use super::model::custom_pet_selector;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PetPickerEntry {
     selector: String,
+    legacy_selector: Option<String>,
     display_name: String,
     description: Option<String>,
 }
@@ -33,7 +38,8 @@ pub(crate) fn build_pet_picker_params(
         .into_iter()
         .enumerate()
         .map(|(idx, entry)| {
-            let is_current = current_pet == entry.selector;
+            let is_current = current_pet == entry.selector
+                || entry.legacy_selector.as_deref() == Some(current_pet);
             if is_current {
                 initial_selected_idx = Some(idx);
             }
@@ -74,70 +80,65 @@ pub(crate) fn build_pet_picker_params(
 }
 
 fn available_pet_entries(codex_home: &Path) -> Vec<PetPickerEntry> {
-    let mut entries = vec![
-        pet_picker_entry(DEFAULT_PET_ID),
-        pet_picker_entry("boba"),
-        PetPickerEntry {
-            selector: DISABLED_PET_ID.to_string(),
-            display_name: "None".to_string(),
-            description: Some("Disable terminal pets.".to_string()),
-        },
-    ];
-    let pets_dir = codex_home.join("pets");
-    let Ok(children) = fs::read_dir(pets_dir) else {
-        return entries;
-    };
-
-    for child in children.flatten() {
-        let path = child.path();
-        if !path.join("pet.json").is_file() {
-            continue;
-        }
-        let Some(selector) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if selector == DISABLED_PET_ID {
-            continue;
-        }
-        entries.push(pet_picker_entry_from_path(selector, &path));
-    }
+    let mut entries = catalog::BUILTIN_PETS
+        .iter()
+        .map(|pet| PetPickerEntry {
+            selector: pet.id.to_string(),
+            legacy_selector: None,
+            display_name: pet.display_name.to_string(),
+            description: Some(pet.description.to_string()),
+        })
+        .collect::<Vec<_>>();
+    entries.push(PetPickerEntry {
+        selector: DISABLED_PET_ID.to_string(),
+        legacy_selector: None,
+        display_name: "None".to_string(),
+        description: Some("Disable terminal pets.".to_string()),
+    });
+    entries.extend(custom_pet_entries(codex_home));
     entries
 }
 
-fn pet_picker_entry(selector: &str) -> PetPickerEntry {
-    match Pet::load(selector) {
-        Ok(pet) => PetPickerEntry {
-            selector: selector.to_string(),
-            display_name: pet.display_name,
-            description: (!pet.description.is_empty()).then_some(pet.description),
-        },
-        Err(_) => PetPickerEntry {
-            selector: selector.to_string(),
-            display_name: selector.to_string(),
-            description: None,
-        },
+fn custom_pet_entries(codex_home: &Path) -> Vec<PetPickerEntry> {
+    let mut entries_by_selector = HashMap::new();
+    for (directory_name, manifest_file) in [("avatars", "avatar.json"), ("pets", "pet.json")] {
+        let Ok(children) = fs::read_dir(codex_home.join(directory_name)) else {
+            continue;
+        };
+        for child in children.flatten() {
+            let path = child.path();
+            if !path.join(manifest_file).is_file() {
+                continue;
+            }
+            let Some(id) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if id == DISABLED_PET_ID || id.starts_with(CUSTOM_PET_PREFIX) {
+                continue;
+            }
+            let selector = custom_pet_selector(id);
+            let Ok(pet) =
+                Pet::load_with_codex_home(&selector, /*codex_home*/ Some(codex_home))
+            else {
+                continue;
+            };
+            entries_by_selector.insert(
+                selector.clone(),
+                PetPickerEntry {
+                    selector,
+                    legacy_selector: Some(id.to_string()),
+                    display_name: pet.display_name,
+                    description: (!pet.description.is_empty()).then_some(pet.description),
+                },
+            );
+        }
     }
-}
 
-fn pet_picker_entry_from_path(selector: &str, path: &Path) -> PetPickerEntry {
-    match Pet::load(path.to_string_lossy().as_ref()) {
-        Ok(pet) => PetPickerEntry {
-            selector: selector.to_string(),
-            display_name: pet.display_name,
-            description: (!pet.description.is_empty()).then_some(pet.description),
-        },
-        Err(_) => PetPickerEntry {
-            selector: selector.to_string(),
-            display_name: selector.to_string(),
-            description: None,
-        },
-    }
+    entries_by_selector.into_values().collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
     use super::*;
 
     fn write_pet(dir: &Path, folder_name: &str, display_name: &str) {
@@ -155,14 +156,36 @@ mod tests {
             ),
         )
         .unwrap();
-        fs::File::create(pet_dir.join("spritesheet.webp"))
-            .unwrap()
-            .write_all(b"not-used-by-loader")
-            .unwrap();
+        fs::copy(
+            catalog::builtin_spritesheet_path("codex-spritesheet-v3.webp"),
+            pet_dir.join("spritesheet.webp"),
+        )
+        .unwrap();
+    }
+
+    fn write_legacy_avatar(dir: &Path, folder_name: &str, display_name: &str) {
+        let avatar_dir = dir.join("avatars").join(folder_name);
+        fs::create_dir_all(&avatar_dir).unwrap();
+        fs::write(
+            avatar_dir.join("avatar.json"),
+            format!(
+                r#"{{
+                    "displayName": "{display_name}",
+                    "description": "legacy custom pet",
+                    "spritesheetPath": "spritesheet.webp"
+                }}"#
+            ),
+        )
+        .unwrap();
+        fs::copy(
+            catalog::builtin_spritesheet_path("codex-spritesheet-v3.webp"),
+            avatar_dir.join("spritesheet.webp"),
+        )
+        .unwrap();
     }
 
     #[test]
-    fn picker_lists_bundled_and_installed_pets() {
+    fn picker_lists_app_bundled_and_custom_pets() {
         let codex_home = tempfile::tempdir().unwrap();
         write_pet(codex_home.path(), "chefito", "Chefito");
 
@@ -174,9 +197,24 @@ mod tests {
                 .iter()
                 .map(|item| item.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Boba", "Chefito", "Codex", "None"],
+            vec![
+                "BSOD",
+                "Chefito",
+                "Codex",
+                "Dewey",
+                "Fireball",
+                "None",
+                "Null Signal",
+                "Rocky",
+                "Seedy",
+                "Stacky",
+            ],
         );
         assert_eq!(params.initial_selected_idx, Some(1));
+        assert_eq!(
+            params.items[1].search_value.as_deref(),
+            Some("custom:chefito")
+        );
     }
 
     #[test]
@@ -194,8 +232,24 @@ mod tests {
         let codex_home = tempfile::tempdir().unwrap();
         let params = build_pet_picker_params(Some(DISABLED_PET_ID), codex_home.path());
 
-        assert_eq!(params.initial_selected_idx, Some(2));
-        assert_eq!(params.items[2].name, "None");
-        assert!(params.items[2].is_current);
+        assert_eq!(params.initial_selected_idx, Some(4));
+        assert_eq!(params.items[4].name, "None");
+        assert!(params.items[4].is_current);
+    }
+
+    #[test]
+    fn picker_imports_legacy_avatar_manifests() {
+        let codex_home = tempfile::tempdir().unwrap();
+        write_legacy_avatar(codex_home.path(), "legacy", "Legacy");
+
+        let params = build_pet_picker_params(Some("custom:legacy"), codex_home.path());
+        let legacy = params
+            .items
+            .iter()
+            .find(|item| item.name == "Legacy")
+            .unwrap();
+
+        assert!(legacy.is_current);
+        assert_eq!(legacy.search_value.as_deref(), Some("custom:legacy"));
     }
 }
