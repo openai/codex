@@ -4,4 +4,4 @@ expression: "footer_snapshot(&state, 96, 20)"
 ---
 ───────────────────────────────────────────────────────────────────────────────── 0 / 0 · 100% ─
  enter resume   esc clear   ctrl+c quit   tab focus   ←/→ option
- alt+v comfy   ctrl+t preview   space exp   ↑/↓ browse
+ ctrl+o comfy   ctrl+t preview   space exp   ↑/↓ browse
