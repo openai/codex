@@ -97,7 +97,7 @@ use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolName;
-use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
+use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
 use codex_utils_stream_parser::ProposedPlanSegment;
@@ -1170,7 +1170,7 @@ pub(crate) async fn built_tools(
             )
             .await
             .map(|discoverable_tools| {
-                filter_tool_suggest_discoverable_tools_for_client(
+                filter_request_plugin_install_discoverable_tools_for_client(
                     discoverable_tools,
                     turn_context.app_server_client_name.as_deref(),
                 )

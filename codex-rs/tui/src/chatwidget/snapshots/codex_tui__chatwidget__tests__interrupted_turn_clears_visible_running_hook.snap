@@ -1,0 +1,8 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "format!(\"before interrupt:\\n{before_interrupt}after interrupt:\\n{}\",\nactive_hook_blob(&chat))"
+---
+before interrupt:
+• Running PreToolUse hook: checking command policy
+after interrupt:
+<empty>

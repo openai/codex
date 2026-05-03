@@ -8,15 +8,15 @@ use codex_rmcp_client::ElicitationResponse;
 use codex_tools::DiscoverableTool;
 use codex_tools::DiscoverableToolAction;
 use codex_tools::DiscoverableToolType;
-use codex_tools::TOOL_SUGGEST_PERSIST_ALWAYS_VALUE;
-use codex_tools::TOOL_SUGGEST_PERSIST_KEY;
-use codex_tools::TOOL_SUGGEST_TOOL_NAME;
-use codex_tools::ToolSuggestArgs;
-use codex_tools::ToolSuggestResult;
-use codex_tools::all_suggested_connectors_picked_up;
-use codex_tools::build_tool_suggestion_elicitation_request;
-use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
-use codex_tools::verified_connector_suggestion_completed;
+use codex_tools::REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE;
+use codex_tools::REQUEST_PLUGIN_INSTALL_PERSIST_KEY;
+use codex_tools::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
+use codex_tools::RequestPluginInstallArgs;
+use codex_tools::RequestPluginInstallResult;
+use codex_tools::all_requested_connectors_picked_up;
+use codex_tools::build_request_plugin_install_elicitation_request;
+use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
+use codex_tools::verified_connector_install_completed;
 use rmcp::model::RequestId;
 use serde_json::Value;
 use tracing::warn;
@@ -32,9 +32,9 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
-pub struct ToolSuggestHandler;
+pub struct RequestPluginInstallHandler;
 
-impl ToolHandler for ToolSuggestHandler {
+impl ToolHandler for RequestPluginInstallHandler {
     type Output = FunctionToolOutput;
 
     fn kind(&self) -> ToolKind {
@@ -43,7 +43,7 @@ impl ToolHandler for ToolSuggestHandler {
 
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "tool suggestion discovery reads through the session-owned manager guard"
+        reason = "plugin install discovery reads through the session-owned manager guard"
     )]
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
@@ -58,12 +58,12 @@ impl ToolHandler for ToolSuggestHandler {
             ToolPayload::Function { arguments } => arguments,
             _ => {
                 return Err(FunctionCallError::Fatal(format!(
-                    "{TOOL_SUGGEST_TOOL_NAME} handler received unsupported payload"
+                    "{REQUEST_PLUGIN_INSTALL_TOOL_NAME} handler received unsupported payload"
                 )));
             }
         };
 
-        let args: ToolSuggestArgs = parse_arguments(&arguments)?;
+        let args: RequestPluginInstallArgs = parse_arguments(&arguments)?;
         let suggest_reason = args.suggest_reason.trim();
         if suggest_reason.is_empty() {
             return Err(FunctionCallError::RespondToModel(
@@ -72,14 +72,15 @@ impl ToolHandler for ToolSuggestHandler {
         }
         if args.action_type != DiscoverableToolAction::Install {
             return Err(FunctionCallError::RespondToModel(
-                "tool suggestions currently support only action_type=\"install\"".to_string(),
+                "plugin install requests currently support only action_type=\"install\""
+                    .to_string(),
             ));
         }
         if args.tool_type == DiscoverableToolType::Plugin
             && turn.app_server_client_name.as_deref() == Some("codex-tui")
         {
             return Err(FunctionCallError::RespondToModel(
-                "plugin tool suggestions are not available in codex-tui yet".to_string(),
+                "plugin install requests are not available in codex-tui yet".to_string(),
             ));
         }
 
@@ -98,14 +99,14 @@ impl ToolHandler for ToolSuggestHandler {
         )
         .await
         .map(|discoverable_tools| {
-            filter_tool_suggest_discoverable_tools_for_client(
+            filter_request_plugin_install_discoverable_tools_for_client(
                 discoverable_tools,
                 turn.app_server_client_name.as_deref(),
             )
         })
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!(
-                "tool suggestions are unavailable right now: {err}"
+                "plugin install requests are unavailable right now: {err}"
             ))
         })?;
 
@@ -114,12 +115,12 @@ impl ToolHandler for ToolSuggestHandler {
             .find(|tool| tool.tool_type() == args.tool_type && tool.id() == args.tool_id)
             .ok_or_else(|| {
                 FunctionCallError::RespondToModel(format!(
-                    "tool_id must match one of the discoverable tools exposed by {TOOL_SUGGEST_TOOL_NAME}"
+                    "tool_id must match one of the discoverable tools exposed by {REQUEST_PLUGIN_INSTALL_TOOL_NAME}"
                 ))
             })?;
 
-        let request_id = RequestId::String(format!("tool_suggestion_{call_id}").into());
-        let params = build_tool_suggestion_elicitation_request(
+        let request_id = RequestId::String(format!("request_plugin_install_{call_id}").into());
+        let params = build_request_plugin_install_elicitation_request(
             CODEX_APPS_MCP_SERVER_NAME,
             session.conversation_id.to_string(),
             turn.sub_id.clone(),
@@ -131,14 +132,14 @@ impl ToolHandler for ToolSuggestHandler {
             .request_mcp_server_elicitation(turn.as_ref(), request_id, params)
             .await;
         if let Some(response) = response.as_ref() {
-            maybe_persist_tool_suggest_disable(&session, &turn, &tool, response).await;
+            maybe_persist_disabled_install_request(&session, &turn, &tool, response).await;
         }
         let user_confirmed = response
             .as_ref()
             .is_some_and(|response| response.action == ElicitationAction::Accept);
 
         let completed = if user_confirmed {
-            verify_tool_suggestion_completed(&session, &turn, &tool, auth.as_ref()).await
+            verify_request_plugin_install_completed(&session, &turn, &tool, auth.as_ref()).await
         } else {
             false
         };
@@ -149,7 +150,7 @@ impl ToolHandler for ToolSuggestHandler {
                 .await;
         }
 
-        let content = serde_json::to_string(&ToolSuggestResult {
+        let content = serde_json::to_string(&RequestPluginInstallResult {
             completed,
             user_confirmed,
             tool_type: args.tool_type,
@@ -160,7 +161,7 @@ impl ToolHandler for ToolSuggestHandler {
         })
         .map_err(|err| {
             FunctionCallError::Fatal(format!(
-                "failed to serialize {TOOL_SUGGEST_TOOL_NAME} response: {err}"
+                "failed to serialize {REQUEST_PLUGIN_INSTALL_TOOL_NAME} response: {err}"
             ))
         })?;
 
@@ -168,17 +169,17 @@ impl ToolHandler for ToolSuggestHandler {
     }
 }
 
-async fn maybe_persist_tool_suggest_disable(
+async fn maybe_persist_disabled_install_request(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
     tool: &DiscoverableTool,
     response: &ElicitationResponse,
 ) {
-    if !tool_suggest_response_requests_persistent_disable(response) {
+    if !request_plugin_install_response_requests_persistent_disable(response) {
         return;
     }
 
-    if let Err(err) = persist_tool_suggest_disable(&turn.config.codex_home, tool).await {
+    if let Err(err) = persist_disabled_install_request(&turn.config.codex_home, tool).await {
         warn!(
             error = %err,
             tool_id = tool.id(),
@@ -190,7 +191,9 @@ async fn maybe_persist_tool_suggest_disable(
     session.reload_user_config_layer().await;
 }
 
-fn tool_suggest_response_requests_persistent_disable(response: &ElicitationResponse) -> bool {
+fn request_plugin_install_response_requests_persistent_disable(
+    response: &ElicitationResponse,
+) -> bool {
     if response.action != ElicitationAction::Decline {
         return false;
     }
@@ -199,24 +202,24 @@ fn tool_suggest_response_requests_persistent_disable(response: &ElicitationRespo
         .meta
         .as_ref()
         .and_then(Value::as_object)
-        .and_then(|meta| meta.get(TOOL_SUGGEST_PERSIST_KEY))
+        .and_then(|meta| meta.get(REQUEST_PLUGIN_INSTALL_PERSIST_KEY))
         .and_then(Value::as_str)
-        == Some(TOOL_SUGGEST_PERSIST_ALWAYS_VALUE)
+        == Some(REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE)
 }
 
-async fn persist_tool_suggest_disable(
+async fn persist_disabled_install_request(
     codex_home: &codex_utils_absolute_path::AbsolutePathBuf,
     tool: &DiscoverableTool,
 ) -> anyhow::Result<()> {
     ConfigEditsBuilder::new(codex_home)
         .with_edits([ConfigEdit::AddToolSuggestDisabledTool(
-            disabled_tool_suggestion(tool),
+            disabled_install_request(tool),
         )])
         .apply()
         .await
 }
 
-fn disabled_tool_suggestion(tool: &DiscoverableTool) -> ToolSuggestDisabledTool {
+fn disabled_install_request(tool: &DiscoverableTool) -> ToolSuggestDisabledTool {
     match tool {
         DiscoverableTool::Connector(connector) => {
             ToolSuggestDisabledTool::connector(connector.id.as_str())
@@ -225,14 +228,14 @@ fn disabled_tool_suggestion(tool: &DiscoverableTool) -> ToolSuggestDisabledTool 
     }
 }
 
-async fn verify_tool_suggestion_completed(
+async fn verify_request_plugin_install_completed(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
     tool: &DiscoverableTool,
     auth: Option<&codex_login::CodexAuth>,
 ) -> bool {
     match tool {
-        DiscoverableTool::Connector(connector) => refresh_missing_suggested_connectors(
+        DiscoverableTool::Connector(connector) => refresh_missing_requested_connectors(
             session,
             turn,
             auth,
@@ -241,17 +244,17 @@ async fn verify_tool_suggestion_completed(
         )
         .await
         .is_some_and(|accessible_connectors| {
-            verified_connector_suggestion_completed(connector.id.as_str(), &accessible_connectors)
+            verified_connector_install_completed(connector.id.as_str(), &accessible_connectors)
         }),
         DiscoverableTool::Plugin(plugin) => {
             session.reload_user_config_layer().await;
             let config = session.get_config().await;
-            let completed = verified_plugin_suggestion_completed(
+            let completed = verified_plugin_install_completed(
                 plugin.id.as_str(),
                 config.as_ref(),
                 session.services.plugins_manager.as_ref(),
             );
-            let _ = refresh_missing_suggested_connectors(
+            let _ = refresh_missing_requested_connectors(
                 session,
                 turn,
                 auth,
@@ -268,7 +271,7 @@ async fn verify_tool_suggestion_completed(
     clippy::await_holding_invalid_type,
     reason = "connector cache refresh reads through the session-owned manager guard"
 )]
-async fn refresh_missing_suggested_connectors(
+async fn refresh_missing_requested_connectors(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
     auth: Option<&codex_login::CodexAuth>,
@@ -285,7 +288,7 @@ async fn refresh_missing_suggested_connectors(
         connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
         &turn.config,
     );
-    if all_suggested_connectors_picked_up(expected_connector_ids, &accessible_connectors) {
+    if all_requested_connectors_picked_up(expected_connector_ids, &accessible_connectors) {
         return Some(accessible_connectors);
     }
 
@@ -304,14 +307,14 @@ async fn refresh_missing_suggested_connectors(
         }
         Err(err) => {
             warn!(
-                "failed to refresh codex apps tools cache after tool suggestion for {tool_id}: {err:#}"
+                "failed to refresh codex apps tools cache after plugin install request for {tool_id}: {err:#}"
             );
             None
         }
     }
 }
 
-fn verified_plugin_suggestion_completed(
+fn verified_plugin_install_completed(
     tool_id: &str,
     config: &crate::config::Config,
     plugins_manager: &codex_core_plugins::PluginsManager,
@@ -327,5 +330,5 @@ fn verified_plugin_suggestion_completed(
 }
 
 #[cfg(test)]
-#[path = "tool_suggest_tests.rs"]
+#[path = "request_plugin_install_tests.rs"]
 mod tests;

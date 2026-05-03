@@ -13,12 +13,12 @@ use crate::DiscoverableTool;
 use crate::DiscoverableToolAction;
 use crate::DiscoverableToolType;
 
-pub const TOOL_SUGGEST_APPROVAL_KIND_VALUE: &str = "tool_suggestion";
-pub const TOOL_SUGGEST_PERSIST_KEY: &str = "persist";
-pub const TOOL_SUGGEST_PERSIST_ALWAYS_VALUE: &str = "always";
+pub const REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE: &str = "tool_suggestion";
+pub const REQUEST_PLUGIN_INSTALL_PERSIST_KEY: &str = "persist";
+pub const REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE: &str = "always";
 
 #[derive(Debug, Deserialize)]
-pub struct ToolSuggestArgs {
+pub struct RequestPluginInstallArgs {
     pub tool_type: DiscoverableToolType,
     pub action_type: DiscoverableToolAction,
     pub tool_id: String,
@@ -26,7 +26,7 @@ pub struct ToolSuggestArgs {
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct ToolSuggestResult {
+pub struct RequestPluginInstallResult {
     pub completed: bool,
     pub user_confirmed: bool,
     pub tool_type: DiscoverableToolType,
@@ -37,7 +37,7 @@ pub struct ToolSuggestResult {
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct ToolSuggestMeta<'a> {
+pub struct RequestPluginInstallMeta<'a> {
     pub codex_approval_kind: &'static str,
     pub persist: &'static str,
     pub tool_type: DiscoverableToolType,
@@ -49,11 +49,11 @@ pub struct ToolSuggestMeta<'a> {
     pub install_url: Option<&'a str>,
 }
 
-pub fn build_tool_suggestion_elicitation_request(
+pub fn build_request_plugin_install_elicitation_request(
     server_name: &str,
     thread_id: String,
     turn_id: String,
-    args: &ToolSuggestArgs,
+    args: &RequestPluginInstallArgs,
     suggest_reason: &str,
     tool: &DiscoverableTool,
 ) -> McpServerElicitationRequestParams {
@@ -66,7 +66,7 @@ pub fn build_tool_suggestion_elicitation_request(
         turn_id: Some(turn_id),
         server_name: server_name.to_string(),
         request: McpServerElicitationRequest::Form {
-            meta: Some(json!(build_tool_suggestion_meta(
+            meta: Some(json!(build_request_plugin_install_meta(
                 args.tool_type,
                 args.action_type,
                 suggest_reason,
@@ -85,16 +85,16 @@ pub fn build_tool_suggestion_elicitation_request(
     }
 }
 
-pub fn all_suggested_connectors_picked_up(
+pub fn all_requested_connectors_picked_up(
     expected_connector_ids: &[String],
     accessible_connectors: &[AppInfo],
 ) -> bool {
     expected_connector_ids.iter().all(|connector_id| {
-        verified_connector_suggestion_completed(connector_id, accessible_connectors)
+        verified_connector_install_completed(connector_id, accessible_connectors)
     })
 }
 
-pub fn verified_connector_suggestion_completed(
+pub fn verified_connector_install_completed(
     tool_id: &str,
     accessible_connectors: &[AppInfo],
 ) -> bool {
@@ -104,17 +104,17 @@ pub fn verified_connector_suggestion_completed(
         .is_some_and(|connector| connector.is_accessible)
 }
 
-fn build_tool_suggestion_meta<'a>(
+fn build_request_plugin_install_meta<'a>(
     tool_type: DiscoverableToolType,
     action_type: DiscoverableToolAction,
     suggest_reason: &'a str,
     tool_id: &'a str,
     tool_name: &'a str,
     install_url: Option<&'a str>,
-) -> ToolSuggestMeta<'a> {
-    ToolSuggestMeta {
-        codex_approval_kind: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
-        persist: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE,
+) -> RequestPluginInstallMeta<'a> {
+    RequestPluginInstallMeta {
+        codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
+        persist: REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE,
         tool_type,
         suggest_type: action_type,
         suggest_reason,
@@ -125,5 +125,5 @@ fn build_tool_suggestion_meta<'a>(
 }
 
 #[cfg(test)]
-#[path = "tool_suggest_tests.rs"]
+#[path = "request_plugin_install_tests.rs"]
 mod tests;

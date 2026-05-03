@@ -22,7 +22,7 @@ use core_test_support::test_codex::test_codex;
 use serde_json::Value;
 
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
-const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
+const REQUEST_PLUGIN_INSTALL_TOOL_NAME: &str = "request_plugin_install";
 const DISCOVERABLE_GMAIL_ID: &str = "connector_68df038e0ba48191908c8434991bbac2";
 
 fn tool_names(body: &Value) -> Vec<String> {
@@ -89,7 +89,8 @@ fn configure_apps_without_search_tool(config: &mut Config, apps_base_url: &str) 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tool_suggest_is_available_without_search_tool_after_discovery_attempts() -> Result<()> {
+async fn request_plugin_install_is_available_without_search_tool_after_discovery_attempts()
+-> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -125,17 +126,22 @@ async fn tool_suggest_is_available_without_search_tool_after_discovery_attempts(
         "tools list should not include {TOOL_SEARCH_TOOL_NAME}: {tools:?}"
     );
     assert!(
-        tools.iter().any(|name| name == TOOL_SUGGEST_TOOL_NAME),
-        "tools list should include {TOOL_SUGGEST_TOOL_NAME}: {tools:?}"
+        tools
+            .iter()
+            .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
+        "tools list should include {REQUEST_PLUGIN_INSTALL_TOOL_NAME}: {tools:?}"
     );
 
     let description =
-        function_tool_description(&body, TOOL_SUGGEST_TOOL_NAME).expect("description");
+        function_tool_description(&body, REQUEST_PLUGIN_INSTALL_TOOL_NAME).expect("description");
     assert!(description.contains(
         "Use this tool only to ask the user to install one known plugin or connector from the list below"
     ));
     assert!(description.contains(
         "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
+    ));
+    assert!(description.contains(
+        "Only use when the user explicitly asks to use that exact listed plugin or connector."
     ));
     assert!(description.contains("IMPORTANT: DO NOT call this tool in parallel with other tools."));
     assert!(!description.contains("tool_search fails to find a good match"));

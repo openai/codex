@@ -55,7 +55,6 @@ use futures::future::FutureExt;
 use futures::future::Shared;
 use rmcp::model::ClientCapabilities;
 use rmcp::model::ElicitationCapability;
-use rmcp::model::FormElicitationCapability;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::ProtocolVersion;
@@ -323,12 +322,7 @@ pub(crate) fn elicitation_capability_for_server(
 ) -> Option<ElicitationCapability> {
     // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
     // indicates this should be an empty object.
-    Some(ElicitationCapability {
-        form: Some(FormElicitationCapability {
-            schema_validation: None,
-        }),
-        url: None,
-    })
+    Some(ElicitationCapability::default())
 }
 
 pub(crate) async fn list_tools_for_client_uncached(

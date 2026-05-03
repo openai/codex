@@ -2220,6 +2220,7 @@ dependencies = [
  "opentelemetry_sdk",
  "pretty_assertions",
  "rand 0.9.3",
+ "rcgen",
  "reqwest",
  "rustls",
  "rustls-native-certs",

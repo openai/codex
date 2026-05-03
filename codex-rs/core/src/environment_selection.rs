@@ -75,6 +75,9 @@ pub(crate) fn resolve_environment_selections(
             environment_id,
             environment,
             cwd: selected_environment.cwd.clone(),
+            // TODO(starr): Resolve shell metadata per environment instead of
+            // hardcoding bash.
+            shell: "bash".to_string(),
         });
     }
 

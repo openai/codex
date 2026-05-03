@@ -2938,6 +2938,12 @@ impl ChatWidget {
     fn finalize_turn(&mut self) {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
+        // Turn-scoped hook rows are transient live state; once the turn is over,
+        // do not leave an orphaned running row behind if no matching completion
+        // event arrived before cancellation.
+        if self.active_hook_cell.take().is_some() {
+            self.bump_active_cell_revision();
+        }
         // Reset running state and clear streaming buffers.
         self.user_turn_pending_start = false;
         self.agent_turn_running = false;

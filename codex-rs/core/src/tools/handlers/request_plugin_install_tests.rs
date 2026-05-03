@@ -22,7 +22,7 @@ use serde_json::json;
 use tempfile::tempdir;
 
 #[tokio::test]
-async fn verified_plugin_suggestion_completed_requires_installed_plugin() {
+async fn verified_plugin_install_completed_requires_installed_plugin() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());
     write_openai_curated_marketplace(&curated_root, &["sample"]);
@@ -32,7 +32,7 @@ async fn verified_plugin_suggestion_completed_requires_installed_plugin() {
     let config = load_plugins_config(codex_home.path()).await;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
-    assert!(!verified_plugin_suggestion_completed(
+    assert!(!verified_plugin_install_completed(
         "sample@openai-curated",
         &config,
         &plugins_manager,
@@ -50,7 +50,7 @@ async fn verified_plugin_suggestion_completed_requires_installed_plugin() {
         .expect("plugin should install");
 
     let refreshed_config = load_plugins_config(codex_home.path()).await;
-    assert!(verified_plugin_suggestion_completed(
+    assert!(verified_plugin_install_completed(
         "sample@openai-curated",
         &refreshed_config,
         &plugins_manager,
@@ -58,43 +58,47 @@ async fn verified_plugin_suggestion_completed_requires_installed_plugin() {
 }
 
 #[test]
-fn tool_suggest_response_persists_only_decline_always_mode() {
-    assert!(tool_suggest_response_requests_persistent_disable(
+fn request_plugin_install_response_persists_only_decline_always_mode() {
+    assert!(request_plugin_install_response_requests_persistent_disable(
         &ElicitationResponse {
             action: ElicitationAction::Decline,
             content: None,
-            meta: Some(json!({ TOOL_SUGGEST_PERSIST_KEY: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE })),
+            meta: Some(json!({
+                REQUEST_PLUGIN_INSTALL_PERSIST_KEY: REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE
+            })),
         }
     ));
-    assert!(!tool_suggest_response_requests_persistent_disable(
-        &ElicitationResponse {
+    assert!(
+        !request_plugin_install_response_requests_persistent_disable(&ElicitationResponse {
             action: ElicitationAction::Accept,
             content: None,
-            meta: Some(json!({ TOOL_SUGGEST_PERSIST_KEY: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE })),
-        }
-    ));
-    assert!(!tool_suggest_response_requests_persistent_disable(
-        &ElicitationResponse {
+            meta: Some(json!({
+                REQUEST_PLUGIN_INSTALL_PERSIST_KEY: REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE
+            })),
+        })
+    );
+    assert!(
+        !request_plugin_install_response_requests_persistent_disable(&ElicitationResponse {
             action: ElicitationAction::Decline,
             content: None,
-            meta: Some(json!({ TOOL_SUGGEST_PERSIST_KEY: "session" })),
-        }
-    ));
-    assert!(!tool_suggest_response_requests_persistent_disable(
-        &ElicitationResponse {
+            meta: Some(json!({ REQUEST_PLUGIN_INSTALL_PERSIST_KEY: "session" })),
+        })
+    );
+    assert!(
+        !request_plugin_install_response_requests_persistent_disable(&ElicitationResponse {
             action: ElicitationAction::Decline,
             content: None,
             meta: None,
-        }
-    ));
+        })
+    );
 }
 
 #[tokio::test]
-async fn persist_tool_suggest_disable_writes_connector_config() {
+async fn persist_disabled_install_request_writes_connector_config() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let tool = connector_tool("connector_calendar", "Google Calendar");
 
-    persist_tool_suggest_disable(&codex_home.path().abs(), &tool)
+    persist_disabled_install_request(&codex_home.path().abs(), &tool)
         .await
         .expect("persist connector disable");
 
@@ -111,7 +115,7 @@ async fn persist_tool_suggest_disable_writes_connector_config() {
 }
 
 #[tokio::test]
-async fn persist_tool_suggest_disable_writes_plugin_config() {
+async fn persist_disabled_install_request_writes_plugin_config() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let tool = DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
         id: "slack@openai-curated".to_string(),
@@ -122,7 +126,7 @@ async fn persist_tool_suggest_disable_writes_plugin_config() {
         app_connector_ids: Vec::new(),
     }));
 
-    persist_tool_suggest_disable(&codex_home.path().abs(), &tool)
+    persist_disabled_install_request(&codex_home.path().abs(), &tool)
         .await
         .expect("persist plugin disable");
 
@@ -139,7 +143,7 @@ async fn persist_tool_suggest_disable_writes_plugin_config() {
 }
 
 #[tokio::test]
-async fn persist_tool_suggest_disable_dedupes_existing_disabled_tools() {
+async fn persist_disabled_install_request_dedupes_existing_disabled_tools() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let tool = connector_tool("connector_calendar", "Google Calendar");
     std::fs::write(
@@ -169,7 +173,7 @@ id = "slack@openai-curated"
     )
     .expect("write config");
 
-    persist_tool_suggest_disable(&codex_home.path().abs(), &tool)
+    persist_disabled_install_request(&codex_home.path().abs(), &tool)
         .await
         .expect("persist connector disable");
 
