@@ -317,6 +317,9 @@ pub(crate) enum AppEvent {
         pet_id: String,
     },
 
+    /// Persist terminal pets as disabled and remove the ambient pet.
+    PetDisabled,
+
     /// Refresh app connector state and mention bindings.
     RefreshConnectors {
         force_refetch: bool,

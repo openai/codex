@@ -20,6 +20,7 @@ pub(crate) use image_protocol::detect_pet_image_support;
 pub(crate) use picker::build_pet_picker_params;
 
 pub(crate) const DEFAULT_PET_ID: &str = "codex";
+pub(crate) const DISABLED_PET_ID: &str = "disabled";
 
 pub(crate) fn render_ambient_pet_image(
     writer: &mut impl Write,

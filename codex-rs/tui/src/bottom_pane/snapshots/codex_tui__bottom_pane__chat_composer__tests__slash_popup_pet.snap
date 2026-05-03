@@ -6,4 +6,4 @@ expression: terminal.backend()
 "› /pet                                                      "
 "                                                            "
 "                                                            "
-"  /pets  choose the terminal pet                            "
+"  /pets  choose or disable the terminal pet                 "

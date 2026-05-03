@@ -1420,6 +1420,17 @@ async fn ambient_pet_defaults_to_codex_and_stays_above_the_footer() {
 
 #[tokio::test]
 #[serial]
+async fn ambient_pet_can_be_disabled() {
+    let _env_guard = supported_pet_image_env();
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_tui_pet(Some(crate::pets::DISABLED_PET_ID.to_string()));
+
+    assert!(chat.ambient_pet.is_none());
+}
+
+#[tokio::test]
+#[serial]
 async fn ambient_pet_draw_uses_terminal_screen_area_not_short_inline_viewport() {
     use ratatui::layout::Rect;
 

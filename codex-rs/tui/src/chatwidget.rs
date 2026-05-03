@@ -10567,6 +10567,10 @@ fn load_ambient_pet(
     config: &Config,
     frame_requester: FrameRequester,
 ) -> Option<crate::pets::AmbientPet> {
+    if config.tui_pet.as_deref() == Some(crate::pets::DISABLED_PET_ID) {
+        return None;
+    }
+
     match crate::pets::AmbientPet::load(
         config.tui_pet.as_deref(),
         &config.codex_home,

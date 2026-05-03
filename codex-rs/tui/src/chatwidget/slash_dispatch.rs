@@ -784,6 +784,14 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot { path: args });
             }
+            SlashCommand::Pets
+                if matches!(
+                    args.trim().to_ascii_lowercase().as_str(),
+                    "disable" | "disabled" | "off" | "none"
+                ) =>
+            {
+                self.app_event_tx.send(AppEvent::PetDisabled);
+            }
             SlashCommand::Pets if !trimmed.is_empty() => {
                 self.select_pet_by_id(args);
             }

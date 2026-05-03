@@ -398,6 +398,24 @@ impl App {
                     }
                 }
             }
+            AppEvent::PetDisabled => {
+                let edit =
+                    crate::legacy_core::config::edit::tui_pet_edit(crate::pets::DISABLED_PET_ID);
+                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([edit])
+                    .apply()
+                    .await;
+                match apply_result {
+                    Ok(()) => {
+                        self.sync_tui_pet_disabled();
+                        tui.frame_requester().schedule_frame();
+                    }
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to disable pets: {err}"));
+                    }
+                }
+            }
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
             }

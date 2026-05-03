@@ -4,11 +4,13 @@ use std::fs;
 use std::path::Path;
 
 use crate::app_event::AppEvent;
+use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 
 use super::DEFAULT_PET_ID;
+use super::DISABLED_PET_ID;
 use super::model::Pet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,17 +38,24 @@ pub(crate) fn build_pet_picker_params(
                 initial_selected_idx = Some(idx);
             }
             let pet_id = entry.selector.clone();
+            let actions: Vec<SelectionAction> = if pet_id == DISABLED_PET_ID {
+                vec![Box::new(|tx| {
+                    tx.send(AppEvent::PetDisabled);
+                })]
+            } else {
+                vec![Box::new(move |tx| {
+                    tx.send(AppEvent::PetSelected {
+                        pet_id: pet_id.clone(),
+                    });
+                })]
+            };
             SelectionItem {
                 name: entry.display_name,
                 description: entry.description,
                 is_current,
                 dismiss_on_select: true,
                 search_value: Some(entry.selector),
-                actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::PetSelected {
-                        pet_id: pet_id.clone(),
-                    });
-                })],
+                actions,
                 ..Default::default()
             }
         })
@@ -65,7 +74,15 @@ pub(crate) fn build_pet_picker_params(
 }
 
 fn available_pet_entries(codex_home: &Path) -> Vec<PetPickerEntry> {
-    let mut entries = vec![pet_picker_entry(DEFAULT_PET_ID), pet_picker_entry("boba")];
+    let mut entries = vec![
+        pet_picker_entry(DEFAULT_PET_ID),
+        pet_picker_entry("boba"),
+        PetPickerEntry {
+            selector: DISABLED_PET_ID.to_string(),
+            display_name: "None".to_string(),
+            description: Some("Disable terminal pets.".to_string()),
+        },
+    ];
     let pets_dir = codex_home.join("pets");
     let Ok(children) = fs::read_dir(pets_dir) else {
         return entries;
@@ -79,6 +96,9 @@ fn available_pet_entries(codex_home: &Path) -> Vec<PetPickerEntry> {
         let Some(selector) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
+        if selector == DISABLED_PET_ID {
+            continue;
+        }
         entries.push(pet_picker_entry_from_path(selector, &path));
     }
     entries
@@ -154,7 +174,7 @@ mod tests {
                 .iter()
                 .map(|item| item.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Boba", "Chefito", "Codex"],
+            vec!["Boba", "Chefito", "Codex", "None"],
         );
         assert_eq!(params.initial_selected_idx, Some(1));
     }
@@ -167,5 +187,15 @@ mod tests {
         assert_eq!(params.initial_selected_idx, Some(1));
         assert_eq!(params.items[1].name, "Codex");
         assert!(params.items[1].is_current);
+    }
+
+    #[test]
+    fn picker_marks_disabled_pet_as_current() {
+        let codex_home = tempfile::tempdir().unwrap();
+        let params = build_pet_picker_params(Some(DISABLED_PET_ID), codex_home.path());
+
+        assert_eq!(params.initial_selected_idx, Some(2));
+        assert_eq!(params.items[2].name, "None");
+        assert!(params.items[2].is_current);
     }
 }
