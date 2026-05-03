@@ -836,6 +836,10 @@ impl PickerState {
         self.requester.schedule_frame();
     }
 
+    fn is_transcript_loading(&self) -> bool {
+        self.pending_transcript_open.is_some()
+    }
+
     fn handle_overlay_event(&mut self, tui: &mut Tui, event: TuiEvent) -> Result<()> {
         let Some(overlay) = &mut self.overlay else {
             return Ok(());
@@ -868,18 +872,34 @@ impl PickerState {
             }
             Some(SessionTranscriptState::Loading) => {
                 self.pending_transcript_open = Some(thread_id);
+                self.request_frame();
             }
             Some(SessionTranscriptState::Failed) | None => {
                 self.transcript_cells
                     .insert(thread_id, SessionTranscriptState::Loading);
                 self.pending_transcript_open = Some(thread_id);
                 (self.picker_loader)(PickerLoadRequest::Transcript { thread_id });
+                self.request_frame();
             }
+        }
+    }
+
+    fn handle_transcript_loading_key(&mut self, key: KeyEvent) -> Option<SessionSelection> {
+        match key {
+            KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => Some(SessionSelection::Exit),
+            _ => None,
         }
     }
 
     async fn handle_key(&mut self, key: KeyEvent) -> Result<Option<SessionSelection>> {
         self.inline_error = None;
+        if self.is_transcript_loading() {
+            return Ok(self.handle_transcript_loading_key(key));
+        }
         match key {
             KeyEvent {
                 code: KeyCode::Esc, ..
@@ -1702,6 +1722,9 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             list.height,
         );
         render_list(frame, list, state);
+        if state.is_transcript_loading() {
+            render_transcript_loading_overlay(frame, list);
+        }
 
         // Hint line
         frame.render_widget_ref(hint_line(state, hint.width), hint);
@@ -1835,6 +1858,27 @@ struct PickerFooterHint {
 }
 
 fn hint_line(state: &PickerState, width: u16) -> Line<'static> {
+    if state.is_transcript_loading() {
+        let hints = [
+            PickerFooterHint {
+                key: "loading",
+                wide_label: String::from("transcript"),
+                compact_label: String::from("transcript"),
+                priority: 0,
+            },
+            PickerFooterHint {
+                key: "ctrl+c",
+                wide_label: String::from("quit"),
+                compact_label: String::from("quit"),
+                priority: 1,
+            },
+        ];
+        return fit_footer_hints(&hints, FooterHintLabelMode::Wide, width)
+            .or_else(|| fit_footer_hints(&hints, FooterHintLabelMode::Compact, width))
+            .or_else(|| fit_footer_hints(&hints, FooterHintLabelMode::KeyOnly, width))
+            .unwrap_or_default();
+    }
+
     let action_label = state.action.action_label();
     let esc_label = if state.query.is_empty() {
         "start new"
@@ -1937,6 +1981,30 @@ fn hint_line(state: &PickerState, width: u16) -> Line<'static> {
         }
     }
     Line::default()
+}
+
+fn render_transcript_loading_overlay(frame: &mut crate::custom_terminal::Frame, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let overlay = Rect::new(
+        area.x,
+        area.y + area.height.saturating_sub(1) / 2,
+        area.width,
+        1,
+    );
+    Clear.render(overlay, frame.buffer);
+
+    let message = "Loading transcript…";
+    let message_width = UnicodeWidthStr::width(message) as u16;
+    let x = overlay.x + overlay.width.saturating_sub(message_width) / 2;
+    let line = if overlay.width > 4 {
+        Rect::new(x, overlay.y, message_width.min(overlay.width), 1)
+    } else {
+        overlay
+    };
+    frame.render_widget_ref(Line::from(message.bold()), line);
 }
 
 #[derive(Clone, Copy)]
@@ -3433,6 +3501,26 @@ mod tests {
         assert!(!rendered.contains("space"));
     }
 
+    #[test]
+    fn hint_line_shows_loading_transcript_mode() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.pending_transcript_open = Some(ThreadId::new());
+
+        let rendered = hint_line(&state, /*width*/ 80).to_string();
+
+        assert!(rendered.contains("loading transcript"));
+        assert!(rendered.contains("ctrl+c quit"));
+        assert!(!rendered.contains("enter"));
+    }
+
     #[tokio::test]
     async fn alt_t_toggles_density_without_typing_into_search() {
         let loader = page_only_loader(|_| {});
@@ -3496,6 +3584,141 @@ mod tests {
             state.transcript_cells.get(&thread_id),
             Some(SessionTranscriptState::Loading)
         ));
+    }
+
+    #[tokio::test]
+    async fn transcript_loading_consumes_picker_input() {
+        let loader = page_only_loader(|_| {});
+        let thread_id = ThreadId::new();
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.filtered_rows = vec![
+            Row {
+                path: None,
+                preview: String::from("one"),
+                thread_id: Some(ThreadId::new()),
+                thread_name: None,
+                created_at: None,
+                updated_at: None,
+                cwd: None,
+                git_branch: None,
+            },
+            Row {
+                path: None,
+                preview: String::from("two"),
+                thread_id: Some(ThreadId::new()),
+                thread_name: None,
+                created_at: None,
+                updated_at: None,
+                cwd: None,
+                git_branch: None,
+            },
+        ];
+        state.pending_transcript_open = Some(thread_id);
+
+        let selection = state
+            .handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .unwrap();
+
+        assert!(selection.is_none());
+        assert_eq!(state.selected, 0);
+        assert_eq!(state.query, "");
+
+        let selection = state
+            .handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE))
+            .await
+            .unwrap();
+
+        assert!(selection.is_none());
+        assert_eq!(state.query, "");
+    }
+
+    #[tokio::test]
+    async fn transcript_loading_still_allows_ctrl_c_exit() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.pending_transcript_open = Some(ThreadId::new());
+
+        let selection = state
+            .handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert!(matches!(selection, Some(SessionSelection::Exit)));
+    }
+
+    #[test]
+    fn transcript_loading_overlay_snapshot() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        let thread_id = ThreadId::new();
+        state.pending_transcript_open = Some(thread_id);
+        state.filtered_rows = vec![
+            Row {
+                path: None,
+                preview: String::from("Find pending threads and emails"),
+                thread_id: Some(thread_id),
+                thread_name: None,
+                created_at: None,
+                updated_at: None,
+                cwd: None,
+                git_branch: None,
+            },
+            Row {
+                path: None,
+                preview: String::from("Plan raw scrollback mode"),
+                thread_id: Some(ThreadId::new()),
+                thread_name: None,
+                created_at: None,
+                updated_at: None,
+                cwd: None,
+                git_branch: None,
+            },
+        ];
+        state.update_viewport(/*rows*/ 7, /*width*/ 80);
+
+        let width: u16 = 80;
+        let height: u16 = 7;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            render_list(&mut frame, area, &state);
+            render_transcript_loading_overlay(&mut frame, area);
+        }
+        terminal.flush().expect("flush");
+
+        assert_snapshot!(
+            "resume_picker_transcript_loading_overlay",
+            terminal.backend().to_string()
+        );
     }
 
     #[tokio::test]
