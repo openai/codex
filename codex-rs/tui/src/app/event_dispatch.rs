@@ -381,6 +381,23 @@ impl App {
             AppEvent::OpenUrlInBrowser { url } => {
                 self.open_url_in_browser(url);
             }
+            AppEvent::PetSelected { pet_id } => {
+                let edit = crate::legacy_core::config::edit::tui_pet_edit(&pet_id);
+                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([edit])
+                    .apply()
+                    .await;
+                match apply_result {
+                    Ok(()) => {
+                        self.sync_tui_pet_selection(pet_id);
+                        tui.frame_requester().schedule_frame();
+                    }
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to save pet selection: {err}"));
+                    }
+                }
+            }
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
             }

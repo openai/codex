@@ -695,6 +695,12 @@ pub struct Tui {
     #[serde(default)]
     pub theme: Option<String>,
 
+    /// Pet id to preselect in the terminal pet picker.
+    ///
+    /// Custom pet ids resolve against CODEX_HOME/pets/<pet-id>/pet.json.
+    #[serde(default)]
+    pub pet: Option<String>,
+
     /// Preferred layout for resume/fork session picker results.
     #[serde(default)]
     pub session_picker_view: Option<SessionPickerViewMode>,

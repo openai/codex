@@ -75,6 +75,14 @@ fn should_emit_notification(condition: NotificationCondition, terminal_focused: 
     }
 }
 
+impl Drop for Tui {
+    fn drop(&mut self) {
+        if let Err(err) = self.clear_ambient_pet_image() {
+            tracing::debug!(error = %err, "failed to clear ambient pet image on TUI drop");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write as _;
@@ -861,6 +869,21 @@ impl Tui {
                 draw_fn(frame);
             })
         })?
+    }
+
+    pub fn draw_ambient_pet_image(
+        &mut self,
+        request: Option<crate::pets::AmbientPetDraw>,
+    ) -> Result<()> {
+        stdout().sync_update(|_| {
+            crate::pets::render_ambient_pet_image(self.terminal.backend_mut(), request)
+                .map_err(std::io::Error::other)
+        })?
+    }
+
+    pub fn clear_ambient_pet_image(&mut self) -> Result<()> {
+        crate::pets::render_ambient_pet_image(self.terminal.backend_mut(), /*request*/ None)
+            .map_err(std::io::Error::other)
     }
 
     /// Draw a frame using the resize-reflow viewport and history insertion rules.

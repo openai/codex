@@ -312,6 +312,11 @@ pub(crate) enum AppEvent {
         url: String,
     },
 
+    /// Persist a pet selection and reload the ambient pet.
+    PetSelected {
+        pet_id: String,
+    },
+
     /// Refresh app connector state and mention bindings.
     RefreshConnectors {
         force_refetch: bool,

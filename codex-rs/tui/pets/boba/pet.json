@@ -1,0 +1,62 @@
+{
+  "id": "boba",
+  "displayName": "Boba",
+  "description": "A tiny otter sipping bubble tea while keeping you company in Codex.",
+  "spritesheetPath": "spritesheet.webp",
+  "frame": {
+    "width": 192,
+    "height": 208,
+    "columns": 8,
+    "rows": 9
+  },
+  "animations": {
+    "idle": {
+      "frames": [0, 1, 2, 3, 4, 5],
+      "fps": 5
+    },
+    "move_left": {
+      "frames": [8, 9, 10, 11, 12, 13, 14, 15],
+      "fps": 10
+    },
+    "move_right": {
+      "frames": [16, 17, 18, 19, 20, 21, 22, 23],
+      "fps": 10
+    },
+    "wave": {
+      "frames": [24, 25, 26, 27],
+      "fps": 7,
+      "loop": false,
+      "fallback": "idle"
+    },
+    "sit": {
+      "frames": [32, 33, 34, 35, 36],
+      "fps": 6
+    },
+    "sad": {
+      "frames": [40, 41, 42, 43, 44, 45, 46],
+      "fps": 6
+    },
+    "sleep": {
+      "frames": [43, 44, 47],
+      "fps": 3
+    },
+    "sip": {
+      "frames": [48, 49, 50, 51, 52, 53],
+      "fps": 8,
+      "loop": false,
+      "fallback": "idle"
+    },
+    "bounce": {
+      "frames": [56, 57, 58, 59, 60, 61],
+      "fps": 9,
+      "loop": false,
+      "fallback": "idle"
+    },
+    "grumpy": {
+      "frames": [64, 65, 66, 67, 68, 69],
+      "fps": 6,
+      "loop": false,
+      "fallback": "idle"
+    }
+  }
+}

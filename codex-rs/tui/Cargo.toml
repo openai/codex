@@ -73,6 +73,7 @@ diffy = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }
+icy_sixel = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
 pathdiff = { workspace = true }

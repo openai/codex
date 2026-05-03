@@ -549,6 +549,9 @@ pub struct Config {
     /// Syntax highlighting theme override (kebab-case name).
     pub tui_theme: Option<String>,
 
+    /// Pet id preselected by the terminal pet picker.
+    pub tui_pet: Option<String>,
+
     /// Preferred layout for resume/fork session picker results.
     pub tui_session_picker_view: SessionPickerViewMode,
 
@@ -3211,6 +3214,7 @@ impl Config {
                 .unwrap_or(true),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
+            tui_pet: cfg.tui.as_ref().and_then(|t| t.pet.clone()),
             tui_session_picker_view: config_profile
                 .tui
                 .as_ref()

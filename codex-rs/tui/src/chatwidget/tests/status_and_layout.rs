@@ -1352,6 +1352,77 @@ async fn ui_snapshots_small_heights_task_running() {
     }
 }
 
+#[tokio::test]
+async fn ambient_pet_defaults_to_codex_and_stays_above_the_footer() {
+    use ratatui::layout::Rect;
+
+    let (chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    assert_eq!(
+        chat.ambient_pet
+            .as_ref()
+            .map(crate::pets::AmbientPet::selected_pet_id),
+        Some("codex"),
+    );
+
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 60, /*height*/ 20,
+    );
+    let draw = chat
+        .ambient_pet_draw(area)
+        .expect("ambient pet draw request");
+    assert_eq!(draw.x, 51);
+    assert_eq!(draw.y, 10);
+    assert_eq!(draw.columns, 9);
+    assert_eq!(draw.rows, 5);
+}
+
+#[tokio::test]
+async fn ambient_pet_draw_uses_terminal_screen_area_not_short_inline_viewport() {
+    use ratatui::layout::Rect;
+
+    let (chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    assert!(
+        chat.ambient_pet_draw(Rect::new(
+            /*x*/ 0, /*y*/ 21, /*width*/ 80, /*height*/ 3,
+        ))
+        .is_none(),
+        "a normal short inline viewport cannot fit the ambient pet"
+    );
+
+    let draw = chat
+        .ambient_pet_draw(Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 24,
+        ))
+        .expect("full terminal screen has room for the ambient pet");
+    assert_eq!(draw.x, 71);
+    assert_eq!(draw.y, 14);
+}
+
+#[tokio::test]
+async fn ambient_pet_uses_the_app_notification_labels() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    for (kind, label) in [
+        (crate::pets::PetNotificationKind::Running, "Running"),
+        (crate::pets::PetNotificationKind::Waiting, "Needs input"),
+        (crate::pets::PetNotificationKind::Review, "Ready"),
+        (crate::pets::PetNotificationKind::Failed, "Blocked"),
+    ] {
+        chat.set_ambient_pet_notification(kind, /*body*/ None);
+        let mut terminal = Terminal::new(TestBackend::new(60, 20)).expect("create terminal");
+        terminal
+            .draw(|f| chat.render(f.area(), f.buffer_mut()))
+            .expect("draw ambient pet notification");
+        assert!(
+            normalized_backend_snapshot(terminal.backend()).contains(label),
+            "expected {label} notification to render"
+        );
+    }
+}
+
 // Snapshot test: status widget + approval modal active together
 // The modal takes precedence visually; this captures the layout with a running
 // task (status indicator active) while an approval request is shown.

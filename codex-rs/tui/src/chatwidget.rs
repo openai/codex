@@ -742,6 +742,15 @@ pub(crate) struct ChatWidget {
     review: ReviewState,
     // Active hook runs render in a dedicated live cell so they can run alongside tools.
     active_hook_cell: Option<HookCell>,
+    // Ambient companion rendered over the transcript area, never inside the footer rows.
+    ambient_pet: Option<crate::pets::AmbientPet>,
+    // Semantic status used for terminal-title status rendering.
+    terminal_title_status_kind: TerminalTitleStatusKind,
+    // Previous status header to restore after a transient stream retry.
+    retry_status_header: Option<String>,
+    // Set when commentary output completes; once stream queues go idle we restore the status row.
+    pending_status_indicator_restore: bool,
+    suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
     /// Nudge dismissals that should survive draft edits within the current thread scope.
     ///
@@ -2268,6 +2277,10 @@ impl ChatWidget {
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Running,
+            /*body*/ None,
+        );
         self.request_redraw();
     }
 
@@ -2358,6 +2371,10 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
+        if !from_replay {
+            let body = Notification::agent_turn_preview(&notification_response);
+            self.set_ambient_pet_notification(crate::pets::PetNotificationKind::Review, body);
+        }
         self.request_redraw();
 
         let had_pending_steers = !self.input_queue.pending_steers.is_empty();
@@ -2842,6 +2859,10 @@ impl ChatWidget {
         self.input_queue.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
         self.add_to_history(history_cell::new_error_event(message));
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Failed,
+            /*body*/ None,
+        );
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.
@@ -4046,6 +4067,9 @@ impl ChatWidget {
         self.update_due_hook_visibility();
         self.schedule_hook_timer_if_needed();
         self.bottom_pane.pre_draw_tick();
+        if let Some(pet) = self.ambient_pet.as_ref() {
+            pet.schedule_next_frame();
+        }
         self.refresh_plan_mode_nudge();
         self.refresh_goal_status_indicator_for_time_tick();
         if self.terminal_title_shows_action_required() != self.last_terminal_title_requires_action {
@@ -4372,6 +4396,10 @@ impl ChatWidget {
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Waiting,
+            /*body*/ None,
+        );
         self.request_redraw();
     }
 
@@ -4388,6 +4416,10 @@ impl ChatWidget {
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Waiting,
+            /*body*/ None,
+        );
         self.request_redraw();
         self.notify(Notification::EditApprovalRequested {
             cwd: self.config.cwd.to_path_buf(),
@@ -4446,12 +4478,20 @@ impl ChatWidget {
                 }
             }
         }
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Waiting,
+            /*body*/ None,
+        );
         self.request_redraw();
     }
 
     pub(crate) fn push_approval_request(&mut self, request: ApprovalRequest) {
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Waiting,
+            /*body*/ None,
+        );
         self.request_redraw();
     }
 
@@ -4461,6 +4501,10 @@ impl ChatWidget {
     ) {
         self.bottom_pane
             .push_mcp_server_elicitation_request(request);
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Waiting,
+            /*body*/ None,
+        );
         self.request_redraw();
     }
 
@@ -4475,6 +4519,10 @@ impl ChatWidget {
         };
         self.notify(Notification::PlanModePrompt { title });
         self.bottom_pane.push_user_input_request(ev);
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Waiting,
+            /*body*/ None,
+        );
         self.request_redraw();
     }
 
@@ -4489,6 +4537,10 @@ impl ChatWidget {
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Waiting,
+            /*body*/ None,
+        );
         self.request_redraw();
     }
 
@@ -4749,6 +4801,7 @@ impl ChatWidget {
             &chat_keymap.edit_queued_message,
             current_terminal_info,
         );
+        let ambient_pet = load_ambient_pet(&config, frame_requester.clone());
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -4823,6 +4876,11 @@ impl ChatWidget {
             status_state: StatusState::default(),
             review: ReviewState::default(),
             active_hook_cell: None,
+            ambient_pet,
+            terminal_title_status_kind: TerminalTitleStatusKind::Working,
+            retry_status_header: None,
+            pending_status_indicator_restore: false,
+            suppress_queue_autosend: false,
             thread_id: None,
             dismissed_plan_mode_nudge_scopes: HashSet::new(),
             thread_name: None,
@@ -6263,6 +6321,24 @@ impl ChatWidget {
         self.frame_requester.schedule_frame();
     }
 
+    fn set_ambient_pet_notification(
+        &mut self,
+        kind: crate::pets::PetNotificationKind,
+        body: Option<String>,
+    ) {
+        if let Some(pet) = self.ambient_pet.as_mut() {
+            pet.set_notification(kind, body);
+        }
+    }
+
+    pub(crate) fn ambient_pet_draw(&self, area: Rect) -> Option<crate::pets::AmbientPetDraw> {
+        self.bottom_pane.no_modal_or_popup_active().then(|| {
+            self.ambient_pet
+                .as_ref()?
+                .draw_request(area, self.footer_height(area.width))
+        })?
+    }
+
     fn bump_active_cell_revision(&mut self) {
         self.transcript.bump_active_cell_revision();
     }
@@ -6533,6 +6609,14 @@ impl ChatWidget {
             self.config.tui_theme.as_deref(),
             codex_home.as_deref(),
             terminal_width,
+        );
+        self.bottom_pane.show_selection_view(params);
+    }
+
+    fn open_pets_picker(&mut self) {
+        let params = crate::pets::build_pet_picker_params(
+            self.config.tui_pet.as_deref(),
+            &self.config.codex_home,
         );
         self.bottom_pane.show_selection_view(params);
     }
@@ -8860,6 +8944,13 @@ impl ChatWidget {
         self.config.tui_theme = theme;
     }
 
+    /// Set the pet preselected by the TUI picker in the widget's config copy.
+    pub(crate) fn set_tui_pet(&mut self, pet: Option<String>) {
+        self.config.tui_pet = pet;
+        self.ambient_pet = load_ambient_pet(&self.config, self.frame_requester.clone());
+        self.request_redraw();
+    }
+
     /// Set the model in the widget's config copy and stored collaboration mode.
     pub(crate) fn set_model(&mut self, model: &str) {
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
@@ -10439,9 +10530,47 @@ impl Drop for ChatWidget {
     }
 }
 
+fn load_ambient_pet(
+    config: &Config,
+    frame_requester: FrameRequester,
+) -> Option<crate::pets::AmbientPet> {
+    match crate::pets::AmbientPet::load(
+        config.tui_pet.as_deref(),
+        &config.codex_home,
+        frame_requester.clone(),
+    ) {
+        Ok(pet) => Some(pet),
+        Err(err) if config.tui_pet.is_some() => {
+            tracing::warn!(
+                error = %err,
+                "failed to load configured ambient pet; falling back to default"
+            );
+            crate::pets::AmbientPet::load(
+                /*selected_pet*/ None,
+                &config.codex_home,
+                frame_requester,
+            )
+            .map_err(|fallback_err| {
+                tracing::warn!(error = %fallback_err, "failed to load default ambient pet");
+                fallback_err
+            })
+            .ok()
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to load ambient pet");
+            None
+        }
+    }
+}
+
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.as_renderable().render(area, buf);
+        if self.bottom_pane.no_modal_or_popup_active()
+            && let Some(pet) = self.ambient_pet.as_ref()
+        {
+            pet.render_overlay(area, self.footer_height(area.width), buf);
+        }
         self.last_rendered_width.set(Some(area.width as usize));
     }
 
@@ -10455,6 +10584,12 @@ impl Renderable for ChatWidget {
 
     fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
         self.as_renderable().cursor_style(area)
+    }
+}
+
+impl ChatWidget {
+    fn footer_height(&self, width: u16) -> u16 {
+        self.bottom_pane.desired_height(width).saturating_add(1)
     }
 }
 

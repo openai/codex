@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+expression: popup
+---
+  Select Pet
+  Choose a pet to wake in the terminal.
+
+  Type to filter pets...
+  Boba             A tiny otter sipping bubble tea while keeping you company
+                   in Codex.
+› Codex (current)  The original Codex companion.
+
+  Press enter to confirm or esc to go back

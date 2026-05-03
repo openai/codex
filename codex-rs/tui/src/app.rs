@@ -155,6 +155,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::backend::Backend;
+use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -1080,13 +1081,18 @@ See the Codex keymap documentation for supported actions and examples."
         if let Err(err) = app_server.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }
+        let clear_pet_result = tui.clear_ambient_pet_image();
         let clear_result = tui.terminal.clear();
         let exit_reason = match exit_reason_result {
             Ok(exit_reason) => {
+                clear_pet_result?;
                 clear_result?;
                 exit_reason
             }
             Err(err) => {
+                if let Err(clear_pet_err) = clear_pet_result {
+                    tracing::warn!(error = %clear_pet_err, "failed to clear ambient pet image");
+                }
                 if let Err(clear_err) = clear_result {
                     tracing::warn!(error = %clear_err, "failed to clear terminal UI");
                 }
@@ -1173,6 +1179,16 @@ See the Codex keymap documentation for supported actions and examples."
                             }
                         })?;
                     }
+                    let terminal_size = tui.terminal.size()?;
+                    let ambient_pet_area = Rect::new(
+                        /*x*/ 0,
+                        /*y*/ 0,
+                        terminal_size.width,
+                        terminal_size.height,
+                    );
+                    tui.draw_ambient_pet_image(
+                        self.chat_widget.ambient_pet_draw(ambient_pet_area),
+                    )?;
                     if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
                         self.chat_widget
                             .set_external_editor_state(ExternalEditorState::Active);
