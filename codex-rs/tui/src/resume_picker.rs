@@ -70,8 +70,9 @@ const SESSION_META_MAX_CWD_WIDTH: usize = 72;
 const SESSION_META_BRANCH_ICON: &str = "";
 const SESSION_META_CWD_ICON: &str = "⌁";
 const FOOTER_COMPACT_BREAKPOINT: u16 = 120;
-const FOOTER_WIDE_MIN_GAP: usize = 4;
-const FOOTER_COMPACT_MIN_GAP: usize = 2;
+const FOOTER_HINT_LEFT_PADDING: usize = 1;
+const FOOTER_HINT_GAP: usize = 3;
+const PICKER_CHROME_HEIGHT: u16 = 8;
 
 #[derive(Debug, Clone)]
 pub struct SessionTarget {
@@ -405,7 +406,8 @@ async fn run_session_picker_with_loader(
                     }
                     TuiEvent::Draw | TuiEvent::Resize => {
                         if let Ok(size) = alt.tui.terminal.size() {
-                            let list_height = size.height.saturating_sub(6) as usize;
+                            let list_height =
+                                size.height.saturating_sub(PICKER_CHROME_HEIGHT) as usize;
                             state.update_viewport(list_height, size.width);
                             state.ensure_minimum_rows_for_view(list_height);
                         }
@@ -543,6 +545,8 @@ struct PickerState {
     seen_rows: HashSet<SeenRowKey>,
     selected: usize,
     scroll_top: usize,
+    pending_page_down_target: Option<usize>,
+    frozen_footer_percent: Option<u8>,
     query: String,
     search_state: SearchState,
     next_request_token: usize,
@@ -811,6 +815,8 @@ impl PickerState {
             seen_rows: HashSet::new(),
             selected: 0,
             scroll_top: 0,
+            pending_page_down_target: None,
+            frozen_footer_percent: None,
             query: String::new(),
             search_state: SearchState::Idle,
             next_request_token: 0,
@@ -933,6 +939,9 @@ impl PickerState {
         self.inline_error = None;
         if self.is_transcript_loading() {
             return Ok(self.handle_transcript_loading_key(key));
+        }
+        if !matches!(key.code, KeyCode::PageDown) {
+            self.pending_page_down_target = None;
         }
         match key {
             KeyEvent {
@@ -1067,15 +1076,41 @@ impl PickerState {
                 }
             }
             KeyEvent {
+                code: KeyCode::Home,
+                ..
+            } => {
+                if !self.filtered_rows.is_empty() {
+                    self.selected = 0;
+                    self.ensure_selected_visible();
+                    self.request_frame();
+                }
+            }
+            KeyEvent {
+                code: KeyCode::End, ..
+            } => {
+                if !self.filtered_rows.is_empty() {
+                    self.selected = self.filtered_rows.len().saturating_sub(1);
+                    self.ensure_selected_visible();
+                    self.maybe_load_more_for_scroll();
+                    self.request_frame();
+                }
+            }
+            KeyEvent {
                 code: KeyCode::PageDown,
                 ..
             } => {
                 if !self.filtered_rows.is_empty() {
                     let step = self.view_rows.unwrap_or(10).max(1);
+                    let target = self.selected.saturating_add(step);
                     let max_index = self.filtered_rows.len().saturating_sub(1);
-                    self.selected = (self.selected + step).min(max_index);
-                    self.ensure_selected_visible();
-                    self.maybe_load_more_for_scroll();
+                    if target > max_index && self.pagination.next_cursor.is_some() {
+                        self.pending_page_down_target = Some(target);
+                        self.load_more_if_needed(LoadTrigger::Scroll);
+                    } else {
+                        self.selected = target.min(max_index);
+                        self.ensure_selected_visible();
+                        self.maybe_load_more_for_scroll();
+                    }
                     self.request_frame();
                 }
             }
@@ -1143,6 +1178,8 @@ impl PickerState {
         self.filtered_rows.clear();
         self.seen_rows.clear();
         self.selected = 0;
+        self.pending_page_down_target = None;
+        self.frozen_footer_percent = None;
 
         let search_token = if self.query.is_empty() {
             self.search_state = SearchState::Idle;
@@ -1187,6 +1224,7 @@ impl PickerState {
                 self.pagination.loading = LoadingState::Idle;
                 let page = page.map_err(color_eyre::Report::from)?;
                 self.ingest_page(page);
+                self.complete_pending_page_down();
                 let completed_token = pending.search_token.or(search_token);
                 self.continue_search_if_token_matches(completed_token);
             }
@@ -1233,6 +1271,7 @@ impl PickerState {
         self.pagination.num_scanned_files = 0;
         self.pagination.reached_scan_cap = false;
         self.pagination.loading = LoadingState::Idle;
+        self.frozen_footer_percent = None;
     }
 
     fn ingest_page(&mut self, page: PickerPage) {
@@ -1260,6 +1299,27 @@ impl PickerState {
         }
 
         self.apply_filter();
+    }
+
+    fn complete_pending_page_down(&mut self) {
+        let Some(target) = self.pending_page_down_target else {
+            return;
+        };
+        if self.filtered_rows.is_empty() {
+            return;
+        }
+
+        let max_index = self.filtered_rows.len().saturating_sub(1);
+        if target > max_index && self.pagination.next_cursor.is_some() {
+            self.load_more_if_needed(LoadTrigger::Scroll);
+            return;
+        }
+
+        self.pending_page_down_target = None;
+        self.selected = target.min(max_index);
+        self.ensure_selected_visible();
+        self.maybe_load_more_for_scroll();
+        self.request_frame();
     }
 
     fn apply_filter(&mut self) {
@@ -1430,6 +1490,7 @@ impl PickerState {
         let Some(cursor) = self.pagination.next_cursor.clone() else {
             return;
         };
+        self.freeze_footer_percent();
         let request_token = self.allocate_request_token();
         let search_token = match trigger {
             LoadTrigger::Scroll => None,
@@ -1449,6 +1510,11 @@ impl PickerState {
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
         }));
+    }
+
+    fn freeze_footer_percent(&mut self) {
+        let list_height = self.view_rows.unwrap_or_default().min(u16::MAX as usize) as u16;
+        self.frozen_footer_percent = Some(picker_footer_scroll_percent(self, list_height));
     }
 
     fn allocate_request_token(&mut self) -> usize {
@@ -1707,22 +1773,13 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
     let height = tui.terminal.size()?.height;
     tui.draw(height, |frame| {
         let area = frame.area();
-        let [
-            header,
-            _header_gap,
-            search,
-            _search_gap,
-            list,
-            _footer_gap,
-            hint,
-        ] = Layout::vertical([
+        let [header, _header_gap, search, _search_gap, list, footer] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
-            Constraint::Min(area.height.saturating_sub(6)),
-            Constraint::Length(1),
-            Constraint::Length(1),
+            Constraint::Min(area.height.saturating_sub(PICKER_CHROME_HEIGHT)),
+            Constraint::Length(4),
         ])
         .areas(area);
 
@@ -1759,8 +1816,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             render_transcript_loading_overlay(frame, list);
         }
 
-        // Hint line
-        frame.render_widget_ref(hint_line(state, hint.width), hint);
+        render_picker_footer(frame, footer, state, list.height);
     })
 }
 
@@ -1890,7 +1946,121 @@ struct PickerFooterHint {
     priority: u8,
 }
 
-fn hint_line(state: &PickerState, width: u16) -> Line<'static> {
+fn render_picker_footer(
+    frame: &mut crate::custom_terminal::Frame,
+    area: Rect,
+    state: &PickerState,
+    list_height: u16,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let separator = Rect::new(area.x, area.y, area.width, 1);
+    render_picker_footer_separator(
+        frame,
+        separator,
+        picker_footer_progress_label(state, list_height, area.width),
+    );
+
+    let lines = footer_hint_lines(state, area.width);
+    for (idx, line) in lines.into_iter().enumerate() {
+        let y = area.y.saturating_add(1 + idx as u16);
+        if y >= area.bottom() {
+            break;
+        }
+        frame.render_widget_ref(line, Rect::new(area.x, y, area.width, 1));
+    }
+}
+
+fn render_picker_footer_separator(
+    frame: &mut crate::custom_terminal::Frame,
+    area: Rect,
+    progress_label: String,
+) {
+    if area.width == 0 {
+        return;
+    }
+
+    let separator = "─".repeat(area.width as usize);
+    frame.render_widget_ref(Line::from(separator.dim()), area);
+
+    let progress_width = UnicodeWidthStr::width(progress_label.as_str()) as u16;
+    if progress_width < area.width {
+        let percent_area = Rect::new(
+            area.x + area.width - progress_width - 1,
+            area.y,
+            progress_width,
+            1,
+        );
+        frame.render_widget_ref(Line::from(progress_label.dim()), percent_area);
+    }
+}
+
+fn picker_footer_progress_label(state: &PickerState, list_height: u16, width: u16) -> String {
+    let position = if state.filtered_rows.is_empty() {
+        0
+    } else {
+        state.selected.saturating_add(1)
+    };
+    let total = if state.pagination.loading.is_pending() {
+        format!("{}…", state.filtered_rows.len())
+    } else {
+        state.filtered_rows.len().to_string()
+    };
+    let percent = picker_footer_percent(state, list_height);
+    let labels = [
+        format!(" {position} / {total} · {percent}% "),
+        format!(" {position}/{total} · {percent}% "),
+        format!(" {percent}% "),
+    ];
+    labels
+        .into_iter()
+        .find(|label| UnicodeWidthStr::width(label.as_str()) < width as usize)
+        .unwrap_or_default()
+}
+
+fn picker_footer_percent(state: &PickerState, list_height: u16) -> u8 {
+    if state.pagination.loading.is_pending() {
+        return state.frozen_footer_percent.unwrap_or_else(|| {
+            if state.filtered_rows.is_empty() {
+                0
+            } else {
+                picker_footer_scroll_percent(state, list_height)
+            }
+        });
+    }
+
+    picker_footer_scroll_percent(state, list_height)
+}
+
+fn picker_footer_scroll_percent(state: &PickerState, list_height: u16) -> u8 {
+    if state.filtered_rows.is_empty() {
+        return 100;
+    }
+
+    let content_rows = state.available_content_rows(list_height as usize);
+    let total_height =
+        state.rendered_height_between(/*start*/ 0, state.filtered_rows.len() - 1);
+    let max_scroll = total_height.saturating_sub(content_rows);
+    if max_scroll == 0 {
+        return 100;
+    }
+    let remaining_height =
+        state.rendered_height_between(state.scroll_top, state.filtered_rows.len() - 1);
+    if remaining_height <= content_rows {
+        return 100;
+    }
+
+    let skipped_height = if state.scroll_top == 0 {
+        0
+    } else {
+        state.rendered_height_between(/*start*/ 0, state.scroll_top - 1)
+    };
+    (((skipped_height.min(max_scroll)) as f32 / max_scroll as f32) * 100.0).round() as u8
+}
+
+fn footer_hint_lines(state: &PickerState, width: u16) -> Vec<Line<'static>> {
     if state.is_transcript_loading() {
         let hints = [
             PickerFooterHint {
@@ -1906,10 +2076,11 @@ fn hint_line(state: &PickerState, width: u16) -> Line<'static> {
                 priority: 1,
             },
         ];
-        return fit_footer_hints(&hints, FooterHintLabelMode::Wide, width)
+        let line = fit_footer_hints(&hints, FooterHintLabelMode::Wide, width)
             .or_else(|| fit_footer_hints(&hints, FooterHintLabelMode::Compact, width))
             .or_else(|| fit_footer_hints(&hints, FooterHintLabelMode::KeyOnly, width))
             .unwrap_or_default();
+        return vec![line, Line::default()];
     }
 
     let action_label = state.action.action_label();
@@ -1926,7 +2097,7 @@ fn hint_line(state: &PickerState, width: u16) -> Line<'static> {
         SessionListDensity::Comfortable => "dense",
         SessionListDensity::Dense => "comfy",
     };
-    let hints = vec![
+    let first_row_hints = vec![
         PickerFooterHint {
             key: "enter",
             wide_label: action_label.to_string(),
@@ -1961,6 +2132,8 @@ fn hint_line(state: &PickerState, width: u16) -> Line<'static> {
             compact_label: String::from("option"),
             priority: 8,
         },
+    ];
+    let second_row_hints = vec![
         PickerFooterHint {
             key: "alt+v",
             wide_label: density_label.to_string(),
@@ -1985,18 +2158,24 @@ fn hint_line(state: &PickerState, width: u16) -> Line<'static> {
             compact_label: String::from("browse"),
             priority: 5,
         },
+    ];
+
+    vec![
+        hint_line_for_row(&first_row_hints, width),
+        hint_line_for_row(&second_row_hints, width),
     ]
-    .into_iter()
-    .collect::<Vec<_>>();
+}
+
+fn hint_line_for_row(hints: &[PickerFooterHint], width: u16) -> Line<'static> {
     if width >= FOOTER_COMPACT_BREAKPOINT
-        && let Some(line) = fit_footer_hints(&hints, FooterHintLabelMode::Wide, width)
+        && let Some(line) = fit_footer_hints(hints, FooterHintLabelMode::Wide, width)
     {
         return line;
     }
-    if let Some(line) = fit_footer_hints(&hints, FooterHintLabelMode::Compact, width) {
+    if let Some(line) = fit_footer_hints(hints, FooterHintLabelMode::Compact, width) {
         return line;
     }
-    if let Some(line) = fit_footer_hints(&hints, FooterHintLabelMode::KeyOnly, width) {
+    if let Some(line) = fit_footer_hints(hints, FooterHintLabelMode::KeyOnly, width) {
         return line;
     }
 
@@ -2086,27 +2265,15 @@ fn fit_footer_hint_refs(
     mode: FooterHintLabelMode,
     width: u16,
 ) -> Option<Line<'static>> {
-    let min_gap = match mode {
-        FooterHintLabelMode::Wide => FOOTER_WIDE_MIN_GAP,
-        FooterHintLabelMode::Compact | FooterHintLabelMode::KeyOnly => FOOTER_COMPACT_MIN_GAP,
-    };
-    let total_hint_width = footer_hints_width(hints, mode, /*gap_width*/ 0);
-    let gap_count = hints.len().saturating_sub(1);
-    let gap_width = if gap_count == 0 {
-        0
-    } else {
-        let remaining_width = width.saturating_sub(total_hint_width as u16) as usize;
-        if remaining_width >= min_gap * gap_count {
-            remaining_width / gap_count
-        } else {
-            min_gap
-        }
-    };
+    let gap_width = FOOTER_HINT_GAP;
     if footer_hints_width(hints, mode, gap_width) > width as usize {
         return None;
     }
 
-    let mut spans = Vec::new();
+    let mut spans = vec![
+        " ".repeat(FOOTER_HINT_LEFT_PADDING)
+            .set_style(footer_hint_label_style()),
+    ];
     for (idx, hint) in hints.iter().enumerate() {
         if idx > 0 {
             spans.push(" ".repeat(gap_width).set_style(footer_hint_label_style()));
@@ -2146,25 +2313,28 @@ fn footer_hints_width(
     mode: FooterHintLabelMode,
     gap_width: usize,
 ) -> usize {
-    hints
-        .iter()
-        .enumerate()
-        .map(|(idx, hint)| {
-            let label_width = match mode {
-                FooterHintLabelMode::Wide => 1 + UnicodeWidthStr::width(hint.wide_label.as_str()),
-                FooterHintLabelMode::Compact => {
-                    1 + UnicodeWidthStr::width(hint.compact_label.as_str())
+    FOOTER_HINT_LEFT_PADDING
+        + hints
+            .iter()
+            .enumerate()
+            .map(|(idx, hint)| {
+                let label_width = match mode {
+                    FooterHintLabelMode::Wide => {
+                        1 + UnicodeWidthStr::width(hint.wide_label.as_str())
+                    }
+                    FooterHintLabelMode::Compact => {
+                        1 + UnicodeWidthStr::width(hint.compact_label.as_str())
+                    }
+                    FooterHintLabelMode::KeyOnly => 0,
+                };
+                let hint_width = UnicodeWidthStr::width(hint.key) + label_width;
+                if idx == 0 {
+                    hint_width
+                } else {
+                    hint_width + gap_width
                 }
-                FooterHintLabelMode::KeyOnly => 0,
-            };
-            let hint_width = UnicodeWidthStr::width(hint.key) + label_width;
-            if idx == 0 {
-                hint_width
-            } else {
-                hint_width + gap_width
-            }
-        })
-        .sum()
+            })
+            .sum::<usize>()
 }
 
 fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &PickerState) {
@@ -3001,6 +3171,38 @@ mod tests {
         }
     }
 
+    fn footer_lines_text(state: &PickerState, width: u16) -> String {
+        footer_hint_lines(state, width)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn footer_snapshot(state: &PickerState, width: u16, list_height: u16) -> String {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+
+        let backend = VT100Backend::new(width, /*height*/ 4);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, 4));
+
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            render_picker_footer(&mut frame, area, state, list_height);
+        }
+        terminal.flush().expect("flush");
+
+        terminal
+            .backend()
+            .to_string()
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn row_display_preview_prefers_thread_name() {
         let row = Row {
@@ -3425,19 +3627,11 @@ mod tests {
             SessionPickerAction::Resume,
         );
 
-        assert!(
-            hint_line(&state, /*width*/ 220)
-                .to_string()
-                .contains("esc start new")
-        );
+        assert!(footer_lines_text(&state, /*width*/ 220).contains("esc start new"));
 
         state.query = String::from("picker");
 
-        assert!(
-            hint_line(&state, /*width*/ 220)
-                .to_string()
-                .contains("esc clear search")
-        );
+        assert!(footer_lines_text(&state, /*width*/ 220).contains("esc clear search"));
     }
 
     #[test]
@@ -3452,24 +3646,12 @@ mod tests {
             SessionPickerAction::Resume,
         );
 
-        assert!(
-            hint_line(&state, /*width*/ 220)
-                .to_string()
-                .contains("alt+v dense view")
-        );
-        assert!(
-            hint_line(&state, /*width*/ 220)
-                .to_string()
-                .contains("ctrl+t transcript")
-        );
+        assert!(footer_lines_text(&state, /*width*/ 220).contains("alt+v dense view"));
+        assert!(footer_lines_text(&state, /*width*/ 220).contains("ctrl+t transcript"));
 
         state.density = SessionListDensity::Dense;
 
-        assert!(
-            hint_line(&state, /*width*/ 220)
-                .to_string()
-                .contains("alt+v comfortable view")
-        );
+        assert!(footer_lines_text(&state, /*width*/ 220).contains("alt+v comfortable view"));
     }
 
     #[test]
@@ -3484,7 +3666,7 @@ mod tests {
             SessionPickerAction::Resume,
         );
 
-        let rendered = hint_line(&state, /*width*/ 120).to_string();
+        let rendered = footer_lines_text(&state, /*width*/ 119);
 
         assert!(rendered.contains("esc new"));
         assert!(rendered.contains("tab focus"));
@@ -3508,7 +3690,7 @@ mod tests {
 
         assert_snapshot!(
             "resume_picker_footer_wide",
-            hint_line(&state, /*width*/ 220).to_string()
+            footer_snapshot(&state, /*width*/ 220, /*list_height*/ 20)
         );
     }
 
@@ -3528,7 +3710,7 @@ mod tests {
 
         assert_snapshot!(
             "resume_picker_footer_compact",
-            hint_line(&state, /*width*/ 96).to_string()
+            footer_snapshot(&state, /*width*/ 96, /*list_height*/ 20)
         );
     }
 
@@ -3546,17 +3728,20 @@ mod tests {
         state.density = SessionListDensity::Dense;
 
         let width = 38;
-        let line = hint_line(&state, width);
-        let rendered = line.to_string();
+        let lines = footer_hint_lines(&state, width);
+        let rendered = lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
 
-        assert!(line.width() <= width as usize);
+        assert!(lines.iter().all(|line| line.width() <= width as usize));
         assert!(rendered.contains("enter"));
         assert!(rendered.contains("esc"));
         assert!(rendered.contains("ctrl+c"));
         assert!(rendered.contains("alt+v"));
         assert!(rendered.contains("ctrl+t"));
         assert!(rendered.contains("↑/↓"));
-        assert!(!rendered.contains("space"));
     }
 
     #[test]
@@ -3572,11 +3757,151 @@ mod tests {
         );
         state.pending_transcript_open = Some(ThreadId::new());
 
-        let rendered = hint_line(&state, /*width*/ 80).to_string();
+        let rendered = footer_lines_text(&state, /*width*/ 80);
 
         assert!(rendered.contains("loading transcript"));
         assert!(rendered.contains("ctrl+c quit"));
         assert!(!rendered.contains("enter"));
+    }
+
+    #[test]
+    fn picker_footer_percent_reports_scroll_progress() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.filtered_rows = (0..10)
+            .map(|idx| {
+                make_row(
+                    &format!("/tmp/{idx}.jsonl"),
+                    "2026-05-02T12:00:00Z",
+                    &format!("row {idx}"),
+                )
+            })
+            .collect();
+
+        state.scroll_top = 0;
+        assert_eq!(picker_footer_percent(&state, /*list_height*/ 6), 0);
+
+        state.scroll_top = state.filtered_rows.len() - 1;
+        assert_eq!(picker_footer_percent(&state, /*list_height*/ 6), 100);
+    }
+
+    #[test]
+    fn picker_footer_progress_label_shows_position_total_and_percent() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.filtered_rows = (0..10)
+            .map(|idx| {
+                make_row(
+                    &format!("/tmp/{idx}.jsonl"),
+                    "2026-05-02T12:00:00Z",
+                    &format!("row {idx}"),
+                )
+            })
+            .collect();
+        state.selected = 2;
+
+        let label = picker_footer_progress_label(&state, /*list_height*/ 6, /*width*/ 80);
+
+        assert_eq!(label, " 3 / 10 · 0% ");
+        assert!(!label.contains('-'));
+    }
+
+    #[test]
+    fn picker_footer_progress_label_uses_known_count_when_more_pages_exist() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.filtered_rows = (0..10)
+            .map(|idx| {
+                make_row(
+                    &format!("/tmp/{idx}.jsonl"),
+                    "2026-05-02T12:00:00Z",
+                    &format!("row {idx}"),
+                )
+            })
+            .collect();
+        state.selected = 2;
+        state.pagination.next_cursor = Some(PageCursor::AppServer(String::from("cursor-1")));
+
+        let label = picker_footer_progress_label(&state, /*list_height*/ 6, /*width*/ 80);
+
+        assert_eq!(label, " 3 / 10 · 0% ");
+    }
+
+    #[test]
+    fn picker_footer_progress_label_freezes_percent_while_loading() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.filtered_rows = (0..10)
+            .map(|idx| {
+                make_row(
+                    &format!("/tmp/{idx}.jsonl"),
+                    "2026-05-02T12:00:00Z",
+                    &format!("row {idx}"),
+                )
+            })
+            .collect();
+        state.selected = 9;
+        state.scroll_top = 9;
+        state.pagination.next_cursor = Some(PageCursor::AppServer(String::from("cursor-1")));
+        state.pagination.loading = LoadingState::Pending(PendingLoad {
+            request_token: 1,
+            search_token: None,
+        });
+        state.frozen_footer_percent = Some(37);
+
+        let label = picker_footer_progress_label(&state, /*list_height*/ 6, /*width*/ 80);
+
+        assert_eq!(label, " 10 / 10… · 37% ");
+    }
+
+    #[test]
+    fn picker_footer_percent_is_complete_when_not_scrollable() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+
+        assert_eq!(picker_footer_percent(&state, /*list_height*/ 20), 100);
+
+        state.filtered_rows = vec![make_row(
+            "/tmp/1.jsonl",
+            "2026-05-02T12:00:00Z",
+            "single row",
+        )];
+        assert_eq!(picker_footer_percent(&state, /*list_height*/ 20), 100);
     }
 
     #[tokio::test]
@@ -4872,6 +5197,66 @@ session_picker_view = "dense"
             .await
             .unwrap();
         assert_eq!(state.selected, 5);
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(state.selected, 19);
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(state.selected, 0);
+    }
+
+    #[tokio::test]
+    async fn end_jumps_to_last_known_row_and_starts_loading_more() {
+        let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader = page_only_loader(move |req: PageLoadRequest| {
+            request_sink.lock().unwrap().push(req);
+        });
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+
+        let items = (0..10)
+            .map(|idx| {
+                make_row(
+                    &format!("/tmp/{idx}.jsonl"),
+                    "2026-05-02T12:00:00Z",
+                    &format!("row {idx}"),
+                )
+            })
+            .collect();
+        state.reset_pagination();
+        state.ingest_page(page(
+            items,
+            Some("cursor-1"),
+            /*num_scanned_files*/ 10,
+            /*reached_scan_cap*/ false,
+        ));
+        state.update_viewport(/*rows*/ 5, /*width*/ 80);
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE))
+            .await
+            .unwrap();
+
+        assert_eq!(state.selected, 9);
+        assert!(state.pagination.loading.is_pending());
+        assert_eq!(recorded_requests.lock().unwrap().len(), 1);
+        assert_eq!(
+            picker_footer_progress_label(&state, /*list_height*/ 5, /*width*/ 80),
+            " 10 / 10… · 100% "
+        );
     }
 
     #[tokio::test]
