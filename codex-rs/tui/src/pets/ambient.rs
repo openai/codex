@@ -18,6 +18,7 @@ use crate::tui::FrameRequester;
 use super::DEFAULT_PET_ID;
 use super::frames;
 use super::image_protocol::ImageProtocol;
+use super::image_protocol::PetImageSupport;
 use super::image_protocol::ProtocolSelection;
 use super::model::Animation;
 use super::model::Pet;
@@ -110,7 +111,7 @@ pub(crate) struct AmbientPetDraw {
 
 pub(crate) struct AmbientPet {
     pet: Pet,
-    protocol: Option<ImageProtocol>,
+    support: PetImageSupport,
     frames: Vec<PathBuf>,
     sixel_dir: PathBuf,
     frame_requester: FrameRequester,
@@ -133,7 +134,7 @@ impl AmbientPet {
         let frames = frames::prepare_png_frames(&pet, &frame_dir)?;
         Ok(Self {
             pet,
-            protocol: ProtocolSelection::Auto.resolve(),
+            support: ProtocolSelection::Auto.resolve(),
             frames,
             sixel_dir,
             frame_requester,
@@ -148,11 +149,11 @@ impl AmbientPet {
     }
 
     pub(crate) fn image_enabled(&self) -> bool {
-        self.protocol.is_some()
+        self.support.protocol().is_some()
     }
 
     pub(crate) fn schedule_next_frame(&self) {
-        if self.protocol.is_none() {
+        if self.support.protocol().is_none() {
             return;
         }
 
@@ -172,7 +173,7 @@ impl AmbientPet {
     }
 
     pub(crate) fn draw_request(&self, area: Rect, footer_height: u16) -> Option<AmbientPetDraw> {
-        let protocol = self.protocol?;
+        let protocol = self.support.protocol()?;
         let size = self.image_size();
         let notification = self.visible_notification(Instant::now());
         let notification_height = notification.map_or(0, notification_height);
@@ -208,7 +209,7 @@ impl AmbientPet {
 
     pub(crate) fn render_overlay(&self, area: Rect, footer_height: u16, buf: &mut Buffer) {
         let notification = self.visible_notification(Instant::now());
-        let size = self.protocol.map(|_| self.image_size());
+        let size = self.support.protocol().map(|_| self.image_size());
         let notification_height = notification.map_or(0, notification_height);
         let notification_width = notification.map_or(0, notification_width);
         let image_columns = size.map_or(0, |size| size.columns);

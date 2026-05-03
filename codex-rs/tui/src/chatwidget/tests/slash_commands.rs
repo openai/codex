@@ -1,6 +1,50 @@
 use super::*;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use pretty_assertions::assert_eq;
+use serial_test::serial;
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn remove(key: &'static str) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe { std::env::remove_var(key) };
+        Self { key, previous }
+    }
+
+    fn set(key: &'static str, value: &'static str) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe { std::env::set_var(key, value) };
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(value) => unsafe { std::env::set_var(self.key, value) },
+            None => unsafe { std::env::remove_var(self.key) },
+        }
+    }
+}
+
+fn supported_pet_image_env() -> [EnvVarGuard; 6] {
+    [
+        EnvVarGuard::remove("TMUX"),
+        EnvVarGuard::remove("TMUX_PANE"),
+        EnvVarGuard::remove("ZELLIJ"),
+        EnvVarGuard::remove("ZELLIJ_SESSION_NAME"),
+        EnvVarGuard::remove("ZELLIJ_VERSION"),
+        EnvVarGuard::set("KITTY_WINDOW_ID", "test-window"),
+    ]
+}
+
+fn tmux_pet_image_env() -> EnvVarGuard {
+    EnvVarGuard::set("TMUX", "session")
+}
 
 fn fast_tier_command() -> ServiceTierCommand {
     ServiceTierCommand {
@@ -1820,7 +1864,9 @@ async fn slash_resume_with_arg_requests_named_session() {
 }
 
 #[tokio::test]
+#[serial]
 async fn slash_pets_opens_picker() {
+    let _env_guard = supported_pet_image_env();
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.dispatch_command(SlashCommand::Pets);
@@ -1833,7 +1879,9 @@ async fn slash_pets_opens_picker() {
 }
 
 #[tokio::test]
+#[serial]
 async fn slash_pets_with_arg_selects_named_pet() {
+    let _env_guard = supported_pet_image_env();
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.bottom_pane
@@ -1844,6 +1892,46 @@ async fn slash_pets_with_arg_selects_named_pet() {
         rx.try_recv(),
         Ok(AppEvent::PetSelected { pet_id }) if pet_id == "chefito"
     );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+#[serial]
+async fn slash_pets_on_unsupported_terminal_warns_without_picker() {
+    let _env_guard = tmux_pet_image_env();
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Pets);
+
+    assert!(!chat.bottom_pane.has_active_view());
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Pets are disabled in tmux."));
+    assert!(rendered.contains("outside tmux"));
+}
+
+#[tokio::test]
+#[serial]
+async fn slash_pets_with_arg_on_unsupported_terminal_warns_without_selection() {
+    let _env_guard = tmux_pet_image_env();
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.bottom_pane
+        .set_composer_text("/pets chefito".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Pets are disabled in tmux."));
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 

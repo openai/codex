@@ -785,8 +785,7 @@ impl ChatWidget {
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot { path: args });
             }
             SlashCommand::Pets if !trimmed.is_empty() => {
-                self.app_event_tx
-                    .send(AppEvent::PetSelected { pet_id: args });
+                self.select_pet_by_id(args);
             }
             _ => self.dispatch_command(cmd),
         }

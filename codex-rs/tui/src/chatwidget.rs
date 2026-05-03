@@ -6620,11 +6620,33 @@ impl ChatWidget {
     }
 
     fn open_pets_picker(&mut self) {
+        if self.warn_if_pets_unsupported() {
+            return;
+        }
+
         let params = crate::pets::build_pet_picker_params(
             self.config.tui_pet.as_deref(),
             &self.config.codex_home,
         );
         self.bottom_pane.show_selection_view(params);
+    }
+
+    fn select_pet_by_id(&mut self, pet_id: String) {
+        if self.warn_if_pets_unsupported() {
+            return;
+        }
+
+        self.app_event_tx.send(AppEvent::PetSelected { pet_id });
+    }
+
+    fn warn_if_pets_unsupported(&mut self) -> bool {
+        let support = crate::pets::detect_pet_image_support();
+        let Some(message) = support.unsupported_message() else {
+            return false;
+        };
+
+        self.add_warning_message(message.to_string());
+        true
     }
 
     fn status_line_context_window_size(&self) -> Option<i64> {
@@ -9437,6 +9459,11 @@ impl ChatWidget {
 
     pub(crate) fn add_plain_history_lines(&mut self, lines: Vec<Line<'static>>) {
         self.add_boxed_history(Box::new(PlainHistoryCell::new(lines)));
+        self.request_redraw();
+    }
+
+    pub(crate) fn add_warning_message(&mut self, message: String) {
+        self.add_to_history(history_cell::new_warning_event(message));
         self.request_redraw();
     }
 

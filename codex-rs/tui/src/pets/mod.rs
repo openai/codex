@@ -16,6 +16,7 @@ mod picker;
 pub(crate) use ambient::AmbientPet;
 pub(crate) use ambient::AmbientPetDraw;
 pub(crate) use ambient::PetNotificationKind;
+pub(crate) use image_protocol::detect_pet_image_support;
 pub(crate) use picker::build_pet_picker_params;
 
 pub(crate) const DEFAULT_PET_ID: &str = "codex";

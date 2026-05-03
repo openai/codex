@@ -14,6 +14,12 @@ impl EnvVarGuard {
         unsafe { std::env::remove_var(key) };
         Self { key, previous }
     }
+
+    fn set(key: &'static str, value: &'static str) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe { std::env::set_var(key, value) };
+        Self { key, previous }
+    }
 }
 
 impl Drop for EnvVarGuard {
@@ -25,10 +31,14 @@ impl Drop for EnvVarGuard {
     }
 }
 
-fn remove_tmux_env() -> [EnvVarGuard; 2] {
+fn supported_pet_image_env() -> [EnvVarGuard; 6] {
     [
         EnvVarGuard::remove("TMUX"),
         EnvVarGuard::remove("TMUX_PANE"),
+        EnvVarGuard::remove("ZELLIJ"),
+        EnvVarGuard::remove("ZELLIJ_SESSION_NAME"),
+        EnvVarGuard::remove("ZELLIJ_VERSION"),
+        EnvVarGuard::set("KITTY_WINDOW_ID", "test-window"),
     ]
 }
 
@@ -1387,7 +1397,7 @@ async fn ui_snapshots_small_heights_task_running() {
 async fn ambient_pet_defaults_to_codex_and_stays_above_the_footer() {
     use ratatui::layout::Rect;
 
-    let _env_guard = remove_tmux_env();
+    let _env_guard = supported_pet_image_env();
     let (chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     assert_eq!(
         chat.ambient_pet
@@ -1413,7 +1423,7 @@ async fn ambient_pet_defaults_to_codex_and_stays_above_the_footer() {
 async fn ambient_pet_draw_uses_terminal_screen_area_not_short_inline_viewport() {
     use ratatui::layout::Rect;
 
-    let _env_guard = remove_tmux_env();
+    let _env_guard = supported_pet_image_env();
     let (chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     assert!(
@@ -1439,7 +1449,7 @@ async fn ambient_pet_uses_the_app_notification_labels() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    let _env_guard = remove_tmux_env();
+    let _env_guard = supported_pet_image_env();
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     for (kind, label) in [
         (crate::pets::PetNotificationKind::Running, "Running"),

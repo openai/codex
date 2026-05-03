@@ -9,6 +9,10 @@ use anyhow::Result;
 use anyhow::bail;
 use base64::Engine as _;
 use base64::engine::general_purpose;
+use codex_terminal_detection::Multiplexer;
+use codex_terminal_detection::TerminalInfo;
+use codex_terminal_detection::TerminalName;
+use codex_terminal_detection::terminal_info;
 use icy_sixel::BackgroundMode;
 use icy_sixel::PixelAspectRatio;
 use icy_sixel::SixelImage;
@@ -25,6 +29,51 @@ pub enum ImageProtocol {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PetImageSupport {
+    Supported(ImageProtocol),
+    Unsupported(PetImageUnsupportedReason),
+}
+
+impl PetImageSupport {
+    pub(crate) fn protocol(self) -> Option<ImageProtocol> {
+        match self {
+            Self::Supported(protocol) => Some(protocol),
+            Self::Unsupported(_) => None,
+        }
+    }
+
+    pub(crate) fn unsupported_message(self) -> Option<&'static str> {
+        match self {
+            Self::Supported(_) => None,
+            Self::Unsupported(reason) => Some(reason.message()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PetImageUnsupportedReason {
+    Tmux,
+    Zellij,
+    Terminal,
+}
+
+impl PetImageUnsupportedReason {
+    fn message(self) -> &'static str {
+        match self {
+            Self::Tmux => {
+                "Pets are disabled in tmux. Terminal images don’t stay pane-local in tmux and can corrupt scrollback or move between panes. Run Codex outside tmux to use pets."
+            }
+            Self::Zellij => {
+                "Pets are disabled in Zellij. Terminal images don’t stay reliably pane-local in Zellij. Run Codex outside Zellij to use pets."
+            }
+            Self::Terminal => {
+                "Pets aren’t available in this terminal. Terminal pets need image support, and this terminal environment doesn’t expose a supported image protocol. Try a terminal with Kitty graphics or Sixel support, or run Codex outside tmux."
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolSelection {
     Auto,
     Kitty,
@@ -32,11 +81,11 @@ pub enum ProtocolSelection {
 }
 
 impl ProtocolSelection {
-    pub fn resolve(self) -> Option<ImageProtocol> {
+    pub(crate) fn resolve(self) -> PetImageSupport {
         match self {
-            Self::Kitty => Some(ImageProtocol::Kitty),
-            Self::Sixel => Some(ImageProtocol::Sixel),
-            Self::Auto => detect_protocol(),
+            Self::Kitty => PetImageSupport::Supported(ImageProtocol::Kitty),
+            Self::Sixel => PetImageSupport::Supported(ImageProtocol::Sixel),
+            Self::Auto => detect_pet_image_support(),
         }
     }
 }
@@ -54,34 +103,72 @@ impl FromStr for ProtocolSelection {
     }
 }
 
-fn detect_protocol() -> Option<ImageProtocol> {
-    // tmux does not own terminal images as pane-local state. Passing images through tmux can
-    // leave them attached to the outer terminal grid, so pane switches and scrollback replay can
-    // smear or move the pet independently of the TUI. Keep auto mode conservative; explicit
-    // protocol selection can still opt into passthrough once a config surface exists.
+pub(crate) fn detect_pet_image_support() -> PetImageSupport {
     if env::var_os("TMUX").is_some() || env::var_os("TMUX_PANE").is_some() {
-        return None;
+        return PetImageSupport::Unsupported(PetImageUnsupportedReason::Tmux);
     }
 
-    let term = env::var("TERM").unwrap_or_default().to_ascii_lowercase();
-    if env::var_os("KITTY_WINDOW_ID").is_some() || term.contains("kitty") {
-        return Some(ImageProtocol::Kitty);
-    }
-
-    let term_program = env::var("TERM_PROGRAM")
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if term.contains("sixel")
-        || term.contains("mlterm")
-        || term.contains("foot")
-        || env::var_os("WEZTERM_EXECUTABLE").is_some()
-        || term_program.contains("wezterm")
-        || term_program.contains("iterm")
+    if env::var_os("ZELLIJ").is_some()
+        || env::var_os("ZELLIJ_SESSION_NAME").is_some()
+        || env::var_os("ZELLIJ_VERSION").is_some()
     {
-        return Some(ImageProtocol::Sixel);
+        return PetImageSupport::Unsupported(PetImageUnsupportedReason::Zellij);
     }
 
-    Some(ImageProtocol::Kitty)
+    if env::var_os("KITTY_WINDOW_ID").is_some() {
+        return PetImageSupport::Supported(ImageProtocol::Kitty);
+    }
+
+    if env::var_os("WEZTERM_EXECUTABLE").is_some() || env::var_os("WEZTERM_VERSION").is_some() {
+        return PetImageSupport::Supported(ImageProtocol::Sixel);
+    }
+
+    pet_image_support_for_terminal(&terminal_info())
+}
+
+fn pet_image_support_for_terminal(info: &TerminalInfo) -> PetImageSupport {
+    match info.multiplexer {
+        Some(Multiplexer::Tmux { .. }) => {
+            return PetImageSupport::Unsupported(PetImageUnsupportedReason::Tmux);
+        }
+        Some(Multiplexer::Zellij {}) => {
+            return PetImageSupport::Unsupported(PetImageUnsupportedReason::Zellij);
+        }
+        None => {}
+    }
+
+    if supports_kitty_graphics(info) {
+        return PetImageSupport::Supported(ImageProtocol::Kitty);
+    }
+
+    if supports_sixel(info) {
+        return PetImageSupport::Supported(ImageProtocol::Sixel);
+    }
+
+    PetImageSupport::Unsupported(PetImageUnsupportedReason::Terminal)
+}
+
+fn supports_kitty_graphics(info: &TerminalInfo) -> bool {
+    matches!(info.name, TerminalName::Ghostty | TerminalName::Kitty)
+        || terminal_field_contains(info.term.as_deref(), "kitty")
+        || terminal_field_contains(info.term.as_deref(), "ghostty")
+        || terminal_field_contains(info.term_program.as_deref(), "kitty")
+        || terminal_field_contains(info.term_program.as_deref(), "ghostty")
+}
+
+fn supports_sixel(info: &TerminalInfo) -> bool {
+    matches!(info.name, TerminalName::Iterm2 | TerminalName::WezTerm)
+        || terminal_field_contains(info.term.as_deref(), "sixel")
+        || terminal_field_contains(info.term.as_deref(), "mlterm")
+        || terminal_field_contains(info.term.as_deref(), "foot")
+        || terminal_field_contains(info.term_program.as_deref(), "wezterm")
+        || terminal_field_contains(info.term_program.as_deref(), "iterm")
+}
+
+fn terminal_field_contains(value: Option<&str>, needle: &str) -> bool {
+    value
+        .map(|value| value.to_ascii_lowercase().contains(needle))
+        .unwrap_or(false)
 }
 
 pub fn kitty_delete_image(image_id: u32) -> String {
@@ -244,7 +331,10 @@ mod tests {
     fn auto_protocol_is_disabled_inside_tmux() {
         let _guard = TmuxEnvGuard::new(Some("session"));
 
-        assert_eq!(ProtocolSelection::Auto.resolve(), None);
+        assert_eq!(
+            ProtocolSelection::Auto.resolve(),
+            PetImageSupport::Unsupported(PetImageUnsupportedReason::Tmux)
+        );
     }
 
     #[test]
@@ -254,12 +344,132 @@ mod tests {
 
         assert_eq!(
             ProtocolSelection::Kitty.resolve(),
-            Some(ImageProtocol::Kitty)
+            PetImageSupport::Supported(ImageProtocol::Kitty)
         );
         assert_eq!(
             ProtocolSelection::Sixel.resolve(),
-            Some(ImageProtocol::Sixel)
+            PetImageSupport::Supported(ImageProtocol::Sixel)
         );
+    }
+
+    #[test]
+    fn pet_image_support_prefers_multiplexer_safety() {
+        assert_eq!(
+            pet_image_support_for_terminal(&terminal_info_for_test(
+                TerminalName::Ghostty,
+                Some(Multiplexer::Tmux { version: None }),
+                Some("Ghostty"),
+                /*term*/ None,
+            )),
+            PetImageSupport::Unsupported(PetImageUnsupportedReason::Tmux)
+        );
+        assert_eq!(
+            pet_image_support_for_terminal(&terminal_info_for_test(
+                TerminalName::Kitty,
+                Some(Multiplexer::Zellij {}),
+                Some("kitty"),
+                /*term*/ None,
+            )),
+            PetImageSupport::Unsupported(PetImageUnsupportedReason::Zellij)
+        );
+    }
+
+    #[test]
+    fn pet_image_support_detects_kitty_graphics_terminals() {
+        for info in [
+            terminal_info_for_test(
+                TerminalName::Ghostty,
+                /*multiplexer*/ None,
+                Some("Ghostty"),
+                /*term*/ None,
+            ),
+            terminal_info_for_test(
+                TerminalName::Kitty,
+                /*multiplexer*/ None,
+                Some("kitty"),
+                /*term*/ None,
+            ),
+            terminal_info_for_test(
+                TerminalName::Unknown,
+                /*multiplexer*/ None,
+                /*term_program*/ None,
+                Some("xterm-kitty"),
+            ),
+        ] {
+            assert_eq!(
+                pet_image_support_for_terminal(&info),
+                PetImageSupport::Supported(ImageProtocol::Kitty)
+            );
+        }
+    }
+
+    #[test]
+    fn pet_image_support_detects_sixel_terminals() {
+        for info in [
+            terminal_info_for_test(
+                TerminalName::WezTerm,
+                /*multiplexer*/ None,
+                Some("WezTerm"),
+                /*term*/ None,
+            ),
+            terminal_info_for_test(
+                TerminalName::Iterm2,
+                /*multiplexer*/ None,
+                Some("iTerm.app"),
+                /*term*/ None,
+            ),
+            terminal_info_for_test(
+                TerminalName::Unknown,
+                /*multiplexer*/ None,
+                /*term_program*/ None,
+                Some("xterm-sixel"),
+            ),
+            terminal_info_for_test(
+                TerminalName::Unknown,
+                /*multiplexer*/ None,
+                /*term_program*/ None,
+                Some("foot"),
+            ),
+            terminal_info_for_test(
+                TerminalName::Unknown,
+                /*multiplexer*/ None,
+                /*term_program*/ None,
+                Some("mlterm"),
+            ),
+        ] {
+            assert_eq!(
+                pet_image_support_for_terminal(&info),
+                PetImageSupport::Supported(ImageProtocol::Sixel)
+            );
+        }
+    }
+
+    #[test]
+    fn pet_image_support_rejects_unknown_terminals() {
+        assert_eq!(
+            pet_image_support_for_terminal(&terminal_info_for_test(
+                TerminalName::Unknown,
+                /*multiplexer*/ None,
+                /*term_program*/ None,
+                Some("xterm-256color"),
+            )),
+            PetImageSupport::Unsupported(PetImageUnsupportedReason::Terminal)
+        );
+    }
+
+    fn terminal_info_for_test(
+        name: TerminalName,
+        multiplexer: Option<Multiplexer>,
+        term_program: Option<&str>,
+        term: Option<&str>,
+    ) -> TerminalInfo {
+        TerminalInfo {
+            name,
+            term_program: term_program.map(str::to_string),
+            version: /*version*/ None,
+            term: term.map(str::to_string),
+            multiplexer,
+        }
     }
 
     #[test]
