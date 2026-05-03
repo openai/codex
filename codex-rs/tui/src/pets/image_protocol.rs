@@ -32,10 +32,10 @@ pub enum ProtocolSelection {
 }
 
 impl ProtocolSelection {
-    pub fn resolve(self) -> ImageProtocol {
+    pub fn resolve(self) -> Option<ImageProtocol> {
         match self {
-            Self::Kitty => ImageProtocol::Kitty,
-            Self::Sixel => ImageProtocol::Sixel,
+            Self::Kitty => Some(ImageProtocol::Kitty),
+            Self::Sixel => Some(ImageProtocol::Sixel),
             Self::Auto => detect_protocol(),
         }
     }
@@ -54,10 +54,18 @@ impl FromStr for ProtocolSelection {
     }
 }
 
-fn detect_protocol() -> ImageProtocol {
+fn detect_protocol() -> Option<ImageProtocol> {
+    // tmux does not own terminal images as pane-local state. Passing images through tmux can
+    // leave them attached to the outer terminal grid, so pane switches and scrollback replay can
+    // smear or move the pet independently of the TUI. Keep auto mode conservative; explicit
+    // protocol selection can still opt into passthrough once a config surface exists.
+    if env::var_os("TMUX").is_some() || env::var_os("TMUX_PANE").is_some() {
+        return None;
+    }
+
     let term = env::var("TERM").unwrap_or_default().to_ascii_lowercase();
     if env::var_os("KITTY_WINDOW_ID").is_some() || term.contains("kitty") {
-        return ImageProtocol::Kitty;
+        return Some(ImageProtocol::Kitty);
     }
 
     let term_program = env::var("TERM_PROGRAM")
@@ -70,10 +78,10 @@ fn detect_protocol() -> ImageProtocol {
         || term_program.contains("wezterm")
         || term_program.contains("iterm")
     {
-        return ImageProtocol::Sixel;
+        return Some(ImageProtocol::Sixel);
     }
 
-    ImageProtocol::Kitty
+    Some(ImageProtocol::Kitty)
 }
 
 pub fn kitty_delete_image(image_id: u32) -> String {
@@ -228,6 +236,29 @@ mod tests {
         assert_eq!(
             "sixel".parse::<ProtocolSelection>().unwrap(),
             ProtocolSelection::Sixel
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn auto_protocol_is_disabled_inside_tmux() {
+        let _guard = TmuxEnvGuard::new(Some("session"));
+
+        assert_eq!(ProtocolSelection::Auto.resolve(), None);
+    }
+
+    #[test]
+    #[serial]
+    fn explicit_protocol_still_resolves_inside_tmux() {
+        let _guard = TmuxEnvGuard::new(Some("session"));
+
+        assert_eq!(
+            ProtocolSelection::Kitty.resolve(),
+            Some(ImageProtocol::Kitty)
+        );
+        assert_eq!(
+            ProtocolSelection::Sixel.resolve(),
+            Some(ImageProtocol::Sixel)
         );
     }
 

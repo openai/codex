@@ -1,6 +1,36 @@
 use super::*;
 use crate::bottom_pane::goal_status_indicator_line;
 use pretty_assertions::assert_eq;
+use serial_test::serial;
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn remove(key: &'static str) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe { std::env::remove_var(key) };
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(value) => unsafe { std::env::set_var(self.key, value) },
+            None => unsafe { std::env::remove_var(self.key) },
+        }
+    }
+}
+
+fn remove_tmux_env() -> [EnvVarGuard; 2] {
+    [
+        EnvVarGuard::remove("TMUX"),
+        EnvVarGuard::remove("TMUX_PANE"),
+    ]
+}
 
 /// Receiving a token usage update without usage clears the context indicator.
 #[tokio::test]
@@ -1353,9 +1383,11 @@ async fn ui_snapshots_small_heights_task_running() {
 }
 
 #[tokio::test]
+#[serial]
 async fn ambient_pet_defaults_to_codex_and_stays_above_the_footer() {
     use ratatui::layout::Rect;
 
+    let _env_guard = remove_tmux_env();
     let (chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     assert_eq!(
         chat.ambient_pet
@@ -1377,9 +1409,11 @@ async fn ambient_pet_defaults_to_codex_and_stays_above_the_footer() {
 }
 
 #[tokio::test]
+#[serial]
 async fn ambient_pet_draw_uses_terminal_screen_area_not_short_inline_viewport() {
     use ratatui::layout::Rect;
 
+    let _env_guard = remove_tmux_env();
     let (chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     assert!(
@@ -1400,10 +1434,12 @@ async fn ambient_pet_draw_uses_terminal_screen_area_not_short_inline_viewport() 
 }
 
 #[tokio::test]
+#[serial]
 async fn ambient_pet_uses_the_app_notification_labels() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
+    let _env_guard = remove_tmux_env();
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     for (kind, label) in [
         (crate::pets::PetNotificationKind::Running, "Running"),

@@ -110,7 +110,7 @@ pub(crate) struct AmbientPetDraw {
 
 pub(crate) struct AmbientPet {
     pet: Pet,
-    protocol: ImageProtocol,
+    protocol: Option<ImageProtocol>,
     frames: Vec<PathBuf>,
     sixel_dir: PathBuf,
     frame_requester: FrameRequester,
@@ -147,7 +147,15 @@ impl AmbientPet {
         self.animation_started_at = Instant::now();
     }
 
+    pub(crate) fn image_enabled(&self) -> bool {
+        self.protocol.is_some()
+    }
+
     pub(crate) fn schedule_next_frame(&self) {
+        if self.protocol.is_none() {
+            return;
+        }
+
         let animation = self.current_animation();
         if animation.frames.len() <= 1 {
             return;
@@ -164,6 +172,7 @@ impl AmbientPet {
     }
 
     pub(crate) fn draw_request(&self, area: Rect, footer_height: u16) -> Option<AmbientPetDraw> {
+        let protocol = self.protocol?;
         let size = self.image_size();
         let notification = self.visible_notification(Instant::now());
         let notification_height = notification.map_or(0, notification_height);
@@ -182,7 +191,7 @@ impl AmbientPet {
             .saturating_sub(size.rows);
         Some(AmbientPetDraw {
             frame: self.current_frame_path(),
-            protocol: self.protocol,
+            protocol,
             x,
             y,
             columns: size.columns,
@@ -199,12 +208,14 @@ impl AmbientPet {
 
     pub(crate) fn render_overlay(&self, area: Rect, footer_height: u16, buf: &mut Buffer) {
         let notification = self.visible_notification(Instant::now());
-        let size = self.image_size();
+        let size = self.protocol.map(|_| self.image_size());
         let notification_height = notification.map_or(0, notification_height);
         let notification_width = notification.map_or(0, notification_width);
-        let required_height = size.rows.saturating_add(notification_height);
+        let image_columns = size.map_or(0, |size| size.columns);
+        let image_rows = size.map_or(0, |size| size.rows);
+        let required_height = image_rows.saturating_add(notification_height);
         if area.height < required_height.saturating_add(footer_height)
-            || area.width < size.columns.max(notification_width)
+            || area.width < image_columns.max(notification_width)
         {
             return;
         }
@@ -213,11 +224,11 @@ impl AmbientPet {
             let x = area.x
                 + area
                     .width
-                    .saturating_sub(notification_width.max(size.columns));
+                    .saturating_sub(notification_width.max(image_columns));
             let y = area
                 .bottom()
                 .saturating_sub(footer_height)
-                .saturating_sub(size.rows + notification_height);
+                .saturating_sub(image_rows + notification_height);
             render_notification(notification, x, y, buf);
         }
     }

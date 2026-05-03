@@ -1179,16 +1179,18 @@ See the Codex keymap documentation for supported actions and examples."
                             }
                         })?;
                     }
-                    let terminal_size = tui.terminal.size()?;
-                    let ambient_pet_area = Rect::new(
-                        /*x*/ 0,
-                        /*y*/ 0,
-                        terminal_size.width,
-                        terminal_size.height,
-                    );
-                    tui.draw_ambient_pet_image(
-                        self.chat_widget.ambient_pet_draw(ambient_pet_area),
-                    )?;
+                    if self.chat_widget.ambient_pet_image_enabled() {
+                        let terminal_size = tui.terminal.size()?;
+                        let ambient_pet_area = Rect::new(
+                            /*x*/ 0,
+                            /*y*/ 0,
+                            terminal_size.width,
+                            terminal_size.height,
+                        );
+                        tui.draw_ambient_pet_image(
+                            self.chat_widget.ambient_pet_draw(ambient_pet_area),
+                        )?;
+                    }
                     if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
                         self.chat_widget
                             .set_external_editor_state(ExternalEditorState::Active);
