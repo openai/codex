@@ -6,63 +6,26 @@ impl CodexMessageProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadGoalSetParams,
-    ) {
+    ) -> Result<(), JSONRPCErrorError> {
         if !self.config.features.enabled(Feature::Goals) {
-            self.send_invalid_request_error(request_id, "goals feature is disabled".to_string())
-                .await;
-            return;
+            return Err(invalid_request("goals feature is disabled"));
         }
 
-        let thread_id = match parse_thread_id_for_request(params.thread_id.as_str()) {
-            Ok(thread_id) => thread_id,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-        let state_db = match self.state_db_for_materialized_thread(thread_id).await {
-            Ok(state_db) => state_db,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let thread_id = parse_thread_id_for_request(params.thread_id.as_str())?;
+        let state_db = self.state_db_for_materialized_thread(thread_id).await?;
         let running_thread = self.thread_manager.get_thread(thread_id).await.ok();
         let rollout_path = match running_thread.as_ref() {
-            Some(thread) => match thread.rollout_path() {
-                Some(path) => path,
-                None => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("ephemeral thread does not support goals: {thread_id}"),
-                    )
-                    .await;
-                    return;
-                }
-            },
-            None => {
-                match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
-                    .await
-                {
-                    Ok(Some(path)) => path,
-                    Ok(None) => {
-                        self.send_invalid_request_error(
-                            request_id,
-                            format!("thread not found: {thread_id}"),
-                        )
-                        .await;
-                        return;
-                    }
-                    Err(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to locate thread id {thread_id}: {err}"),
-                        )
-                        .await;
-                        return;
-                    }
-                }
-            }
+            Some(thread) => thread.rollout_path().ok_or_else(|| {
+                invalid_request(format!(
+                    "ephemeral thread does not support goals: {thread_id}"
+                ))
+            })?,
+            None => find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
+                .await
+                .map_err(|err| {
+                    internal_error(format!("failed to locate thread id {thread_id}: {err}"))
+                })?
+                .ok_or_else(|| invalid_request(format!("thread not found: {thread_id}")))?,
         };
         reconcile_rollout(
             Some(&state_db),
@@ -84,61 +47,51 @@ impl CodexMessageProcessor {
         let objective = params.objective.as_deref().map(str::trim);
 
         if let Some(objective) = objective {
-            if let Err(message) = validate_thread_goal_objective(objective) {
-                self.send_invalid_request_error(request_id, message).await;
-                return;
-            }
-            if let Err(message) = validate_goal_budget(params.token_budget.flatten()) {
-                self.send_invalid_request_error(request_id, message).await;
-                return;
-            }
-        } else if let Some(token_budget) = params.token_budget
-            && let Err(message) = validate_goal_budget(token_budget)
-        {
-            self.send_invalid_request_error(request_id, message).await;
-            return;
+            validate_thread_goal_objective(objective).map_err(invalid_request)?;
+        }
+        if objective.is_some() || params.token_budget.is_some() {
+            validate_goal_budget(params.token_budget.flatten()).map_err(invalid_request)?;
         }
 
         if let Some(thread) = running_thread.as_ref() {
             thread.prepare_external_goal_mutation().await;
         }
 
-        let goal = if let Some(objective) = objective {
-            match state_db.get_thread_goal(thread_id).await {
-                Ok(goal) => {
-                    if let Some(goal) = goal.as_ref().filter(|goal| {
-                        goal.objective == objective
-                            && goal.status != codex_state::ThreadGoalStatus::Complete
-                    }) {
-                        state_db
-                            .update_thread_goal(
-                                thread_id,
-                                codex_state::ThreadGoalUpdate {
-                                    status,
-                                    token_budget: params.token_budget,
-                                    expected_goal_id: Some(goal.goal_id.clone()),
-                                },
+        let goal = (if let Some(objective) = objective {
+            let existing_goal = state_db
+                .get_thread_goal(thread_id)
+                .await
+                .map_err(|err| invalid_request(err.to_string()))?;
+            if let Some(goal) = existing_goal.as_ref().filter(|goal| {
+                goal.objective == objective
+                    && goal.status != codex_state::ThreadGoalStatus::Complete
+            }) {
+                state_db
+                    .update_thread_goal(
+                        thread_id,
+                        codex_state::ThreadGoalUpdate {
+                            status,
+                            token_budget: params.token_budget,
+                            expected_goal_id: Some(goal.goal_id.clone()),
+                        },
+                    )
+                    .await
+                    .and_then(|goal| {
+                        goal.ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "cannot update goal for thread {thread_id}: no goal exists"
                             )
-                            .await
-                            .and_then(|goal| {
-                                goal.ok_or_else(|| {
-                                    anyhow::anyhow!(
-                                        "cannot update goal for thread {thread_id}: no goal exists"
-                                    )
-                                })
-                            })
-                    } else {
-                        state_db
-                            .replace_thread_goal(
-                                thread_id,
-                                objective,
-                                status.unwrap_or(codex_state::ThreadGoalStatus::Active),
-                                params.token_budget.flatten(),
-                            )
-                            .await
-                    }
-                }
-                Err(err) => Err(err),
+                        })
+                    })
+            } else {
+                state_db
+                    .replace_thread_goal(
+                        thread_id,
+                        objective,
+                        status.unwrap_or(codex_state::ThreadGoalStatus::Active),
+                        params.token_budget.flatten(),
+                    )
+                    .await
             }
         } else {
             state_db
@@ -156,16 +109,8 @@ impl CodexMessageProcessor {
                         anyhow::anyhow!("cannot update goal for thread {thread_id}: no goal exists")
                     })
                 })
-        };
-
-        let goal = match goal {
-            Ok(goal) => goal,
-            Err(err) => {
-                self.send_invalid_request_error(request_id, err.to_string())
-                    .await;
-                return;
-            }
-        };
+        })
+        .map_err(|err| invalid_request(err.to_string()))?;
         let goal_status = goal.status;
         let goal = api_thread_goal_from_state(goal);
         self.outgoing
@@ -179,107 +124,51 @@ impl CodexMessageProcessor {
         if let Some(thread) = running_thread.as_ref() {
             thread.apply_external_goal_set(goal_status).await;
         }
+        Ok(())
     }
 
     pub(super) async fn thread_goal_get(
         &self,
-        request_id: ConnectionRequestId,
         params: ThreadGoalGetParams,
-    ) {
+    ) -> Result<ThreadGoalGetResponse, JSONRPCErrorError> {
         if !self.config.features.enabled(Feature::Goals) {
-            self.send_invalid_request_error(request_id, "goals feature is disabled".to_string())
-                .await;
-            return;
+            return Err(invalid_request("goals feature is disabled"));
         }
 
-        let thread_id = match parse_thread_id_for_request(params.thread_id.as_str()) {
-            Ok(thread_id) => thread_id,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-        let state_db = match self.state_db_for_materialized_thread(thread_id).await {
-            Ok(state_db) => state_db,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-        let goal = match state_db.get_thread_goal(thread_id).await {
-            Ok(goal) => goal.map(api_thread_goal_from_state),
-            Err(err) => {
-                self.send_internal_error(request_id, format!("failed to read thread goal: {err}"))
-                    .await;
-                return;
-            }
-        };
-        self.outgoing
-            .send_response(request_id, ThreadGoalGetResponse { goal })
-            .await;
+        let thread_id = parse_thread_id_for_request(params.thread_id.as_str())?;
+        let state_db = self.state_db_for_materialized_thread(thread_id).await?;
+        let goal = state_db
+            .get_thread_goal(thread_id)
+            .await
+            .map_err(|err| internal_error(format!("failed to read thread goal: {err}")))?
+            .map(api_thread_goal_from_state);
+        Ok(ThreadGoalGetResponse { goal })
     }
 
     pub(super) async fn thread_goal_clear(
         &self,
         request_id: ConnectionRequestId,
         params: ThreadGoalClearParams,
-    ) {
+    ) -> Result<(), JSONRPCErrorError> {
         if !self.config.features.enabled(Feature::Goals) {
-            self.send_invalid_request_error(request_id, "goals feature is disabled".to_string())
-                .await;
-            return;
+            return Err(invalid_request("goals feature is disabled"));
         }
 
-        let thread_id = match parse_thread_id_for_request(params.thread_id.as_str()) {
-            Ok(thread_id) => thread_id,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-        let state_db = match self.state_db_for_materialized_thread(thread_id).await {
-            Ok(state_db) => state_db,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let thread_id = parse_thread_id_for_request(params.thread_id.as_str())?;
+        let state_db = self.state_db_for_materialized_thread(thread_id).await?;
         let running_thread = self.thread_manager.get_thread(thread_id).await.ok();
         let rollout_path = match running_thread.as_ref() {
-            Some(thread) => match thread.rollout_path() {
-                Some(path) => path,
-                None => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("ephemeral thread does not support goals: {thread_id}"),
-                    )
-                    .await;
-                    return;
-                }
-            },
-            None => {
-                match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
-                    .await
-                {
-                    Ok(Some(path)) => path,
-                    Ok(None) => {
-                        self.send_invalid_request_error(
-                            request_id,
-                            format!("thread not found: {thread_id}"),
-                        )
-                        .await;
-                        return;
-                    }
-                    Err(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to locate thread id {thread_id}: {err}"),
-                        )
-                        .await;
-                        return;
-                    }
-                }
-            }
+            Some(thread) => thread.rollout_path().ok_or_else(|| {
+                invalid_request(format!(
+                    "ephemeral thread does not support goals: {thread_id}"
+                ))
+            })?,
+            None => find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
+                .await
+                .map_err(|err| {
+                    internal_error(format!("failed to locate thread id {thread_id}: {err}"))
+                })?
+                .ok_or_else(|| invalid_request(format!("thread not found: {thread_id}")))?,
         };
         reconcile_rollout(
             Some(&state_db),
@@ -301,14 +190,10 @@ impl CodexMessageProcessor {
             let thread_state = thread_state.lock().await;
             thread_state.listener_command_tx()
         };
-        let cleared = match state_db.delete_thread_goal(thread_id).await {
-            Ok(cleared) => cleared,
-            Err(err) => {
-                self.send_internal_error(request_id, format!("failed to clear thread goal: {err}"))
-                    .await;
-                return;
-            }
-        };
+        let cleared = state_db
+            .delete_thread_goal(thread_id)
+            .await
+            .map_err(|err| internal_error(format!("failed to clear thread goal: {err}")))?;
 
         if cleared && let Some(thread) = running_thread.as_ref() {
             thread.apply_external_goal_clear().await;
@@ -321,6 +206,7 @@ impl CodexMessageProcessor {
             self.emit_thread_goal_cleared_ordered(thread_id, listener_command_tx)
                 .await;
         }
+        Ok(())
     }
 
     async fn state_db_for_materialized_thread(
@@ -337,18 +223,12 @@ impl CodexMessageProcessor {
                 return Ok(state_db);
             }
         } else {
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
-            {
-                Ok(Some(_)) => {}
-                Ok(None) => {
-                    return Err(invalid_request(format!("thread not found: {thread_id}")));
-                }
-                Err(err) => {
-                    return Err(internal_error(format!(
-                        "failed to locate thread id {thread_id}: {err}"
-                    )));
-                }
-            }
+            find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
+                .await
+                .map_err(|err| {
+                    internal_error(format!("failed to locate thread id {thread_id}: {err}"))
+                })?
+                .ok_or_else(|| invalid_request(format!("thread not found: {thread_id}")))?;
         }
 
         open_state_db_for_direct_thread_lookup(&self.config)

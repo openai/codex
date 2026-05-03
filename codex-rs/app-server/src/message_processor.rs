@@ -38,14 +38,8 @@ use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
-use codex_app_server_protocol::ConfigBatchWriteParams;
-use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
-use codex_app_server_protocol::DeviceKeyCreateParams;
-use codex_app_server_protocol::DeviceKeyPublicParams;
-use codex_app_server_protocol::DeviceKeySignParams;
 use codex_app_server_protocol::ExperimentalApi;
-use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
@@ -394,25 +388,29 @@ impl MessageProcessor {
             Arc::clone(&self.outgoing),
             request_context.clone(),
             async {
-                let result = async {
-                    let request_json = serde_json::to_value(&request)
-                        .map_err(|err| invalid_request(format!("Invalid request: {err}")))?;
-                    let codex_request = serde_json::from_value::<ClientRequest>(request_json)
-                        .map_err(|err| invalid_request(format!("Invalid request: {err}")))?;
-                    // Websocket callers finalize outbound readiness in lib.rs after mirroring
-                    // session state into outbound state and sending initialize notifications to
-                    // this specific connection. Passing `None` avoids marking the connection
-                    // ready too early from inside the shared request handler.
-                    self.handle_client_request(
-                        request_id.clone(),
-                        codex_request,
-                        Arc::clone(&session),
-                        /*outbound_initialized*/ None,
-                        request_context.clone(),
-                    )
-                    .await
-                }
-                .await;
+                let codex_request = serde_json::to_value(&request)
+                    .map_err(|err| invalid_request(format!("Invalid request: {err}")))
+                    .and_then(|request_json| {
+                        serde_json::from_value::<ClientRequest>(request_json)
+                            .map_err(|err| invalid_request(format!("Invalid request: {err}")))
+                    });
+                let result = match codex_request {
+                    Ok(codex_request) => {
+                        // Websocket callers finalize outbound readiness in lib.rs after mirroring
+                        // session state into outbound state and sending initialize notifications to
+                        // this specific connection. Passing `None` avoids marking the connection
+                        // ready too early from inside the shared request handler.
+                        self.handle_client_request(
+                            request_id.clone(),
+                            codex_request,
+                            Arc::clone(&session),
+                            /*outbound_initialized*/ None,
+                            request_context.clone(),
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
                 if let Err(error) = result {
                     self.outgoing.send_error(request_id.clone(), error).await;
                 }
@@ -792,161 +790,141 @@ impl MessageProcessor {
         device_key_requests_allowed: bool,
     ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
-        let request_id_for_connection = |request_id| ConnectionRequestId {
+        let request_id = ConnectionRequestId {
             connection_id,
-            request_id,
+            request_id: codex_request.id().clone(),
         };
 
-        match codex_request {
-            ClientRequest::ConfigRead { request_id, params } => {
-                self.outgoing
-                    .send_result(
-                        request_id_for_connection(request_id),
-                        self.config_api.read(params).await,
+        let result: Result<Option<ClientResponsePayload>, JSONRPCErrorError> = match codex_request {
+            ClientRequest::ConfigRead { params, .. } => self
+                .config_api
+                .read(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ExternalAgentConfigDetect { params, .. } => self
+                .external_agent_config_api
+                .detect(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ExternalAgentConfigImport { params, .. } => self
+                .handle_external_agent_config_import(request_id.clone(), params)
+                .await
+                .map(|()| None),
+            ClientRequest::ConfigValueWrite { params, .. } => self
+                .handle_config_mutation_result(self.config_api.write_value(params).await)
+                .await
+                .map(|response| Some(ClientResponsePayload::ConfigValueWrite(response))),
+            ClientRequest::ConfigBatchWrite { params, .. } => self
+                .handle_config_mutation_result(self.config_api.batch_write(params).await)
+                .await
+                .map(|response| Some(ClientResponsePayload::ConfigBatchWrite(response))),
+            ClientRequest::ExperimentalFeatureEnablementSet { params, .. } => {
+                let should_refresh_apps_list = params.enablement.get("apps").copied() == Some(true);
+                match self
+                    .handle_config_mutation_result(
+                        self.config_api
+                            .set_experimental_feature_enablement(params)
+                            .await,
                     )
-                    .await;
+                    .await
+                {
+                    Ok(response) => {
+                        self.outgoing
+                            .send_response_as(
+                                request_id.clone(),
+                                ClientResponsePayload::ExperimentalFeatureEnablementSet(response),
+                            )
+                            .await;
+                        if should_refresh_apps_list {
+                            self.refresh_apps_list_after_experimental_feature_enablement_set()
+                                .await;
+                        }
+                        Ok(None)
+                    }
+                    Err(error) => Err(error),
+                }
             }
-            ClientRequest::ExternalAgentConfigDetect { request_id, params } => {
-                self.outgoing
-                    .send_result(
-                        request_id_for_connection(request_id),
-                        self.external_agent_config_api.detect(params).await,
-                    )
-                    .await;
-            }
-            ClientRequest::ExternalAgentConfigImport { request_id, params } => {
-                self.handle_external_agent_config_import(
-                    request_id_for_connection(request_id),
-                    params,
-                )
-                .await?;
-            }
-            ClientRequest::ConfigValueWrite { request_id, params } => {
-                self.handle_config_value_write(request_id_for_connection(request_id), params)
-                    .await;
-            }
-            ClientRequest::ConfigBatchWrite { request_id, params } => {
-                self.handle_config_batch_write(request_id_for_connection(request_id), params)
-                    .await;
-            }
-            ClientRequest::ExperimentalFeatureEnablementSet { request_id, params } => {
-                self.handle_experimental_feature_enablement_set(
-                    request_id_for_connection(request_id),
-                    params,
-                )
-                .await;
-            }
-            ClientRequest::ConfigRequirementsRead {
-                request_id,
-                params: _,
-            } => {
-                self.outgoing
-                    .send_result(
-                        request_id_for_connection(request_id),
-                        self.config_api.config_requirements_read().await,
-                    )
-                    .await;
-            }
-            ClientRequest::DeviceKeyCreate { request_id, params } => {
-                self.handle_device_key_create(
-                    request_id_for_connection(request_id),
-                    params,
+            ClientRequest::ConfigRequirementsRead { params: _, .. } => self
+                .config_api
+                .config_requirements_read()
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::DeviceKeyCreate { params, .. } => {
+                self.spawn_device_key_request(
+                    request_id.clone(),
+                    "device/key/create",
                     device_key_requests_allowed,
+                    move |device_key_api| async move { device_key_api.create(params).await },
                 );
+                Ok(None)
             }
-            ClientRequest::DeviceKeyPublic { request_id, params } => {
-                self.handle_device_key_public(
-                    request_id_for_connection(request_id),
-                    params,
+            ClientRequest::DeviceKeyPublic { params, .. } => {
+                self.spawn_device_key_request(
+                    request_id.clone(),
+                    "device/key/public",
                     device_key_requests_allowed,
+                    move |device_key_api| async move { device_key_api.public(params).await },
                 );
+                Ok(None)
             }
-            ClientRequest::DeviceKeySign { request_id, params } => {
-                self.handle_device_key_sign(
-                    request_id_for_connection(request_id),
-                    params,
+            ClientRequest::DeviceKeySign { params, .. } => {
+                self.spawn_device_key_request(
+                    request_id.clone(),
+                    "device/key/sign",
                     device_key_requests_allowed,
+                    move |device_key_api| async move { device_key_api.sign(params).await },
                 );
+                Ok(None)
             }
-            ClientRequest::FsReadFile { request_id, params } => {
-                self.outgoing
-                    .send_result(
-                        request_id_for_connection(request_id),
-                        self.fs_api.read_file(params).await,
-                    )
-                    .await;
-            }
-            ClientRequest::FsWriteFile { request_id, params } => {
-                self.outgoing
-                    .send_result(
-                        request_id_for_connection(request_id),
-                        self.fs_api.write_file(params).await,
-                    )
-                    .await;
-            }
-            ClientRequest::FsCreateDirectory { request_id, params } => {
-                self.outgoing
-                    .send_result(
-                        request_id_for_connection(request_id),
-                        self.fs_api.create_directory(params).await,
-                    )
-                    .await;
-            }
-            ClientRequest::FsGetMetadata { request_id, params } => {
-                self.outgoing
-                    .send_result(
-                        request_id_for_connection(request_id),
-                        self.fs_api.get_metadata(params).await,
-                    )
-                    .await;
-            }
-            ClientRequest::FsReadDirectory { request_id, params } => {
-                self.outgoing
-                    .send_result(
-                        request_id_for_connection(request_id),
-                        self.fs_api.read_directory(params).await,
-                    )
-                    .await;
-            }
-            ClientRequest::FsRemove { request_id, params } => {
-                self.outgoing
-                    .send_result(
-                        request_id_for_connection(request_id),
-                        self.fs_api.remove(params).await,
-                    )
-                    .await;
-            }
-            ClientRequest::FsCopy { request_id, params } => {
-                self.outgoing
-                    .send_result(
-                        request_id_for_connection(request_id),
-                        self.fs_api.copy(params).await,
-                    )
-                    .await;
-            }
-            ClientRequest::FsWatch { request_id, params } => {
-                self.outgoing
-                    .send_result(
-                        request_id_for_connection(request_id),
-                        self.fs_watch_manager.watch(connection_id, params).await,
-                    )
-                    .await;
-            }
-            ClientRequest::FsUnwatch { request_id, params } => {
-                self.outgoing
-                    .send_result(
-                        request_id_for_connection(request_id),
-                        self.fs_watch_manager.unwatch(connection_id, params).await,
-                    )
-                    .await;
-            }
-            ClientRequest::ModelProviderCapabilitiesRead {
-                request_id,
-                params: _,
-            } => {
-                self.handle_model_provider_capabilities_read(request_id_for_connection(request_id))
-                    .await;
-            }
+            ClientRequest::FsReadFile { params, .. } => self
+                .fs_api
+                .read_file(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::FsWriteFile { params, .. } => self
+                .fs_api
+                .write_file(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::FsCreateDirectory { params, .. } => self
+                .fs_api
+                .create_directory(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::FsGetMetadata { params, .. } => self
+                .fs_api
+                .get_metadata(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::FsReadDirectory { params, .. } => self
+                .fs_api
+                .read_directory(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::FsRemove { params, .. } => self
+                .fs_api
+                .remove(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::FsCopy { params, .. } => self
+                .fs_api
+                .copy(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::FsWatch { params, .. } => self
+                .fs_watch_manager
+                .watch(connection_id, params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::FsUnwatch { params, .. } => self
+                .fs_watch_manager
+                .unwatch(connection_id, params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ModelProviderCapabilitiesRead { params: _, .. } => self
+                .handle_model_provider_capabilities_read()
+                .await
+                .map(|response| Some(response.into())),
             other => {
                 // Box the delegated future so this wrapper's async state machine does not
                 // inline the full `CodexMessageProcessor::process_request` future, which
@@ -961,78 +939,38 @@ impl MessageProcessor {
                     )
                     .boxed()
                     .await;
+                Ok(None)
+            }
+        };
+
+        match result {
+            Ok(Some(response)) => {
+                self.outgoing
+                    .send_response_as(request_id.clone(), response)
+                    .await;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.outgoing.send_error(request_id.clone(), error).await;
             }
         }
         Ok(())
     }
 
-    async fn handle_model_provider_capabilities_read(&self, request_id: ConnectionRequestId) {
-        let result = async {
-            let config = self
-                .config_api
-                .load_latest_config(/*fallback_cwd*/ None)
-                .await?;
-            let provider = create_model_provider(config.model_provider, /*auth_manager*/ None);
-            let capabilities = provider.capabilities();
-            Ok::<_, JSONRPCErrorError>(ModelProviderCapabilitiesReadResponse {
-                namespace_tools: capabilities.namespace_tools,
-                image_generation: capabilities.image_generation,
-                web_search: capabilities.web_search,
-            })
-        }
-        .await;
-        self.outgoing.send_result(request_id, result).await;
-    }
-
-    async fn handle_config_value_write(
+    async fn handle_model_provider_capabilities_read(
         &self,
-        request_id: ConnectionRequestId,
-        params: ConfigValueWriteParams,
-    ) {
-        let result = self.config_api.write_value(params).await;
-        self.handle_config_mutation_result(
-            request_id,
-            result,
-            ClientResponsePayload::ConfigValueWrite,
-        )
-        .await
-    }
-
-    async fn handle_config_batch_write(
-        &self,
-        request_id: ConnectionRequestId,
-        params: ConfigBatchWriteParams,
-    ) {
-        let result = self.config_api.batch_write(params).await;
-        self.handle_config_mutation_result(
-            request_id,
-            result,
-            ClientResponsePayload::ConfigBatchWrite,
-        )
-        .await;
-    }
-
-    async fn handle_experimental_feature_enablement_set(
-        &self,
-        request_id: ConnectionRequestId,
-        params: ExperimentalFeatureEnablementSetParams,
-    ) {
-        let should_refresh_apps_list = params.enablement.get("apps").copied() == Some(true);
-        let result = self
+    ) -> Result<ModelProviderCapabilitiesReadResponse, JSONRPCErrorError> {
+        let config = self
             .config_api
-            .set_experimental_feature_enablement(params)
-            .await;
-        let is_ok = result.is_ok();
-        self.handle_config_mutation_result(
-            request_id,
-            result,
-            ClientResponsePayload::ExperimentalFeatureEnablementSet,
-        )
-        .await;
-        if should_refresh_apps_list && is_ok {
-            self.refresh_apps_list_after_experimental_feature_enablement_set()
-                .await;
-        }
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await?;
+        let provider = create_model_provider(config.model_provider, /*auth_manager*/ None);
+        let capabilities = provider.capabilities();
+        Ok(ModelProviderCapabilitiesReadResponse {
+            namespace_tools: capabilities.namespace_tools,
+            image_generation: capabilities.image_generation,
+            web_search: capabilities.web_search,
+        })
     }
 
     async fn refresh_apps_list_after_experimental_feature_enablement_set(&self) {
@@ -1106,19 +1044,11 @@ impl MessageProcessor {
 
     async fn handle_config_mutation_result<T>(
         &self,
-        request_id: ConnectionRequestId,
         result: std::result::Result<T, JSONRPCErrorError>,
-        wrap_success: impl FnOnce(T) -> ClientResponsePayload,
-    ) {
-        match result {
-            Ok(response) => {
-                self.handle_config_mutation().await;
-                self.outgoing
-                    .send_response_as(request_id, wrap_success(response))
-                    .await;
-            }
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
+    ) -> Result<T, JSONRPCErrorError> {
+        let response = result?;
+        self.handle_config_mutation().await;
+        Ok(response)
     }
 
     async fn handle_config_mutation(&self) {
@@ -1144,48 +1074,6 @@ impl MessageProcessor {
         }
     }
 
-    fn handle_device_key_create(
-        &self,
-        request_id: ConnectionRequestId,
-        params: DeviceKeyCreateParams,
-        device_key_requests_allowed: bool,
-    ) {
-        self.spawn_device_key_request(
-            request_id,
-            "device/key/create",
-            device_key_requests_allowed,
-            move |device_key_api| async move { device_key_api.create(params).await },
-        );
-    }
-
-    fn handle_device_key_public(
-        &self,
-        request_id: ConnectionRequestId,
-        params: DeviceKeyPublicParams,
-        device_key_requests_allowed: bool,
-    ) {
-        self.spawn_device_key_request(
-            request_id,
-            "device/key/public",
-            device_key_requests_allowed,
-            move |device_key_api| async move { device_key_api.public(params).await },
-        );
-    }
-
-    fn handle_device_key_sign(
-        &self,
-        request_id: ConnectionRequestId,
-        params: DeviceKeySignParams,
-        device_key_requests_allowed: bool,
-    ) {
-        self.spawn_device_key_request(
-            request_id,
-            "device/key/sign",
-            device_key_requests_allowed,
-            move |device_key_api| async move { device_key_api.sign(params).await },
-        );
-    }
-
     fn spawn_device_key_request<R, F, Fut>(
         &self,
         request_id: ConnectionRequestId,
@@ -1200,15 +1088,13 @@ impl MessageProcessor {
         let device_key_api = self.device_key_api.clone();
         let outgoing = Arc::clone(&self.outgoing);
         tokio::spawn(async move {
-            let result = async {
-                if !device_key_requests_allowed {
-                    return Err(invalid_request(format!(
-                        "{method} is not available over remote transports"
-                    )));
-                }
+            let result = if !device_key_requests_allowed {
+                Err(invalid_request(format!(
+                    "{method} is not available over remote transports"
+                )))
+            } else {
                 run_request(device_key_api).await
-            }
-            .await;
+            };
             outgoing.send_result(request_id, result).await;
         });
     }

@@ -9,15 +9,6 @@ use codex_core_plugins::remote::validate_remote_plugin_id;
 impl CodexMessageProcessor {
     pub(super) async fn plugin_list(
         &self,
-        request_id: ConnectionRequestId,
-        params: PluginListParams,
-    ) {
-        let result = self.plugin_list_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
-    }
-
-    async fn plugin_list_response(
-        &self,
         params: PluginListParams,
     ) -> Result<PluginListResponse, JSONRPCErrorError> {
         let plugins_manager = self.thread_manager.plugins_manager();
@@ -175,15 +166,6 @@ impl CodexMessageProcessor {
 
     pub(super) async fn plugin_read(
         &self,
-        request_id: ConnectionRequestId,
-        params: PluginReadParams,
-    ) {
-        let result = self.plugin_read_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
-    }
-
-    async fn plugin_read_response(
-        &self,
         params: PluginReadParams,
     ) -> Result<PluginReadResponse, JSONRPCErrorError> {
         let plugins_manager = self.thread_manager.plugins_manager();
@@ -304,15 +286,6 @@ impl CodexMessageProcessor {
 
     pub(super) async fn plugin_skill_read(
         &self,
-        request_id: ConnectionRequestId,
-        params: PluginSkillReadParams,
-    ) {
-        let result = self.plugin_skill_read_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
-    }
-
-    async fn plugin_skill_read_response(
-        &self,
         params: PluginSkillReadParams,
     ) -> Result<PluginSkillReadResponse, JSONRPCErrorError> {
         let PluginSkillReadParams {
@@ -359,15 +332,6 @@ impl CodexMessageProcessor {
 
     pub(super) async fn plugin_share_save(
         &self,
-        request_id: ConnectionRequestId,
-        params: PluginShareSaveParams,
-    ) {
-        let result = self.plugin_share_save_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
-    }
-
-    async fn plugin_share_save_response(
-        &self,
         params: PluginShareSaveParams,
     ) -> Result<PluginShareSaveResponse, JSONRPCErrorError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
@@ -403,15 +367,7 @@ impl CodexMessageProcessor {
 
     pub(super) async fn plugin_share_list(
         &self,
-        request_id: ConnectionRequestId,
         _params: PluginShareListParams,
-    ) {
-        let result = self.plugin_share_list_response().await;
-        self.outgoing.send_result(request_id, result).await;
-    }
-
-    async fn plugin_share_list_response(
-        &self,
     ) -> Result<PluginShareListResponse, JSONRPCErrorError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         let remote_plugin_service_config = RemotePluginServiceConfig {
@@ -443,15 +399,6 @@ impl CodexMessageProcessor {
     }
 
     pub(super) async fn plugin_share_delete(
-        &self,
-        request_id: ConnectionRequestId,
-        params: PluginShareDeleteParams,
-    ) {
-        let result = self.plugin_share_delete_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
-    }
-
-    async fn plugin_share_delete_response(
         &self,
         params: PluginShareDeleteParams,
     ) -> Result<PluginShareDeleteResponse, JSONRPCErrorError> {
@@ -490,15 +437,6 @@ impl CodexMessageProcessor {
     }
 
     pub(super) async fn plugin_install(
-        &self,
-        request_id: ConnectionRequestId,
-        params: PluginInstallParams,
-    ) {
-        let result = self.plugin_install_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
-    }
-
-    async fn plugin_install_response(
         &self,
         params: PluginInstallParams,
     ) -> Result<PluginInstallResponse, JSONRPCErrorError> {
@@ -761,15 +699,6 @@ impl CodexMessageProcessor {
 
     pub(super) async fn plugin_uninstall(
         &self,
-        request_id: ConnectionRequestId,
-        params: PluginUninstallParams,
-    ) {
-        let result = self.plugin_uninstall_response(params).await;
-        self.outgoing.send_result(request_id, result).await;
-    }
-
-    async fn plugin_uninstall_response(
-        &self,
         params: PluginUninstallParams,
     ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
         let PluginUninstallParams { plugin_id } = params;
@@ -975,28 +904,16 @@ fn remote_plugin_catalog_error_to_jsonrpc(
     err: RemotePluginCatalogError,
     context: &str,
 ) -> JSONRPCErrorError {
-    match err {
+    let code = match &err {
         RemotePluginCatalogError::AuthRequired | RemotePluginCatalogError::UnsupportedAuthMode => {
-            JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("{context}: {err}"),
-                data: None,
-            }
+            INVALID_REQUEST_ERROR_CODE
         }
         RemotePluginCatalogError::UnexpectedStatus { status, .. } if status.as_u16() == 404 => {
-            JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("{context}: {err}"),
-                data: None,
-            }
+            INVALID_REQUEST_ERROR_CODE
         }
         RemotePluginCatalogError::InvalidPluginPath { .. }
         | RemotePluginCatalogError::ArchiveTooLarge { .. }
-        | RemotePluginCatalogError::UnknownMarketplace { .. } => JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: format!("{context}: {err}"),
-            data: None,
-        },
+        | RemotePluginCatalogError::UnknownMarketplace { .. } => INVALID_REQUEST_ERROR_CODE,
         RemotePluginCatalogError::AuthToken(_)
         | RemotePluginCatalogError::Request { .. }
         | RemotePluginCatalogError::UnexpectedStatus { .. }
@@ -1010,11 +927,12 @@ fn remote_plugin_catalog_error_to_jsonrpc(
         | RemotePluginCatalogError::ArchiveJoin(_)
         | RemotePluginCatalogError::MissingUploadEtag
         | RemotePluginCatalogError::UnexpectedResponse(_)
-        | RemotePluginCatalogError::CacheRemove(_) => JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: format!("{context}: {err}"),
-            data: None,
-        },
+        | RemotePluginCatalogError::CacheRemove(_) => INTERNAL_ERROR_CODE,
+    };
+    JSONRPCErrorError {
+        code,
+        message: format!("{context}: {err}"),
+        data: None,
     }
 }
 
