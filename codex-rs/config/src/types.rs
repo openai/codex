@@ -61,8 +61,8 @@ const fn default_enabled() -> bool {
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum SessionPickerViewMode {
-    #[default]
     Comfortable,
+    #[default]
     Dense,
 }
 
