@@ -410,6 +410,9 @@ async fn run_session_picker_with_loader(
                             state.ensure_minimum_rows_for_view(list_height);
                         }
                         draw_picker(alt.tui, &state)?;
+                        if state.note_transcript_loading_frame_drawn() {
+                            state.open_pending_transcript_if_ready();
+                        }
                     }
                     _ => {}
                 }
@@ -560,6 +563,7 @@ struct PickerState {
     transcript_previews: HashMap<ThreadId, TranscriptPreviewState>,
     transcript_cells: HashMap<ThreadId, SessionTranscriptState>,
     pending_transcript_open: Option<ThreadId>,
+    transcript_loading_frame_shown: bool,
     overlay: Option<Overlay>,
     pager_keymap: PagerKeymap,
 }
@@ -827,6 +831,7 @@ impl PickerState {
             transcript_previews: HashMap::new(),
             transcript_cells: HashMap::new(),
             pending_transcript_open: None,
+            transcript_loading_frame_shown: false,
             overlay: None,
             pager_keymap: RuntimeKeymap::defaults().pager,
         }
@@ -838,6 +843,41 @@ impl PickerState {
 
     fn is_transcript_loading(&self) -> bool {
         self.pending_transcript_open.is_some()
+    }
+
+    fn note_transcript_loading_frame_drawn(&mut self) -> bool {
+        if self.pending_transcript_open.is_some() {
+            self.transcript_loading_frame_shown = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn open_pending_transcript_if_ready(&mut self) {
+        if !self.transcript_loading_frame_shown {
+            return;
+        }
+        let Some(thread_id) = self.pending_transcript_open else {
+            return;
+        };
+        let Some(SessionTranscriptState::Loaded(cells)) = self.transcript_cells.get(&thread_id)
+        else {
+            return;
+        };
+        self.overlay = Some(Overlay::new_transcript(
+            cells.clone(),
+            self.pager_keymap.clone(),
+        ));
+        self.pending_transcript_open = None;
+        self.transcript_loading_frame_shown = false;
+        self.request_frame();
+    }
+
+    fn begin_transcript_loading(&mut self, thread_id: ThreadId) {
+        self.pending_transcript_open = Some(thread_id);
+        self.transcript_loading_frame_shown = false;
+        self.request_frame();
     }
 
     fn handle_overlay_event(&mut self, tui: &mut Tui, event: TuiEvent) -> Result<()> {
@@ -863,23 +903,17 @@ impl PickerState {
         };
 
         match self.transcript_cells.get(&thread_id) {
-            Some(SessionTranscriptState::Loaded(cells)) => {
-                self.overlay = Some(Overlay::new_transcript(
-                    cells.clone(),
-                    self.pager_keymap.clone(),
-                ));
-                self.request_frame();
+            Some(SessionTranscriptState::Loaded(_)) => {
+                self.begin_transcript_loading(thread_id);
             }
             Some(SessionTranscriptState::Loading) => {
-                self.pending_transcript_open = Some(thread_id);
-                self.request_frame();
+                self.begin_transcript_loading(thread_id);
             }
             Some(SessionTranscriptState::Failed) | None => {
                 self.transcript_cells
                     .insert(thread_id, SessionTranscriptState::Loading);
-                self.pending_transcript_open = Some(thread_id);
+                self.begin_transcript_loading(thread_id);
                 (self.picker_loader)(PickerLoadRequest::Transcript { thread_id });
-                self.request_frame();
             }
         }
     }
@@ -917,7 +951,7 @@ impl PickerState {
                 return Ok(Some(SessionSelection::Exit));
             }
             KeyEvent {
-                code: KeyCode::Char('t'),
+                code: KeyCode::Char('v'),
                 modifiers,
                 ..
             } if modifiers.contains(KeyModifiers::ALT) && !modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1175,9 +1209,7 @@ impl PickerState {
                     self.transcript_cells
                         .insert(thread_id, SessionTranscriptState::Loaded(cells.clone()));
                     if should_open {
-                        self.pending_transcript_open = None;
-                        self.overlay =
-                            Some(Overlay::new_transcript(cells, self.pager_keymap.clone()));
+                        self.open_pending_transcript_if_ready();
                     }
                     self.request_frame();
                 }
@@ -1186,6 +1218,7 @@ impl PickerState {
                         .insert(thread_id, SessionTranscriptState::Failed);
                     if self.pending_transcript_open == Some(thread_id) {
                         self.pending_transcript_open = None;
+                        self.transcript_loading_frame_shown = false;
                         self.inline_error = Some("Could not load transcript preview".to_string());
                     }
                     self.request_frame();
@@ -1929,7 +1962,7 @@ fn hint_line(state: &PickerState, width: u16) -> Line<'static> {
             priority: 8,
         },
         PickerFooterHint {
-            key: "alt+t",
+            key: "alt+v",
             wide_label: density_label.to_string(),
             compact_label: density_compact_label.to_string(),
             priority: 3,
@@ -1988,23 +2021,48 @@ fn render_transcript_loading_overlay(frame: &mut crate::custom_terminal::Frame, 
         return;
     }
 
-    let overlay = Rect::new(
-        area.x,
-        area.y + area.height.saturating_sub(1) / 2,
-        area.width,
-        1,
-    );
-    Clear.render(overlay, frame.buffer);
-
     let message = "Loading transcript…";
     let message_width = UnicodeWidthStr::width(message) as u16;
-    let x = overlay.x + overlay.width.saturating_sub(message_width) / 2;
-    let line = if overlay.width > 4 {
-        Rect::new(x, overlay.y, message_width.min(overlay.width), 1)
+    let overlay_width = if area.width >= message_width.saturating_add(10) {
+        message_width + 10
     } else {
-        overlay
+        area.width
     };
+    let overlay_height = if area.height >= 3 { 3 } else { 1 };
+    let overlay = Rect::new(
+        area.x + area.width.saturating_sub(overlay_width) / 2,
+        area.y + area.height.saturating_sub(overlay_height) / 2,
+        overlay_width,
+        overlay_height,
+    );
+    let style = transcript_loading_overlay_style();
+    for y in overlay.y..overlay.bottom() {
+        for x in overlay.x..overlay.right() {
+            frame.buffer[(x, y)].set_symbol(" ").set_style(style);
+        }
+    }
+
+    let message = truncate_text(message, overlay.width as usize);
+    let message_width = UnicodeWidthStr::width(message.as_str()) as u16;
+    let line = Rect::new(
+        overlay.x + overlay.width.saturating_sub(message_width) / 2,
+        overlay.y + overlay.height / 2,
+        message_width.min(overlay.width),
+        1,
+    );
     frame.render_widget_ref(Line::from(message.bold()), line);
+}
+
+fn transcript_loading_overlay_style() -> Style {
+    let Some(bg) = default_bg() else {
+        return Style::default().bg(Color::DarkGray);
+    };
+    let (overlay, alpha) = if is_light(bg) {
+        ((0, 0, 0), 0.08)
+    } else {
+        ((255, 255, 255), 0.14)
+    };
+    Style::default().bg(best_color(blend(overlay, bg, alpha)))
 }
 
 #[derive(Clone, Copy)]
@@ -3397,7 +3455,7 @@ mod tests {
         assert!(
             hint_line(&state, /*width*/ 220)
                 .to_string()
-                .contains("alt+t dense view")
+                .contains("alt+v dense view")
         );
         assert!(
             hint_line(&state, /*width*/ 220)
@@ -3410,7 +3468,7 @@ mod tests {
         assert!(
             hint_line(&state, /*width*/ 220)
                 .to_string()
-                .contains("alt+t comfortable view")
+                .contains("alt+v comfortable view")
         );
     }
 
@@ -3431,7 +3489,7 @@ mod tests {
         assert!(rendered.contains("esc new"));
         assert!(rendered.contains("tab focus"));
         assert!(rendered.contains("←/→ option"));
-        assert!(rendered.contains("alt+t dense"));
+        assert!(rendered.contains("alt+v dense"));
         assert!(rendered.contains("ctrl+t preview"));
         assert!(!rendered.contains("focus sort/filter"));
     }
@@ -3495,7 +3553,7 @@ mod tests {
         assert!(rendered.contains("enter"));
         assert!(rendered.contains("esc"));
         assert!(rendered.contains("ctrl+c"));
-        assert!(rendered.contains("alt+t"));
+        assert!(rendered.contains("alt+v"));
         assert!(rendered.contains("ctrl+t"));
         assert!(rendered.contains("↑/↓"));
         assert!(!rendered.contains("space"));
@@ -3522,7 +3580,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn alt_t_toggles_density_without_typing_into_search() {
+    async fn alt_v_toggles_density_without_typing_into_search() {
         let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
@@ -3535,7 +3593,7 @@ mod tests {
         state.query = String::from("pick");
 
         state
-            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT))
+            .handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT))
             .await
             .unwrap();
 
@@ -3715,10 +3773,14 @@ mod tests {
         }
         terminal.flush().expect("flush");
 
-        assert_snapshot!(
-            "resume_picker_transcript_loading_overlay",
-            terminal.backend().to_string()
-        );
+        let snapshot = terminal
+            .backend()
+            .to_string()
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_snapshot!("resume_picker_transcript_loading_overlay", snapshot);
     }
 
     #[tokio::test]
@@ -3792,7 +3854,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn loaded_transcript_opens_overlay_when_requested() {
+    async fn loaded_transcript_waits_for_loading_frame_before_opening_overlay() {
         use crate::history_cell::PlainHistoryCell;
 
         let thread_id = ThreadId::new();
@@ -3817,16 +3879,68 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(matches!(state.overlay, Some(Overlay::Transcript(_))));
-        assert_eq!(state.pending_transcript_open, None);
+        assert!(state.overlay.is_none());
+        assert_eq!(state.pending_transcript_open, Some(thread_id));
         assert!(matches!(
             state.transcript_cells.get(&thread_id),
             Some(SessionTranscriptState::Loaded(_))
         ));
+
+        assert!(state.note_transcript_loading_frame_drawn());
+        state.open_pending_transcript_if_ready();
+
+        assert!(matches!(state.overlay, Some(Overlay::Transcript(_))));
+        assert_eq!(state.pending_transcript_open, None);
     }
 
     #[tokio::test]
-    async fn alt_t_persists_density_preference() {
+    async fn cached_transcript_still_shows_loading_frame_before_opening_overlay() {
+        use crate::history_cell::PlainHistoryCell;
+
+        let thread_id = ThreadId::new();
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.filtered_rows = vec![Row {
+            path: None,
+            preview: String::from("preview"),
+            thread_id: Some(thread_id),
+            thread_name: None,
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+        }];
+        state.transcript_cells.insert(
+            thread_id,
+            SessionTranscriptState::Loaded(vec![Arc::new(PlainHistoryCell::new(vec![
+                "transcript".into(),
+            ]))]),
+        );
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert!(state.overlay.is_none());
+        assert_eq!(state.pending_transcript_open, Some(thread_id));
+
+        assert!(state.note_transcript_loading_frame_drawn());
+        state.open_pending_transcript_if_ready();
+
+        assert!(matches!(state.overlay, Some(Overlay::Transcript(_))));
+        assert_eq!(state.pending_transcript_open, None);
+    }
+
+    #[tokio::test]
+    async fn alt_v_persists_density_preference() {
         let tmp = tempdir().expect("tmpdir");
         let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
@@ -3843,7 +3957,7 @@ mod tests {
         });
 
         state
-            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT))
+            .handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT))
             .await
             .unwrap();
 
@@ -3859,7 +3973,7 @@ session_picker_view = "dense"
     }
 
     #[tokio::test]
-    async fn alt_t_persists_density_preference_for_active_profile() {
+    async fn alt_v_persists_density_preference_for_active_profile() {
         let tmp = tempdir().expect("tmpdir");
         let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
@@ -3876,7 +3990,7 @@ session_picker_view = "dense"
         });
 
         state
-            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT))
+            .handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT))
             .await
             .unwrap();
 
@@ -3892,7 +4006,7 @@ session_picker_view = "dense"
     }
 
     #[tokio::test]
-    async fn alt_t_keeps_toggled_density_when_persistence_fails() {
+    async fn alt_v_keeps_toggled_density_when_persistence_fails() {
         let tmp = tempdir().expect("tmpdir");
         let codex_home_file = tmp.path().join("codex-home-file");
         std::fs::write(&codex_home_file, "not a directory").expect("write codex home file");
@@ -3911,7 +4025,7 @@ session_picker_view = "dense"
         });
 
         state
-            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT))
+            .handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT))
             .await
             .unwrap();
 

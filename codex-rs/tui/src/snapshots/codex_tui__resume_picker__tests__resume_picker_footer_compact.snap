@@ -2,4 +2,4 @@
 source: tui/src/resume_picker.rs
 expression: "hint_line(&state, 96).to_string()"
 ---
-enter       esc       ctrl+c       tab       ←/→       alt+t       ctrl+t       space       ↑/↓
+enter       esc       ctrl+c       tab       ←/→       alt+v       ctrl+t       space       ↑/↓
