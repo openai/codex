@@ -1782,7 +1782,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
 
         // Header
         let header_title = if default_bg().is_some_and(is_light) {
-            state.action.title().bold().green()
+            state.action.title().bold().fg(best_color((0, 100, 0)))
         } else {
             state.action.title().bold().cyan()
         };
