@@ -32,6 +32,13 @@ pub(crate) fn build_pet_picker_params(
     let current_pet = current_pet.unwrap_or(DEFAULT_PET_ID);
     let mut entries = available_pet_entries(codex_home);
     entries.sort_by(|left, right| left.display_name.cmp(&right.display_name));
+    if let Some(disabled_idx) = entries
+        .iter()
+        .position(|entry| entry.selector == DISABLED_PET_ID)
+    {
+        let disabled_entry = entries.remove(disabled_idx);
+        entries.insert(0, disabled_entry);
+    }
 
     let mut initial_selected_idx = None;
     let items = entries
@@ -44,6 +51,11 @@ pub(crate) fn build_pet_picker_params(
                 initial_selected_idx = Some(idx);
             }
             let pet_id = entry.selector.clone();
+            let search_value = if pet_id == DISABLED_PET_ID {
+                "disable disabled hide hidden off none".to_string()
+            } else {
+                entry.selector
+            };
             let actions: Vec<SelectionAction> = if pet_id == DISABLED_PET_ID {
                 vec![Box::new(|tx| {
                     tx.send(AppEvent::PetDisabled);
@@ -60,7 +72,7 @@ pub(crate) fn build_pet_picker_params(
                 description: entry.description,
                 is_current,
                 dismiss_on_select: true,
-                search_value: Some(entry.selector),
+                search_value: Some(search_value),
                 actions,
                 ..Default::default()
             }
@@ -92,8 +104,8 @@ fn available_pet_entries(codex_home: &Path) -> Vec<PetPickerEntry> {
     entries.push(PetPickerEntry {
         selector: DISABLED_PET_ID.to_string(),
         legacy_selector: None,
-        display_name: "None".to_string(),
-        description: Some("Disable terminal pets.".to_string()),
+        display_name: "Disable terminal pets".to_string(),
+        description: None,
     });
     entries.extend(custom_pet_entries(codex_home));
     entries
@@ -198,21 +210,21 @@ mod tests {
                 .map(|item| item.name.as_str())
                 .collect::<Vec<_>>(),
             vec![
+                "Disable terminal pets",
                 "BSOD",
                 "Chefito",
                 "Codex",
                 "Dewey",
                 "Fireball",
-                "None",
                 "Null Signal",
                 "Rocky",
                 "Seedy",
                 "Stacky",
             ],
         );
-        assert_eq!(params.initial_selected_idx, Some(1));
+        assert_eq!(params.initial_selected_idx, Some(2));
         assert_eq!(
-            params.items[1].search_value.as_deref(),
+            params.items[2].search_value.as_deref(),
             Some("custom:chefito")
         );
     }
@@ -222,9 +234,9 @@ mod tests {
         let codex_home = tempfile::tempdir().unwrap();
         let params = build_pet_picker_params(/*current_pet*/ None, codex_home.path());
 
-        assert_eq!(params.initial_selected_idx, Some(1));
-        assert_eq!(params.items[1].name, "Codex");
-        assert!(params.items[1].is_current);
+        assert_eq!(params.initial_selected_idx, Some(2));
+        assert_eq!(params.items[2].name, "Codex");
+        assert!(params.items[2].is_current);
     }
 
     #[test]
@@ -232,9 +244,14 @@ mod tests {
         let codex_home = tempfile::tempdir().unwrap();
         let params = build_pet_picker_params(Some(DISABLED_PET_ID), codex_home.path());
 
-        assert_eq!(params.initial_selected_idx, Some(4));
-        assert_eq!(params.items[4].name, "None");
-        assert!(params.items[4].is_current);
+        assert_eq!(params.initial_selected_idx, Some(0));
+        assert_eq!(params.items[0].name, "Disable terminal pets");
+        assert_eq!(params.items[0].description, None);
+        assert!(params.items[0].is_current);
+        assert_eq!(
+            params.items[0].search_value.as_deref(),
+            Some("disable disabled hide hidden off none")
+        );
     }
 
     #[test]

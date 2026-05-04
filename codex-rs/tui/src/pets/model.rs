@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -12,11 +13,25 @@ use serde::Deserialize;
 use super::catalog;
 
 #[derive(Debug, Clone)]
+pub struct AnimationFrame {
+    pub sprite_index: usize,
+    pub duration: Duration,
+}
+
+#[derive(Debug, Clone)]
 pub struct Animation {
-    pub frames: Vec<usize>,
-    pub fps: f64,
-    pub loop_animation: bool,
+    pub frames: Vec<AnimationFrame>,
+    pub loop_start: Option<usize>,
     pub fallback: String,
+}
+
+impl Animation {
+    pub(super) fn total_duration(&self) -> Duration {
+        self.frames
+            .iter()
+            .map(|frame| frame.duration)
+            .sum::<Duration>()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -296,18 +311,29 @@ fn load_animations(specs: HashMap<String, AnimationSpec>) -> HashMap<String, Ani
         }
 
         let fps = spec.fps.filter(|fps| *fps > 0.0).unwrap_or(8.0);
+        let duration = Duration::from_secs_f64(1.0 / fps);
         let fallback = if spec.fallback.is_empty() {
             "idle".to_string()
         } else {
             spec.fallback
         };
+        let loop_start = spec
+            .loop_animation
+            .unwrap_or(/*default*/ true)
+            .then_some(/*loop_start*/ 0);
 
         animations.insert(
             name.clone(),
             Animation {
-                frames: spec.frames,
-                fps,
-                loop_animation: spec.loop_animation.unwrap_or(true),
+                frames: spec
+                    .frames
+                    .into_iter()
+                    .map(|sprite_index| AnimationFrame {
+                        sprite_index,
+                        duration,
+                    })
+                    .collect(),
+                loop_start,
                 fallback,
             },
         );
@@ -320,51 +346,146 @@ fn load_animations(specs: HashMap<String, AnimationSpec>) -> HashMap<String, Ani
 }
 
 fn default_animations() -> HashMap<String, Animation> {
-    let idle = idle_animation();
     [
-        ("idle", idle.frames, idle.fps, idle.loop_animation, "idle"),
+        ("idle", idle_animation()),
         (
-            "move_left",
-            vec![8, 9, 10, 11, 12, 13, 14, 15],
-            10.0,
-            true,
-            "idle",
+            "running-right",
+            app_state_animation(
+                /*row_index*/ 1, /*frame_count*/ 8, /*frame_duration_ms*/ 120,
+                /*final_frame_duration_ms*/ 220,
+            ),
+        ),
+        (
+            "running-left",
+            app_state_animation(
+                /*row_index*/ 2, /*frame_count*/ 8, /*frame_duration_ms*/ 120,
+                /*final_frame_duration_ms*/ 220,
+            ),
+        ),
+        (
+            "waving",
+            app_state_animation(
+                /*row_index*/ 3, /*frame_count*/ 4, /*frame_duration_ms*/ 140,
+                /*final_frame_duration_ms*/ 280,
+            ),
+        ),
+        (
+            "jumping",
+            app_state_animation(
+                /*row_index*/ 4, /*frame_count*/ 5, /*frame_duration_ms*/ 140,
+                /*final_frame_duration_ms*/ 280,
+            ),
+        ),
+        (
+            "failed",
+            app_state_animation(
+                /*row_index*/ 5, /*frame_count*/ 8, /*frame_duration_ms*/ 140,
+                /*final_frame_duration_ms*/ 240,
+            ),
+        ),
+        (
+            "waiting",
+            app_state_animation(
+                /*row_index*/ 6, /*frame_count*/ 6, /*frame_duration_ms*/ 150,
+                /*final_frame_duration_ms*/ 260,
+            ),
+        ),
+        (
+            "running",
+            app_state_animation(
+                /*row_index*/ 7, /*frame_count*/ 6, /*frame_duration_ms*/ 120,
+                /*final_frame_duration_ms*/ 220,
+            ),
+        ),
+        (
+            "review",
+            app_state_animation(
+                /*row_index*/ 8, /*frame_count*/ 6, /*frame_duration_ms*/ 150,
+                /*final_frame_duration_ms*/ 280,
+            ),
         ),
         (
             "move_right",
-            vec![16, 17, 18, 19, 20, 21, 22, 23],
-            10.0,
-            true,
-            "idle",
+            app_state_animation(
+                /*row_index*/ 1, /*frame_count*/ 8, /*frame_duration_ms*/ 120,
+                /*final_frame_duration_ms*/ 220,
+            ),
         ),
-        ("wave", vec![24, 25, 26, 27], 7.0, false, "idle"),
-        ("sit", vec![32, 33, 34, 35, 36], 6.0, true, "idle"),
-        ("sad", vec![40, 41, 42, 43, 44, 45, 46], 6.0, true, "idle"),
-        ("sleep", vec![43, 44, 47], 3.0, true, "idle"),
-        ("sip", vec![48, 49, 50, 51, 52, 53], 8.0, false, "idle"),
-        ("bounce", vec![56, 57, 58, 59, 60, 61], 9.0, false, "idle"),
-        ("grumpy", vec![64, 65, 66, 67, 68, 69], 6.0, false, "idle"),
+        (
+            "move_left",
+            app_state_animation(
+                /*row_index*/ 2, /*frame_count*/ 8, /*frame_duration_ms*/ 120,
+                /*final_frame_duration_ms*/ 220,
+            ),
+        ),
+        (
+            "wave",
+            app_state_animation(
+                /*row_index*/ 3, /*frame_count*/ 4, /*frame_duration_ms*/ 140,
+                /*final_frame_duration_ms*/ 280,
+            ),
+        ),
+        (
+            "bounce",
+            app_state_animation(
+                /*row_index*/ 4, /*frame_count*/ 5, /*frame_duration_ms*/ 140,
+                /*final_frame_duration_ms*/ 280,
+            ),
+        ),
+        (
+            "sad",
+            app_state_animation(
+                /*row_index*/ 5, /*frame_count*/ 8, /*frame_duration_ms*/ 140,
+                /*final_frame_duration_ms*/ 240,
+            ),
+        ),
     ]
     .into_iter()
-    .map(|(name, frames, fps, loop_animation, fallback)| {
-        (
-            name.to_string(),
-            Animation {
-                frames,
-                fps,
-                loop_animation,
-                fallback: fallback.to_string(),
-            },
-        )
-    })
+    .map(|(name, animation)| (name.to_string(), animation))
     .collect()
 }
 
 fn idle_animation() -> Animation {
     Animation {
-        frames: vec![0, 1, 2, 3, 4, 5],
-        fps: 5.0,
-        loop_animation: true,
+        frames: [(0, 1680), (1, 660), (2, 660), (3, 840), (4, 840), (5, 1920)]
+            .into_iter()
+            .map(|(sprite_index, duration_ms)| AnimationFrame {
+                sprite_index,
+                duration: Duration::from_millis(duration_ms),
+            })
+            .collect(),
+        loop_start: Some(/*loop_start*/ 0),
+        fallback: "idle".to_string(),
+    }
+}
+
+fn app_state_animation(
+    row_index: usize,
+    frame_count: usize,
+    frame_duration_ms: u64,
+    final_frame_duration_ms: u64,
+) -> Animation {
+    let primary_frames = (0..frame_count)
+        .map(|column_index| AnimationFrame {
+            sprite_index: row_index * catalog::DEFAULT_FRAME_COLUMNS as usize + column_index,
+            duration: Duration::from_millis(if column_index == frame_count - 1 {
+                final_frame_duration_ms
+            } else {
+                frame_duration_ms
+            }),
+        })
+        .collect::<Vec<_>>();
+    let primary_frame_count = primary_frames.len() * 3;
+    let frames = primary_frames
+        .iter()
+        .chain(primary_frames.iter())
+        .chain(primary_frames.iter())
+        .cloned()
+        .chain(idle_animation().frames)
+        .collect();
+    Animation {
+        frames,
+        loop_start: Some(primary_frame_count),
         fallback: "idle".to_string(),
     }
 }
@@ -411,6 +532,73 @@ mod tests {
         assert_eq!(pet.frame_height, 208);
         assert_eq!(pet.columns, 8);
         assert_eq!(pet.rows, 9);
+    }
+
+    #[test]
+    fn app_idle_animation_uses_calm_loop() {
+        let animations = default_animations();
+        let idle = &animations["idle"];
+
+        assert_eq!(sprite_indices(idle), vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(durations_ms(idle), vec![1680, 660, 660, 840, 840, 1920]);
+        assert_eq!(idle.loop_start, Some(/*loop_start*/ 0));
+    }
+
+    #[test]
+    fn app_running_animation_repeats_then_settles_into_idle() {
+        let animations = default_animations();
+        let running = &animations["running"];
+        let primary = vec![56, 57, 58, 59, 60, 61];
+
+        assert_eq!(sprite_indices(running)[0..6], primary);
+        assert_eq!(sprite_indices(running)[6..12], primary);
+        assert_eq!(sprite_indices(running)[12..18], primary);
+        assert_eq!(
+            sprite_indices(running)[18..],
+            sprite_indices(&animations["idle"])
+        );
+        assert_eq!(
+            durations_ms(running)[0..6],
+            vec![120, 120, 120, 120, 120, 220]
+        );
+        assert_eq!(running.loop_start, Some(/*loop_start*/ 18));
+    }
+
+    #[test]
+    fn app_notification_states_use_expected_rows() {
+        let animations = default_animations();
+
+        assert_eq!(
+            sprite_indices(&animations["waiting"])[0..6],
+            vec![48, 49, 50, 51, 52, 53]
+        );
+        assert_eq!(
+            sprite_indices(&animations["review"])[0..6],
+            vec![64, 65, 66, 67, 68, 69]
+        );
+        assert_eq!(
+            sprite_indices(&animations["failed"])[0..8],
+            vec![40, 41, 42, 43, 44, 45, 46, 47]
+        );
+    }
+
+    #[test]
+    fn custom_animation_specs_keep_manifest_fps_and_loop_shape() {
+        let animations = load_animations(HashMap::from([(
+            "custom".to_string(),
+            AnimationSpec {
+                frames: vec![1, 2],
+                fps: Some(/*fps*/ 2.0),
+                loop_animation: Some(/*loop_animation*/ false),
+                fallback: "idle".to_string(),
+            },
+        )]));
+        let custom = &animations["custom"];
+
+        assert_eq!(sprite_indices(custom), vec![1, 2]);
+        assert_eq!(durations_ms(custom), vec![500, 500]);
+        assert_eq!(custom.loop_start, None);
+        assert_eq!(custom.fallback, "idle");
     }
 
     #[test]
@@ -513,5 +701,21 @@ mod tests {
             err.to_string()
                 .contains("spritesheet path must stay inside")
         );
+    }
+
+    fn sprite_indices(animation: &Animation) -> Vec<usize> {
+        animation
+            .frames
+            .iter()
+            .map(|frame| frame.sprite_index)
+            .collect()
+    }
+
+    fn durations_ms(animation: &Animation) -> Vec<u128> {
+        animation
+            .frames
+            .iter()
+            .map(|frame| frame.duration.as_millis())
+            .collect()
     }
 }

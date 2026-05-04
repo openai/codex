@@ -10575,6 +10575,7 @@ fn load_ambient_pet(
         config.tui_pet.as_deref(),
         &config.codex_home,
         frame_requester.clone(),
+        config.animations,
     ) {
         Ok(pet) => Some(pet),
         Err(err) if config.tui_pet.is_some() => {
@@ -10586,6 +10587,7 @@ fn load_ambient_pet(
                 /*selected_pet*/ None,
                 &config.codex_home,
                 frame_requester,
+                config.animations,
             )
             .map_err(|fallback_err| {
                 tracing::warn!(error = %fallback_err, "failed to load default ambient pet");

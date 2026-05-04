@@ -787,7 +787,7 @@ impl ChatWidget {
             SlashCommand::Pets
                 if matches!(
                     args.trim().to_ascii_lowercase().as_str(),
-                    "disable" | "disabled" | "off" | "none"
+                    "disable" | "disabled" | "hide" | "hidden" | "off" | "none"
                 ) =>
             {
                 self.app_event_tx.send(AppEvent::PetDisabled);

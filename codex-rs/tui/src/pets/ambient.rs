@@ -117,6 +117,7 @@ pub(crate) struct AmbientPet {
     frame_requester: FrameRequester,
     notification: Option<PetNotification>,
     animation_started_at: Instant,
+    animations_enabled: bool,
 }
 
 impl AmbientPet {
@@ -124,6 +125,7 @@ impl AmbientPet {
         selected_pet: Option<&str>,
         codex_home: &std::path::Path,
         frame_requester: FrameRequester,
+        animations_enabled: bool,
     ) -> Result<Self> {
         let pet = Pet::load_with_codex_home(
             selected_pet.unwrap_or(DEFAULT_PET_ID),
@@ -142,6 +144,7 @@ impl AmbientPet {
             frame_requester,
             notification: None,
             animation_started_at: Instant::now(),
+            animations_enabled,
         })
     }
 
@@ -155,23 +158,21 @@ impl AmbientPet {
     }
 
     pub(crate) fn schedule_next_frame(&self) {
-        if self.support.protocol().is_none() {
-            return;
+        if let Some(delay) = self.next_frame_delay() {
+            self.frame_requester.schedule_frame_in(delay);
+        }
+    }
+
+    fn next_frame_delay(&self) -> Option<Duration> {
+        if self.support.protocol().is_none() || !self.animations_enabled {
+            return None;
         }
 
-        let animation = self.current_animation();
-        if animation.frames.len() <= 1 {
-            return;
-        }
-        let frame_duration = Duration::from_secs_f64(1.0 / animation.fps.max(0.1));
-        let elapsed = self.animation_started_at.elapsed();
-        let rem = elapsed.as_nanos() % frame_duration.as_nanos();
-        let delay = if rem == 0 {
-            frame_duration
-        } else {
-            frame_duration.saturating_sub(Duration::from_nanos(rem as u64))
-        };
-        self.frame_requester.schedule_frame_in(delay);
+        current_animation_frame(
+            self.current_animation(),
+            self.animation_started_at.elapsed(),
+        )
+        .delay
     }
 
     pub(crate) fn draw_request(&self, area: Rect, footer_height: u16) -> Option<AmbientPetDraw> {
@@ -254,11 +255,9 @@ impl AmbientPet {
         else {
             unreachable!("ambient pets always have an idle animation");
         };
-        if !animation.loop_animation {
-            let elapsed_frames = (self.animation_started_at.elapsed().as_secs_f64()
-                * animation.fps.max(0.1))
-            .floor() as usize;
-            if elapsed_frames >= animation.frames.len()
+        if animation.loop_start.is_none() {
+            let elapsed = self.animation_started_at.elapsed();
+            if elapsed >= animation.total_duration()
                 && let Some(fallback) = self.pet.animations.get(&animation.fallback)
             {
                 return fallback;
@@ -269,8 +268,11 @@ impl AmbientPet {
 
     fn current_frame_path(&self) -> PathBuf {
         let animation = self.current_animation();
-        let frame_index = current_animation_frame(animation, self.animation_started_at.elapsed());
-        let sprite_index = animation.frames[frame_index];
+        let sprite_index = if self.animations_enabled {
+            current_animation_frame(animation, self.animation_started_at.elapsed()).sprite_index
+        } else {
+            animation.frames[0].sprite_index
+        };
         self.frames[sprite_index.min(self.frames.len().saturating_sub(1))].clone()
     }
 
@@ -293,16 +295,75 @@ struct ImageSize {
     height_px: u16,
 }
 
-fn current_animation_frame(animation: &Animation, elapsed: Duration) -> usize {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AnimationFrameTick {
+    sprite_index: usize,
+    delay: Option<Duration>,
+}
+
+fn current_animation_frame(animation: &Animation, elapsed: Duration) -> AnimationFrameTick {
     if animation.frames.len() <= 1 {
-        return 0;
+        return AnimationFrameTick {
+            sprite_index: animation.frames[0].sprite_index,
+            delay: None,
+        };
     }
-    let elapsed_frames = (elapsed.as_secs_f64() * animation.fps.max(0.1)).floor() as usize;
-    if animation.loop_animation {
-        elapsed_frames % animation.frames.len()
+
+    let elapsed_nanos = elapsed.as_nanos();
+    if let Some(loop_start) = animation
+        .loop_start
+        .filter(|idx| *idx < animation.frames.len())
+    {
+        let total_nanos = duration_nanos(animation.total_duration());
+        let prefix_nanos = animation.frames[..loop_start]
+            .iter()
+            .map(|frame| duration_nanos(frame.duration))
+            .sum::<u128>();
+        let loop_nanos = animation.frames[loop_start..]
+            .iter()
+            .map(|frame| duration_nanos(frame.duration))
+            .sum::<u128>();
+        let effective_elapsed = if elapsed_nanos >= total_nanos && loop_nanos > 0 {
+            prefix_nanos + elapsed_nanos.saturating_sub(prefix_nanos) % loop_nanos
+        } else {
+            elapsed_nanos
+        };
+        frame_at_elapsed(animation, effective_elapsed)
+    } else if elapsed_nanos >= duration_nanos(animation.total_duration()) {
+        AnimationFrameTick {
+            sprite_index: animation.frames[animation.frames.len() - 1].sprite_index,
+            delay: None,
+        }
     } else {
-        elapsed_frames.min(animation.frames.len() - 1)
+        frame_at_elapsed(animation, elapsed_nanos)
     }
+}
+
+fn frame_at_elapsed(animation: &Animation, elapsed_nanos: u128) -> AnimationFrameTick {
+    let mut remaining_elapsed = elapsed_nanos;
+    for frame in &animation.frames {
+        let frame_nanos = duration_nanos(frame.duration).max(/*other*/ 1);
+        if remaining_elapsed < frame_nanos {
+            return AnimationFrameTick {
+                sprite_index: frame.sprite_index,
+                delay: Some(nanos_to_duration(frame_nanos - remaining_elapsed)),
+            };
+        }
+        remaining_elapsed = remaining_elapsed.saturating_sub(frame_nanos);
+    }
+
+    AnimationFrameTick {
+        sprite_index: animation.frames[animation.frames.len() - 1].sprite_index,
+        delay: None,
+    }
+}
+
+fn duration_nanos(duration: Duration) -> u128 {
+    duration.as_nanos()
+}
+
+fn nanos_to_duration(nanos: u128) -> Duration {
+    Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
 }
 
 fn notification_height(notification: &PetNotification) -> u16 {
@@ -342,6 +403,9 @@ fn render_notification(notification: &PetNotification, x: u16, y: u16, buf: &mut
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use super::super::model::AnimationFrame;
     use super::*;
 
     #[test]
@@ -350,5 +414,68 @@ mod tests {
         assert_eq!(PetNotificationKind::Waiting.label(), "Needs input");
         assert_eq!(PetNotificationKind::Review.label(), "Ready");
         assert_eq!(PetNotificationKind::Failed.label(), "Blocked");
+    }
+
+    #[test]
+    fn animation_frame_uses_per_frame_duration() {
+        let animation = test_animation();
+
+        assert_eq!(
+            current_animation_frame(&animation, Duration::from_millis(/*millis*/ 15)),
+            AnimationFrameTick {
+                sprite_index: 1,
+                delay: Some(Duration::from_millis(/*millis*/ 5)),
+            }
+        );
+    }
+
+    #[test]
+    fn reduced_motion_uses_stable_first_frame_and_schedules_no_follow_up() {
+        let pet = test_ambient_pet(/*animations_enabled*/ false);
+
+        assert_eq!(pet.current_frame_path(), PathBuf::from("frame-0.png"));
+        assert_eq!(pet.next_frame_delay(), None);
+    }
+
+    fn test_ambient_pet(animations_enabled: bool) -> AmbientPet {
+        AmbientPet {
+            pet: Pet {
+                id: "test".to_string(),
+                display_name: "Test".to_string(),
+                description: String::new(),
+                spritesheet_path: PathBuf::from("spritesheet.webp"),
+                frame_width: 192,
+                frame_height: 208,
+                columns: 8,
+                rows: 9,
+                animations: HashMap::from([("idle".to_string(), test_animation())]),
+            },
+            support: PetImageSupport::Supported(ImageProtocol::Kitty),
+            frames: vec![PathBuf::from("frame-0.png"), PathBuf::from("frame-1.png")],
+            sixel_dir: PathBuf::new(),
+            frame_requester: FrameRequester::test_dummy(),
+            notification: None,
+            animation_started_at: Instant::now()
+                .checked_sub(Duration::from_millis(/*millis*/ 15))
+                .unwrap(),
+            animations_enabled,
+        }
+    }
+
+    fn test_animation() -> Animation {
+        Animation {
+            frames: vec![
+                AnimationFrame {
+                    sprite_index: 0,
+                    duration: Duration::from_millis(/*millis*/ 10),
+                },
+                AnimationFrame {
+                    sprite_index: 1,
+                    duration: Duration::from_millis(/*millis*/ 10),
+                },
+            ],
+            loop_start: Some(/*loop_start*/ 0),
+            fallback: "idle".to_string(),
+        }
     }
 }

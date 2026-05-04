@@ -1912,6 +1912,21 @@ async fn slash_pets_disable_disables_pets_even_on_unsupported_terminal() {
 
 #[tokio::test]
 #[serial]
+async fn slash_pet_hide_disables_pets_even_on_unsupported_terminal() {
+    let _env_guard = tmux_pet_image_env();
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.bottom_pane
+        .set_composer_text("/pet hide".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::PetDisabled));
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+#[serial]
 async fn slash_pets_on_unsupported_terminal_warns_without_picker() {
     let _env_guard = tmux_pet_image_env();
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
