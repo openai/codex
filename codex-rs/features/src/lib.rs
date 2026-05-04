@@ -227,6 +227,8 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
     ResponsesWebsocketsV2,
+    /// Enable remote compaction v2 over the normal Responses API.
+    RemoteCompactionV2,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
 }
@@ -785,7 +787,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Experimental {
             name: "Memories",
             menu_description: "Allow Codex to create new memories from conversations and bring relevant memories into new conversations.",
-            announcement: "NEW: Codex can now generate and uses memories. Try is now with `/memories`",
+            announcement: "NEW: Codex can now generate and use memories. Try it now with `/memories`",
         },
         default_enabled: false,
     },
@@ -1119,6 +1121,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ResponsesWebsocketsV2,
         key: "responses_websockets_v2",
         stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RemoteCompactionV2,
+        key: "remote_compaction_v2",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

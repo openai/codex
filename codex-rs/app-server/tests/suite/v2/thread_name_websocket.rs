@@ -211,9 +211,10 @@ async fn thread_name_update_rollout_count(
     codex_home: &Path,
     conversation_id: &str,
 ) -> Result<usize> {
-    let rollout_path = find_thread_path_by_id_str(codex_home, conversation_id)
-        .await?
-        .context("rollout path")?;
+    let rollout_path =
+        find_thread_path_by_id_str(codex_home, conversation_id, /*state_db_ctx*/ None)
+            .await?
+            .context("rollout path")?;
     let contents = tokio::fs::read_to_string(rollout_path).await?;
     Ok(contents
         .lines()

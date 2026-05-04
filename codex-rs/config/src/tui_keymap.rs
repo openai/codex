@@ -104,6 +104,8 @@ pub struct TuiGlobalKeymap {
     pub toggle_shortcuts: Option<KeybindingsSpec>,
     /// Toggle Vim mode for the composer input.
     pub toggle_vim_mode: Option<KeybindingsSpec>,
+    /// Toggle Fast mode.
+    pub toggle_fast_mode: Option<KeybindingsSpec>,
 }
 
 /// Chat context keybindings.
@@ -169,6 +171,8 @@ pub struct TuiEditorKeymap {
     pub delete_forward_word: Option<KeybindingsSpec>,
     /// Kill text from cursor to line start.
     pub kill_line_start: Option<KeybindingsSpec>,
+    /// Kill the current line.
+    pub kill_whole_line: Option<KeybindingsSpec>,
     /// Kill text from cursor to line end.
     pub kill_line_end: Option<KeybindingsSpec>,
     /// Yank the kill buffer.

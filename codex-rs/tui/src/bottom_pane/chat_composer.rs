@@ -190,6 +190,7 @@ use crate::keymap::EditorKeymap;
 use crate::keymap::RuntimeKeymap;
 use crate::keymap::VimNormalKeymap;
 use crate::keymap::primary_binding;
+use crate::onboarding::mark_underlined_hyperlink;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
@@ -396,6 +397,7 @@ pub(crate) struct ChatComposer {
     side_conversation_active: bool,
     is_zellij: bool,
     status_line_value: Option<Line<'static>>,
+    status_line_hyperlink_url: Option<String>,
     status_line_enabled: bool,
     side_conversation_context_label: Option<String>,
     // Agent label injected into the footer's contextual row when multi-agent mode is active.
@@ -580,6 +582,7 @@ impl ChatComposer {
                 Some(codex_terminal_detection::Multiplexer::Zellij {})
             ),
             status_line_value: None,
+            status_line_hyperlink_url: None,
             status_line_enabled: false,
             side_conversation_context_label: None,
             active_agent_label: None,
@@ -4037,6 +4040,14 @@ impl ChatComposer {
         true
     }
 
+    pub(crate) fn set_status_line_hyperlink(&mut self, url: Option<String>) -> bool {
+        if self.status_line_hyperlink_url == url {
+            return false;
+        }
+        self.status_line_hyperlink_url = url;
+        true
+    }
+
     pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) -> bool {
         if self.status_line_enabled == enabled {
             return false;
@@ -4440,6 +4451,11 @@ impl ChatComposer {
                     }
                     if show_right && let Some(line) = &right_line {
                         render_context_right(hint_rect, buf, line);
+                    }
+                    if status_line_active
+                        && let Some(url) = self.status_line_hyperlink_url.as_deref()
+                    {
+                        mark_underlined_hyperlink(buf, hint_rect, url);
                     }
                 }
             }
@@ -5019,6 +5035,39 @@ mod tests {
         assert_eq!(
             buf[(shell_label_x as u16, footer_y)].style().fg,
             Some(Color::LightRed)
+        );
+    }
+
+    #[test]
+    fn status_line_hyperlink_marks_pr_number_cells() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        let url = "https://github.com/openai/codex/pull/20252";
+        composer.set_status_line_enabled(/*enabled*/ true);
+        composer.set_status_line(Some(Line::from(Span::styled(
+            "PR #20252",
+            Style::default().cyan().underlined(),
+        ))));
+        composer.set_status_line_hyperlink(Some(url.to_string()));
+
+        let area = Rect::new(0, 0, 40, 6);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+
+        let marked_cells = (area.top()..area.bottom())
+            .flat_map(|y| (area.left()..area.right()).map(move |x| (x, y)))
+            .filter(|&(x, y)| buf[(x, y)].symbol().contains(url))
+            .count();
+        assert_eq!(
+            marked_cells,
+            "PR #20252".chars().filter(|ch| !ch.is_whitespace()).count()
         );
     }
 

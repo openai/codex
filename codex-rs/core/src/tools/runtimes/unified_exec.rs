@@ -254,7 +254,8 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         }
         let environment_is_remote = ctx
             .turn
-            .primary_environment()
+            .environments
+            .primary()
             .is_some_and(|turn_environment| turn_environment.environment.is_remote());
         let command = if environment_is_remote {
             base_command.to_vec()
@@ -292,7 +293,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .await?
             {
                 Some(prepared) => {
-                    let Some(turn_environment) = ctx.turn.primary_environment() else {
+                    let Some(turn_environment) = ctx.turn.environments.primary() else {
                         return Err(ToolError::Rejected(
                             "exec_command is unavailable in this session".to_string(),
                         ));
@@ -337,7 +338,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .env_for(command, options, managed_network)
             .map_err(|err| ToolError::Codex(err.into()))?;
         exec_env.exec_server_env_config = req.exec_server_env_config.clone();
-        let Some(turn_environment) = ctx.turn.primary_environment() else {
+        let Some(turn_environment) = ctx.turn.environments.primary() else {
             return Err(ToolError::Rejected(
                 "exec_command is unavailable in this session".to_string(),
             ));

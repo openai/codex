@@ -412,7 +412,7 @@ impl ShellHandler {
         } = args;
 
         let mut exec_params = exec_params;
-        let Some(turn_environment) = turn.primary_environment() else {
+        let Some(turn_environment) = turn.environments.primary() else {
             return Err(FunctionCallError::RespondToModel(
                 "shell is unavailable in this session".to_string(),
             ));

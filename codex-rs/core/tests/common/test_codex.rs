@@ -423,6 +423,7 @@ impl TestCodexBuilder {
         environment_manager: Arc<codex_exec_server::EnvironmentManager>,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
+        let state_db = codex_core::init_state_db(&config).await;
         let thread_manager = if config.model_catalog.is_some() {
             ThreadManager::new(
                 &config,
@@ -430,14 +431,16 @@ impl TestCodexBuilder {
                 SessionSource::Exec,
                 Arc::clone(&environment_manager),
                 /*analytics_events_client*/ None,
-                thread_store_from_config(&config),
+                thread_store_from_config(&config, state_db.clone()),
+                state_db.clone(),
             )
         } else {
-            codex_core::test_support::thread_manager_with_models_provider_and_home(
+            codex_core::test_support::thread_manager_with_models_provider_home_and_state(
                 auth.clone(),
                 config.model_provider.clone(),
                 config.codex_home.to_path_buf(),
                 Arc::clone(&environment_manager),
+                state_db.clone(),
             )
         };
         let thread_manager = Arc::new(thread_manager);

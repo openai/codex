@@ -31,6 +31,8 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+use codex_protocol::items::McpToolCallError as CoreMcpToolCallError;
+use codex_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::CallToolResult as CoreMcpCallToolResult;
 use codex_protocol::mcp::Resource as McpResource;
@@ -2783,6 +2785,24 @@ impl From<CoreMcpCallToolResult> for McpServerToolCallResponse {
     }
 }
 
+impl From<CoreMcpCallToolResult> for McpToolCallResult {
+    fn from(result: CoreMcpCallToolResult) -> Self {
+        Self {
+            content: result.content,
+            structured_content: result.structured_content,
+            meta: result.meta,
+        }
+    }
+}
+
+impl From<CoreMcpToolCallError> for McpToolCallError {
+    fn from(error: CoreMcpToolCallError) -> Self {
+        Self {
+            message: error.message,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -3611,8 +3631,9 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.experimentalRawEvents")]
     #[serde(default)]
     pub experimental_raw_events: bool,
-    /// If true, persist additional rollout EventMsg variants required to
-    /// reconstruct a richer thread history on resume/fork/read.
+    /// If true, persist additional EventMsg variants to the rollout file.
+    /// However, `thread/read`, `thread/resume`, and `thread/fork` still only
+    /// return the limited form of thread history for scalability reasons.
     #[experimental("thread/start.persistFullHistory")]
     #[serde(default)]
     pub persist_extended_history: bool,
@@ -3742,8 +3763,9 @@ pub struct ThreadResumeParams {
     #[experimental("thread/resume.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
-    /// If true, persist additional rollout EventMsg variants required to
-    /// reconstruct a richer thread history on subsequent resume/fork/read.
+    /// If true, persist additional EventMsg variants to the rollout file.
+    /// However, `thread/read`, `thread/resume`, and `thread/fork` still only
+    /// return the limited form of thread history for scalability reasons.
     #[experimental("thread/resume.persistFullHistory")]
     #[serde(default)]
     pub persist_extended_history: bool,
@@ -3847,8 +3869,9 @@ pub struct ThreadForkParams {
     #[experimental("thread/fork.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
-    /// If true, persist additional rollout EventMsg variants required to
-    /// reconstruct a richer thread history on subsequent resume/fork/read.
+    /// If true, persist additional EventMsg variants to the rollout file.
+    /// However, `thread/read`, `thread/resume`, and `thread/fork` still only
+    /// return the limited form of thread history for scalability reasons.
     #[experimental("thread/fork.persistFullHistory")]
     #[serde(default)]
     pub persist_extended_history: bool,
@@ -6483,6 +6506,23 @@ impl From<CoreTurnItem> for ThreadItem {
                     .map(PatchApplyStatus::from)
                     .unwrap_or(PatchApplyStatus::InProgress),
             },
+            CoreTurnItem::McpToolCall(mcp) => {
+                let duration_ms = mcp
+                    .duration
+                    .and_then(|duration| i64::try_from(duration.as_millis()).ok());
+
+                ThreadItem::McpToolCall {
+                    id: mcp.id,
+                    server: mcp.server,
+                    tool: mcp.tool,
+                    status: McpToolCallStatus::from(mcp.status),
+                    arguments: mcp.arguments,
+                    mcp_app_resource_uri: mcp.mcp_app_resource_uri,
+                    result: mcp.result.map(McpToolCallResult::from).map(Box::new),
+                    error: mcp.error.map(McpToolCallError::from),
+                    duration_ms,
+                }
+            }
             CoreTurnItem::ContextCompaction(compaction) => {
                 ThreadItem::ContextCompaction { id: compaction.id }
             }
@@ -6588,6 +6628,16 @@ impl From<&CorePatchApplyStatus> for PatchApplyStatus {
             CorePatchApplyStatus::Completed => PatchApplyStatus::Completed,
             CorePatchApplyStatus::Failed => PatchApplyStatus::Failed,
             CorePatchApplyStatus::Declined => PatchApplyStatus::Declined,
+        }
+    }
+}
+
+impl From<CoreMcpToolCallStatus> for McpToolCallStatus {
+    fn from(value: CoreMcpToolCallStatus) -> Self {
+        match value {
+            CoreMcpToolCallStatus::InProgress => McpToolCallStatus::InProgress,
+            CoreMcpToolCallStatus::Completed => McpToolCallStatus::Completed,
+            CoreMcpToolCallStatus::Failed => McpToolCallStatus::Failed,
         }
     }
 }
@@ -8094,10 +8144,13 @@ mod tests {
     use codex_protocol::items::AgentMessageItem;
     use codex_protocol::items::FileChangeItem;
     use codex_protocol::items::ImageViewItem;
+    use codex_protocol::items::McpToolCallItem;
+    use codex_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
     use codex_protocol::items::ReasoningItem;
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
     use codex_protocol::items::WebSearchItem;
+    use codex_protocol::mcp::CallToolResult;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
     use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
     use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -8107,6 +8160,7 @@ mod tests {
     use serde_json::json;
     use std::num::NonZeroUsize;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     fn absolute_path_string(path: &str) -> String {
         let path = format!("/{}", path.trim_start_matches('/'));
@@ -10414,6 +10468,69 @@ mod tests {
                     diff: "hello\n".to_string(),
                 }],
                 status: PatchApplyStatus::Completed,
+            }
+        );
+
+        let mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
+            id: "mcp-1".to_string(),
+            server: "server".to_string(),
+            tool: "tool".to_string(),
+            arguments: json!({"arg": "value"}),
+            mcp_app_resource_uri: Some("app://connector".to_string()),
+            status: CoreMcpToolCallStatus::InProgress,
+            result: None,
+            error: None,
+            duration: None,
+        });
+
+        assert_eq!(
+            ThreadItem::from(mcp_tool_call_item),
+            ThreadItem::McpToolCall {
+                id: "mcp-1".to_string(),
+                server: "server".to_string(),
+                tool: "tool".to_string(),
+                status: McpToolCallStatus::InProgress,
+                arguments: json!({"arg": "value"}),
+                mcp_app_resource_uri: Some("app://connector".to_string()),
+                result: None,
+                error: None,
+                duration_ms: None,
+            }
+        );
+
+        let completed_mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
+            id: "mcp-2".to_string(),
+            server: "server".to_string(),
+            tool: "tool".to_string(),
+            arguments: JsonValue::Null,
+            mcp_app_resource_uri: None,
+            status: CoreMcpToolCallStatus::Completed,
+            result: Some(CallToolResult {
+                content: vec![json!({"type": "text", "text": "ok"})],
+                structured_content: Some(json!({"ok": true})),
+                is_error: Some(false),
+                meta: Some(json!({"trace": "1"})),
+            }),
+            error: None,
+            duration: Some(Duration::from_millis(42)),
+        });
+
+        assert_eq!(
+            ThreadItem::from(completed_mcp_tool_call_item),
+            ThreadItem::McpToolCall {
+                id: "mcp-2".to_string(),
+                server: "server".to_string(),
+                tool: "tool".to_string(),
+                status: McpToolCallStatus::Completed,
+                arguments: JsonValue::Null,
+                mcp_app_resource_uri: None,
+                result: Some(Box::new(McpToolCallResult {
+                    content: vec![json!({"type": "text", "text": "ok"})],
+                    structured_content: Some(json!({"ok": true})),
+                    meta: Some(json!({"trace": "1"})),
+                })),
+                error: None,
+                duration_ms: Some(42),
             }
         );
     }

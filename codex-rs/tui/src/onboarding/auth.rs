@@ -61,6 +61,24 @@ use crate::tui::FrameRequester;
 /// row boundary, which breaks normal terminal URL detection for long URLs that
 /// wrap across multiple rows.
 pub(crate) fn mark_url_hyperlink(buf: &mut Buffer, area: Rect, url: &str) {
+    mark_hyperlink_cells(buf, area, url, |cell| {
+        cell.fg == Color::Cyan && cell.modifier.contains(Modifier::UNDERLINED)
+    });
+}
+
+/// Marks any underlined buffer cells as an OSC 8 hyperlink.
+pub(crate) fn mark_underlined_hyperlink(buf: &mut Buffer, area: Rect, url: &str) {
+    mark_hyperlink_cells(buf, area, url, |cell| {
+        cell.modifier.contains(Modifier::UNDERLINED)
+    });
+}
+
+fn mark_hyperlink_cells(
+    buf: &mut Buffer,
+    area: Rect,
+    url: &str,
+    should_mark: impl Fn(&ratatui::buffer::Cell) -> bool,
+) {
     // Sanitize: strip any characters that could break out of the OSC 8
     // sequence (ESC or BEL) to prevent terminal escape injection from a
     // malformed or compromised upstream URL.
@@ -75,8 +93,7 @@ pub(crate) fn mark_url_hyperlink(buf: &mut Buffer, area: Rect, url: &str) {
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
             let cell = &mut buf[(x, y)];
-            // Only mark cells that carry the URL's distinctive style.
-            if cell.fg != Color::Cyan || !cell.modifier.contains(Modifier::UNDERLINED) {
+            if !should_mark(cell) {
                 continue;
             }
             let sym = cell.symbol().to_string();
@@ -1048,6 +1065,7 @@ mod tests {
             .await,
             feedback: codex_feedback::CodexFeedback::new(),
             log_db: None,
+            state_db: None,
             environment_manager: Arc::new(
                 codex_app_server_client::EnvironmentManager::default_for_tests(),
             ),

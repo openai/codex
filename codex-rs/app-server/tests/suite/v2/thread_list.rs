@@ -614,6 +614,7 @@ sqlite = true
         generate_memories: false,
     };
     let repaired_page = codex_core::RolloutRecorder::list_threads(
+        Some(state_db.clone()),
         &rollout_config,
         /*page_size*/ 10,
         /*cursor*/ None,

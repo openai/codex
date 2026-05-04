@@ -49,7 +49,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_rollout::state_db::get_state_db;
+use codex_rollout::StateDbHandle;
+use codex_rollout::state_db;
 use codex_state::log_db;
 use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -102,6 +103,7 @@ mod audio_device {
     }
 }
 mod bottom_pane;
+mod branch_summary;
 mod chatwidget;
 mod cli;
 mod clipboard_copy;
@@ -166,6 +168,7 @@ mod status_indicator_widget;
 mod streaming;
 mod style;
 mod terminal_palette;
+mod terminal_probe;
 mod terminal_title;
 mod text_formatting;
 mod theme_picker;
@@ -186,6 +189,7 @@ mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;
 mod width;
+mod workspace_command;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod voice {
@@ -270,6 +274,7 @@ async fn start_embedded_app_server(
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
+    state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<InProcessAppServerClient> {
     start_embedded_app_server_with(
@@ -280,6 +285,7 @@ async fn start_embedded_app_server(
         cloud_requirements,
         feedback,
         log_db,
+        state_db,
         environment_manager,
         InProcessAppServerClient::start,
     )
@@ -397,6 +403,7 @@ async fn start_app_server(
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
+    state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppServerClient> {
     match target {
@@ -408,6 +415,7 @@ async fn start_app_server(
             cloud_requirements,
             feedback,
             log_db,
+            state_db,
             environment_manager,
         )
         .await
@@ -422,6 +430,7 @@ async fn start_app_server(
 pub(crate) async fn start_app_server_for_picker(
     config: &Config,
     target: &AppServerTarget,
+    state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppServerSession> {
     let app_server = start_app_server(
@@ -433,6 +442,7 @@ pub(crate) async fn start_app_server_for_picker(
         CloudRequirementsLoader::default(),
         codex_feedback::CodexFeedback::new(),
         /*log_db*/ None,
+        state_db,
         environment_manager,
     )
     .await?;
@@ -443,9 +453,11 @@ pub(crate) async fn start_app_server_for_picker(
 pub(crate) async fn start_embedded_app_server_for_picker(
     config: &Config,
 ) -> color_eyre::Result<AppServerSession> {
+    let state_db = state_db::init(config).await;
     start_app_server_for_picker(
         config,
         &AppServerTarget::Embedded,
+        state_db,
         Arc::new(EnvironmentManager::default_for_tests()),
     )
     .await
@@ -460,6 +472,7 @@ async fn start_embedded_app_server_with<F, Fut>(
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
+    state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
     start_client: F,
 ) -> color_eyre::Result<InProcessAppServerClient>
@@ -485,6 +498,7 @@ where
         cloud_requirements,
         feedback,
         log_db,
+        state_db,
         environment_manager,
         config_warnings,
         session_source: serde_json::from_value(serde_json::json!("cli"))
@@ -786,15 +800,6 @@ pub async fn run_main(
         }
     };
 
-    if let Err(err) = crate::legacy_core::personality_migration::maybe_migrate_personality(
-        &codex_home,
-        &config_toml,
-    )
-    .await
-    {
-        tracing::warn!(error = %err, "failed to run personality migration");
-    }
-
     let chatgpt_base_url = config_toml
         .chatgpt_base_url
         .clone()
@@ -864,12 +869,52 @@ pub async fn run_main(
         ..Default::default()
     };
 
-    let config = load_config_or_exit(
+    let mut config = load_config_or_exit(
         cli_kv_overrides.clone(),
         overrides.clone(),
         cloud_requirements.clone(),
     )
     .await;
+
+    let state_db = match &app_server_target {
+        AppServerTarget::Embedded => state_db::init(&config).await,
+        AppServerTarget::Remote { .. } => state_db::get_state_db(&config).await,
+    };
+
+    let effective_toml = config.config_layer_stack.effective_config();
+    match effective_toml.try_into() {
+        Ok(config_toml) => {
+            match crate::legacy_core::personality_migration::maybe_migrate_personality(
+                &config.codex_home,
+                &config_toml,
+                state_db.clone(),
+            )
+            .await
+            {
+                Ok(
+                    crate::legacy_core::personality_migration::PersonalityMigrationStatus::Applied,
+                ) => {
+                    config = load_config_or_exit(
+                        cli_kv_overrides.clone(),
+                        overrides.clone(),
+                        cloud_requirements.clone(),
+                    )
+                    .await;
+                }
+                Ok(
+                    crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedMarker
+                    | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedExplicitPersonality
+                    | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedNoSessions,
+                ) => {}
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to run personality migration");
+                }
+            }
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to deserialize config for personality migration");
+        }
+    }
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
@@ -1002,7 +1047,7 @@ pub async fn run_main(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db = get_state_db(&config).await.map(log_db::start);
+    let log_db = state_db.clone().map(log_db::start);
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
@@ -1028,6 +1073,7 @@ pub async fn run_main(
         cloud_requirements,
         feedback,
         log_db,
+        state_db,
         remote_url,
         remote_auth_token,
         environment_manager,
@@ -1049,6 +1095,7 @@ async fn run_ratatui_app(
     mut cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
+    state_db: Option<StateDbHandle>,
     remote_url: Option<String>,
     remote_auth_token: Option<String>,
     environment_manager: Arc<EnvironmentManager>,
@@ -1108,6 +1155,7 @@ async fn run_ratatui_app(
             cloud_requirements.clone(),
             feedback.clone(),
             log_db.clone(),
+            state_db.clone(),
             environment_manager.clone(),
         )
         .await
@@ -1359,7 +1407,7 @@ async fn run_ratatui_app(
             } else {
                 match resolve_cwd_for_resume_or_fork(
                     &mut tui,
-                    &config,
+                    state_db.as_deref(),
                     &current_cwd,
                     target_session.thread_id,
                     target_session.path.as_deref(),
@@ -1437,6 +1485,7 @@ async fn run_ratatui_app(
             cloud_requirements.clone(),
             feedback.clone(),
             log_db.clone(),
+            state_db.clone(),
             environment_manager.clone(),
         )
         .await
@@ -1467,6 +1516,7 @@ async fn run_ratatui_app(
         should_prompt_windows_sandbox_nux_at_startup,
         remote_url,
         remote_auth_token,
+        state_db,
         environment_manager,
     )
     .await;
@@ -1671,6 +1721,7 @@ mod tests {
     async fn start_test_embedded_app_server(
         config: Config,
     ) -> color_eyre::Result<InProcessAppServerClient> {
+        let state_db = state_db::init(&config).await;
         start_embedded_app_server(
             Arg0DispatchPaths::default(),
             config,
@@ -1679,6 +1730,7 @@ mod tests {
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
+            state_db,
             Arc::new(EnvironmentManager::default_for_tests()),
         )
         .await
@@ -2025,6 +2077,7 @@ mod tests {
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
+            /*state_db*/ None,
             Arc::new(EnvironmentManager::default_for_tests()),
             |_args| async { Err(std::io::Error::other("boom")) },
         )
