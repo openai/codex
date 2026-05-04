@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ProcessExitedNotification;
 use codex_app_server_protocol::ProcessKillParams;
@@ -18,9 +19,11 @@ use codex_app_server_protocol::ProcessTerminalSize;
 use codex_app_server_protocol::ProcessWriteStdinParams;
 use codex_app_server_protocol::ProcessWriteStdinResponse;
 use codex_app_server_protocol::ServerNotification;
+use codex_core::config::Config;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecExpirationOutcome;
 use codex_core::exec::IO_DRAIN_TIMEOUT_MS;
+use codex_core::exec_env::create_env;
 use codex_protocol::exec_output::bytes_to_string_smart;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
@@ -40,19 +43,33 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 
-use super::CodexMessageProcessor;
-use super::create_env;
-
 const EXEC_TIMEOUT_EXIT_CODE: i32 = 124;
 const OUTPUT_CHUNK_SIZE_HINT: usize = 64 * 1024;
 
-impl CodexMessageProcessor {
-    pub(super) async fn process_spawn(
+#[derive(Clone)]
+pub(crate) struct ProcessExecRequestProcessor {
+    config: Arc<Config>,
+    outgoing: Arc<OutgoingMessageSender>,
+    process_exec_manager: ProcessExecManager,
+}
+
+impl ProcessExecRequestProcessor {
+    pub(crate) fn new(config: Arc<Config>, outgoing: Arc<OutgoingMessageSender>) -> Self {
+        Self {
+            config,
+            outgoing,
+            process_exec_manager: ProcessExecManager::default(),
+        }
+    }
+
+    pub(crate) async fn process_spawn(
         &self,
         request_id: ConnectionRequestId,
         params: ProcessSpawnParams,
-    ) -> Result<(), JSONRPCErrorError> {
-        self.process_spawn_inner(request_id, params).await
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.process_spawn_inner(request_id, params)
+            .await
+            .map(|()| None)
     }
 
     async fn process_spawn_inner(
@@ -144,37 +161,48 @@ impl CodexMessageProcessor {
         Ok(())
     }
 
-    pub(super) async fn process_write_stdin(
+    pub(crate) async fn process_write_stdin(
         &self,
         request_id: ConnectionRequestId,
         params: ProcessWriteStdinParams,
-    ) -> Result<ProcessWriteStdinResponse, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.process_exec_manager
             .write_stdin(request_id, params)
             .await
+            .map(|response| Some(response.into()))
     }
 
-    pub(super) async fn process_resize_pty(
+    pub(crate) async fn process_resize_pty(
         &self,
         request_id: ConnectionRequestId,
         params: ProcessResizePtyParams,
-    ) -> Result<ProcessResizePtyResponse, JSONRPCErrorError> {
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.process_exec_manager
             .resize_pty(request_id, params)
             .await
+            .map(|response| Some(response.into()))
     }
 
-    pub(super) async fn process_kill(
+    pub(crate) async fn process_kill(
         &self,
         request_id: ConnectionRequestId,
         params: ProcessKillParams,
-    ) -> Result<ProcessKillResponse, JSONRPCErrorError> {
-        self.process_exec_manager.kill(request_id, params).await
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.process_exec_manager
+            .kill(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
+        self.process_exec_manager
+            .connection_closed(connection_id)
+            .await;
     }
 }
 
 #[derive(Clone, Default)]
-pub(super) struct ProcessExecManager {
+struct ProcessExecManager {
     sessions: Arc<Mutex<HashMap<ConnectionProcessHandle, ProcessSession>>>,
 }
 
@@ -407,7 +435,7 @@ impl ProcessExecManager {
         Ok(ProcessResizePtyResponse {})
     }
 
-    pub(super) async fn connection_closed(&self, connection_id: ConnectionId) {
+    async fn connection_closed(&self, connection_id: ConnectionId) {
         let controls = {
             let mut sessions = self.sessions.lock().await;
             let process_handles = sessions

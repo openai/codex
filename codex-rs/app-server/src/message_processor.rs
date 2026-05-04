@@ -26,6 +26,7 @@ use crate::request_processors::InitializeRequestProcessor;
 use crate::request_processors::MarketplaceRequestProcessor;
 use crate::request_processors::McpRequestProcessor;
 use crate::request_processors::PluginRequestProcessor;
+use crate::request_processors::ProcessExecRequestProcessor;
 use crate::request_processors::SearchRequestProcessor;
 use crate::request_processors::ThreadGoalRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
@@ -156,6 +157,7 @@ pub(crate) struct MessageProcessor {
     apps_processor: AppsRequestProcessor,
     catalog_processor: CatalogRequestProcessor,
     command_exec_processor: CommandExecRequestProcessor,
+    process_exec_processor: ProcessExecRequestProcessor,
     config_processor: ConfigRequestProcessor,
     device_key_processor: DeviceKeyRequestProcessor,
     external_agent_config_processor: ExternalAgentConfigRequestProcessor,
@@ -331,6 +333,8 @@ impl MessageProcessor {
             Arc::clone(&config),
             outgoing.clone(),
         );
+        let process_exec_processor =
+            ProcessExecRequestProcessor::new(Arc::clone(&config), outgoing.clone());
         let feedback_processor = FeedbackRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
@@ -453,6 +457,7 @@ impl MessageProcessor {
             apps_processor,
             catalog_processor,
             command_exec_processor,
+            process_exec_processor,
             config_processor,
             device_key_processor,
             external_agent_config_processor,
@@ -669,6 +674,9 @@ impl MessageProcessor {
         self.outgoing.connection_closed(connection_id).await;
         self.fs_processor.connection_closed(connection_id).await;
         self.command_exec_processor
+            .connection_closed(connection_id)
+            .await;
+        self.process_exec_processor
             .connection_closed(connection_id)
             .await;
         self.thread_processor.connection_closed(connection_id).await;
@@ -1234,6 +1242,26 @@ impl MessageProcessor {
             ClientRequest::CommandExecTerminate { params, .. } => {
                 self.command_exec_processor
                     .command_exec_terminate(request_id.clone(), params)
+                    .await
+            }
+            ClientRequest::ProcessSpawn { params, .. } => {
+                self.process_exec_processor
+                    .process_spawn(request_id.clone(), params)
+                    .await
+            }
+            ClientRequest::ProcessWriteStdin { params, .. } => {
+                self.process_exec_processor
+                    .process_write_stdin(request_id.clone(), params)
+                    .await
+            }
+            ClientRequest::ProcessKill { params, .. } => {
+                self.process_exec_processor
+                    .process_kill(request_id.clone(), params)
+                    .await
+            }
+            ClientRequest::ProcessResizePty { params, .. } => {
+                self.process_exec_processor
+                    .process_resize_pty(request_id.clone(), params)
                     .await
             }
             ClientRequest::FeedbackUpload { params, .. } => {
