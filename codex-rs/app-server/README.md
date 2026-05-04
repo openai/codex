@@ -181,12 +181,12 @@ Example with notification opt-out:
 - `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
 - `command/exec/terminate` — terminate a running `command/exec` session by `processId`; returns `{}`.
 - `command/exec/outputDelta` — notification emitted for base64-encoded stdout/stderr chunks from a streaming `command/exec` session.
-- `process/spawn` — spawn a standalone process without the Codex sandbox; returns after the process starts and emits `process/outputDelta` and `process/exited` notifications.
-- `process/writeStdin` — write base64-decoded stdin bytes to a running `process/spawn` session or close stdin; returns `{}`.
-- `process/resizePty` — resize a running PTY-backed `process/spawn` session by `processHandle`; returns `{}`.
-- `process/kill` — terminate a running `process/spawn` session by `processHandle`; returns `{}`.
-- `process/outputDelta` — notification emitted for base64-encoded stdout/stderr chunks from a streaming `process/spawn` session.
-- `process/exited` — notification emitted when a `process/spawn` session exits.
+- `process/spawn` — experimental; spawn a standalone process without the Codex sandbox; returns after the process starts and emits `process/outputDelta` and `process/exited` notifications.
+- `process/writeStdin` — experimental; write base64-decoded stdin bytes to a running `process/spawn` session or close stdin; returns `{}`.
+- `process/resizePty` — experimental; resize a running PTY-backed `process/spawn` session by `processHandle`; returns `{}`.
+- `process/kill` — experimental; terminate a running `process/spawn` session by `processHandle`; returns `{}`.
+- `process/outputDelta` — experimental; notification emitted for base64-encoded stdout/stderr chunks from a streaming `process/spawn` session.
+- `process/exited` — experimental; notification emitted when a `process/spawn` session exits.
 - `fs/readFile` — read an absolute file path and return `{ dataBase64 }`.
 - `fs/writeFile` — write an absolute file path from base64-encoded `{ dataBase64 }`; returns `{}`.
 - `fs/createDirectory` — create an absolute directory path; `recursive` defaults to `true`.
@@ -1012,7 +1012,7 @@ Streaming stdin/stdout uses base64 so PTY sessions can carry arbitrary bytes:
 
 ### Example: Process lifecycle execution
 
-Use `process/spawn` to start a standalone argv-based process without the Codex sandbox. The spawn response means the process has started and the `processHandle` is registered; completion is reported later through `process/exited`.
+Use `process/spawn` to start a standalone argv-based process without the Codex sandbox. The `process/*` API is experimental and requires `initialize.params.capabilities.experimentalApi: true`. The spawn response means the process has started and the `processHandle` is registered; completion is reported later through `process/exited`.
 
 ```json
 { "method": "process/spawn", "id": 40, "params": {

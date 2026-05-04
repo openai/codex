@@ -906,24 +906,28 @@ client_request_definitions! {
         serialization: command_process_id(params.process_id),
         response: v2::CommandExecResizeResponse,
     },
+    #[experimental("process/spawn")]
     /// Spawn a standalone process (argv vector) without a Codex sandbox.
     ProcessSpawn => "process/spawn" {
         params: v2::ProcessSpawnParams,
         serialization: process_handle(params.process_handle),
         response: v2::ProcessSpawnResponse,
     },
+    #[experimental("process/writeStdin")]
     /// Write stdin bytes to a running `process/spawn` session or close stdin.
     ProcessWriteStdin => "process/writeStdin" {
         params: v2::ProcessWriteStdinParams,
         serialization: process_handle(params.process_handle),
         response: v2::ProcessWriteStdinResponse,
     },
+    #[experimental("process/kill")]
     /// Terminate a running `process/spawn` session by client-supplied `processHandle`.
     ProcessKill => "process/kill" {
         params: v2::ProcessKillParams,
         serialization: process_handle(params.process_handle),
         response: v2::ProcessKillResponse,
     },
+    #[experimental("process/resizePty")]
     /// Resize a running PTY-backed `process/spawn` session by client-supplied `processHandle`.
     ProcessResizePty => "process/resizePty" {
         params: v2::ProcessResizePtyParams,
@@ -1432,8 +1436,10 @@ server_notification_definitions! {
     /// Stream base64-encoded stdout/stderr chunks for a running `command/exec` session.
     CommandExecOutputDelta => "command/exec/outputDelta" (v2::CommandExecOutputDeltaNotification),
     /// Stream base64-encoded stdout/stderr chunks for a running `process/spawn` session.
+    #[experimental("process/outputDelta")]
     ProcessOutputDelta => "process/outputDelta" (v2::ProcessOutputDeltaNotification),
     /// Final exit notification for a `process/spawn` session.
+    #[experimental("process/exited")]
     ProcessExited => "process/exited" (v2::ProcessExitedNotification),
     CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
     TerminalInteraction => "item/commandExecution/terminalInteraction" (v2::TerminalInteractionNotification),
