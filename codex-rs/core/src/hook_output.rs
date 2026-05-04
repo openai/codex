@@ -49,7 +49,13 @@ pub(crate) async fn cap_model_visible_hook_text(
         return formatted_truncate_text(&text, truncation_policy);
     }
 
-    spawn_hook_output_cleanup(codex_home.clone(), thread_id, state_db);
+    let cleanup_codex_home = codex_home.clone();
+    tokio::spawn(async move {
+        if let Err(err) = cleanup_stale_hook_outputs(&cleanup_codex_home, thread_id, state_db).await
+        {
+            warn!("failed to clean up hook outputs: {err:?}");
+        }
+    });
     spilled_hook_output_preview(&text, &path, truncation_policy)
 }
 
@@ -84,19 +90,6 @@ fn policy_with_footer_reserve(policy: TruncationPolicy, footer: &str) -> Truncat
             TruncationPolicy::Tokens(tokens.saturating_sub(approx_token_count(footer)))
         }
     }
-}
-
-fn spawn_hook_output_cleanup(
-    codex_home: AbsolutePathBuf,
-    active_thread_id: ThreadId,
-    state_db: Option<StateDbHandle>,
-) {
-    tokio::spawn(async move {
-        if let Err(err) = cleanup_stale_hook_outputs(&codex_home, active_thread_id, state_db).await
-        {
-            warn!("failed to clean up hook outputs: {err:?}");
-        }
-    });
 }
 
 /// Removes hook-output directories whose threads are no longer live enough to retain.
