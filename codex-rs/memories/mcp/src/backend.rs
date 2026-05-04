@@ -47,6 +47,7 @@ pub struct ListMemoriesResponse {
 pub struct ReadMemoryRequest {
     pub path: String,
     pub line_offset: usize,
+    pub max_lines: Option<usize>,
     pub max_tokens: usize,
 }
 
@@ -99,6 +100,8 @@ pub enum MemoriesBackendError {
     InvalidPath { path: String, reason: String },
     #[error("line_offset must be a 1-indexed line number")]
     InvalidLineOffset,
+    #[error("max_lines must be a positive integer")]
+    InvalidMaxLines,
     #[error("line_offset exceeds file length")]
     LineOffsetExceedsFileLength,
     #[error("path '{path}' is not a file")]

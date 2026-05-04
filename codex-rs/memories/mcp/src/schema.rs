@@ -43,7 +43,8 @@ pub(crate) fn read_input_schema() -> JsonObject {
         "type": "object",
         "properties": {
             "path": { "type": "string" },
-            "line_offset": { "type": "integer", "minimum": 1 }
+            "line_offset": { "type": "integer", "minimum": 1 },
+            "max_lines": { "type": "integer", "minimum": 1 }
         },
         "required": ["path"],
         "additionalProperties": false

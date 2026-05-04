@@ -49,6 +49,7 @@ struct ListArgs {
 struct ReadArgs {
     path: String,
     line_offset: Option<usize>,
+    max_lines: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -129,6 +130,7 @@ impl<B: MemoriesBackend> ServerHandler for MemoriesMcpServer<B> {
                         .read(ReadMemoryRequest {
                             path: args.path,
                             line_offset: args.line_offset.unwrap_or(1),
+                            max_lines: args.max_lines,
                             max_tokens: DEFAULT_READ_MAX_TOKENS,
                         })
                         .await
@@ -197,7 +199,7 @@ fn read_tool() -> Tool {
     let mut tool = Tool::new(
         Cow::Borrowed(READ_TOOL_NAME),
         Cow::Borrowed(
-            "Read a Codex memory file by relative path, optionally starting at a 1-indexed line offset.",
+            "Read a Codex memory file by relative path, optionally starting at a 1-indexed line offset and limiting the number of lines returned.",
         ),
         Arc::new(schema::read_input_schema()),
     );
@@ -229,6 +231,7 @@ fn backend_error_to_mcp(err: MemoriesBackendError) -> McpError {
     match err {
         MemoriesBackendError::InvalidPath { .. }
         | MemoriesBackendError::InvalidLineOffset
+        | MemoriesBackendError::InvalidMaxLines
         | MemoriesBackendError::LineOffsetExceedsFileLength
         | MemoriesBackendError::NotFile { .. }
         | MemoriesBackendError::EmptyQuery => McpError::invalid_params(err.to_string(), None),

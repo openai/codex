@@ -94,6 +94,9 @@ impl MemoriesBackend for LocalMemoriesBackend {
         if request.line_offset == 0 {
             return Err(MemoriesBackendError::InvalidLineOffset);
         }
+        if request.max_lines == Some(0) {
+            return Err(MemoriesBackendError::InvalidMaxLines);
+        }
 
         let path = self.resolve_scoped_path(Some(request.path.as_str()))?;
         let Some(metadata) = Self::metadata_or_none(&path).await? else {
@@ -106,14 +109,15 @@ impl MemoriesBackend for LocalMemoriesBackend {
 
         let original_content = tokio::fs::read_to_string(&path).await?;
         let start_byte = line_start_byte_offset(&original_content, request.line_offset)?;
-        let content_from_offset = &original_content[start_byte..];
+        let end_byte = line_end_byte_offset(&original_content, start_byte, request.max_lines);
+        let content_from_offset = &original_content[start_byte..end_byte];
         let max_tokens = if request.max_tokens == 0 {
             DEFAULT_READ_MAX_TOKENS
         } else {
             request.max_tokens
         };
         let content = truncate_text(content_from_offset, TruncationPolicy::Tokens(max_tokens));
-        let truncated = content != content_from_offset;
+        let truncated = end_byte < original_content.len() || content != content_from_offset;
         Ok(ReadMemoryResponse {
             path: request.path,
             start_line_number: request.line_offset,
@@ -332,6 +336,24 @@ fn line_start_byte_offset(
     }
 
     Err(MemoriesBackendError::LineOffsetExceedsFileLength)
+}
+
+fn line_end_byte_offset(content: &str, start_byte: usize, max_lines: Option<usize>) -> usize {
+    let Some(max_lines) = max_lines else {
+        return content.len();
+    };
+
+    let mut lines_seen = 1;
+    for (relative_idx, ch) in content[start_byte..].char_indices() {
+        if ch == '\n' {
+            if lines_seen == max_lines {
+                return start_byte + relative_idx + 1;
+            }
+            lines_seen += 1;
+        }
+    }
+
+    content.len()
 }
 
 #[cfg(test)]
