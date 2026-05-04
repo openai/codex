@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use codex_config::ConfigLayerStack;
 use codex_plugin::PluginHookSource;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookRunSummary;
@@ -101,7 +102,7 @@ impl ClaudeHooksEngine {
         plugin_hook_sources: Vec<PluginHookSource>,
         plugin_hook_load_warnings: Vec<String>,
         shell: CommandShell,
-        hook_output_dir: Option<AbsolutePathBuf>,
+        codex_home: Option<AbsolutePathBuf>,
     ) -> Self {
         if !enabled {
             return Self {
@@ -122,7 +123,7 @@ impl ClaudeHooksEngine {
             handlers: discovered.handlers,
             warnings: discovered.warnings,
             shell,
-            output_spiller: hook_output_dir.map(HookOutputSpiller::new),
+            output_spiller: codex_home.map(HookOutputSpiller::new),
         }
     }
 
@@ -163,11 +164,9 @@ impl ClaudeHooksEngine {
         let session_id = request.session_id;
         let mut outcome =
             crate::events::session_start::run(&self.handlers, &self.shell, request, turn_id).await;
-        if let Some(output_spiller) = &self.output_spiller {
-            outcome.additional_contexts = output_spiller
-                .maybe_spill_texts(session_id, outcome.additional_contexts)
-                .await;
-        }
+        outcome.additional_contexts = self
+            .maybe_spill_texts(session_id, outcome.additional_contexts)
+            .await;
         outcome
     }
 
@@ -189,20 +188,12 @@ impl ClaudeHooksEngine {
         let session_id = request.session_id;
         let mut outcome =
             crate::events::post_tool_use::run(&self.handlers, &self.shell, request).await;
-        if let Some(output_spiller) = &self.output_spiller {
-            outcome.additional_contexts = output_spiller
-                .maybe_spill_texts(session_id, outcome.additional_contexts)
-                .await;
-            outcome.feedback_message = if let Some(feedback_message) = outcome.feedback_message {
-                Some(
-                    output_spiller
-                        .maybe_spill_text(session_id, feedback_message)
-                        .await,
-                )
-            } else {
-                None
-            };
-        }
+        outcome.additional_contexts = self
+            .maybe_spill_texts(session_id, outcome.additional_contexts)
+            .await;
+        outcome.feedback_message = self
+            .maybe_spill_text(session_id, outcome.feedback_message)
+            .await;
         outcome
     }
 
@@ -220,11 +211,9 @@ impl ClaudeHooksEngine {
         let session_id = request.session_id;
         let mut outcome =
             crate::events::user_prompt_submit::run(&self.handlers, &self.shell, request).await;
-        if let Some(output_spiller) = &self.output_spiller {
-            outcome.additional_contexts = output_spiller
-                .maybe_spill_texts(session_id, outcome.additional_contexts)
-                .await;
-        }
+        outcome.additional_contexts = self
+            .maybe_spill_texts(session_id, outcome.additional_contexts)
+            .await;
         outcome
     }
 
@@ -235,12 +224,42 @@ impl ClaudeHooksEngine {
     pub(crate) async fn run_stop(&self, request: StopRequest) -> StopOutcome {
         let session_id = request.session_id;
         let mut outcome = crate::events::stop::run(&self.handlers, &self.shell, request).await;
-        if let Some(output_spiller) = &self.output_spiller {
-            outcome.continuation_fragments = output_spiller
-                .maybe_spill_prompt_fragments(session_id, outcome.continuation_fragments)
-                .await;
-        }
+        outcome.continuation_fragments = self
+            .maybe_spill_prompt_fragments(session_id, outcome.continuation_fragments)
+            .await;
         outcome
+    }
+
+    async fn maybe_spill_texts(&self, session_id: ThreadId, texts: Vec<String>) -> Vec<String> {
+        if let Some(output_spiller) = &self.output_spiller {
+            output_spiller.maybe_spill_texts(session_id, texts).await
+        } else {
+            texts
+        }
+    }
+
+    async fn maybe_spill_text(&self, session_id: ThreadId, text: Option<String>) -> Option<String> {
+        if let Some(output_spiller) = &self.output_spiller
+            && let Some(text) = text
+        {
+            Some(output_spiller.maybe_spill_text(session_id, text).await)
+        } else {
+            text
+        }
+    }
+
+    async fn maybe_spill_prompt_fragments(
+        &self,
+        session_id: ThreadId,
+        fragments: Vec<codex_protocol::items::HookPromptFragment>,
+    ) -> Vec<codex_protocol::items::HookPromptFragment> {
+        if let Some(output_spiller) = &self.output_spiller {
+            output_spiller
+                .maybe_spill_prompt_fragments(session_id, fragments)
+                .await
+        } else {
+            fragments
+        }
     }
 }
 

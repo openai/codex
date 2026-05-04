@@ -8,6 +8,7 @@ use tokio::fs;
 use tracing::warn;
 use uuid::Uuid;
 
+const HOOK_OUTPUTS_DIR: &str = "hook_outputs";
 const HOOK_OUTPUT_TOKEN_LIMIT: usize = 2_500;
 
 #[derive(Clone)]
@@ -16,13 +17,15 @@ pub(crate) struct HookOutputSpiller {
 }
 
 impl HookOutputSpiller {
-    pub(crate) fn new(output_dir: AbsolutePathBuf) -> Self {
-        Self { output_dir }
+    pub(crate) fn new(codex_home: AbsolutePathBuf) -> Self {
+        Self {
+            output_dir: codex_home.join(HOOK_OUTPUTS_DIR),
+        }
     }
 
     /// Keeps hook text within the model-visible hook-output budget.
     ///
-    /// Oversized text is written in full under `<output_dir>/<thread_id>/`
+    /// Oversized text is written in full under `$CODEX_HOME/hook_outputs/<thread_id>/`
     /// and replaced with the same head/tail preview style used for other truncated
     /// output, plus a path back to the preserved full text.
     pub(crate) async fn maybe_spill_text(&self, thread_id: ThreadId, text: String) -> String {

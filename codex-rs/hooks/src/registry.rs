@@ -32,7 +32,7 @@ pub struct HooksConfig {
     pub plugin_hook_load_warnings: Vec<String>,
     pub shell_program: Option<String>,
     pub shell_args: Vec<String>,
-    pub hook_output_dir: Option<AbsolutePathBuf>,
+    pub codex_home: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -71,7 +71,7 @@ impl Hooks {
                 program: config.shell_program.unwrap_or_default(),
                 args: config.shell_args,
             },
-            config.hook_output_dir,
+            config.codex_home,
         );
         Self {
             after_agent,
