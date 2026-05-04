@@ -51,6 +51,12 @@ impl ToolInfo {
     pub fn canonical_tool_name(&self) -> ToolName {
         ToolName::namespaced(self.callable_namespace.clone(), self.callable_name.clone())
     }
+
+    pub fn namespace_description(&self) -> Option<&str> {
+        self.connector_description
+            .as_deref()
+            .or(self.server_instructions.as_deref())
+    }
 }
 
 pub fn declared_openai_file_input_param_names(
