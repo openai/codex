@@ -385,17 +385,27 @@ async fn search_supports_directory_and_file_scopes() {
             query: "needle".to_string(),
             path: None,
             cursor: None,
+            context_lines: 0,
             max_results: DEFAULT_SEARCH_MAX_RESULTS,
         })
         .await
         .expect("search all memories");
     assert_eq!(
-        response
-            .matches
-            .iter()
-            .map(|entry| (entry.path.as_str(), entry.line_number))
-            .collect::<Vec<_>>(),
-        vec![("MEMORY.md", 2), ("rollout_summaries/a.jsonl", 1)]
+        response.matches,
+        vec![
+            MemorySearchMatch {
+                path: "MEMORY.md".to_string(),
+                line_number: 2,
+                start_line_number: 2,
+                content: "needle".to_string(),
+            },
+            MemorySearchMatch {
+                path: "rollout_summaries/a.jsonl".to_string(),
+                line_number: 1,
+                start_line_number: 1,
+                content: "needle again".to_string(),
+            },
+        ]
     );
     assert_eq!(response.next_cursor, None);
     assert_eq!(response.truncated, false);
@@ -405,12 +415,20 @@ async fn search_supports_directory_and_file_scopes() {
             query: "needle".to_string(),
             path: Some("MEMORY.md".to_string()),
             cursor: None,
+            context_lines: 0,
             max_results: DEFAULT_SEARCH_MAX_RESULTS,
         })
         .await
         .expect("search one memory file");
-    assert_eq!(file_response.matches.len(), 1);
-    assert_eq!(file_response.matches[0].path, "MEMORY.md");
+    assert_eq!(
+        file_response.matches,
+        vec![MemorySearchMatch {
+            path: "MEMORY.md".to_string(),
+            line_number: 2,
+            start_line_number: 2,
+            content: "needle".to_string(),
+        }]
+    );
     assert_eq!(file_response.next_cursor, None);
     assert_eq!(file_response.truncated, false);
 }
@@ -436,17 +454,27 @@ async fn search_supports_pagination() {
             query: "needle".to_string(),
             path: None,
             cursor: None,
+            context_lines: 0,
             max_results: 2,
         })
         .await
         .expect("search first page");
     assert_eq!(
-        page1
-            .matches
-            .iter()
-            .map(|entry| (entry.path.as_str(), entry.line_number))
-            .collect::<Vec<_>>(),
-        vec![("MEMORY.md", 1), ("MEMORY.md", 2)]
+        page1.matches,
+        vec![
+            MemorySearchMatch {
+                path: "MEMORY.md".to_string(),
+                line_number: 1,
+                start_line_number: 1,
+                content: "needle one".to_string(),
+            },
+            MemorySearchMatch {
+                path: "MEMORY.md".to_string(),
+                line_number: 2,
+                start_line_number: 2,
+                content: "needle two".to_string(),
+            },
+        ]
     );
     assert_eq!(page1.next_cursor.as_deref(), Some("2"));
     assert_eq!(page1.truncated, true);
@@ -456,20 +484,62 @@ async fn search_supports_pagination() {
             query: "needle".to_string(),
             path: None,
             cursor: page1.next_cursor,
+            context_lines: 0,
             max_results: 2,
         })
         .await
         .expect("search second page");
     assert_eq!(
-        page2
-            .matches
-            .iter()
-            .map(|entry| (entry.path.as_str(), entry.line_number))
-            .collect::<Vec<_>>(),
-        vec![("rollout_summaries/a.jsonl", 1)]
+        page2.matches,
+        vec![MemorySearchMatch {
+            path: "rollout_summaries/a.jsonl".to_string(),
+            line_number: 1,
+            start_line_number: 1,
+            content: "needle three".to_string(),
+        }]
     );
     assert_eq!(page2.next_cursor, None);
     assert_eq!(page2.truncated, false);
+}
+
+#[tokio::test]
+async fn search_supports_context_lines() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::write(
+        tempdir.path().join("MEMORY.md"),
+        "alpha\nneedle\nomega\nneedle again\n",
+    )
+    .await
+    .expect("write memory file");
+
+    let response = backend(&tempdir)
+        .search(SearchMemoriesRequest {
+            query: "needle".to_string(),
+            path: None,
+            cursor: None,
+            context_lines: 1,
+            max_results: DEFAULT_SEARCH_MAX_RESULTS,
+        })
+        .await
+        .expect("search with context");
+
+    assert_eq!(
+        response.matches,
+        vec![
+            MemorySearchMatch {
+                path: "MEMORY.md".to_string(),
+                line_number: 2,
+                start_line_number: 1,
+                content: "alpha\nneedle\nomega".to_string(),
+            },
+            MemorySearchMatch {
+                path: "MEMORY.md".to_string(),
+                line_number: 4,
+                start_line_number: 3,
+                content: "omega\nneedle again".to_string(),
+            },
+        ]
+    );
 }
 
 #[tokio::test]
@@ -484,12 +554,29 @@ async fn search_rejects_invalid_cursor() {
             query: "needle".to_string(),
             path: None,
             cursor: Some("bogus".to_string()),
+            context_lines: 0,
             max_results: DEFAULT_SEARCH_MAX_RESULTS,
         })
         .await
         .expect_err("cursor should be rejected");
 
     assert!(matches!(err, MemoriesBackendError::InvalidCursor { .. }));
+
+    let past_end_err = backend(&tempdir)
+        .search(SearchMemoriesRequest {
+            query: "needle".to_string(),
+            path: None,
+            cursor: Some("2".to_string()),
+            context_lines: 0,
+            max_results: DEFAULT_SEARCH_MAX_RESULTS,
+        })
+        .await
+        .expect_err("cursor past end should be rejected");
+
+    assert!(matches!(
+        past_end_err,
+        MemoriesBackendError::InvalidCursor { .. }
+    ));
 }
 
 #[tokio::test]

@@ -210,7 +210,15 @@ impl MemoriesBackend for LocalMemoriesBackend {
         reject_symlink(&display_relative_path(&self.root, &start), &metadata)?;
 
         let mut matches = Vec::new();
-        search_entries(&self.root, &start, &metadata, query, &mut matches).await?;
+        search_entries(
+            &self.root,
+            &start,
+            &metadata,
+            query,
+            request.context_lines,
+            &mut matches,
+        )
+        .await?;
         matches.sort_by(|left, right| {
             left.path
                 .cmp(&right.path)
@@ -240,10 +248,11 @@ async fn search_entries(
     current: &Path,
     current_metadata: &std::fs::Metadata,
     query: &str,
+    context_lines: usize,
     matches: &mut Vec<MemorySearchMatch>,
 ) -> Result<(), MemoriesBackendError> {
     if current_metadata.is_file() {
-        search_file(root, current, query, matches).await?;
+        search_file(root, current, query, context_lines, matches).await?;
         return Ok(());
     }
     if !current_metadata.is_dir() {
@@ -262,7 +271,7 @@ async fn search_entries(
             if metadata.is_dir() {
                 pending.push(path);
             } else if metadata.is_file() {
-                search_file(root, &path, query, matches).await?;
+                search_file(root, &path, query, context_lines, matches).await?;
             }
         }
     }
@@ -274,6 +283,7 @@ async fn search_file(
     root: &Path,
     path: &Path,
     query: &str,
+    context_lines: usize,
     matches: &mut Vec<MemorySearchMatch>,
 ) -> Result<(), MemoriesBackendError> {
     let content = match tokio::fs::read_to_string(path).await {
@@ -281,12 +291,19 @@ async fn search_file(
         Err(err) if err.kind() == std::io::ErrorKind::InvalidData => return Ok(()),
         Err(err) => return Err(err.into()),
     };
-    for (idx, line) in content.lines().enumerate() {
+    let lines = content.lines().collect::<Vec<_>>();
+    for (idx, line) in lines.iter().enumerate() {
         if line.contains(query) {
+            let start_index = idx.saturating_sub(context_lines);
+            let end_index = idx
+                .saturating_add(context_lines)
+                .saturating_add(1)
+                .min(lines.len());
             matches.push(MemorySearchMatch {
                 path: display_relative_path(root, path),
                 line_number: idx + 1,
-                line: line.to_string(),
+                start_line_number: start_index + 1,
+                content: lines[start_index..end_index].join("\n"),
             });
         }
     }
