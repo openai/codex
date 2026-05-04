@@ -8,6 +8,7 @@ use codex_app_server_protocol::ProcessSpawnParams;
 use codex_app_server_protocol::RequestId;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -26,16 +27,40 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
 
     let process_handle = "one-shot-1".to_string();
     let probe_file = codex_home.path().join("process-created");
+    let command = if cfg!(windows) {
+        vec![
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-NonInteractive".to_string(),
+            "-Command".to_string(),
+            concat!(
+                "[IO.File]::WriteAllText($env:CODEX_PROCESS_EXEC_PROBE_FILE, 'process'); ",
+                "Start-Sleep -Seconds 1; ",
+                "[Console]::Out.Write('process-out'); ",
+                "[Console]::Error.Write('process-err')",
+            )
+            .to_string(),
+        ]
+    } else {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            concat!(
+                "printf process > \"$CODEX_PROCESS_EXEC_PROBE_FILE\"; ",
+                "sleep 1; ",
+                "printf process-out; ",
+                "printf process-err >&2",
+            )
+            .to_string(),
+        ]
+    };
+    let env = HashMap::from([(
+        "CODEX_PROCESS_EXEC_PROBE_FILE".to_string(),
+        Some(probe_file.display().to_string()),
+    )]);
     let spawn_request_id = mcp
         .send_process_spawn_request(ProcessSpawnParams {
-            command: vec![
-                "sh".to_string(),
-                "-c".to_string(),
-                "printf process > \"$1\"; sleep 1; printf process-out; printf process-err >&2"
-                    .to_string(),
-                "sh".to_string(),
-                probe_file.display().to_string(),
-            ],
+            command,
             process_handle: process_handle.clone(),
             cwd: AbsolutePathBuf::try_from(codex_home.path())?,
             tty: false,
@@ -43,7 +68,7 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
             stream_stdout_stderr: false,
             output_bytes_cap: Some(None),
             timeout_ms: Some(None),
-            env: None,
+            env: Some(env),
             size: None,
         })
         .await?;
@@ -84,13 +109,24 @@ async fn process_spawn_reports_buffered_output_cap_reached() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let process_handle = "capped-one-shot-1".to_string();
+    let command = if cfg!(windows) {
+        vec![
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-NonInteractive".to_string(),
+            "-Command".to_string(),
+            "[Console]::Out.Write('abcde'); [Console]::Error.Write('12345')".to_string(),
+        ]
+    } else {
+        vec![
+            "sh".to_string(),
+            "-lc".to_string(),
+            "printf abcde; printf 12345 >&2".to_string(),
+        ]
+    };
     let spawn_request_id = mcp
         .send_process_spawn_request(ProcessSpawnParams {
-            command: vec![
-                "sh".to_string(),
-                "-lc".to_string(),
-                "printf abcde; printf 12345 >&2".to_string(),
-            ],
+            command,
             process_handle: process_handle.clone(),
             cwd: AbsolutePathBuf::try_from(codex_home.path())?,
             tty: false,
@@ -133,9 +169,20 @@ async fn process_kill_terminates_running_process() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let process_handle = "sleep-process-1".to_string();
+    let command = if cfg!(windows) {
+        vec![
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-NonInteractive".to_string(),
+            "-Command".to_string(),
+            "Start-Sleep -Seconds 30".to_string(),
+        ]
+    } else {
+        vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()]
+    };
     let spawn_request_id = mcp
         .send_process_spawn_request(ProcessSpawnParams {
-            command: vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],
+            command,
             process_handle: process_handle.clone(),
             cwd: AbsolutePathBuf::try_from(codex_home.path())?,
             tty: false,

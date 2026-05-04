@@ -35,7 +35,6 @@ mod plugin_list;
 mod plugin_read;
 mod plugin_share;
 mod plugin_uninstall;
-#[cfg(unix)]
 mod process_exec;
 mod rate_limits;
 mod realtime_conversation;
