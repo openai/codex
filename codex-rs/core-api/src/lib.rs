@@ -29,7 +29,6 @@ pub use codex_core::McpManager;
 pub use codex_core::NewThread;
 pub use codex_core::StartThreadOptions;
 pub use codex_core::ThreadManager;
-pub use codex_core::ThreadManagerPersistence;
 pub use codex_core::ThreadShutdownReport;
 pub use codex_core::agent_graph_store_from_state_db;
 pub use codex_core::config::Config;

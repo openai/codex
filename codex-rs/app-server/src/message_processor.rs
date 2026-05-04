@@ -299,11 +299,9 @@ impl MessageProcessor {
             session_source,
             environment_manager,
             Some(analytics_events_client.clone()),
-            ThreadManagerPersistence {
-                state_db: state_db.clone(),
-                thread_store: Arc::clone(&thread_store),
-                agent_graph_store: agent_graph_store.clone(),
-            },
+            state_db.clone(),
+            Arc::clone(&thread_store),
+            agent_graph_store.clone(),
         ));
         thread_manager
             .plugins_manager()

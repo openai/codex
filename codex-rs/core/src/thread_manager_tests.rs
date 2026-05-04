@@ -129,11 +129,9 @@ async fn thread_manager_accepts_separate_agent_graph_store_and_thread_store() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        ThreadManagerPersistence {
-            state_db,
-            thread_store,
-            agent_graph_store,
-        },
+        state_db,
+        thread_store,
+        agent_graph_store,
     );
 
     let new_thread = manager
@@ -490,11 +488,9 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        ThreadManagerPersistence {
-            state_db,
-            thread_store,
-            agent_graph_store,
-        },
+        state_db,
+        thread_store,
+        agent_graph_store,
     );
     let selected_cwd =
         AbsolutePathBuf::try_from(config.cwd.as_path().join("selected")).expect("absolute path");
@@ -592,11 +588,9 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        ThreadManagerPersistence {
-            state_db,
-            thread_store,
-            agent_graph_store,
-        },
+        state_db,
+        thread_store,
+        agent_graph_store,
     );
 
     let source = manager
@@ -650,11 +644,9 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        ThreadManagerPersistence {
-            state_db,
-            thread_store,
-            agent_graph_store,
-        },
+        state_db,
+        thread_store,
+        agent_graph_store,
     );
 
     let source = manager
@@ -718,11 +710,9 @@ async fn new_uses_active_provider_for_model_refresh() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        ThreadManagerPersistence {
-            state_db,
-            thread_store,
-            agent_graph_store,
-        },
+        state_db,
+        thread_store,
+        agent_graph_store,
     );
 
     let _ = manager.list_models(RefreshStrategy::Online).await;
@@ -934,11 +924,9 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        ThreadManagerPersistence {
-            state_db,
-            thread_store,
-            agent_graph_store,
-        },
+        state_db,
+        thread_store,
+        agent_graph_store,
     );
 
     let source = manager
@@ -1041,11 +1029,9 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        ThreadManagerPersistence {
-            state_db,
-            thread_store,
-            agent_graph_store,
-        },
+        state_db,
+        thread_store,
+        agent_graph_store,
     );
 
     let source = manager
@@ -1137,11 +1123,9 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        ThreadManagerPersistence {
-            state_db,
-            thread_store,
-            agent_graph_store,
-        },
+        state_db,
+        thread_store,
+        agent_graph_store,
     );
 
     let source = manager
@@ -1278,11 +1262,9 @@ async fn resumed_thread_activates_paused_goal_and_continues_on_request() -> anyh
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        ThreadManagerPersistence {
-            state_db,
-            thread_store,
-            agent_graph_store,
-        },
+        state_db,
+        thread_store,
+        agent_graph_store,
     );
 
     let source = manager

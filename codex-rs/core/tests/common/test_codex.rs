@@ -437,11 +437,9 @@ impl TestCodexBuilder {
                 SessionSource::Exec,
                 Arc::clone(&environment_manager),
                 /*analytics_events_client*/ None,
-                codex_core::ThreadManagerPersistence {
-                    state_db,
-                    thread_store,
-                    agent_graph_store,
-                },
+                state_db,
+                thread_store,
+                agent_graph_store,
             )
         } else {
             codex_core::test_support::thread_manager_with_models_provider_and_home(

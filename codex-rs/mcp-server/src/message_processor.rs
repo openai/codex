@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::ThreadManager;
-use codex_core::ThreadManagerPersistence;
 use codex_core::agent_graph_store_from_state_db;
 use codex_core::config::Config;
 use codex_core::init_state_db_from_config;
@@ -72,11 +71,9 @@ impl MessageProcessor {
             SessionSource::Mcp,
             environment_manager,
             /*analytics_events_client*/ None,
-            ThreadManagerPersistence {
-                state_db,
-                thread_store,
-                agent_graph_store,
-            },
+            state_db,
+            thread_store,
+            agent_graph_store,
         ));
         Some(Self {
             outgoing,
