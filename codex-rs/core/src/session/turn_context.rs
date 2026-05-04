@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::GhostSnapshotConfig;
+use crate::environment_selection::ResolvedTurnEnvironments;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -60,7 +61,7 @@ pub(crate) struct TurnContext {
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
-    pub(crate) environments: Vec<TurnEnvironment>,
+    pub(crate) environments: ResolvedTurnEnvironments,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
@@ -104,10 +105,6 @@ impl TurnContext {
 
     pub(crate) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
         self.permission_profile.network_sandbox_policy()
-    }
-
-    pub(crate) fn primary_environment(&self) -> Option<&TurnEnvironment> {
-        self.environments.first()
     }
 
     pub(crate) fn sandbox_policy(&self) -> SandboxPolicy {
@@ -198,7 +195,7 @@ impl TurnContext {
         .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
-        .with_has_environment(self.tools_config.has_environment)
+        .with_environment_mode(self.tools_config.environment_mode)
         .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
@@ -435,7 +432,7 @@ impl Session {
         model_info: ModelInfo,
         models_manager: &SharedModelsManager,
         network: Option<NetworkProxy>,
-        environments: Vec<TurnEnvironment>,
+        environments: ResolvedTurnEnvironments,
         cwd: AbsolutePathBuf,
         sub_id: String,
         skills_outcome: Arc<SkillLoadOutcome>,
@@ -476,7 +473,9 @@ impl Session {
         )
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
-        .with_has_environment(!environments.is_empty())
+        .with_environment_mode(ToolEnvironmentMode::from_count(
+            environments.turn_environments.len(),
+        ))
         .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(per_turn_config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)
@@ -647,12 +646,11 @@ impl Session {
     fn resolve_turn_environments(
         &self,
         environments: &[TurnEnvironmentSelection],
-    ) -> CodexResult<Vec<TurnEnvironment>> {
+    ) -> CodexResult<ResolvedTurnEnvironments> {
         crate::environment_selection::resolve_environment_selections(
             self.services.environment_manager.as_ref(),
             environments,
         )
-        .map(|resolved| resolved.turn_environments)
     }
 
     async fn new_turn_from_configuration(
@@ -660,9 +658,9 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
-        turn_environments: Vec<TurnEnvironment>,
+        turn_environments: ResolvedTurnEnvironments,
     ) -> Arc<TurnContext> {
-        let primary_turn_environment = turn_environments.first();
+        let primary_turn_environment = turn_environments.primary();
         let cwd = primary_turn_environment
             .map(|turn_environment| turn_environment.cwd.clone())
             .unwrap_or_else(|| session_configuration.cwd.clone());
@@ -769,7 +767,7 @@ impl Session {
             Ok(turn_environments) => turn_environments,
             Err(err) => {
                 warn!("failed to resolve stored session environments: {err}");
-                Vec::new()
+                ResolvedTurnEnvironments::default()
             }
         };
 
