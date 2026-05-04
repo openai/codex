@@ -6,6 +6,6 @@ expression: normalized_backend_snapshot(terminal.backend())
 "• Working (0s • esc to interrupt)                                               "
 "                                                                                "
 "                                                                                "
-"› Ask Codex to do anything                                                      "
-"                                                                                "
+"› Ask Codex to do anything                                              Running "
+"                                                                        Thinking"
 "  gpt-5.5 default                                             Side starting...  "

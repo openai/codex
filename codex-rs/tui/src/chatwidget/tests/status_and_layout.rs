@@ -3,43 +3,10 @@ use crate::bottom_pane::goal_status_indicator_line;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 
-struct EnvVarGuard {
-    key: &'static str,
-    previous: Option<std::ffi::OsString>,
-}
-
-impl EnvVarGuard {
-    fn remove(key: &'static str) -> Self {
-        let previous = std::env::var_os(key);
-        unsafe { std::env::remove_var(key) };
-        Self { key, previous }
-    }
-
-    fn set(key: &'static str, value: &'static str) -> Self {
-        let previous = std::env::var_os(key);
-        unsafe { std::env::set_var(key, value) };
-        Self { key, previous }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        match self.previous.take() {
-            Some(value) => unsafe { std::env::set_var(self.key, value) },
-            None => unsafe { std::env::remove_var(self.key) },
-        }
-    }
-}
-
-fn supported_pet_image_env() -> [EnvVarGuard; 6] {
-    [
-        EnvVarGuard::remove("TMUX"),
-        EnvVarGuard::remove("TMUX_PANE"),
-        EnvVarGuard::remove("ZELLIJ"),
-        EnvVarGuard::remove("ZELLIJ_SESSION_NAME"),
-        EnvVarGuard::remove("ZELLIJ_VERSION"),
-        EnvVarGuard::set("KITTY_WINDOW_ID", "test-window"),
-    ]
+fn force_pet_image_support(chat: &mut ChatWidget) {
+    chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
+        crate::pets::ImageProtocol::Kitty,
+    ));
 }
 
 /// Receiving a token usage update without usage clears the context indicator.
@@ -1394,11 +1361,11 @@ async fn ui_snapshots_small_heights_task_running() {
 
 #[tokio::test]
 #[serial]
-async fn ambient_pet_defaults_to_codex_and_stays_above_the_footer() {
+async fn ambient_pet_defaults_to_codex_and_anchors_to_composer_bottom() {
     use ratatui::layout::Rect;
 
-    let _env_guard = supported_pet_image_env();
-    let (chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    force_pet_image_support(&mut chat);
     assert_eq!(
         chat.ambient_pet
             .as_ref()
@@ -1410,18 +1377,57 @@ async fn ambient_pet_defaults_to_codex_and_stays_above_the_footer() {
         /*x*/ 0, /*y*/ 0, /*width*/ 60, /*height*/ 20,
     );
     let draw = chat
-        .ambient_pet_draw(area)
+        .ambient_pet_draw(area, area.bottom())
         .expect("ambient pet draw request");
     assert_eq!(draw.x, 51);
-    assert_eq!(draw.y, 10);
+    assert_eq!(draw.y, 14);
     assert_eq!(draw.columns, 9);
     assert_eq!(draw.rows, 5);
+    assert_eq!(
+        draw.y.saturating_add(draw.rows),
+        area.bottom().saturating_sub(/*rhs*/ 1)
+    );
+
+    handle_turn_started(&mut chat, "turn-1");
+    handle_agent_reasoning_delta(&mut chat, "**Thinking**");
+    let draw_with_status = chat
+        .ambient_pet_draw(area, area.bottom())
+        .expect("ambient pet draw request with status");
+    assert_eq!(draw_with_status.y, draw.y);
+    assert_eq!(
+        draw_with_status.y.saturating_add(draw_with_status.rows),
+        area.bottom().saturating_sub(/*rhs*/ 1)
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn ambient_pet_screen_bottom_anchor_uses_terminal_bottom() {
+    use codex_config::types::TuiPetAnchor;
+    use ratatui::layout::Rect;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    force_pet_image_support(&mut chat);
+
+    let terminal_area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 24,
+    );
+    let composer_bottom_y = 20;
+    let default_draw = chat
+        .ambient_pet_draw(terminal_area, composer_bottom_y)
+        .expect("composer-anchored pet draw request");
+    assert_eq!(default_draw.y, 14);
+
+    chat.config.tui_pet_anchor = TuiPetAnchor::ScreenBottom;
+    let screen_bottom_draw = chat
+        .ambient_pet_draw(terminal_area, composer_bottom_y)
+        .expect("screen-bottom anchored pet draw request");
+    assert_eq!(screen_bottom_draw.y, 18);
 }
 
 #[tokio::test]
 #[serial]
 async fn ambient_pet_can_be_disabled() {
-    let _env_guard = supported_pet_image_env();
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.set_tui_pet(Some(crate::pets::DISABLED_PET_ID.to_string()));
@@ -1434,24 +1440,30 @@ async fn ambient_pet_can_be_disabled() {
 async fn ambient_pet_draw_uses_terminal_screen_area_not_short_inline_viewport() {
     use ratatui::layout::Rect;
 
-    let _env_guard = supported_pet_image_env();
-    let (chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    force_pet_image_support(&mut chat);
 
     assert!(
-        chat.ambient_pet_draw(Rect::new(
-            /*x*/ 0, /*y*/ 21, /*width*/ 80, /*height*/ 3,
-        ))
+        chat.ambient_pet_draw(
+            Rect::new(
+                /*x*/ 0, /*y*/ 21, /*width*/ 80, /*height*/ 3,
+            ),
+            /*composer_bottom_y*/ 24
+        )
         .is_none(),
         "a normal short inline viewport cannot fit the ambient pet"
     );
 
     let draw = chat
-        .ambient_pet_draw(Rect::new(
-            /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 24,
-        ))
+        .ambient_pet_draw(
+            Rect::new(
+                /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 24,
+            ),
+            /*composer_bottom_y*/ 24,
+        )
         .expect("full terminal screen has room for the ambient pet");
     assert_eq!(draw.x, 71);
-    assert_eq!(draw.y, 14);
+    assert_eq!(draw.y, 18);
 }
 
 #[tokio::test]
@@ -1460,8 +1472,8 @@ async fn ambient_pet_uses_the_app_notification_labels() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    let _env_guard = supported_pet_image_env();
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    force_pet_image_support(&mut chat);
     for (kind, label) in [
         (crate::pets::PetNotificationKind::Running, "Running"),
         (crate::pets::PetNotificationKind::Waiting, "Needs input"),

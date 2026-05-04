@@ -6,6 +6,6 @@ expression: normalized_backend_snapshot(terminal.backend())
 "• Working (0s • esc to interrupt) · 1 background terminal running · /ps to view…"
 "                                                                                "
 "                                                                                "
-"› Ask Codex to do anything                                                      "
-"                                                                                "
+"› Ask Codex to do anything                                              Running "
+"                                                                        Thinking"
 "  gpt-5.5 default · /tmp/project                                                "
