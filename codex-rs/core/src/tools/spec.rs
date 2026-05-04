@@ -57,7 +57,7 @@ fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanI
                     tool.callable_namespace.clone(),
                     ToolNamespace {
                         name: tool.callable_namespace.clone(),
-                        description: tool.namespace_description().map(str::to_string),
+                        description: tool.namespace_description.clone(),
                     },
                 )
             })
@@ -115,7 +115,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 name: tool.canonical_tool_name(),
                 server_name: tool.server_name.as_str(),
                 connector_name: tool.connector_name.as_deref(),
-                description: tool.namespace_description(),
+                description: tool.namespace_description.as_deref(),
             })
             .collect::<Vec<_>>()
     });

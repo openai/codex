@@ -62,12 +62,11 @@ fn mcp_tool_info(tool: rmcp::model::Tool) -> ToolInfo {
         server_name: "test_server".to_string(),
         callable_name: tool.name.to_string(),
         callable_namespace: "mcp__test_server__".to_string(),
-        server_instructions: None,
+        namespace_description: None,
         tool,
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),
-        connector_description: None,
     }
 }
 
@@ -81,12 +80,11 @@ fn mcp_tool_info_with_display_name(display_name: &str, tool: rmcp::model::Tool) 
         server_name: "test_server".to_string(),
         callable_name,
         callable_namespace,
-        server_instructions: None,
+        namespace_description: None,
         tool,
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),
-        connector_description: None,
     }
 }
 
@@ -898,7 +896,7 @@ async fn search_tool_description_falls_back_to_connector_name_without_descriptio
                 server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 callable_name: "_create_event".to_string(),
                 callable_namespace: "mcp__codex_apps__calendar".to_string(),
-                server_instructions: None,
+                namespace_description: None,
                 tool: mcp_tool(
                     "calendar_create_event",
                     "Create calendar event",
@@ -907,7 +905,6 @@ async fn search_tool_description_falls_back_to_connector_name_without_descriptio
                 connector_id: Some("calendar".to_string()),
                 connector_name: Some("Calendar".to_string()),
                 plugin_display_names: Vec::new(),
-                connector_description: None,
             },
         )])),
         &[],
@@ -950,7 +947,7 @@ async fn search_tool_registers_namespaced_mcp_tool_aliases() {
                     server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                     callable_name: "_create_event".to_string(),
                     callable_namespace: "mcp__codex_apps__calendar".to_string(),
-                    server_instructions: None,
+                    namespace_description: None,
                     tool: mcp_tool(
                         "calendar-create-event",
                         "Create calendar event",
@@ -958,7 +955,6 @@ async fn search_tool_registers_namespaced_mcp_tool_aliases() {
                     ),
                     connector_id: Some("calendar".to_string()),
                     connector_name: Some("Calendar".to_string()),
-                    connector_description: None,
                     plugin_display_names: Vec::new(),
                 },
             ),
@@ -968,7 +964,7 @@ async fn search_tool_registers_namespaced_mcp_tool_aliases() {
                     server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                     callable_name: "_list_events".to_string(),
                     callable_namespace: "mcp__codex_apps__calendar".to_string(),
-                    server_instructions: None,
+                    namespace_description: None,
                     tool: mcp_tool(
                         "calendar-list-events",
                         "List calendar events",
@@ -976,7 +972,6 @@ async fn search_tool_registers_namespaced_mcp_tool_aliases() {
                     ),
                     connector_id: Some("calendar".to_string()),
                     connector_name: Some("Calendar".to_string()),
-                    connector_description: None,
                     plugin_display_names: Vec::new(),
                 },
             ),
@@ -986,11 +981,10 @@ async fn search_tool_registers_namespaced_mcp_tool_aliases() {
                     server_name: "rmcp".to_string(),
                     callable_name: "echo".to_string(),
                     callable_namespace: "mcp__rmcp__".to_string(),
-                    server_instructions: None,
+                    namespace_description: None,
                     tool: mcp_tool("echo", "Echo", serde_json::json!({"type": "object"})),
                     connector_id: None,
                     connector_name: None,
-                    connector_description: None,
                     plugin_display_names: Vec::new(),
                 },
             ),
