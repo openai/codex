@@ -227,6 +227,7 @@ async fn login_server_includes_all_forced_workspace_query_params() -> Result<()>
             "org-required-a".to_string(),
             "org-required-b".to_string(),
         ]),
+        codex_streamlined_login: false,
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -489,7 +490,6 @@ async fn falls_back_to_registered_fallback_port_when_default_port_is_in_use() ->
         tmp.path().to_path_buf(),
         codex_login::CLIENT_ID.to_string(),
         /*forced_chatgpt_workspace_id*/ None,
-        /*codex_streamlined_login*/ false,
         AuthCredentialsStoreMode::File,
     );
     opts.issuer = issuer;
