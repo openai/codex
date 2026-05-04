@@ -8,6 +8,7 @@ use crate::app_event::AppEvent;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::SideContentWidth;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 
 use super::DEFAULT_PET_ID;
@@ -16,6 +17,10 @@ use super::catalog;
 use super::model::CUSTOM_PET_PREFIX;
 use super::model::Pet;
 use super::model::custom_pet_selector;
+use super::preview::PetPickerPreviewState;
+
+pub(crate) const PET_PICKER_VIEW_ID: &str = "pet-picker";
+const PET_PICKER_PREVIEW_WIDTH: u16 = 30;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PetPickerEntry {
@@ -28,6 +33,7 @@ struct PetPickerEntry {
 pub(crate) fn build_pet_picker_params(
     current_pet: Option<&str>,
     codex_home: &Path,
+    preview_state: PetPickerPreviewState,
 ) -> SelectionViewParams {
     let current_pet = current_pet.unwrap_or(DEFAULT_PET_ID);
     let mut entries = available_pet_entries(codex_home);
@@ -41,6 +47,20 @@ pub(crate) fn build_pet_picker_params(
     }
 
     let mut initial_selected_idx = None;
+    let preview_pet_ids = entries
+        .iter()
+        .map(|entry| entry.selector.clone())
+        .collect::<Vec<_>>();
+    let on_selection_changed: crate::bottom_pane::OnSelectionChangedCallback = Some(Box::new(
+        move |idx: usize, tx: &crate::app_event_sender::AppEventSender| {
+            if let Some(pet_id) = preview_pet_ids.get(idx) {
+                tx.send(AppEvent::PetPreviewRequested {
+                    pet_id: pet_id.clone(),
+                });
+            }
+        },
+    ));
+
     let items = entries
         .into_iter()
         .enumerate()
@@ -80,6 +100,7 @@ pub(crate) fn build_pet_picker_params(
         .collect();
 
     SelectionViewParams {
+        view_id: Some(PET_PICKER_VIEW_ID),
         title: Some("Select Pet".to_string()),
         subtitle: Some("Choose a pet to wake in the terminal.".to_string()),
         footer_hint: Some(standard_popup_hint_line()),
@@ -87,6 +108,12 @@ pub(crate) fn build_pet_picker_params(
         is_searchable: true,
         search_placeholder: Some("Type to filter pets...".to_string()),
         initial_selected_idx,
+        side_content: Box::new(preview_state.renderable()),
+        side_content_width: SideContentWidth::Fixed(PET_PICKER_PREVIEW_WIDTH),
+        side_content_min_width: 28,
+        stacked_side_content: Some(Box::new(())),
+        preserve_side_content_bg: true,
+        on_selection_changed,
         ..Default::default()
     }
 }
@@ -201,7 +228,11 @@ mod tests {
         let codex_home = tempfile::tempdir().unwrap();
         write_pet(codex_home.path(), "chefito", "Chefito");
 
-        let params = build_pet_picker_params(Some("chefito"), codex_home.path());
+        let params = build_pet_picker_params(
+            Some("chefito"),
+            codex_home.path(),
+            PetPickerPreviewState::default(),
+        );
 
         assert_eq!(
             params
@@ -232,7 +263,11 @@ mod tests {
     #[test]
     fn picker_defaults_to_codex_when_no_pet_is_configured() {
         let codex_home = tempfile::tempdir().unwrap();
-        let params = build_pet_picker_params(/*current_pet*/ None, codex_home.path());
+        let params = build_pet_picker_params(
+            /*current_pet*/ None,
+            codex_home.path(),
+            PetPickerPreviewState::default(),
+        );
 
         assert_eq!(params.initial_selected_idx, Some(2));
         assert_eq!(params.items[2].name, "Codex");
@@ -242,7 +277,11 @@ mod tests {
     #[test]
     fn picker_marks_disabled_pet_as_current() {
         let codex_home = tempfile::tempdir().unwrap();
-        let params = build_pet_picker_params(Some(DISABLED_PET_ID), codex_home.path());
+        let params = build_pet_picker_params(
+            Some(DISABLED_PET_ID),
+            codex_home.path(),
+            PetPickerPreviewState::default(),
+        );
 
         assert_eq!(params.initial_selected_idx, Some(0));
         assert_eq!(params.items[0].name, "Disable terminal pets");
@@ -259,7 +298,11 @@ mod tests {
         let codex_home = tempfile::tempdir().unwrap();
         write_legacy_avatar(codex_home.path(), "legacy", "Legacy");
 
-        let params = build_pet_picker_params(Some("custom:legacy"), codex_home.path());
+        let params = build_pet_picker_params(
+            Some("custom:legacy"),
+            codex_home.path(),
+            PetPickerPreviewState::default(),
+        );
         let legacy = params
             .items
             .iter()

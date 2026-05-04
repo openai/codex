@@ -112,6 +112,7 @@ pub(crate) struct AmbientPetDraw {
     pub(crate) sixel_dir: PathBuf,
 }
 
+#[derive(Debug)]
 pub(crate) struct AmbientPet {
     pet: Pet,
     support: PetImageSupport,
@@ -149,6 +150,42 @@ impl AmbientPet {
             animation_started_at: Instant::now(),
             animations_enabled,
         })
+    }
+
+    pub(crate) fn load_with_fallback(
+        selected_pet: Option<&str>,
+        codex_home: &std::path::Path,
+        frame_requester: FrameRequester,
+        animations_enabled: bool,
+    ) -> Result<Self> {
+        match Self::load(
+            selected_pet,
+            codex_home,
+            frame_requester.clone(),
+            animations_enabled,
+        ) {
+            Ok(pet) => Ok(pet),
+            Err(err) if selected_pet.is_some() => {
+                tracing::warn!(
+                    error = %err,
+                    "failed to load configured ambient pet; falling back to default"
+                );
+                Self::load(
+                    /*selected_pet*/ None,
+                    codex_home,
+                    frame_requester,
+                    animations_enabled,
+                )
+                .map_err(|fallback_err| {
+                    tracing::warn!(error = %fallback_err, "failed to load default ambient pet");
+                    fallback_err
+                })
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to load ambient pet");
+                Err(err)
+            }
+        }
     }
 
     pub(crate) fn set_notification(&mut self, kind: PetNotificationKind, body: Option<String>) {
@@ -208,6 +245,25 @@ impl AmbientPet {
             protocol,
             x,
             y,
+            columns: size.columns,
+            rows: size.rows,
+            height_px: size.height_px,
+            sixel_dir: self.sixel_dir.clone(),
+        })
+    }
+
+    pub(crate) fn preview_draw_request(&self, area: Rect) -> Option<AmbientPetDraw> {
+        let protocol = self.support.protocol()?;
+        let size = self.image_size();
+        if area.width < size.columns || area.height < size.rows {
+            return None;
+        }
+
+        Some(AmbientPetDraw {
+            frame: self.first_idle_frame_path(),
+            protocol,
+            x: area.x + area.width.saturating_sub(size.columns) / 2,
+            y: area.y + area.height.saturating_sub(size.rows) / 2,
             columns: size.columns,
             rows: size.rows,
             height_px: size.height_px,
@@ -281,6 +337,16 @@ impl AmbientPet {
         } else {
             animation.frames[0].sprite_index
         };
+        self.frames[sprite_index.min(self.frames.len().saturating_sub(1))].clone()
+    }
+
+    fn first_idle_frame_path(&self) -> PathBuf {
+        let sprite_index = self
+            .pet
+            .animations
+            .get("idle")
+            .and_then(|animation| animation.frames.first())
+            .map_or(0, |frame| frame.sprite_index);
         self.frames[sprite_index.min(self.frames.len().saturating_sub(1))].clone()
     }
 

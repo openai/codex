@@ -203,6 +203,7 @@ const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
 const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
+const PET_SELECTION_LOADING_VIEW_ID: &str = "pet-selection-loading";
 const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
 
 /// Choose the keybinding used to edit the most-recently queued message.
@@ -745,6 +746,11 @@ pub(crate) struct ChatWidget {
     active_hook_cell: Option<HookCell>,
     // Ambient companion rendered over the transcript area, never inside the footer rows.
     ambient_pet: Option<crate::pets::AmbientPet>,
+    pet_picker_preview_state: crate::pets::PetPickerPreviewState,
+    pet_picker_preview_pet: Option<crate::pets::AmbientPet>,
+    pet_picker_preview_request_id: u64,
+    pet_picker_preview_image_visible: std::cell::Cell<bool>,
+    pet_selection_load_request_id: u64,
     #[cfg(test)]
     pet_image_support_override: Option<crate::pets::PetImageSupport>,
     // Semantic status used for terminal-title status rendering.
@@ -4880,6 +4886,11 @@ impl ChatWidget {
             review: ReviewState::default(),
             active_hook_cell: None,
             ambient_pet,
+            pet_picker_preview_state: crate::pets::PetPickerPreviewState::default(),
+            pet_picker_preview_pet: None,
+            pet_picker_preview_request_id: 0,
+            pet_picker_preview_image_visible: std::cell::Cell::new(/*value*/ false),
+            pet_selection_load_request_id: 0,
             #[cfg(test)]
             pet_image_support_override: None,
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
@@ -6358,6 +6369,25 @@ impl ChatWidget {
         })?
     }
 
+    pub(crate) fn pet_picker_preview_draw(
+        &self,
+        _terminal_area: Rect,
+    ) -> Option<crate::pets::AmbientPetDraw> {
+        self.bottom_pane
+            .selected_index_for_active_view(crate::pets::PET_PICKER_VIEW_ID)?;
+        let area = self.pet_picker_preview_state.area()?;
+        let request = self
+            .pet_picker_preview_pet
+            .as_ref()?
+            .preview_draw_request(area)?;
+        self.pet_picker_preview_image_visible.set(true);
+        Some(request)
+    }
+
+    pub(crate) fn should_clear_pet_picker_preview_image(&self) -> bool {
+        self.pet_picker_preview_image_visible.replace(false)
+    }
+
     fn bump_active_cell_revision(&mut self) {
         self.transcript.bump_active_cell_revision();
     }
@@ -6637,11 +6667,20 @@ impl ChatWidget {
             return;
         }
 
+        self.pet_picker_preview_state.clear();
+        self.pet_picker_preview_pet = None;
         let params = crate::pets::build_pet_picker_params(
             self.config.tui_pet.as_deref(),
             &self.config.codex_home,
+            self.pet_picker_preview_state.clone(),
         );
         self.bottom_pane.show_selection_view(params);
+        let initial_pet_id = self
+            .config
+            .tui_pet
+            .clone()
+            .unwrap_or_else(|| crate::pets::DEFAULT_PET_ID.to_string());
+        self.start_pet_picker_preview(initial_pet_id);
     }
 
     fn select_pet_by_id(&mut self, pet_id: String) {
@@ -9013,6 +9052,107 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn set_tui_pet_loaded(
+        &mut self,
+        pet: Option<String>,
+        ambient_pet: Option<crate::pets::AmbientPet>,
+    ) {
+        self.config.tui_pet = pet;
+        self.ambient_pet = ambient_pet;
+        #[cfg(test)]
+        if let Some(support) = self.pet_image_support_override
+            && let Some(pet) = self.ambient_pet.as_mut()
+        {
+            pet.set_image_support_for_tests(support);
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn start_pet_picker_preview(&mut self, pet_id: String) {
+        self.pet_picker_preview_request_id =
+            self.pet_picker_preview_request_id.wrapping_add(/*rhs*/ 1);
+        let request_id = self.pet_picker_preview_request_id;
+        self.pet_picker_preview_pet = None;
+        if pet_id == crate::pets::DISABLED_PET_ID {
+            self.pet_picker_preview_state.set_disabled();
+            self.request_redraw();
+            return;
+        }
+
+        self.pet_picker_preview_state.set_loading();
+        self.request_redraw();
+
+        let codex_home = self.config.codex_home.clone();
+        let frame_requester = self.frame_requester.clone();
+        let tx = self.app_event_tx.clone();
+        spawn_pet_load(move || {
+            let result = crate::pets::AmbientPet::load(
+                Some(&pet_id),
+                &codex_home,
+                frame_requester,
+                /*animations_enabled*/ false,
+            )
+            .map_err(|err| err.to_string());
+            tx.send(AppEvent::PetPreviewLoaded { request_id, result });
+        });
+    }
+
+    pub(crate) fn finish_pet_picker_preview_load(
+        &mut self,
+        request_id: u64,
+        result: Result<crate::pets::AmbientPet, String>,
+    ) {
+        if request_id != self.pet_picker_preview_request_id {
+            return;
+        }
+
+        match result {
+            Ok(pet) => {
+                self.pet_picker_preview_state.set_ready();
+                self.pet_picker_preview_pet = Some(pet);
+                #[cfg(test)]
+                if let Some(support) = self.pet_image_support_override
+                    && let Some(pet) = self.pet_picker_preview_pet.as_mut()
+                {
+                    pet.set_image_support_for_tests(support);
+                }
+            }
+            Err(message) => {
+                self.pet_picker_preview_state.set_error(message);
+                self.pet_picker_preview_pet = None;
+            }
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn show_pet_selection_loading_popup(&mut self) -> u64 {
+        self.pet_selection_load_request_id =
+            self.pet_selection_load_request_id.wrapping_add(/*rhs*/ 1);
+        self.pet_picker_preview_state.clear();
+        self.pet_picker_preview_pet = None;
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            view_id: Some(PET_SELECTION_LOADING_VIEW_ID),
+            title: Some("Loading Pet".to_string()),
+            subtitle: Some("Preparing the terminal pet.".to_string()),
+            items: vec![SelectionItem {
+                name: "Loading selected pet...".to_string(),
+                is_disabled: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        self.pet_selection_load_request_id
+    }
+
+    pub(crate) fn finish_pet_selection_loading_popup(&mut self, request_id: u64) -> bool {
+        if request_id != self.pet_selection_load_request_id {
+            return false;
+        }
+        self.bottom_pane
+            .dismiss_active_view_if_id(PET_SELECTION_LOADING_VIEW_ID);
+        true
+    }
+
     #[cfg(test)]
     pub(crate) fn set_pet_image_support_for_tests(
         &mut self,
@@ -10616,34 +10756,20 @@ fn load_ambient_pet(
         return None;
     }
 
-    match crate::pets::AmbientPet::load(
+    crate::pets::AmbientPet::load_with_fallback(
         config.tui_pet.as_deref(),
         &config.codex_home,
-        frame_requester.clone(),
+        frame_requester,
         config.animations,
-    ) {
-        Ok(pet) => Some(pet),
-        Err(err) if config.tui_pet.is_some() => {
-            tracing::warn!(
-                error = %err,
-                "failed to load configured ambient pet; falling back to default"
-            );
-            crate::pets::AmbientPet::load(
-                /*selected_pet*/ None,
-                &config.codex_home,
-                frame_requester,
-                config.animations,
-            )
-            .map_err(|fallback_err| {
-                tracing::warn!(error = %fallback_err, "failed to load default ambient pet");
-                fallback_err
-            })
-            .ok()
-        }
-        Err(err) => {
-            tracing::warn!(error = %err, "failed to load ambient pet");
-            None
-        }
+    )
+    .ok()
+}
+
+fn spawn_pet_load(f: impl FnOnce() + Send + 'static) {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        std::mem::drop(handle.spawn_blocking(f));
+    } else {
+        let _ = std::thread::spawn(f);
     }
 }
 

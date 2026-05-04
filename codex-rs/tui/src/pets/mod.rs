@@ -12,6 +12,7 @@ mod frames;
 mod image_protocol;
 mod model;
 mod picker;
+mod preview;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -26,7 +27,9 @@ pub(crate) use image_protocol::PetImageSupport;
 pub(crate) use image_protocol::PetImageUnsupportedReason;
 #[cfg(not(test))]
 pub(crate) use image_protocol::detect_pet_image_support;
+pub(crate) use picker::PET_PICKER_VIEW_ID;
 pub(crate) use picker::build_pet_picker_params;
+pub(crate) use preview::PetPickerPreviewState;
 
 pub(crate) const DEFAULT_PET_ID: &str = "codex";
 pub(crate) const DISABLED_PET_ID: &str = "disabled";
@@ -35,19 +38,28 @@ pub(crate) fn render_ambient_pet_image(
     writer: &mut impl Write,
     request: Option<AmbientPetDraw>,
 ) -> Result<()> {
+    render_pet_image(writer, /*image_id*/ 0xC0DE, request)
+}
+
+pub(crate) fn render_pet_picker_preview_image(
+    writer: &mut impl Write,
+    request: Option<AmbientPetDraw>,
+) -> Result<()> {
+    render_pet_image(writer, /*image_id*/ 0xC0DF, request)
+}
+
+fn render_pet_image(
+    writer: &mut impl Write,
+    image_id: u32,
+    request: Option<AmbientPetDraw>,
+) -> Result<()> {
     use crossterm::cursor::MoveTo;
     use crossterm::cursor::RestorePosition;
     use crossterm::cursor::SavePosition;
     use crossterm::queue;
     use image_protocol::ImageProtocol;
 
-    const AMBIENT_PET_IMAGE_ID: u32 = 0xC0DE;
-
-    write!(
-        writer,
-        "{}",
-        image_protocol::kitty_delete_image(AMBIENT_PET_IMAGE_ID)
-    )?;
+    write!(writer, "{}", image_protocol::kitty_delete_image(image_id))?;
     let Some(request) = request else {
         writer.flush()?;
         return Ok(());
@@ -59,7 +71,7 @@ pub(crate) fn render_ambient_pet_image(
                 &request.frame,
                 request.columns,
                 request.rows,
-                Some(AMBIENT_PET_IMAGE_ID),
+                Some(image_id),
             )?)
         }
         ImageProtocol::Sixel => {

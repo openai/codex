@@ -515,6 +515,7 @@ impl App {
         self.chat_widget.set_tui_theme(Some(name));
     }
 
+    #[cfg(test)]
     pub(super) fn sync_tui_pet_selection(&mut self, pet: String) {
         self.config.tui_pet = Some(pet.clone());
         self.chat_widget.set_tui_pet(Some(pet));

@@ -320,6 +320,24 @@ pub(crate) enum AppEvent {
     /// Persist terminal pets as disabled and remove the ambient pet.
     PetDisabled,
 
+    /// Start loading the side preview for the pet picker.
+    PetPreviewRequested {
+        pet_id: String,
+    },
+
+    /// Result of loading the side preview for the pet picker.
+    PetPreviewLoaded {
+        request_id: u64,
+        result: Result<crate::pets::AmbientPet, String>,
+    },
+
+    /// Result of loading the selected ambient pet after config persistence.
+    PetSelectionLoaded {
+        request_id: u64,
+        pet_id: String,
+        result: Result<Option<crate::pets::AmbientPet>, String>,
+    },
+
     /// Refresh app connector state and mention bindings.
     RefreshConnectors {
         force_refetch: bool,

@@ -881,6 +881,16 @@ impl Tui {
         })?
     }
 
+    pub fn draw_pet_picker_preview_image(
+        &mut self,
+        request: Option<crate::pets::AmbientPetDraw>,
+    ) -> Result<()> {
+        stdout().sync_update(|_| {
+            crate::pets::render_pet_picker_preview_image(self.terminal.backend_mut(), request)
+                .map_err(std::io::Error::other)
+        })?
+    }
+
     pub fn clear_ambient_pet_image(&mut self) -> Result<()> {
         crate::pets::render_ambient_pet_image(self.terminal.backend_mut(), /*request*/ None)
             .map_err(std::io::Error::other)
