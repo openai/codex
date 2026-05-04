@@ -67,6 +67,7 @@ pub struct SearchMemoriesRequest {
     pub path: Option<String>,
     pub cursor: Option<String>,
     pub context_lines: usize,
+    pub case_sensitive: bool,
     pub max_results: usize,
 }
 

@@ -216,6 +216,7 @@ impl MemoriesBackend for LocalMemoriesBackend {
             &metadata,
             query,
             request.context_lines,
+            request.case_sensitive,
             &mut matches,
         )
         .await?;
@@ -249,10 +250,11 @@ async fn search_entries(
     current_metadata: &std::fs::Metadata,
     query: &str,
     context_lines: usize,
+    case_sensitive: bool,
     matches: &mut Vec<MemorySearchMatch>,
 ) -> Result<(), MemoriesBackendError> {
     if current_metadata.is_file() {
-        search_file(root, current, query, context_lines, matches).await?;
+        search_file(root, current, query, context_lines, case_sensitive, matches).await?;
         return Ok(());
     }
     if !current_metadata.is_dir() {
@@ -271,7 +273,7 @@ async fn search_entries(
             if metadata.is_dir() {
                 pending.push(path);
             } else if metadata.is_file() {
-                search_file(root, &path, query, context_lines, matches).await?;
+                search_file(root, &path, query, context_lines, case_sensitive, matches).await?;
             }
         }
     }
@@ -284,6 +286,7 @@ async fn search_file(
     path: &Path,
     query: &str,
     context_lines: usize,
+    case_sensitive: bool,
     matches: &mut Vec<MemorySearchMatch>,
 ) -> Result<(), MemoriesBackendError> {
     let content = match tokio::fs::read_to_string(path).await {
@@ -292,8 +295,13 @@ async fn search_file(
         Err(err) => return Err(err.into()),
     };
     let lines = content.lines().collect::<Vec<_>>();
+    let normalized_query = (!case_sensitive).then(|| query.to_lowercase());
     for (idx, line) in lines.iter().enumerate() {
-        if line.contains(query) {
+        let is_match = match normalized_query.as_deref() {
+            Some(query) => line.to_lowercase().contains(query),
+            None => line.contains(query),
+        };
+        if is_match {
             let start_index = idx.saturating_sub(context_lines);
             let end_index = idx
                 .saturating_add(context_lines)

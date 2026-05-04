@@ -386,6 +386,7 @@ async fn search_supports_directory_and_file_scopes() {
             path: None,
             cursor: None,
             context_lines: 0,
+            case_sensitive: true,
             max_results: DEFAULT_SEARCH_MAX_RESULTS,
         })
         .await
@@ -416,6 +417,7 @@ async fn search_supports_directory_and_file_scopes() {
             path: Some("MEMORY.md".to_string()),
             cursor: None,
             context_lines: 0,
+            case_sensitive: true,
             max_results: DEFAULT_SEARCH_MAX_RESULTS,
         })
         .await
@@ -455,6 +457,7 @@ async fn search_supports_pagination() {
             path: None,
             cursor: None,
             context_lines: 0,
+            case_sensitive: true,
             max_results: 2,
         })
         .await
@@ -485,6 +488,7 @@ async fn search_supports_pagination() {
             path: None,
             cursor: page1.next_cursor,
             context_lines: 0,
+            case_sensitive: true,
             max_results: 2,
         })
         .await
@@ -518,6 +522,7 @@ async fn search_supports_context_lines() {
             path: None,
             cursor: None,
             context_lines: 1,
+            case_sensitive: true,
             max_results: DEFAULT_SEARCH_MAX_RESULTS,
         })
         .await
@@ -543,6 +548,70 @@ async fn search_supports_context_lines() {
 }
 
 #[tokio::test]
+async fn search_supports_case_insensitive_matching() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::write(tempdir.path().join("MEMORY.md"), "Needle\nneedle\nNEEDLE\n")
+        .await
+        .expect("write memory file");
+
+    let sensitive_response = backend(&tempdir)
+        .search(SearchMemoriesRequest {
+            query: "needle".to_string(),
+            path: None,
+            cursor: None,
+            context_lines: 0,
+            case_sensitive: true,
+            max_results: DEFAULT_SEARCH_MAX_RESULTS,
+        })
+        .await
+        .expect("search with case-sensitive matching");
+    assert_eq!(
+        sensitive_response.matches,
+        vec![MemorySearchMatch {
+            path: "MEMORY.md".to_string(),
+            line_number: 2,
+            start_line_number: 2,
+            content: "needle".to_string(),
+        }]
+    );
+
+    let insensitive_response = backend(&tempdir)
+        .search(SearchMemoriesRequest {
+            query: "needle".to_string(),
+            path: None,
+            cursor: None,
+            context_lines: 0,
+            case_sensitive: false,
+            max_results: DEFAULT_SEARCH_MAX_RESULTS,
+        })
+        .await
+        .expect("search with case-insensitive matching");
+    assert_eq!(
+        insensitive_response.matches,
+        vec![
+            MemorySearchMatch {
+                path: "MEMORY.md".to_string(),
+                line_number: 1,
+                start_line_number: 1,
+                content: "Needle".to_string(),
+            },
+            MemorySearchMatch {
+                path: "MEMORY.md".to_string(),
+                line_number: 2,
+                start_line_number: 2,
+                content: "needle".to_string(),
+            },
+            MemorySearchMatch {
+                path: "MEMORY.md".to_string(),
+                line_number: 3,
+                start_line_number: 3,
+                content: "NEEDLE".to_string(),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
 async fn search_rejects_invalid_cursor() {
     let tempdir = TempDir::new().expect("tempdir");
     tokio::fs::write(tempdir.path().join("MEMORY.md"), "needle\n")
@@ -555,6 +624,7 @@ async fn search_rejects_invalid_cursor() {
             path: None,
             cursor: Some("bogus".to_string()),
             context_lines: 0,
+            case_sensitive: true,
             max_results: DEFAULT_SEARCH_MAX_RESULTS,
         })
         .await
@@ -568,6 +638,7 @@ async fn search_rejects_invalid_cursor() {
             path: None,
             cursor: Some("2".to_string()),
             context_lines: 0,
+            case_sensitive: true,
             max_results: DEFAULT_SEARCH_MAX_RESULTS,
         })
         .await

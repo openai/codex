@@ -77,6 +77,7 @@ pub(crate) fn search_input_schema() -> JsonObject {
             "path": { "type": "string" },
             "cursor": { "type": "string" },
             "context_lines": { "type": "integer", "minimum": 0 },
+            "case_sensitive": { "type": "boolean" },
             "max_results": { "type": "integer", "minimum": 1 }
         },
         "required": ["query"],

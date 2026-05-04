@@ -59,6 +59,7 @@ struct SearchArgs {
     path: Option<String>,
     cursor: Option<String>,
     context_lines: Option<usize>,
+    case_sensitive: Option<bool>,
     max_results: Option<usize>,
 }
 
@@ -150,6 +151,7 @@ impl<B: MemoriesBackend> ServerHandler for MemoriesMcpServer<B> {
                             path: args.path,
                             cursor: args.cursor,
                             context_lines: args.context_lines.unwrap_or(0),
+                            case_sensitive: args.case_sensitive.unwrap_or(true),
                             max_results: clamp_max_results(
                                 args.max_results,
                                 DEFAULT_SEARCH_MAX_RESULTS,
@@ -220,7 +222,7 @@ fn search_tool() -> Tool {
     let mut tool = Tool::new(
         Cow::Borrowed(SEARCH_TOOL_NAME),
         Cow::Borrowed(
-            "Search Codex memory files for exact text matches, with pagination and optional surrounding context lines.",
+            "Search Codex memory files for exact text matches, with pagination, optional surrounding context lines, and optional case-insensitive matching.",
         ),
         Arc::new(schema::search_input_schema()),
     );
