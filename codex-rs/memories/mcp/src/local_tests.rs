@@ -24,6 +24,7 @@ async fn list_returns_recursive_memory_paths() {
     let response = backend(&tempdir)
         .list(ListMemoriesRequest {
             path: None,
+            cursor: None,
             max_results: DEFAULT_LIST_MAX_RESULTS,
         })
         .await
@@ -50,7 +51,153 @@ async fn list_returns_recursive_memory_paths() {
             },
         ]
     );
+    assert_eq!(response.next_cursor, None);
     assert_eq!(response.truncated, false);
+}
+
+#[tokio::test]
+async fn list_supports_pagination() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::create_dir_all(tempdir.path().join("skills/example"))
+        .await
+        .expect("create skills dir");
+    tokio::fs::write(tempdir.path().join("MEMORY.md"), "summary")
+        .await
+        .expect("write memory file");
+    tokio::fs::write(tempdir.path().join("skills/example/SKILL.md"), "skill")
+        .await
+        .expect("write skill file");
+
+    let page1 = backend(&tempdir)
+        .list(ListMemoriesRequest {
+            path: None,
+            cursor: None,
+            max_results: 2,
+        })
+        .await
+        .expect("list first page");
+    assert_eq!(
+        page1.entries,
+        vec![
+            MemoryEntry {
+                path: "MEMORY.md".to_string(),
+                entry_type: MemoryEntryType::File,
+            },
+            MemoryEntry {
+                path: "skills".to_string(),
+                entry_type: MemoryEntryType::Directory,
+            },
+        ]
+    );
+    assert_eq!(page1.next_cursor.as_deref(), Some("2"));
+    assert_eq!(page1.truncated, true);
+
+    let page2 = backend(&tempdir)
+        .list(ListMemoriesRequest {
+            path: None,
+            cursor: page1.next_cursor,
+            max_results: 2,
+        })
+        .await
+        .expect("list second page");
+    assert_eq!(
+        page2.entries,
+        vec![
+            MemoryEntry {
+                path: "skills/example".to_string(),
+                entry_type: MemoryEntryType::Directory,
+            },
+            MemoryEntry {
+                path: "skills/example/SKILL.md".to_string(),
+                entry_type: MemoryEntryType::File,
+            },
+        ]
+    );
+    assert_eq!(page2.next_cursor, None);
+    assert_eq!(page2.truncated, false);
+}
+
+#[tokio::test]
+async fn list_preserves_lexicographic_order_across_directories() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::create_dir_all(tempdir.path().join("a/nested"))
+        .await
+        .expect("create a dir");
+    tokio::fs::create_dir_all(tempdir.path().join("b"))
+        .await
+        .expect("create b dir");
+    tokio::fs::write(tempdir.path().join("a/file.txt"), "a")
+        .await
+        .expect("write a file");
+    tokio::fs::write(tempdir.path().join("a/nested/inner.txt"), "inner")
+        .await
+        .expect("write nested file");
+    tokio::fs::write(tempdir.path().join("b/file.txt"), "b")
+        .await
+        .expect("write b file");
+
+    let response = backend(&tempdir)
+        .list(ListMemoriesRequest {
+            path: None,
+            cursor: None,
+            max_results: DEFAULT_LIST_MAX_RESULTS,
+        })
+        .await
+        .expect("list memories");
+
+    assert_eq!(
+        response
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "a",
+            "a/file.txt",
+            "a/nested",
+            "a/nested/inner.txt",
+            "b",
+            "b/file.txt",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn list_rejects_invalid_cursor() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::write(tempdir.path().join("MEMORY.md"), "summary")
+        .await
+        .expect("write memory file");
+
+    let err = backend(&tempdir)
+        .list(ListMemoriesRequest {
+            path: None,
+            cursor: Some("bogus".to_string()),
+            max_results: DEFAULT_LIST_MAX_RESULTS,
+        })
+        .await
+        .expect_err("cursor should be rejected");
+
+    assert!(matches!(err, MemoriesBackendError::InvalidCursor { .. }));
+}
+
+#[tokio::test]
+async fn list_rejects_cursor_past_end() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::write(tempdir.path().join("MEMORY.md"), "summary")
+        .await
+        .expect("write memory file");
+
+    let err = backend(&tempdir)
+        .list(ListMemoriesRequest {
+            path: None,
+            cursor: Some("2".to_string()),
+            max_results: DEFAULT_LIST_MAX_RESULTS,
+        })
+        .await
+        .expect_err("cursor past end should be rejected");
+
+    assert!(matches!(err, MemoriesBackendError::InvalidCursor { .. }));
 }
 
 #[tokio::test]

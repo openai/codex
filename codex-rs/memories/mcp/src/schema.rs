@@ -6,6 +6,7 @@ pub(crate) fn list_input_schema() -> JsonObject {
         "type": "object",
         "properties": {
             "path": { "type": "string" },
+            "cursor": { "type": "string" },
             "max_results": { "type": "integer", "minimum": 1 }
         },
         "additionalProperties": false
@@ -17,6 +18,9 @@ pub(crate) fn list_output_schema() -> JsonObject {
         "type": "object",
         "properties": {
             "path": {
+                "anyOf": [{ "type": "string" }, { "type": "null" }]
+            },
+            "next_cursor": {
                 "anyOf": [{ "type": "string" }, { "type": "null" }]
             },
             "entries": {
@@ -33,7 +37,7 @@ pub(crate) fn list_output_schema() -> JsonObject {
             },
             "truncated": { "type": "boolean" }
         },
-        "required": ["path", "entries", "truncated"],
+        "required": ["path", "entries", "next_cursor", "truncated"],
         "additionalProperties": false
     }))
 }

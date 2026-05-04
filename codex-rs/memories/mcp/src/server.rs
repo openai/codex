@@ -42,6 +42,7 @@ pub struct MemoriesMcpServer<B> {
 #[derive(Deserialize)]
 struct ListArgs {
     path: Option<String>,
+    cursor: Option<String>,
     max_results: Option<usize>,
 }
 
@@ -113,6 +114,7 @@ impl<B: MemoriesBackend> ServerHandler for MemoriesMcpServer<B> {
                     self.backend
                         .list(ListMemoriesRequest {
                             path: args.path,
+                            cursor: args.cursor,
                             max_results: clamp_max_results(
                                 args.max_results,
                                 DEFAULT_LIST_MAX_RESULTS,
@@ -230,6 +232,7 @@ fn clamp_max_results(requested: Option<usize>, default: usize, max: usize) -> us
 fn backend_error_to_mcp(err: MemoriesBackendError) -> McpError {
     match err {
         MemoriesBackendError::InvalidPath { .. }
+        | MemoriesBackendError::InvalidCursor { .. }
         | MemoriesBackendError::InvalidLineOffset
         | MemoriesBackendError::InvalidMaxLines
         | MemoriesBackendError::LineOffsetExceedsFileLength

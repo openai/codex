@@ -77,12 +77,17 @@ impl MemoriesBackend for LocalMemoriesBackend {
     ) -> Result<ListMemoriesResponse, MemoriesBackendError> {
         let max_results = request.max_results.min(MAX_LIST_RESULTS);
         let start = self.resolve_scoped_path(request.path.as_deref())?;
+        let start_index = parse_list_cursor(request.cursor.as_deref())?;
+        let stop_after = start_index.saturating_add(max_results);
         let mut entries = Vec::new();
-        let truncated = collect_entries(&self.root, &start, &mut entries, max_results).await?;
-        entries.sort_by(|left, right| left.path.cmp(&right.path));
+        let listed_count =
+            collect_entries_page(&self.root, &start, start_index, stop_after, &mut entries).await?;
+        let next_cursor = (listed_count > stop_after).then(|| stop_after.to_string());
+        let truncated = next_cursor.is_some();
         Ok(ListMemoriesResponse {
             path: request.path,
             entries,
+            next_cursor,
             truncated,
         })
     }
@@ -154,60 +159,85 @@ impl MemoriesBackend for LocalMemoriesBackend {
     }
 }
 
-async fn collect_entries(
+async fn collect_entries_page(
     root: &Path,
     current: &Path,
+    start_index: usize,
+    stop_after: usize,
     entries: &mut Vec<MemoryEntry>,
-    max_results: usize,
-) -> Result<bool, MemoriesBackendError> {
-    if max_results == 0 {
-        return Ok(false);
-    }
+) -> Result<usize, MemoriesBackendError> {
     let Some(metadata) = LocalMemoriesBackend::metadata_or_none(current).await? else {
-        return Ok(false);
+        return Ok(0);
     };
     reject_symlink(&display_relative_path(root, current), &metadata)?;
+
+    let mut seen = 0usize;
     if metadata.is_file() {
-        entries.push(MemoryEntry {
-            path: display_relative_path(root, current),
-            entry_type: MemoryEntryType::File,
-        });
-        return Ok(entries.len() >= max_results);
+        push_list_entry(
+            entries,
+            &mut seen,
+            start_index,
+            stop_after,
+            MemoryEntry {
+                path: display_relative_path(root, current),
+                entry_type: MemoryEntryType::File,
+            },
+        );
+        return Ok(seen);
     }
     if !metadata.is_dir() {
-        return Ok(false);
+        return Ok(0);
     }
 
     let mut pending = vec![current.to_path_buf()];
-    while let Some(dir_path) = pending.pop() {
-        for path in read_sorted_dir_paths(&dir_path).await? {
-            if entries.len() >= max_results {
-                return Ok(true);
-            }
-            let Some(metadata) = LocalMemoriesBackend::metadata_or_none(&path).await? else {
+    while let Some(path) = pending.pop() {
+        let Some(metadata) = LocalMemoriesBackend::metadata_or_none(&path).await? else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if path != current {
+            let relative = display_relative_path(root, &path);
+            let entry_type = if metadata.is_dir() {
+                MemoryEntryType::Directory
+            } else if metadata.is_file() {
+                MemoryEntryType::File
+            } else {
                 continue;
             };
-            if metadata.file_type().is_symlink() {
-                continue;
-            }
-
-            let relative = display_relative_path(root, &path);
-            if metadata.is_dir() {
-                entries.push(MemoryEntry {
+            push_list_entry(
+                entries,
+                &mut seen,
+                start_index,
+                stop_after,
+                MemoryEntry {
                     path: relative,
-                    entry_type: MemoryEntryType::Directory,
-                });
-                pending.push(path);
-            } else if metadata.is_file() {
-                entries.push(MemoryEntry {
-                    path: relative,
-                    entry_type: MemoryEntryType::File,
-                });
+                    entry_type,
+                },
+            );
+            if seen > stop_after {
+                return Ok(seen);
             }
+        }
+        if metadata.is_dir() {
+            let mut children = read_sorted_dir_paths(&path).await?;
+            children.reverse();
+            pending.extend(children);
+        }
+        if seen > stop_after {
+            return Ok(seen);
         }
     }
 
-    Ok(false)
+    if seen < start_index {
+        return Err(MemoriesBackendError::invalid_cursor(
+            start_index.to_string(),
+            "exceeds result count",
+        ));
+    }
+
+    Ok(seen)
 }
 
 async fn search_entries(
@@ -315,6 +345,34 @@ fn display_relative_path(root: &Path, path: &Path) -> String {
         .filter(|component| !component.is_empty())
         .collect::<Vec<_>>()
         .join("/")
+}
+
+fn parse_list_cursor(cursor: Option<&str>) -> Result<usize, MemoriesBackendError> {
+    let Some(cursor) = cursor else {
+        return Ok(0);
+    };
+
+    let start_index = cursor.parse::<usize>().map_err(|_| {
+        MemoriesBackendError::invalid_cursor(cursor, "must be a non-negative integer")
+    })?;
+
+    Ok(start_index)
+}
+
+fn push_list_entry(
+    entries: &mut Vec<MemoryEntry>,
+    seen: &mut usize,
+    start_index: usize,
+    stop_after: usize,
+    entry: MemoryEntry,
+) {
+    *seen += 1;
+    if *seen <= start_index {
+        return;
+    }
+    if *seen <= stop_after {
+        entries.push(entry);
+    }
 }
 
 fn line_start_byte_offset(

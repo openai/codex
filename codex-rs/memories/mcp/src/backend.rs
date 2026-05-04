@@ -33,6 +33,7 @@ pub trait MemoriesBackend: Clone + Send + Sync + 'static {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListMemoriesRequest {
     pub path: Option<String>,
+    pub cursor: Option<String>,
     pub max_results: usize,
 }
 
@@ -40,6 +41,7 @@ pub struct ListMemoriesRequest {
 pub struct ListMemoriesResponse {
     pub path: Option<String>,
     pub entries: Vec<MemoryEntry>,
+    pub next_cursor: Option<String>,
     pub truncated: bool,
 }
 
@@ -98,6 +100,8 @@ pub struct MemorySearchMatch {
 pub enum MemoriesBackendError {
     #[error("path '{path}' {reason}")]
     InvalidPath { path: String, reason: String },
+    #[error("cursor '{cursor}' {reason}")]
+    InvalidCursor { cursor: String, reason: String },
     #[error("line_offset must be a 1-indexed line number")]
     InvalidLineOffset,
     #[error("max_lines must be a positive integer")]
@@ -116,6 +120,13 @@ impl MemoriesBackendError {
     pub fn invalid_path(path: impl Into<String>, reason: impl Into<String>) -> Self {
         Self::InvalidPath {
             path: path.into(),
+            reason: reason.into(),
+        }
+    }
+
+    pub fn invalid_cursor(cursor: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::InvalidCursor {
+            cursor: cursor.into(),
             reason: reason.into(),
         }
     }
