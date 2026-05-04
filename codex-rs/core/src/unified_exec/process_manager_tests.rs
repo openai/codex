@@ -67,12 +67,23 @@ fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
 
 #[test]
 fn exec_server_params_use_env_policy_overlay_contract() {
+    let cwd: codex_utils_absolute_path::AbsolutePathBuf = std::env::current_dir()
+        .expect("current dir")
+        .try_into()
+        .expect("absolute path");
+    let sandbox_policy = codex_protocol::protocol::SandboxPolicy::DangerFullAccess;
+    let file_system_sandbox_policy =
+        codex_protocol::permissions::FileSystemSandboxPolicy::from(&sandbox_policy);
+    let network_sandbox_policy = codex_protocol::permissions::NetworkSandboxPolicy::Restricted;
+    let permission_profile =
+        codex_protocol::models::PermissionProfile::from_runtime_permissions_with_enforcement(
+            codex_protocol::models::SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
+        );
     let request = ExecRequest {
         command: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
-        cwd: std::env::current_dir()
-            .expect("current dir")
-            .try_into()
-            .expect("absolute path"),
+        cwd: cwd.clone(),
         env: HashMap::from([
             ("HOME".to_string(), "/client-home".to_string()),
             ("PATH".to_string(), "/sandbox-path".to_string()),
@@ -80,7 +91,7 @@ fn exec_server_params_use_env_policy_overlay_contract() {
         ]),
         exec_server_env_config: Some(ExecServerEnvConfig {
             policy: codex_exec_server::ExecEnvPolicy {
-                inherit: codex_config::types::ShellEnvironmentPolicyInherit::Core,
+                inherit: codex_protocol::config_types::ShellEnvironmentPolicyInherit::Core,
                 ignore_default_excludes: false,
                 exclude: Vec::new(),
                 r#set: HashMap::new(),
@@ -95,13 +106,12 @@ fn exec_server_params_use_env_policy_overlay_contract() {
         expiration: crate::exec::ExecExpiration::DefaultTimeout,
         capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
         sandbox: codex_sandboxing::SandboxType::None,
+        windows_sandbox_policy_cwd: cwd,
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
-        sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-        file_system_sandbox_policy: codex_protocol::permissions::FileSystemSandboxPolicy::from(
-            &codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-        ),
-        network_sandbox_policy: codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+        permission_profile,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
         windows_sandbox_filesystem_overrides: None,
         arg0: None,
     };
@@ -123,6 +133,94 @@ fn exec_server_params_use_env_policy_overlay_contract() {
 #[test]
 fn exec_server_process_id_matches_unified_exec_process_id() {
     assert_eq!(exec_server_process_id(/*process_id*/ 4321), "4321");
+}
+
+#[tokio::test]
+async fn network_denial_fallback_message_names_sandbox_network_proxy() {
+    let message = network_denial_message_for_session(/*session*/ None, /*deferred*/ None).await;
+
+    assert_eq!(
+        message,
+        "Network access was denied by the Codex sandbox network proxy."
+    );
+}
+
+#[tokio::test]
+async fn late_network_denial_grace_observes_cancellation_after_exit() {
+    let cancellation = CancellationToken::new();
+    let cancellation_for_task = cancellation.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        cancellation_for_task.cancel();
+    });
+
+    assert!(wait_for_late_network_denial(Some(cancellation)).await);
+}
+
+#[tokio::test]
+async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
+    let (session, turn, rx_event) = crate::session::tests::make_session_and_context_with_rx().await;
+    let context = UnifiedExecContext::new(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        "call-unified-denied".to_string(),
+    );
+    let request = ExecCommandRequest {
+        command: vec![
+            "sh".to_string(),
+            "-lc".to_string(),
+            "echo before".to_string(),
+        ],
+        hook_command: "echo before".to_string(),
+        process_id: 123,
+        yield_time_ms: 1000,
+        max_output_tokens: None,
+        workdir: None,
+        network: None,
+        tty: true,
+        sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+        additional_permissions: None,
+        additional_permissions_preapproved: false,
+        justification: None,
+        prefix_rule: None,
+    };
+
+    let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
+    transcript
+        .lock()
+        .await
+        .push_chunk(b"PARTIAL_TRANSCRIPT".to_vec());
+
+    emit_failed_initial_exec_end_if_unstored(
+        /*process_started_alive*/ false,
+        &context,
+        &request,
+        turn.cwd.clone(),
+        transcript,
+        "PRE_DENIAL_MARKER".to_string(),
+        "Network access denied".to_string(),
+        Duration::from_millis(7),
+    )
+    .await;
+
+    let event = tokio::time::timeout(Duration::from_secs(1), rx_event.recv())
+        .await
+        .expect("timed out waiting for failed exec end event")
+        .expect("event channel closed");
+    let codex_protocol::protocol::EventMsg::ExecCommandEnd(end_event) = event.msg else {
+        panic!("expected ExecCommandEnd event");
+    };
+    assert_eq!(end_event.call_id, "call-unified-denied");
+    assert_eq!(
+        end_event.status,
+        codex_protocol::protocol::ExecCommandStatus::Failed
+    );
+    assert_eq!(end_event.exit_code, -1);
+    assert_eq!(end_event.process_id.as_deref(), Some("123"));
+    assert_eq!(
+        end_event.aggregated_output,
+        "PRE_DENIAL_MARKER\nNetwork access denied"
+    );
 }
 
 #[test]

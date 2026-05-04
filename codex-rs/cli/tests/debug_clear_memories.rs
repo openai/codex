@@ -105,7 +105,7 @@ INSERT INTO jobs (
     let memory_root = codex_home.path().join("memories");
     std::fs::create_dir_all(&memory_root)?;
     std::fs::write(memory_root.join("memory_summary.md"), "stale memory")?;
-    drop(pool);
+    pool.close().await;
 
     let mut cmd = codex_command(codex_home.path())?;
     cmd.args(["debug", "clear-memories"])
@@ -127,6 +127,7 @@ INSERT INTO jobs (
     assert_eq!(memory_jobs_count, 0);
     assert!(memory_root.exists());
     assert_eq!(std::fs::read_dir(memory_root)?.count(), 0);
+    pool.close().await;
 
     Ok(())
 }

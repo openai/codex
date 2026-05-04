@@ -10,6 +10,10 @@ use toml::Value as TomlValue;
 
 use crate::ConfigLayerEntry;
 
+mod remote;
+
+pub use remote::RemoteThreadConfigLoader;
+
 /// Context available to implementations when loading thread-scoped config.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ThreadConfigContext {

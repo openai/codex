@@ -1,3 +1,4 @@
+use crate::agent::control::SpawnAgentOptions;
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::status::is_final;
@@ -39,7 +40,6 @@ pub struct BatchJobHandler;
 const DEFAULT_AGENT_JOB_CONCURRENCY: usize = 16;
 const MAX_AGENT_JOB_CONCURRENCY: usize = 64;
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_AGENT_JOB_ITEM_TIMEOUT: Duration = Duration::from_secs(60 * 30);
 
 #[derive(Debug, Deserialize)]
@@ -82,17 +82,6 @@ struct AgentJobFailureSummary {
 }
 
 #[derive(Debug, Serialize)]
-struct AgentJobProgressUpdate {
-    job_id: String,
-    total_items: usize,
-    pending_items: usize,
-    running_items: usize,
-    completed_items: usize,
-    failed_items: usize,
-    eta_seconds: Option<u64>,
-}
-
-#[derive(Debug, Serialize)]
 struct ReportAgentJobResultToolResult {
     accepted: bool,
 }
@@ -108,73 +97,6 @@ struct ActiveJobItem {
     item_id: String,
     started_at: Instant,
     status_rx: Option<Receiver<AgentStatus>>,
-}
-
-struct JobProgressEmitter {
-    started_at: Instant,
-    last_emit_at: Instant,
-    last_processed: usize,
-    last_failed: usize,
-}
-
-impl JobProgressEmitter {
-    fn new() -> Self {
-        let now = Instant::now();
-        let last_emit_at = now.checked_sub(PROGRESS_EMIT_INTERVAL).unwrap_or(now);
-        Self {
-            started_at: now,
-            last_emit_at,
-            last_processed: 0,
-            last_failed: 0,
-        }
-    }
-
-    async fn maybe_emit(
-        &mut self,
-        session: &Session,
-        turn: &TurnContext,
-        job_id: &str,
-        progress: &codex_state::AgentJobProgress,
-        force: bool,
-    ) -> anyhow::Result<()> {
-        let processed = progress.completed_items + progress.failed_items;
-        let should_emit = force
-            || processed != self.last_processed
-            || progress.failed_items != self.last_failed
-            || self.last_emit_at.elapsed() >= PROGRESS_EMIT_INTERVAL;
-        if !should_emit {
-            return Ok(());
-        }
-        let elapsed = self.started_at.elapsed().as_secs_f64();
-        let eta_seconds = if processed > 0 && elapsed > 0.0 {
-            let remaining = progress.total_items.saturating_sub(processed) as f64;
-            let rate = processed as f64 / elapsed;
-            if rate > 0.0 {
-                Some((remaining / rate).round() as u64)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        let update = AgentJobProgressUpdate {
-            job_id: job_id.to_string(),
-            total_items: progress.total_items,
-            pending_items: progress.pending_items,
-            running_items: progress.running_items,
-            completed_items: progress.completed_items,
-            failed_items: progress.failed_items,
-            eta_seconds,
-        };
-        let payload = serde_json::to_string(&update)?;
-        session
-            .notify_background_event(turn, format!("agent_job_progress:{payload}"))
-            .await;
-        self.last_emit_at = Instant::now();
-        self.last_processed = processed;
-        self.last_failed = progress.failed_items;
-        Ok(())
-    }
 }
 
 impl ToolHandler for BatchJobHandler {
@@ -356,12 +278,6 @@ mod spawn_agents_on_csv {
                     "failed to transition agent job {job_id} to running: {err}"
                 ))
             })?;
-        let max_threads = turn.config.agent_max_threads;
-        let effective_concurrency = options.max_concurrency;
-        let message = format!(
-            "agent job concurrency: job_id={job_id} requested={requested_concurrency:?} max_threads={max_threads:?} effective={effective_concurrency}"
-        );
-        let _ = session.notify_background_event(&turn, message).await;
         if let Err(err) = run_agent_job_loop(
             session.clone(),
             turn.clone(),
@@ -532,6 +448,11 @@ async fn build_runner_options(
             "agent depth limit reached; this session cannot spawn more subagents".to_string(),
         ));
     }
+    if turn.config.agent_max_threads == Some(0) {
+        return Err(FunctionCallError::RespondToModel(
+            "agent thread limit reached; this session cannot spawn more subagents".to_string(),
+        ));
+    }
     let max_concurrency =
         normalize_concurrency(requested_concurrency, turn.config.agent_max_threads);
     let base_instructions = session.get_base_instructions().await;
@@ -577,7 +498,6 @@ async fn run_agent_job_loop(
         .ok_or_else(|| anyhow::anyhow!("agent job {job_id} was not found"))?;
     let runtime_timeout = job_runtime_timeout(&job);
     let mut active_items: HashMap<ThreadId, ActiveJobItem> = HashMap::new();
-    let mut progress_emitter = JobProgressEmitter::new();
     recover_running_items(
         session.clone(),
         db.clone(),
@@ -586,16 +506,6 @@ async fn run_agent_job_loop(
         runtime_timeout,
     )
     .await?;
-    let initial_progress = db.get_agent_job_progress(job_id.as_str()).await?;
-    progress_emitter
-        .maybe_emit(
-            &session,
-            &turn,
-            job_id.as_str(),
-            &initial_progress,
-            /*force*/ true,
-        )
-        .await?;
 
     let mut cancel_requested = db.is_agent_job_cancelled(job_id.as_str()).await?;
     loop {
@@ -603,12 +513,6 @@ async fn run_agent_job_loop(
 
         if !cancel_requested && db.is_agent_job_cancelled(job_id.as_str()).await? {
             cancel_requested = true;
-            let _ = session
-                .notify_background_event(
-                    &turn,
-                    format!("agent job {job_id} cancellation requested; stopping new workers"),
-                )
-                .await;
         }
 
         if !cancel_requested && active_items.len() < options.max_concurrency {
@@ -629,16 +533,20 @@ async fn run_agent_job_loop(
                 let thread_id = match session
                     .services
                     .agent_control
-                    .spawn_agent(
+                    .spawn_agent_with_metadata(
                         options.spawn_config.clone(),
                         items.into(),
                         Some(SessionSource::SubAgent(SubAgentSource::Other(format!(
                             "agent_job:{job_id}"
                         )))),
+                        SpawnAgentOptions {
+                            environments: Some(turn.environments.to_selections()),
+                            ..Default::default()
+                        },
                     )
                     .await
                 {
-                    Ok(thread_id) => thread_id,
+                    Ok(spawned_agent) => spawned_agent.thread_id,
                     Err(CodexErr::AgentLimitReached { .. }) => {
                         db.mark_agent_job_item_pending(
                             job_id.as_str(),
@@ -733,20 +641,9 @@ async fn run_agent_job_loop(
             )
             .await?;
             active_items.remove(&thread_id);
-            let progress = db.get_agent_job_progress(job_id.as_str()).await?;
-            progress_emitter
-                .maybe_emit(
-                    &session,
-                    &turn,
-                    job_id.as_str(),
-                    &progress,
-                    /*force*/ false,
-                )
-                .await?;
         }
     }
 
-    let progress = db.get_agent_job_progress(job_id.as_str()).await?;
     if let Err(err) = export_job_csv_snapshot(db.clone(), &job).await {
         let message = format!("auto-export failed: {err}");
         db.mark_agent_job_failed(job_id.as_str(), message.as_str())
@@ -755,37 +652,9 @@ async fn run_agent_job_loop(
     }
     let cancelled = cancel_requested || db.is_agent_job_cancelled(job_id.as_str()).await?;
     if cancelled {
-        let pending_items = progress.pending_items;
-        let message =
-            format!("agent job {job_id} cancelled with {pending_items} unprocessed items");
-        let _ = session.notify_background_event(&turn, message).await;
-        progress_emitter
-            .maybe_emit(
-                &session,
-                &turn,
-                job_id.as_str(),
-                &progress,
-                /*force*/ true,
-            )
-            .await?;
         return Ok(());
     }
-    if progress.failed_items > 0 {
-        let failed_items = progress.failed_items;
-        let message = format!("agent job completed with {failed_items} failed items");
-        let _ = session.notify_background_event(&turn, message).await;
-    }
     db.mark_agent_job_completed(job_id.as_str()).await?;
-    let progress = db.get_agent_job_progress(job_id.as_str()).await?;
-    progress_emitter
-        .maybe_emit(
-            &session,
-            &turn,
-            job_id.as_str(),
-            &progress,
-            /*force*/ true,
-        )
-        .await?;
     Ok(())
 }
 

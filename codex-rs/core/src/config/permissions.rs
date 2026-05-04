@@ -9,9 +9,12 @@ use codex_config::permissions_toml::FilesystemPermissionsToml;
 use codex_config::permissions_toml::NetworkToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
+use codex_config::types::SandboxWorkspaceWrite;
 use codex_network_proxy::NetworkProxyConfig;
 #[cfg(test)]
 use codex_network_proxy::NetworkUnixSocketPermission as ProxyNetworkUnixSocketPermission;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -20,13 +23,120 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+use super::ProjectConfig;
+
+pub(crate) const BUILT_IN_READ_ONLY_PROFILE: &str = ":read-only";
+pub(crate) const BUILT_IN_WORKSPACE_PROFILE: &str = ":workspace";
+pub(crate) const BUILT_IN_DANGER_NO_SANDBOX_PROFILE: &str = ":danger-no-sandbox";
+
+pub(crate) fn default_builtin_permission_profile_name(
+    active_project: &ProjectConfig,
+    windows_sandbox_level: WindowsSandboxLevel,
+) -> &'static str {
+    if (active_project.is_trusted() || active_project.is_untrusted())
+        && !(cfg!(target_os = "windows") && windows_sandbox_level == WindowsSandboxLevel::Disabled)
+    {
+        BUILT_IN_WORKSPACE_PROFILE
+    } else {
+        BUILT_IN_READ_ONLY_PROFILE
+    }
+}
+
+pub(crate) fn is_builtin_permission_profile_name(profile_name: &str) -> bool {
+    matches!(
+        profile_name,
+        BUILT_IN_READ_ONLY_PROFILE
+            | BUILT_IN_WORKSPACE_PROFILE
+            | BUILT_IN_DANGER_NO_SANDBOX_PROFILE
+    )
+}
+
+pub(crate) fn builtin_permission_profile(
+    profile_name: &str,
+    workspace_write: Option<&SandboxWorkspaceWrite>,
+) -> Option<PermissionProfile> {
+    match profile_name {
+        BUILT_IN_READ_ONLY_PROFILE => Some(PermissionProfile::read_only()),
+        BUILT_IN_WORKSPACE_PROFILE => Some(match workspace_write {
+            Some(SandboxWorkspaceWrite {
+                writable_roots,
+                network_access,
+                exclude_tmpdir_env_var,
+                exclude_slash_tmp,
+            }) => PermissionProfile::workspace_write_with(
+                writable_roots,
+                if *network_access {
+                    NetworkSandboxPolicy::Enabled
+                } else {
+                    NetworkSandboxPolicy::Restricted
+                },
+                *exclude_tmpdir_env_var,
+                *exclude_slash_tmp,
+            ),
+            None => PermissionProfile::workspace_write(),
+        }),
+        BUILT_IN_DANGER_NO_SANDBOX_PROFILE => Some(PermissionProfile::Disabled),
+        _ => None,
+    }
+}
+
+pub(crate) fn validate_user_permission_profile_names(
+    permissions: Option<&PermissionsToml>,
+) -> io::Result<()> {
+    let Some(permissions) = permissions else {
+        return Ok(());
+    };
+
+    for profile_name in permissions.entries.keys() {
+        if profile_name.starts_with(':') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "permissions profile `{profile_name}` uses a reserved built-in profile prefix"
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn network_proxy_config_from_profile_network(
     network: Option<&NetworkToml>,
 ) -> NetworkProxyConfig {
-    network.map_or_else(
+    let mut config = network.map_or_else(
         NetworkProxyConfig::default,
         NetworkToml::to_network_proxy_config,
-    )
+    );
+    // Profile `network.enabled` controls sandbox network access. Do not start a
+    // managed proxy for that bit alone, but keep the proxy enabled when the
+    // profile also supplied policy that only the proxy can enforce.
+    config.network.enabled = network.is_some_and(profile_network_requires_proxy);
+    config
+}
+
+fn profile_network_requires_proxy(network: &NetworkToml) -> bool {
+    if network.enabled != Some(true) {
+        return false;
+    }
+
+    network.proxy_url.is_some()
+        || network.enable_socks5 == Some(true)
+        || network.socks_url.is_some()
+        || network.enable_socks5_udp == Some(true)
+        || network.allow_upstream_proxy == Some(true)
+        || network.dangerously_allow_non_loopback_proxy == Some(true)
+        || network.dangerously_allow_all_unix_sockets == Some(true)
+        || network.mode.is_some()
+        || network
+            .domains
+            .as_ref()
+            .is_some_and(|domains| !domains.is_empty())
+        || network
+            .unix_sockets
+            .as_ref()
+            .is_some_and(|unix_sockets| !unix_sockets.is_empty())
+        || network.allow_local_binding == Some(true)
 }
 
 pub(crate) fn resolve_permission_profile<'a>(
@@ -39,6 +149,27 @@ pub(crate) fn resolve_permission_profile<'a>(
             format!("default_permissions refers to undefined profile `{profile_name}`"),
         )
     })
+}
+
+pub(crate) fn network_proxy_config_for_profile_selection(
+    permissions: Option<&PermissionsToml>,
+    profile_name: &str,
+) -> io::Result<NetworkProxyConfig> {
+    if is_builtin_permission_profile_name(profile_name) {
+        return Ok(NetworkProxyConfig::default());
+    }
+    reject_unknown_builtin_permission_profile(profile_name)?;
+
+    let permissions = permissions.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "default_permissions requires a `[permissions]` table",
+        )
+    })?;
+    let profile = resolve_permission_profile(permissions, profile_name)?;
+    Ok(network_proxy_config_from_profile_network(
+        profile.network.as_ref(),
+    ))
 }
 
 pub(crate) fn compile_permission_profile(
@@ -101,6 +232,38 @@ pub(crate) fn compile_permission_profile(
     let mut file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(entries);
     file_system_sandbox_policy.glob_scan_max_depth = glob_scan_max_depth;
     Ok((file_system_sandbox_policy, network_sandbox_policy))
+}
+
+pub(crate) fn compile_permission_profile_selection(
+    permissions: Option<&PermissionsToml>,
+    profile_name: &str,
+    workspace_write: Option<&SandboxWorkspaceWrite>,
+    policy_cwd: &Path,
+    startup_warnings: &mut Vec<String>,
+) -> io::Result<(FileSystemSandboxPolicy, NetworkSandboxPolicy)> {
+    if let Some(permission_profile) = builtin_permission_profile(profile_name, workspace_write) {
+        return Ok(permission_profile.to_runtime_permissions());
+    }
+    reject_unknown_builtin_permission_profile(profile_name)?;
+
+    let permissions = permissions.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "default_permissions requires a `[permissions]` table",
+        )
+    })?;
+    compile_permission_profile(permissions, profile_name, policy_cwd, startup_warnings)
+}
+
+fn reject_unknown_builtin_permission_profile(profile_name: &str) -> io::Result<()> {
+    if profile_name.starts_with(':') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("default_permissions refers to unknown built-in profile `{profile_name}`"),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Returns a list of paths that must be readable by shell tools in order
@@ -383,6 +546,16 @@ fn validate_glob_scan_max_depth(max_depth: Option<usize>) -> io::Result<Option<u
 }
 
 fn contains_glob_chars(path: &str) -> bool {
+    contains_glob_chars_for_platform(path, cfg!(windows))
+}
+
+fn contains_glob_chars_for_platform(path: &str, is_windows: bool) -> bool {
+    let normalized_windows_path = if is_windows {
+        normalize_windows_device_path(path)
+    } else {
+        None
+    };
+    let path = normalized_windows_path.as_deref().unwrap_or(path);
     path.chars().any(|ch| matches!(ch, '*' | '?' | '[' | ']'))
 }
 

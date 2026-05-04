@@ -1,3 +1,5 @@
+use crate::connect_policy::TargetCheckedTcpConnector;
+use crate::state::NetworkProxyState;
 use rama_core::Layer;
 use rama_core::Service;
 use rama_core::error::BoxError;
@@ -16,9 +18,9 @@ use rama_http_backend::client::proxy::layer::HttpProxyConnectorLayer;
 use rama_net::address::ProxyAddress;
 use rama_net::client::EstablishedClientConnection;
 use rama_net::http::RequestContext;
-use rama_tcp::client::service::TcpConnector;
 use rama_tls_rustls::client::TlsConnectorDataBuilder;
 use rama_tls_rustls::client::TlsConnectorLayer;
+use std::sync::Arc;
 use tracing::warn;
 
 #[cfg(target_os = "macos")]
@@ -102,12 +104,32 @@ pub(crate) struct UpstreamClient {
 }
 
 impl UpstreamClient {
-    pub(crate) fn direct() -> Self {
-        Self::new(ProxyConfig::default())
+    pub(crate) fn direct(state: Arc<NetworkProxyState>) -> Self {
+        Self::new(
+            ProxyConfig::default(),
+            TargetCheckedTcpConnector::new(state),
+        )
     }
 
-    pub(crate) fn from_env_proxy() -> Self {
-        Self::new(ProxyConfig::from_env())
+    pub(crate) fn from_env_proxy(state: Arc<NetworkProxyState>) -> Self {
+        Self::new(
+            ProxyConfig::from_env(),
+            TargetCheckedTcpConnector::new(state),
+        )
+    }
+
+    pub(crate) fn direct_with_allow_local_binding(allow_local_binding: bool) -> Self {
+        Self::new(
+            ProxyConfig::default(),
+            TargetCheckedTcpConnector::from_allow_local_binding(allow_local_binding),
+        )
+    }
+
+    pub(crate) fn from_env_proxy_with_allow_local_binding(allow_local_binding: bool) -> Self {
+        Self::new(
+            ProxyConfig::from_env(),
+            TargetCheckedTcpConnector::from_allow_local_binding(allow_local_binding),
+        )
     }
 
     #[cfg(target_os = "macos")]
@@ -119,8 +141,8 @@ impl UpstreamClient {
         }
     }
 
-    fn new(proxy_config: ProxyConfig) -> Self {
-        let connector = build_http_connector();
+    fn new(proxy_config: ProxyConfig, transport: TargetCheckedTcpConnector) -> Self {
+        let connector = build_http_connector(transport);
         Self {
             connector,
             proxy_config,
@@ -158,12 +180,13 @@ impl Service<Request<Body>> for UpstreamClient {
     }
 }
 
-fn build_http_connector() -> BoxService<
+fn build_http_connector(
+    transport: TargetCheckedTcpConnector,
+) -> BoxService<
     Request<Body>,
     EstablishedClientConnection<HttpClientService<Body>, Request<Body>>,
     BoxError,
 > {
-    let transport = TcpConnector::default();
     let proxy = HttpProxyConnectorLayer::optional().into_layer(transport);
     let tls_config = TlsConnectorDataBuilder::new()
         .with_alpn_protocols_http_auto()

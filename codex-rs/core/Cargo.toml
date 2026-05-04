@@ -35,15 +35,14 @@ codex-connectors = { workspace = true }
 codex-config = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-core-skills = { workspace = true }
-crypto_box = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-feedback = { workspace = true }
 codex-login = { workspace = true }
+codex-memories-read = { workspace = true }
 codex-mcp = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-models-manager = { workspace = true }
-ed25519-dalek = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-git-utils = { workspace = true }
@@ -55,6 +54,7 @@ codex-model-provider = { workspace = true }
 codex-protocol = { workspace = true }
 codex-response-debug-context = { workspace = true }
 codex-rollout = { workspace = true }
+codex-rollout-trace = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
@@ -70,7 +70,6 @@ codex-utils-path = { workspace = true }
 codex-utils-plugins = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
-codex-secrets = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-utils-stream-parser = { workspace = true }
 codex-utils-template = { workspace = true }
@@ -100,7 +99,6 @@ rmcp = { workspace = true, default-features = false, features = [
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha1 = { workspace = true }
-sha2 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
 tempfile = { workspace = true }
@@ -121,10 +119,6 @@ url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 whoami = { workspace = true }
-zip = { workspace = true }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-core-foundation = "0.9"
 
 # Build OpenSSL from source for musl builds.
 [target.x86_64-unknown-linux-musl.dependencies]
@@ -134,20 +128,12 @@ openssl-sys = { workspace = true, features = ["vendored"] }
 [target.aarch64-unknown-linux-musl.dependencies]
 openssl-sys = { workspace = true, features = ["vendored"] }
 
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.52", features = [
-    "Win32_Foundation",
-    "Win32_System_Com",
-    "Win32_UI_Shell",
-] }
-
 [target.'cfg(unix)'.dependencies]
 codex-shell-escalation = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
-codex-arg0 = { workspace = true }
 codex-otel = { workspace = true }
 codex-test-binary-support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }

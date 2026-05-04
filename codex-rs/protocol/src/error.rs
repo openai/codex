@@ -82,7 +82,7 @@ pub enum CodexErr {
     ContextWindowExceeded,
     #[error("no thread with id: {0}")]
     ThreadNotFound(ThreadId),
-    #[error("agent thread limit reached (max {max_threads})")]
+    #[error("agent thread limit reached")]
     AgentLimitReached { max_threads: usize },
     #[error("session configured event was not the first event in the stream")]
     SessionConfiguredNotFirstEvent,
@@ -110,6 +110,8 @@ pub enum CodexErr {
     UsageLimitReached(UsageLimitReachedError),
     #[error("Selected model is at capacity. Please try a different model.")]
     ServerOverloaded,
+    #[error("{message}")]
+    CyberPolicy { message: String },
     #[error("{0}")]
     ResponseStreamFailed(ResponseStreamFailed),
     #[error("{0}")]
@@ -186,7 +188,8 @@ impl CodexErr {
             | CodexErr::Spawn
             | CodexErr::SessionConfiguredNotFirstEvent
             | CodexErr::UsageLimitReached(_)
-            | CodexErr::ServerOverloaded => false,
+            | CodexErr::ServerOverloaded
+            | CodexErr::CyberPolicy { .. } => false,
             CodexErr::Stream(..)
             | CodexErr::Timeout
             | CodexErr::UnexpectedStatus(_)
@@ -217,6 +220,7 @@ impl CodexErr {
             | CodexErr::QuotaExceeded
             | CodexErr::UsageNotIncluded => CodexErrorInfo::UsageLimitExceeded,
             CodexErr::ServerOverloaded => CodexErrorInfo::ServerOverloaded,
+            CodexErr::CyberPolicy { .. } => CodexErrorInfo::CyberPolicy,
             CodexErr::RetryLimit(_) => CodexErrorInfo::ResponseTooManyFailedAttempts {
                 http_status_code: self.http_status_code_value(),
             },

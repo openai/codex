@@ -3,7 +3,7 @@ requires = ["hatchling>=1.24.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "codex-cli-bin"
+name = "openai-codex-cli-bin"
 version = "0.0.0-dev"
 description = "Pinned Codex CLI runtime for the Python SDK"
 readme = "README.md"
@@ -43,3 +43,11 @@ include = ["src/codex_cli_bin/bin/**"]
 [tool.hatch.build.targets.sdist]
 
 [tool.hatch.build.targets.sdist.hooks.custom]
+
+[tool.uv]
+exclude-newer = "7 days"
+index-strategy = "first-index"
+
+[tool.uv.pip]
+exclude-newer = "7 days"
+index-strategy = "first-index"

@@ -28,13 +28,18 @@ impl ToolHandler for Handler {
         let arguments = function_arguments(payload)?;
         let args: WaitArgs = parse_arguments(&arguments)?;
         let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
+        let min_timeout_ms = turn
+            .config
+            .multi_agent_v2
+            .min_wait_timeout_ms
+            .clamp(1, MAX_WAIT_TIMEOUT_MS);
         let timeout_ms = match timeout_ms {
             ms if ms <= 0 => {
                 return Err(FunctionCallError::RespondToModel(
                     "timeout_ms must be greater than zero".to_owned(),
                 ));
             }
-            ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
+            ms => ms.clamp(min_timeout_ms, MAX_WAIT_TIMEOUT_MS),
         };
 
         let mut mailbox_seq_rx = session.subscribe_mailbox_seq();
@@ -52,8 +57,12 @@ impl ToolHandler for Handler {
             )
             .await;
 
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-        let timed_out = !wait_for_mailbox_change(&mut mailbox_seq_rx, deadline).await;
+        let timed_out = if session.has_pending_mailbox_items().await {
+            false
+        } else {
+            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+            !wait_for_mailbox_change(&mut mailbox_seq_rx, deadline).await
+        };
         let result = WaitAgentResult::from_timed_out(timed_out);
 
         session

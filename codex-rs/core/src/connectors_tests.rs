@@ -1,12 +1,12 @@
 use super::*;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
-use crate::config_loader::AppRequirementToml;
-use crate::config_loader::AppsRequirementsToml;
-use crate::config_loader::CloudRequirementsLoader;
-use crate::config_loader::ConfigLayerStack;
-use crate::config_loader::ConfigRequirements;
-use crate::config_loader::ConfigRequirementsToml;
+use codex_config::AppRequirementToml;
+use codex_config::AppsRequirementsToml;
+use codex_config::CloudRequirementsLoader;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigRequirements;
+use codex_config::ConfigRequirementsToml;
 use codex_config::types::AppConfig;
 use codex_config::types::AppToolConfig;
 use codex_config::types::AppToolsConfig;
@@ -119,11 +119,10 @@ fn codex_app_tool(
         server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
         callable_name: tool_name.to_string(),
         callable_namespace: tool_namespace,
-        server_instructions: None,
+        namespace_description: None,
         tool: test_tool_definition(tool_name),
         connector_id: Some(connector_id.to_string()),
         connector_name: connector_name.map(ToOwned::to_owned),
-        connector_description: None,
         plugin_display_names: plugin_names(plugin_display_names),
     }
 }
@@ -198,11 +197,10 @@ fn accessible_connectors_from_mcp_tools_carries_plugin_display_names() {
                 server_name: "sample".to_string(),
                 callable_name: "echo".to_string(),
                 callable_namespace: "sample".to_string(),
-                server_instructions: None,
+                namespace_description: None,
                 tool: test_tool_definition("echo"),
                 connector_id: None,
                 connector_name: None,
-                connector_description: None,
                 plugin_display_names: plugin_names(&["ignored"]),
             },
         ),
@@ -323,7 +321,7 @@ fn accessible_connectors_from_mcp_tools_preserves_description() {
             server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
             callable_name: "calendar_create_event".to_string(),
             callable_namespace: "mcp__codex_apps__calendar".to_string(),
-            server_instructions: None,
+            namespace_description: Some("Plan events".to_string()),
             tool: Tool {
                 name: "calendar_create_event".to_string().into(),
                 title: None,
@@ -337,7 +335,6 @@ fn accessible_connectors_from_mcp_tools_preserves_description() {
             },
             connector_id: Some("calendar".to_string()),
             connector_name: Some("Calendar".to_string()),
-            connector_description: Some("Plan events".to_string()),
             plugin_display_names: Vec::new(),
         },
     )]);
@@ -1109,6 +1106,35 @@ discoverables = [
     assert_eq!(
         tool_suggest_connector_ids(&config).await,
         HashSet::from(["connector_2128aebfecb84f64a069897515042a44".to_string()])
+    );
+}
+
+#[tokio::test]
+async fn tool_suggest_connector_ids_exclude_disabled_tool_suggestions() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[tool_suggest]
+discoverables = [
+  { type = "connector", id = "connector_calendar" },
+  { type = "connector", id = "connector_gmail" }
+]
+disabled_tools = [
+  { type = "connector", id = "connector_calendar" }
+]
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+
+    assert_eq!(
+        tool_suggest_connector_ids(&config).await,
+        HashSet::from(["connector_gmail".to_string()])
     );
 }
 

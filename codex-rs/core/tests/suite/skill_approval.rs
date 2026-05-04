@@ -2,21 +2,22 @@
 #![cfg(unix)]
 
 use anyhow::Result;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::mount_function_call_agent_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::zsh_fork::build_zsh_fork_test;
-use core_test_support::zsh_fork::restrictive_workspace_write_policy;
+use core_test_support::zsh_fork::restrictive_workspace_write_profile;
 use core_test_support::zsh_fork::zsh_fork_runtime;
 use std::fs;
 use std::path::Path;
@@ -40,10 +41,13 @@ async fn submit_turn_with_policies(
     test: &TestCodex,
     prompt: &str,
     approval_policy: AskForApproval,
-    sandbox_policy: SandboxPolicy,
+    permission_profile: PermissionProfile,
 ) -> Result<()> {
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(permission_profile, test.cwd_path());
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: prompt.to_string(),
                 text_elements: Vec::new(),
@@ -53,6 +57,7 @@ async fn submit_turn_with_policies(
             approval_policy,
             approvals_reviewer: None,
             sandbox_policy,
+            permission_profile,
             model: test.session_configured.model.clone(),
             effort: None,
             summary: None,
@@ -142,7 +147,7 @@ async fn shell_zsh_fork_skill_scripts_ignore_declared_permissions() -> Result<()
         request_permissions: true,
         mcp_elicitations: true,
     });
-    let workspace_write_policy = restrictive_workspace_write_policy();
+    let workspace_write_profile = restrictive_workspace_write_profile();
     let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
     let allowed_dir = outside_dir.path().join("allowed-output");
     fs::create_dir_all(&allowed_dir)?;
@@ -163,7 +168,7 @@ async fn shell_zsh_fork_skill_scripts_ignore_declared_permissions() -> Result<()
         &server,
         runtime,
         approval_policy,
-        workspace_write_policy.clone(),
+        workspace_write_profile.clone(),
         move |home| {
             let _ = fs::remove_file(&allowed_path_for_hook);
             write_skill_with_shell_script_contents(
@@ -188,7 +193,7 @@ async fn shell_zsh_fork_skill_scripts_ignore_declared_permissions() -> Result<()
         &test,
         "use $mbolin-test-skill",
         approval_policy,
-        workspace_write_policy,
+        workspace_write_profile,
     )
     .await?;
 
@@ -233,13 +238,13 @@ async fn shell_zsh_fork_still_enforces_workspace_write_sandbox() -> Result<()> {
     let server = start_mock_server().await;
     let tool_call_id = "zsh-fork-workspace-write-deny";
     let outside_path = "/tmp/codex-zsh-fork-workspace-write-deny.txt";
-    let workspace_write_policy = restrictive_workspace_write_policy();
+    let workspace_write_profile = restrictive_workspace_write_profile();
     let _ = fs::remove_file(outside_path);
     let test = build_zsh_fork_test(
         &server,
         runtime,
         AskForApproval::Never,
-        workspace_write_policy.clone(),
+        workspace_write_profile.clone(),
         move |_| {
             let _ = fs::remove_file(outside_path);
         },
@@ -256,7 +261,7 @@ async fn shell_zsh_fork_still_enforces_workspace_write_sandbox() -> Result<()> {
         &test,
         "write outside workspace with zsh fork",
         AskForApproval::Never,
-        workspace_write_policy,
+        workspace_write_profile,
     )
     .await?;
 

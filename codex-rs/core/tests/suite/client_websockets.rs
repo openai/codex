@@ -53,6 +53,7 @@ use tracing_test::traced_test;
 
 const MODEL: &str = "gpt-5.3-codex";
 const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
+const USER_AGENT_HEADER: &str = "user-agent";
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
@@ -127,6 +128,10 @@ async fn responses_websocket_streams_request() {
         Some(harness.conversation_id.to_string())
     );
     assert_eq!(
+        handshake.header(USER_AGENT_HEADER),
+        Some(codex_login::default_client::get_codex_user_agent())
+    );
+    assert_eq!(
         body["client_metadata"]["x-codex-installation-id"].as_str(),
         Some(TEST_INSTALLATION_ID)
     );
@@ -197,6 +202,10 @@ async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
     };
 
     assert_eq!(server.handshakes().len(), 1);
+    assert_eq!(
+        server.single_handshake().header(USER_AGENT_HEADER),
+        Some(codex_login::default_client::get_codex_user_agent())
+    );
     let connection = server.single_connection();
     assert_eq!(connection.len(), 2);
 
@@ -282,7 +291,12 @@ async fn responses_websocket_preconnect_reuses_connection() {
     stream_until_complete(&mut client_session, &harness, &prompt).await;
 
     assert_eq!(server.handshakes().len(), 1);
-    assert_eq!(server.single_connection().len(), 1);
+    assert_eq!(
+        server.single_handshake().header(USER_AGENT_HEADER),
+        Some(codex_login::default_client::get_codex_user_agent())
+    );
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 1);
 
     server.shutdown().await;
 }
@@ -315,6 +329,10 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     stream_until_complete(&mut client_session, &harness, &prompt).await;
 
     assert_eq!(server.handshakes().len(), 1);
+    assert_eq!(
+        server.single_handshake().header(USER_AGENT_HEADER),
+        Some(codex_login::default_client::get_codex_user_agent())
+    );
     let connection = server.single_connection();
     assert_eq!(connection.len(), 2);
     let warmup = connection
@@ -390,6 +408,7 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
         .expect("websocket stream failed");
@@ -440,6 +459,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
         .expect("websocket stream failed");
@@ -842,6 +862,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
         .expect("websocket stream failed");
@@ -915,6 +936,7 @@ async fn responses_websocket_emits_rate_limit_events() {
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
         .expect("websocket stream failed");
@@ -998,6 +1020,7 @@ async fn responses_websocket_usage_limit_error_emits_rate_limit_event() {
     let submission_id = test
         .codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1085,6 +1108,7 @@ async fn responses_websocket_invalid_request_error_with_status_is_forwarded() {
     let submission_id = test
         .codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1145,6 +1169,18 @@ async fn responses_websocket_connection_limit_error_reconnects_and_completes() {
 
     let total_websocket_requests: usize = server.connections().iter().map(Vec::len).sum();
     assert_eq!(total_websocket_requests, 2);
+    let handshake_user_agents: Vec<_> = server
+        .handshakes()
+        .iter()
+        .map(|handshake| handshake.header(USER_AGENT_HEADER))
+        .collect();
+    assert_eq!(
+        handshake_user_agents,
+        vec![
+            Some(codex_login::default_client::get_codex_user_agent()),
+            Some(codex_login::default_client::get_codex_user_agent()),
+        ]
+    );
 
     server.shutdown().await;
 }
@@ -1551,6 +1587,7 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
         .expect("websocket stream failed");
@@ -1638,6 +1675,7 @@ async fn responses_websocket_v2_surfaces_terminal_error_without_close_handshake(
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
         .expect("websocket stream failed");
@@ -1692,7 +1730,6 @@ fn message_item(text: &str) -> ResponseItem {
         id: None,
         role: "user".into(),
         content: vec![ContentItem::InputText { text: text.into() }],
-        end_turn: None,
         phase: None,
     }
 }
@@ -1702,7 +1739,6 @@ fn assistant_message_item(id: &str, text: &str) -> ResponseItem {
         id: Some(id.to_string()),
         role: "assistant".into(),
         content: vec![ContentItem::OutputText { text: text.into() }],
-        end_turn: None,
         phase: None,
     }
 }
@@ -1901,6 +1937,7 @@ async fn stream_until_complete_with_request_metadata(
             harness.summary,
             service_tier,
             turn_metadata_header,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
         .expect("websocket stream failed");

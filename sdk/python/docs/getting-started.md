@@ -10,13 +10,15 @@ From repo root:
 
 ```bash
 cd sdk/python
-python -m pip install -e .
+uv sync
+source .venv/bin/activate
 ```
 
 Requirements:
 
 - Python `>=3.10`
-- installed `codex-cli-bin` runtime package, or an explicit `codex_bin` override
+- uv
+- installed `openai-codex-cli-bin` runtime package, or an explicit `codex_bin` override
 - local Codex auth/session configured
 
 ## 2) Run your first turn (sync)

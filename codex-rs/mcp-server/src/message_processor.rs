@@ -2,14 +2,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_arg0::Arg0DispatchPaths;
+use codex_core::StateDbHandle;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core::thread_store_from_config;
 use codex_exec_server::EnvironmentManager;
-use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::default_client::USER_AGENT_SUFFIX;
 use codex_login::default_client::get_codex_user_agent;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
@@ -49,28 +49,27 @@ pub(crate) struct MessageProcessor {
 impl MessageProcessor {
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
-    pub(crate) fn new(
+    pub(crate) async fn new(
         outgoing: OutgoingMessageSender,
         arg0_paths: Arg0DispatchPaths,
         config: Arc<Config>,
         environment_manager: Arc<EnvironmentManager>,
+        state_db: Option<StateDbHandle>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
         let auth_manager = AuthManager::shared_from_config(
             config.as_ref(),
             /*enable_codex_api_key_env*/ false,
-        );
+        )
+        .await;
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager,
             SessionSource::Mcp,
-            CollaborationModesConfig {
-                default_mode_request_user_input: config
-                    .features
-                    .enabled(Feature::DefaultModeRequestUserInput),
-            },
             environment_manager,
             /*analytics_events_client*/ None,
+            thread_store_from_config(config.as_ref(), state_db.clone()),
+            state_db.clone(),
         ));
         Self {
             outgoing,

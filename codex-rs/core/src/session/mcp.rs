@@ -218,21 +218,22 @@ impl Session {
             .mcp_manager
             .tool_plugin_provenance(config.as_ref())
             .await;
-        let background_authorization_header_value = if let Some(auth) = auth.as_ref() {
-            self.services
-                .auth_manager
-                .chatgpt_authorization_header_for_auth(auth)
-                .await
-        } else {
-            None
+        let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
+        let auth_statuses =
+            compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
+        let mcp_runtime_environment = match turn_context.environments.primary() {
+            Some(turn_environment) => McpRuntimeEnvironment::new(
+                Arc::clone(&turn_environment.environment),
+                turn_environment.cwd.to_path_buf(),
+            ),
+            None => McpRuntimeEnvironment::new(
+                self.services
+                    .environment_manager
+                    .default_environment()
+                    .unwrap_or_else(|| self.services.environment_manager.local_environment()),
+                turn_context.cwd.to_path_buf(),
+            ),
         };
-        let mcp_servers = with_codex_apps_mcp_with_authorization_header(
-            mcp_servers,
-            auth.as_ref(),
-            &mcp_config,
-            background_authorization_header_value.as_deref(),
-        );
-        let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             guard.cancel();
@@ -242,20 +243,15 @@ impl Session {
             &mcp_servers,
             store_mode,
             auth_statuses,
-            &turn_context.config.permissions.approval_policy,
+            &turn_context.approval_policy,
             turn_context.sub_id.clone(),
             self.get_tx_event(),
-            turn_context.sandbox_policy.get().clone(),
-            McpRuntimeEnvironment::new(
-                turn_context
-                    .environment
-                    .clone()
-                    .unwrap_or_else(|| Arc::new(Environment::default())),
-                turn_context.cwd.to_path_buf(),
-            ),
+            turn_context.permission_profile(),
+            mcp_runtime_environment,
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
             tool_plugin_provenance,
+            auth.as_ref(),
         )
         .await;
         {
@@ -266,8 +262,11 @@ impl Session {
             *guard = cancel_token;
         }
 
-        let mut manager = self.services.mcp_connection_manager.write().await;
-        *manager = refreshed_manager;
+        let mut old_manager = {
+            let mut manager = self.services.mcp_connection_manager.write().await;
+            std::mem::replace(&mut *manager, refreshed_manager)
+        };
+        old_manager.shutdown().await;
     }
 
     pub(crate) async fn refresh_mcp_servers_if_requested(&self, turn_context: &TurnContext) {

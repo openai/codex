@@ -24,7 +24,9 @@ jobs:
   build-windows-binaries:
     name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on }}
-    timeout-minutes: 60
+    # Windows release builds can exceed an hour on fat-LTO mainline releases,
+    # so keep the timeout aligned with the top-level release build headroom.
+    timeout-minutes: 90
     permissions:
       contents: read
     defaults:
@@ -40,28 +42,42 @@ jobs:
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: primary
-            build_args: --bin codex --bin codex-responses-api-proxy
+            binaries: "codex codex-responses-api-proxy"
             runs_on:
               group: codex-runners
               labels: codex-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             bundle: primary
-            build_args: --bin codex --bin codex-responses-api-proxy
+            binaries: "codex codex-responses-api-proxy"
             runs_on:
               group: codex-runners
               labels: codex-windows-arm64
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: helpers
-            build_args: --bin codex-windows-sandbox-setup --bin codex-command-runner
+            binaries: "codex-windows-sandbox-setup codex-command-runner"
             runs_on:
               group: codex-runners
               labels: codex-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             bundle: helpers
-            build_args: --bin codex-windows-sandbox-setup --bin codex-command-runner
+            binaries: "codex-windows-sandbox-setup codex-command-runner"
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-arm64
+          - runner: windows-x64
+            target: x86_64-pc-windows-msvc
+            bundle: app-server
+            binaries: "codex-app-server"
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+          - runner: windows-arm64
+            target: aarch64-pc-windows-msvc
+            bundle: app-server
+            binaries: "codex-app-server"
             runs_on:
               group: codex-runners
               labels: codex-windows-arm64
@@ -89,7 +105,11 @@ jobs:
       - name: Cargo build (Windows binaries)
         shell: bash
         run: |
-          cargo build --target ${{ matrix.target }} --release --timings ${{ matrix.build_args }}
+          build_args=()
+          for binary in ${{ matrix.binaries }}; do
+            build_args+=(--bin "$binary")
+          done
+          cargo build --target ${{ matrix.target }} --release --timings "${build_args[@]}"
 
       - name: Upload Cargo timings
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
@@ -103,13 +123,9 @@ jobs:
         run: |
           output_dir="target/${{ matrix.target }}/release/staged-${{ matrix.bundle }}"
           mkdir -p "$output_dir"
-          if [[ "${{ matrix.bundle }}" == "primary" ]]; then
-            cp target/${{ matrix.target }}/release/codex.exe "$output_dir/codex.exe"
-            cp target/${{ matrix.target }}/release/codex-responses-api-proxy.exe "$output_dir/codex-responses-api-proxy.exe"
-          else
-            cp target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe "$output_dir/codex-windows-sandbox-setup.exe"
-            cp target/${{ matrix.target }}/release/codex-command-runner.exe "$output_dir/codex-command-runner.exe"
-          fi
+          for binary in ${{ matrix.binaries }}; do
+            cp "target/${{ matrix.target }}/release/${binary}.exe" "$output_dir/${binary}.exe"
+          done
 
       - name: Upload Windows binaries
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
@@ -123,13 +139,15 @@ jobs:
       - build-windows-binaries
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
       id-token: write
     defaults:
       run:
         working-directory: codex-rs
+    env:
+      WINDOWS_BINARIES: "codex codex-responses-api-proxy codex-windows-sandbox-setup codex-command-runner codex-app-server"
 
     strategy:
       fail-fast: false
@@ -161,19 +179,25 @@ jobs:
           name: windows-binaries-${{ matrix.target }}-helpers
           path: codex-rs/target/${{ matrix.target }}/release
 
+      - name: Download prebuilt Windows app-server binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: windows-binaries-${{ matrix.target }}-app-server
+          path: codex-rs/target/${{ matrix.target }}/release
+
       - name: Verify binaries
         shell: bash
         run: |
           set -euo pipefail
-          ls -lh target/${{ matrix.target }}/release/codex.exe
-          ls -lh target/${{ matrix.target }}/release/codex-responses-api-proxy.exe
-          ls -lh target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe
-          ls -lh target/${{ matrix.target }}/release/codex-command-runner.exe
+          for binary in ${WINDOWS_BINARIES}; do
+            ls -lh "target/${{ matrix.target }}/release/${binary}.exe"
+          done
 
       - name: Sign Windows binaries with Azure Trusted Signing
         uses: ./.github/actions/windows-code-sign
         with:
           target: ${{ matrix.target }}
+          binaries: ${{ env.WINDOWS_BINARIES }}
           client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
@@ -187,10 +211,10 @@ jobs:
           dest="dist/${{ matrix.target }}"
           mkdir -p "$dest"
 
-          cp target/${{ matrix.target }}/release/codex.exe "$dest/codex-${{ matrix.target }}.exe"
-          cp target/${{ matrix.target }}/release/codex-responses-api-proxy.exe "$dest/codex-responses-api-proxy-${{ matrix.target }}.exe"
-          cp target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe "$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
-          cp target/${{ matrix.target }}/release/codex-command-runner.exe "$dest/codex-command-runner-${{ matrix.target }}.exe"
+          for binary in ${WINDOWS_BINARIES}; do
+            cp "target/${{ matrix.target }}/release/${binary}.exe" \
+              "$dest/${binary}-${{ matrix.target }}.exe"
+          done
 
       - name: Install DotSlash
         uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2

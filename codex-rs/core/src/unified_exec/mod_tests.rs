@@ -55,9 +55,7 @@ fn test_exec_request(
     env: HashMap<String, String>,
 ) -> ExecRequest {
     let windows_sandbox_private_desktop = false;
-    let sandbox_policy = turn.sandbox_policy.get().clone();
-    let file_system_sandbox_policy = turn.file_system_sandbox_policy.clone();
-    let network_sandbox_policy = turn.network_sandbox_policy;
+    let permission_profile = turn.permission_profile();
     let network = None;
     let arg0 = None;
     ExecRequest::new(
@@ -70,9 +68,7 @@ fn test_exec_request(
         SandboxType::None,
         turn.windows_sandbox_level,
         windows_sandbox_private_desktop,
-        sandbox_policy,
-        file_system_sandbox_policy,
-        network_sandbox_policy,
+        permission_profile,
         arg0,
     )
 }
@@ -100,7 +96,11 @@ async fn exec_command_with_tty(
                 &request,
                 tty,
                 Box::new(NoopSpawnLifecycle),
-                turn.environment.as_ref().expect("turn environment"),
+                turn.environments
+                    .primary()
+                    .expect("turn environment")
+                    .environment
+                    .as_ref(),
             )
             .await?,
     );
@@ -113,9 +113,9 @@ async fn exec_command_with_tty(
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id,
-            command: command.clone(),
+            hook_command: cmd.to_string(),
             tty,
-            network_approval_id: None,
+            network_approval: None,
             session: Arc::downgrade(session),
             last_used: started_at,
         };
@@ -165,7 +165,7 @@ async fn exec_command_with_tty(
         process_id: response_process_id,
         exit_code,
         original_token_count: Some(approx_token_count(&text)),
-        session_command: Some(command),
+        hook_command: Some(cmd.to_string()),
     })
 }
 
@@ -508,7 +508,7 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
         shell_env(),
     );
 
-    let environment = codex_exec_server::Environment::default();
+    let environment = codex_exec_server::Environment::default_for_tests();
     let process = UnifiedExecProcessManager::default()
         .open_session_with_exec_env(
             /*process_id*/ 1234,
@@ -595,7 +595,8 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
 
     let remote_test_env = remote_test_env().await?;
     let (_, mut turn) = make_session_and_context().await;
-    turn.environment = Some(Arc::new(remote_test_env.environment().clone()));
+    turn.environments.turn_environments[0].environment =
+        Arc::new(remote_test_env.environment().clone());
 
     let request = test_exec_request(
         &turn,
@@ -613,7 +614,11 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
             Box::new(TestSpawnLifecycle {
                 inherited_fds: vec![42],
             }),
-            turn.environment.as_ref().expect("turn environment"),
+            turn.environments
+                .primary()
+                .expect("turn environment")
+                .environment
+                .as_ref(),
         )
         .await
         .expect_err("expected inherited fd rejection");

@@ -35,6 +35,8 @@ use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewData;
 use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewItem;
 use crate::render::renderable::Renderable;
 
+const STATUS_LINE_USE_THEME_COLORS_ITEM_ID: &str = "status-line-use-theme-colors";
+
 /// Available items that can be displayed in the status line.
 ///
 /// Each variant represents a piece of information that can be shown at the
@@ -45,10 +47,11 @@ use crate::render::renderable::Renderable;
 /// - Git-related items only show when in a git repository
 /// - Context/limit items only show when data is available from the API
 /// - Session ID only shows after a session has started
-#[derive(EnumIter, EnumString, Display, Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(EnumIter, EnumString, Display, Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 #[strum(serialize_all = "kebab_case")]
 pub(crate) enum StatusLineItem {
     /// The current model name.
+    #[strum(to_string = "model", serialize = "model-name")]
     ModelName,
 
     /// Model name with reasoning level suffix.
@@ -58,10 +61,25 @@ pub(crate) enum StatusLineItem {
     CurrentDir,
 
     /// Project root directory (if detected).
+    #[strum(
+        to_string = "project-name",
+        serialize = "project",
+        serialize = "project-root"
+    )]
     ProjectRoot,
 
     /// Current git branch name (if in a repository).
     GitBranch,
+
+    /// Open pull request number for the current branch.
+    PullRequestNumber,
+
+    /// Committed branch diff stats relative to the default branch.
+    BranchChanges,
+
+    /// Compact runtime run-state text.
+    #[strum(to_string = "run-state", serialize = "status")]
+    Status,
 
     /// Percentage of context window remaining.
     ContextRemaining,
@@ -101,17 +119,27 @@ pub(crate) enum StatusLineItem {
 
     /// Current thread title (if set by user).
     ThreadTitle,
+
+    /// Latest checklist task progress from `update_plan` (if available).
+    TaskProgress,
 }
 
 impl StatusLineItem {
     /// User-visible description shown in the popup.
-    pub(crate) fn description(&self) -> &'static str {
+    pub(crate) fn description(self) -> &'static str {
         match self {
             StatusLineItem::ModelName => "Current model name",
             StatusLineItem::ModelWithReasoning => "Current model name with reasoning level",
             StatusLineItem::CurrentDir => "Current working directory",
-            StatusLineItem::ProjectRoot => "Project root directory (omitted when unavailable)",
+            StatusLineItem::ProjectRoot => "Project name (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
+            StatusLineItem::PullRequestNumber => {
+                "Open pull request number for the current branch (omitted when unavailable)"
+            }
+            StatusLineItem::BranchChanges => {
+                "Committed branch changes against the default branch (omitted when unavailable)"
+            }
+            StatusLineItem::Status => "Compact session run-state text (Ready, Working, Thinking)",
             StatusLineItem::ContextRemaining => {
                 "Percentage of context window remaining (omitted when unknown)"
             }
@@ -135,7 +163,10 @@ impl StatusLineItem {
                 "Current session identifier (omitted until session starts)"
             }
             StatusLineItem::FastMode => "Whether Fast mode is currently active",
-            StatusLineItem::ThreadTitle => "Current thread title (omitted unless changed by user)",
+            StatusLineItem::ThreadTitle => "Current thread title (omitted when unavailable)",
+            StatusLineItem::TaskProgress => {
+                "Latest task progress from update_plan (omitted until available)"
+            }
         }
     }
 
@@ -146,6 +177,9 @@ impl StatusLineItem {
             StatusLineItem::CurrentDir => StatusSurfacePreviewItem::CurrentDir,
             StatusLineItem::ProjectRoot => StatusSurfacePreviewItem::ProjectRoot,
             StatusLineItem::GitBranch => StatusSurfacePreviewItem::GitBranch,
+            StatusLineItem::PullRequestNumber => StatusSurfacePreviewItem::PullRequestNumber,
+            StatusLineItem::BranchChanges => StatusSurfacePreviewItem::BranchChanges,
+            StatusLineItem::Status => StatusSurfacePreviewItem::Status,
             StatusLineItem::ContextRemaining => StatusSurfacePreviewItem::ContextRemaining,
             StatusLineItem::ContextUsed => StatusSurfacePreviewItem::ContextUsed,
             StatusLineItem::FiveHourLimit => StatusSurfacePreviewItem::FiveHourLimit,
@@ -158,6 +192,7 @@ impl StatusLineItem {
             StatusLineItem::SessionId => StatusSurfacePreviewItem::SessionId,
             StatusLineItem::FastMode => StatusSurfacePreviewItem::FastMode,
             StatusLineItem::ThreadTitle => StatusSurfacePreviewItem::ThreadTitle,
+            StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
         }
     }
 }
@@ -181,17 +216,27 @@ impl StatusLineSetupView {
     ///
     /// * `status_line_items` - Currently configured item IDs (in display order),
     ///   or `None` to start with all items disabled
+    /// * `use_theme_colors` - Whether the preview and saved status line use colors from
+    ///   the active theme
     /// * `app_event_tx` - Event sender for dispatching configuration changes
     ///
     /// Items from `status_line_items` are shown first (in order) and marked as
     /// enabled. Remaining items are appended and marked as disabled.
     pub(crate) fn new(
         status_line_items: Option<&[String]>,
+        use_theme_colors: bool,
         preview_data: StatusSurfacePreviewData,
         app_event_tx: AppEventSender,
     ) -> Self {
         let mut used_ids = HashSet::new();
-        let mut items = Vec::new();
+        let mut items = vec![MultiSelectItem {
+            id: STATUS_LINE_USE_THEME_COLORS_ITEM_ID.to_string(),
+            name: "Use theme colors".to_string(),
+            description: Some("Apply colors from the active /theme".to_string()),
+            enabled: use_theme_colors,
+            orderable: false,
+            section_break_after: true,
+        }];
 
         if let Some(selected_items) = status_line_items.as_ref() {
             for id in *selected_items {
@@ -227,21 +272,31 @@ impl StatusLineSetupView {
             .items(items)
             .enable_ordering()
             .on_preview(move |items| {
-                preview_data.line_for_items(
+                let use_theme_colors = items
+                    .iter()
+                    .find(|item| item.id == STATUS_LINE_USE_THEME_COLORS_ITEM_ID)
+                    .map(|item| item.enabled)
+                    .unwrap_or(true);
+                preview_data.status_line_for_items(
                     items
                         .iter()
                         .filter(|item| item.enabled)
-                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
-                        .map(StatusLineItem::preview_item),
+                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok()),
+                    use_theme_colors,
                 )
             })
             .on_confirm(|ids, app_event| {
+                let use_theme_colors = ids
+                    .iter()
+                    .any(|id| id == STATUS_LINE_USE_THEME_COLORS_ITEM_ID);
                 let items = ids
                     .iter()
-                    .map(|id| id.parse::<StatusLineItem>())
-                    .collect::<Result<Vec<_>, _>>()
-                    .unwrap_or_default();
-                app_event.send(AppEvent::StatusLineSetup { items });
+                    .filter_map(|id| id.parse::<StatusLineItem>().ok())
+                    .collect::<Vec<_>>();
+                app_event.send(AppEvent::StatusLineSetup {
+                    items,
+                    use_theme_colors,
+                });
             })
             .on_cancel(|app_event| {
                 app_event.send(AppEvent::StatusLineSetupCancelled);
@@ -257,6 +312,8 @@ impl StatusLineSetupView {
             name: item.to_string(),
             description: Some(item.description().to_string()),
             enabled,
+            orderable: true,
+            section_break_after: false,
         }
     }
 }
@@ -289,7 +346,15 @@ impl Renderable for StatusLineSetupView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_event_sender::AppEventSender;
+    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::text::Line;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    use crate::app_event::AppEvent;
 
     #[test]
     fn context_used_accepts_context_usage_legacy_id() {
@@ -314,5 +379,263 @@ mod tests {
             StatusLineItem::ContextRemaining.to_string(),
             "context-remaining"
         );
+    }
+    #[test]
+    fn project_name_is_canonical_and_accepts_legacy_ids() {
+        assert_eq!(StatusLineItem::ProjectRoot.to_string(), "project-name");
+        assert_eq!(
+            "project-name".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ProjectRoot)
+        );
+        assert_eq!(
+            "project".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ProjectRoot)
+        );
+        assert_eq!(
+            "project-root".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ProjectRoot)
+        );
+    }
+
+    #[test]
+    fn model_is_canonical_and_accepts_model_name_legacy_id() {
+        assert_eq!(StatusLineItem::ModelName.to_string(), "model");
+        assert_eq!(
+            "model".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ModelName)
+        );
+        assert_eq!(
+            "model-name".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ModelName)
+        );
+    }
+
+    #[test]
+    fn run_state_is_canonical_and_accepts_status_legacy_id() {
+        assert_eq!(StatusLineItem::Status.to_string(), "run-state");
+        assert_eq!(
+            "run-state".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::Status)
+        );
+        assert_eq!(
+            "status".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::Status)
+        );
+    }
+
+    #[test]
+    fn git_summary_items_are_selectable_ids() {
+        assert_eq!(
+            "pull-request-number".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::PullRequestNumber)
+        );
+        assert_eq!(
+            "branch-changes".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::BranchChanges)
+        );
+    }
+
+    #[test]
+    fn parse_status_line_items_accepts_title_only_variants() {
+        let items = ["run-state", "task-progress"]
+            .into_iter()
+            .map(str::parse::<StatusLineItem>)
+            .collect::<Result<Vec<_>, _>>();
+        assert_eq!(
+            items,
+            Ok(vec![StatusLineItem::Status, StatusLineItem::TaskProgress,])
+        );
+    }
+
+    #[test]
+    fn preview_uses_runtime_values() {
+        let preview_data = StatusSurfacePreviewData::from_iter([
+            (
+                StatusLineItem::ModelName.preview_item(),
+                "gpt-5".to_string(),
+            ),
+            (
+                StatusLineItem::CurrentDir.preview_item(),
+                "/repo".to_string(),
+            ),
+        ]);
+        let items = [
+            MultiSelectItem {
+                id: StatusLineItem::ModelName.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+                orderable: true,
+                section_break_after: false,
+            },
+            MultiSelectItem {
+                id: StatusLineItem::CurrentDir.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+                orderable: true,
+                section_break_after: false,
+            },
+        ];
+
+        assert_eq!(
+            line_text(
+                preview_data.status_line_for_items(
+                    items
+                        .iter()
+                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok()),
+                    /*use_theme_colors*/ true,
+                )
+            ),
+            Some("gpt-5 · /repo".to_string())
+        );
+    }
+
+    #[test]
+    fn preview_uses_placeholders_when_runtime_values_are_missing() {
+        let preview_data = StatusSurfacePreviewData::from_iter([(
+            StatusSurfacePreviewItem::Model,
+            "gpt-5".to_string(),
+        )]);
+        let items = [
+            MultiSelectItem {
+                id: StatusLineItem::ModelName.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+                orderable: true,
+                section_break_after: false,
+            },
+            MultiSelectItem {
+                id: StatusLineItem::GitBranch.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+                orderable: true,
+                section_break_after: false,
+            },
+        ];
+
+        assert_eq!(
+            line_text(
+                preview_data.status_line_for_items(
+                    items
+                        .iter()
+                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok()),
+                    /*use_theme_colors*/ true,
+                )
+            ),
+            Some("gpt-5 · feat/awesome-feature".to_string())
+        );
+    }
+
+    #[test]
+    fn preview_includes_thread_title() {
+        let preview_data = StatusSurfacePreviewData::from_iter([
+            (
+                StatusLineItem::ModelName.preview_item(),
+                "gpt-5".to_string(),
+            ),
+            (
+                StatusLineItem::ThreadTitle.preview_item(),
+                "Roadmap cleanup".to_string(),
+            ),
+        ]);
+        let items = [
+            MultiSelectItem {
+                id: StatusLineItem::ModelName.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+                orderable: true,
+                section_break_after: false,
+            },
+            MultiSelectItem {
+                id: StatusLineItem::ThreadTitle.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+                orderable: true,
+                section_break_after: false,
+            },
+        ];
+
+        assert_eq!(
+            line_text(
+                preview_data.status_line_for_items(
+                    items
+                        .iter()
+                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok()),
+                    /*use_theme_colors*/ true,
+                )
+            ),
+            Some("gpt-5 · Roadmap cleanup".to_string())
+        );
+    }
+
+    #[test]
+    fn setup_view_snapshot_uses_runtime_preview_values() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let view = StatusLineSetupView::new(
+            Some(&[
+                StatusLineItem::ModelName.to_string(),
+                StatusLineItem::CurrentDir.to_string(),
+                StatusLineItem::GitBranch.to_string(),
+            ]),
+            /*use_theme_colors*/ true,
+            StatusSurfacePreviewData::from_iter([
+                (
+                    StatusLineItem::ModelName.preview_item(),
+                    "gpt-5-codex".to_string(),
+                ),
+                (
+                    StatusLineItem::CurrentDir.preview_item(),
+                    "~/codex-rs".to_string(),
+                ),
+                (
+                    StatusLineItem::GitBranch.preview_item(),
+                    "jif/statusline-preview".to_string(),
+                ),
+                (
+                    StatusLineItem::WeeklyLimit.preview_item(),
+                    "weekly 82%".to_string(),
+                ),
+            ]),
+            AppEventSender::new(tx_raw),
+        );
+
+        assert_snapshot!(render_lines(&view, /*width*/ 72));
+    }
+
+    fn render_lines(view: &StatusLineSetupView, width: u16) -> String {
+        let height = view.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        (0..area.height)
+            .map(|row| {
+                let mut line = String::new();
+                for col in 0..area.width {
+                    let symbol = buf[(area.x + col, area.y + row)].symbol();
+                    if symbol.is_empty() {
+                        line.push(' ');
+                    } else {
+                        line.push_str(symbol);
+                    }
+                }
+                line
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn line_text(line: Option<Line<'static>>) -> Option<String> {
+        line.map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
     }
 }

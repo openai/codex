@@ -1,5 +1,7 @@
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::SandboxPolicy;
+use std::path::Path;
 
 pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
     match sandbox_policy {
@@ -23,7 +25,6 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             network_access,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
-            read_only_access: _,
         } => {
             let mut summary = "workspace-write".to_string();
 
@@ -46,6 +47,19 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
                 summary.push_str(" (network access enabled)");
             }
             summary
+        }
+    }
+}
+
+pub fn summarize_permission_profile(permission_profile: &PermissionProfile, cwd: &Path) -> String {
+    match permission_profile.to_legacy_sandbox_policy(cwd) {
+        Ok(policy) => summarize_sandbox_policy(&policy),
+        Err(_) => {
+            if permission_profile.network_sandbox_policy().is_enabled() {
+                "custom permissions (network access enabled)".to_string()
+            } else {
+                "custom permissions".to_string()
+            }
         }
     }
 }
@@ -75,7 +89,6 @@ mod tests {
     #[test]
     fn summarizes_read_only_with_enabled_network() {
         let summary = summarize_sandbox_policy(&SandboxPolicy::ReadOnly {
-            access: Default::default(),
             network_access: true,
         });
         assert_eq!(summary, "read-only (network access enabled)");
@@ -87,7 +100,6 @@ mod tests {
         let writable_root = AbsolutePathBuf::try_from(root).unwrap();
         let summary = summarize_sandbox_policy(&SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![writable_root.clone()],
-            read_only_access: Default::default(),
             network_access: true,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,

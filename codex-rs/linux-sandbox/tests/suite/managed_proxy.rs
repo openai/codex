@@ -1,9 +1,9 @@
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used)]
 
-use codex_config::types::ShellEnvironmentPolicy;
 use codex_core::exec_env::create_env;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::models::PermissionProfile;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::io::Read;
@@ -65,7 +65,7 @@ async fn should_skip_bwrap_tests() -> bool {
 
     let output = run_linux_sandbox_direct(
         &["bash", "-c", "true"],
-        &SandboxPolicy::new_read_only_policy(),
+        &PermissionProfile::read_only(),
         /*allow_network_for_proxy*/ false,
         env,
         NETWORK_TIMEOUT_MS,
@@ -91,7 +91,7 @@ async fn managed_proxy_skip_reason() -> Option<String> {
 
     let output = run_linux_sandbox_direct(
         &["bash", "-c", "true"],
-        &SandboxPolicy::DangerFullAccess,
+        &PermissionProfile::Disabled,
         /*allow_network_for_proxy*/ true,
         env,
         NETWORK_TIMEOUT_MS,
@@ -114,7 +114,7 @@ async fn managed_proxy_skip_reason() -> Option<String> {
 
 async fn run_linux_sandbox_direct(
     command: &[&str],
-    sandbox_policy: &SandboxPolicy,
+    permission_profile: &PermissionProfile,
     allow_network_for_proxy: bool,
     env: HashMap<String, String>,
     timeout_ms: u64,
@@ -123,16 +123,16 @@ async fn run_linux_sandbox_direct(
         Ok(cwd) => cwd,
         Err(err) => panic!("cwd should exist: {err}"),
     };
-    let policy_json = match serde_json::to_string(sandbox_policy) {
-        Ok(policy_json) => policy_json,
-        Err(err) => panic!("policy should serialize: {err}"),
+    let permission_profile_json = match serde_json::to_string(permission_profile) {
+        Ok(permission_profile_json) => permission_profile_json,
+        Err(err) => panic!("permission profile should serialize: {err}"),
     };
 
     let mut args = vec![
         "--sandbox-policy-cwd".to_string(),
         cwd.to_string_lossy().to_string(),
-        "--sandbox-policy".to_string(),
-        policy_json,
+        "--permission-profile".to_string(),
+        permission_profile_json,
     ];
     if allow_network_for_proxy {
         args.push("--allow-network-for-proxy".to_string());
@@ -170,7 +170,7 @@ async fn managed_proxy_mode_fails_closed_without_proxy_env() {
 
     let output = run_linux_sandbox_direct(
         &["bash", "-c", "true"],
-        &SandboxPolicy::DangerFullAccess,
+        &PermissionProfile::Disabled,
         /*allow_network_for_proxy*/ true,
         env,
         NETWORK_TIMEOUT_MS,
@@ -225,7 +225,7 @@ async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
             "-c",
             "proxy=\"${HTTP_PROXY#*://}\"; host=\"${proxy%%:*}\"; port=\"${proxy##*:}\"; exec 3<>/dev/tcp/${host}/${port}; printf 'GET http://example.com/ HTTP/1.1\\r\\nHost: example.com\\r\\n\\r\\n' >&3; IFS= read -r line <&3; printf '%s\\n' \"$line\"",
         ],
-        &SandboxPolicy::DangerFullAccess,
+        &PermissionProfile::Disabled,
         /*allow_network_for_proxy*/ true,
         env.clone(),
         NETWORK_TIMEOUT_MS,
@@ -256,7 +256,7 @@ async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
 
     let direct_egress_output = run_linux_sandbox_direct(
         &["bash", "-c", "echo hi > /dev/tcp/192.0.2.1/80"],
-        &SandboxPolicy::DangerFullAccess,
+        &PermissionProfile::Disabled,
         /*allow_network_for_proxy*/ true,
         env,
         NETWORK_TIMEOUT_MS,
@@ -294,7 +294,7 @@ async fn managed_proxy_mode_denies_af_unix_creation_for_user_command() {
             "-c",
             "import socket,sys\ntry:\n    socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\nexcept PermissionError:\n    sys.exit(0)\nexcept OSError:\n    sys.exit(2)\nsys.exit(1)\n",
         ],
-        &SandboxPolicy::DangerFullAccess,
+        &PermissionProfile::Disabled,
         /*allow_network_for_proxy*/ true,
         env,
         NETWORK_TIMEOUT_MS,

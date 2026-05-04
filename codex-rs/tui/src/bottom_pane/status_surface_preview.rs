@@ -2,6 +2,9 @@ use std::collections::BTreeMap;
 
 use ratatui::text::Line;
 
+use super::status_line_from_segments;
+use super::status_line_setup::StatusLineItem;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) enum StatusSurfacePreviewItem {
     AppName,
@@ -11,6 +14,8 @@ pub(crate) enum StatusSurfacePreviewItem {
     Status,
     ThreadTitle,
     GitBranch,
+    PullRequestNumber,
+    BranchChanges,
     ContextRemaining,
     ContextUsed,
     FiveHourLimit,
@@ -37,6 +42,8 @@ impl StatusSurfacePreviewItem {
             StatusSurfacePreviewItem::Status => "Working",
             StatusSurfacePreviewItem::ThreadTitle => "thread title",
             StatusSurfacePreviewItem::GitBranch => "feat/awesome-feature",
+            StatusSurfacePreviewItem::PullRequestNumber => "PR #123",
+            StatusSurfacePreviewItem::BranchChanges => "+12 -3",
             StatusSurfacePreviewItem::ContextRemaining => "Context 0% left",
             StatusSurfacePreviewItem::ContextUsed => "Context 0% used",
             StatusSurfacePreviewItem::FiveHourLimit => "5h 0%",
@@ -63,6 +70,8 @@ impl StatusSurfacePreviewItem {
             Self::Status,
             Self::ThreadTitle,
             Self::GitBranch,
+            Self::PullRequestNumber,
+            Self::BranchChanges,
             Self::ContextRemaining,
             Self::ContextUsed,
             Self::FiveHourLimit,
@@ -155,19 +164,18 @@ impl StatusSurfacePreviewData {
         self.values.get(&item).map(|value| value.text.as_str())
     }
 
-    pub(crate) fn line_for_items<I>(&self, items: I) -> Option<Line<'static>>
+    pub(crate) fn status_line_for_items<I>(
+        &self,
+        items: I,
+        use_theme_colors: bool,
+    ) -> Option<Line<'static>>
     where
-        I: IntoIterator<Item = StatusSurfacePreviewItem>,
+        I: IntoIterator<Item = StatusLineItem>,
     {
-        let preview = items
-            .into_iter()
-            .filter_map(|item| self.value_for(item))
-            .collect::<Vec<_>>()
-            .join(" · ");
-        if preview.is_empty() {
-            None
-        } else {
-            Some(Line::from(preview))
-        }
+        let segments = items.into_iter().filter_map(|item| {
+            self.value_for(item.preview_item())
+                .map(|value| (item, value.to_string()))
+        });
+        status_line_from_segments(segments, use_theme_colors)
     }
 }

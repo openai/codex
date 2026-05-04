@@ -1,6 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use app_test_support::DISABLE_PLUGIN_STARTUP_TASKS_ARG;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use base64::Engine;
@@ -389,12 +390,13 @@ pub(super) async fn spawn_websocket_server_with_args(
     let mut cmd = Command::new(program);
     cmd.arg("--listen")
         .arg(listen_url)
+        .arg(DISABLE_PLUGIN_STARTUP_TASKS_ARG)
         .args(extra_args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .env("CODEX_HOME", codex_home)
-        .env("RUST_LOG", "debug");
+        .env("RUST_LOG", "warn");
     let mut process = cmd
         .kill_on_drop(true)
         .spawn()
@@ -524,12 +526,13 @@ async fn run_websocket_server_to_completion_with_args(
     let mut cmd = Command::new(program);
     cmd.arg("--listen")
         .arg(listen_url)
+        .arg(DISABLE_PLUGIN_STARTUP_TASKS_ARG)
         .args(extra_args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .env("CODEX_HOME", codex_home)
-        .env("RUST_LOG", "debug");
+        .env("RUST_LOG", "warn");
     timeout(DEFAULT_READ_TIMEOUT, cmd.output())
         .await
         .context("timed out waiting for websocket app-server to exit")?
@@ -777,7 +780,7 @@ pub(super) async fn read_response_and_notification_for_method(
     Ok((response, notification))
 }
 
-async fn read_error_for_id(stream: &mut WsClient, id: i64) -> Result<JSONRPCError> {
+pub(super) async fn read_error_for_id(stream: &mut WsClient, id: i64) -> Result<JSONRPCError> {
     let target_id = RequestId::Integer(id);
     loop {
         let message = read_jsonrpc_message(stream).await?;

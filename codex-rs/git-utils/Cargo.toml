@@ -11,7 +11,7 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 chrono = { workspace = true }
-codex-exec-server = { workspace = true }
+codex-file-system = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 futures = { workspace = true, features = ["alloc"] }
@@ -32,5 +32,4 @@ ts-rs = { workspace = true, features = [
 walkdir = { workspace = true }
 
 [dev-dependencies]
-assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }

@@ -71,23 +71,26 @@ impl ToolRouter {
             dynamic_tools,
         );
         let (specs, registry) = builder.build();
-        let model_visible_specs = if config.code_mode_only_enabled {
-            specs
-                .iter()
-                .filter_map(|configured_tool| {
-                    if !codex_code_mode::is_code_mode_nested_tool(configured_tool.name()) {
-                        Some(configured_tool.spec.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        } else {
-            specs
-                .iter()
-                .map(|configured_tool| configured_tool.spec.clone())
-                .collect()
-        };
+        let deferred_dynamic_tools = dynamic_tools
+            .iter()
+            .filter(|tool| tool.defer_loading)
+            .map(|tool| ToolName::new(tool.namespace.clone(), tool.name.clone()))
+            .collect::<HashSet<_>>();
+        let model_visible_specs = specs
+            .iter()
+            .filter_map(|configured_tool| {
+                if config.code_mode_only_enabled
+                    && codex_code_mode::is_code_mode_nested_tool(configured_tool.name())
+                {
+                    return None;
+                }
+
+                filter_deferred_dynamic_tool_spec(
+                    configured_tool.spec.clone(),
+                    &deferred_dynamic_tools,
+                )
+            })
+            .collect();
 
         Self {
             registry,
@@ -279,18 +282,6 @@ impl ToolRouter {
             payload,
         } = call;
 
-        let direct_js_repl_call = tool_name.namespace.is_none()
-            && matches!(tool_name.name.as_str(), "js_repl" | "js_repl_reset");
-        if source == ToolCallSource::Direct
-            && turn.tools_config.js_repl_tools_only
-            && !direct_js_repl_call
-        {
-            return Err(FunctionCallError::RespondToModel(
-                "direct tool calls are disabled; use js_repl and codex.tool(...) instead"
-                    .to_string(),
-            ));
-        }
-
         let invocation = ToolInvocation {
             session,
             turn,
@@ -298,10 +289,44 @@ impl ToolRouter {
             tracker,
             call_id,
             tool_name,
+            source,
             payload,
         };
 
         self.registry.dispatch_any(invocation).await
+    }
+}
+
+fn filter_deferred_dynamic_tool_spec(
+    spec: ToolSpec,
+    deferred_dynamic_tools: &HashSet<ToolName>,
+) -> Option<ToolSpec> {
+    if deferred_dynamic_tools.is_empty() {
+        return Some(spec);
+    }
+
+    match spec {
+        ToolSpec::Function(tool) => {
+            if deferred_dynamic_tools.contains(&ToolName::plain(tool.name.as_str())) {
+                None
+            } else {
+                Some(ToolSpec::Function(tool))
+            }
+        }
+        ToolSpec::Namespace(mut namespace) => {
+            let namespace_name = namespace.name.clone();
+            namespace.tools.retain(|tool| match tool {
+                ResponsesApiNamespaceTool::Function(tool) => !deferred_dynamic_tools.contains(
+                    &ToolName::namespaced(namespace_name.as_str(), tool.name.as_str()),
+                ),
+            });
+            if namespace.tools.is_empty() {
+                None
+            } else {
+                Some(ToolSpec::Namespace(namespace))
+            }
+        }
+        spec => Some(spec),
     }
 }
 #[cfg(test)]

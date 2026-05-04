@@ -12,7 +12,7 @@ expression: sanitized
 │                                                                         │
 │  Model:            gpt-5.1-codex-max (reasoning medium, summaries auto) │
 │  Directory: [[workspace]]                                               │
-│  Permissions:      Custom (read-only, on-request)                       │
+│  Permissions:      Custom (workspace with network access, on-request)   │
 │  Agents.md:        <none>                                               │
 │                                                                         │
 │  Token usage:      750 total  (500 input + 250 output)                  │

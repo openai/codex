@@ -78,6 +78,7 @@ async fn retries_on_early_close() {
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),

@@ -2,7 +2,7 @@ use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::render::renderable::Renderable;
-use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_app_server_protocol::ToolRequestUserInputParams;
 use crossterm::event::KeyEvent;
 
 use super::CancellationEvent;
@@ -101,8 +101,8 @@ pub(crate) trait BottomPaneView: Renderable {
     /// consumed.
     fn try_consume_user_input_request(
         &mut self,
-        request: RequestUserInputEvent,
-    ) -> Option<RequestUserInputEvent> {
+        request: ToolRequestUserInputParams,
+    ) -> Option<ToolRequestUserInputParams> {
         Some(request)
     }
 
@@ -120,5 +120,19 @@ pub(crate) trait BottomPaneView: Renderable {
     /// Returns `true` when the view changed state.
     fn dismiss_app_server_request(&mut self, _request: &ResolvedAppServerRequest) -> bool {
         false
+    }
+
+    /// Whether this view means the session is blocked waiting for the user.
+    ///
+    /// Views that return `true` surface an "Action Required" terminal title
+    /// instead of the normal working spinner so terminal tabs clearly show that
+    /// Codex needs user input.
+    fn terminal_title_requires_action(&self) -> bool {
+        false
+    }
+
+    /// Return the next time-based redraw this view needs while it is active.
+    fn next_frame_delay(&self) -> Option<std::time::Duration> {
+        None
     }
 }

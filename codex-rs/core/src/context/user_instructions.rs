@@ -12,6 +12,6 @@ impl ContextualUserFragment for UserInstructions {
     const END_MARKER: &'static str = "</INSTRUCTIONS>";
 
     fn body(&self) -> String {
-        format!("{}\n\n<INSTRUCTIONS>\n{}", self.directory, self.text)
+        format!("{}\n\n<INSTRUCTIONS>\n{}\n", self.directory, self.text)
     }
 }

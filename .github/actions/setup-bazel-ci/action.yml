@@ -5,7 +5,7 @@ inputs:
     description: Target triple used for cache namespacing.
     required: true
   install-test-prereqs:
-    description: Install Node.js and DotSlash for Bazel-backed test jobs.
+    description: Install DotSlash for Bazel-backed test jobs.
     required: false
     default: "false"
 outputs:
@@ -16,12 +16,6 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Set up Node.js for js_repl tests
-      if: inputs.install-test-prereqs == 'true'
-      uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
-      with:
-        node-version-file: codex-rs/node-version.txt
-
     # Some integration tests rely on DotSlash being installed.
     # See https://github.com/openai/codex/pull/7617.
     - name: Install DotSlash
@@ -39,7 +33,7 @@ runs:
       run: Copy-Item (Get-Command dotslash).Source -Destination "$env:LOCALAPPDATA\Microsoft\WindowsApps\dotslash.exe"
 
     - name: Set up Bazel
-      uses: bazelbuild/setup-bazelisk@b39c379c82683a5f25d34f0d062761f62693e0b2 # v3
+      uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
 
     - name: Configure Bazel repository cache
       id: configure_bazel_repository_cache
@@ -121,6 +115,11 @@ runs:
             "$name=$value" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           }
         }
+
+    - name: Compute cache-stable Windows Bazel PATH
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: ./.github/scripts/compute-bazel-windows-path.ps1
 
     - name: Enable Git long paths (Windows)
       if: runner.os == 'Windows'

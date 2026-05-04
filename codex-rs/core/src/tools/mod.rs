@@ -2,7 +2,7 @@ pub(crate) mod code_mode;
 pub(crate) mod context;
 pub(crate) mod events;
 pub(crate) mod handlers;
-pub(crate) mod js_repl;
+pub(crate) mod hook_names;
 pub(crate) mod network_approval;
 pub(crate) mod orchestrator;
 pub(crate) mod parallel;
@@ -11,6 +11,7 @@ pub(crate) mod router;
 pub(crate) mod runtimes;
 pub(crate) mod sandboxing;
 pub(crate) mod spec;
+pub(crate) mod tool_dispatch_trace;
 pub(crate) mod tool_search_entry;
 
 use codex_protocol::exec_output::ExecToolCallOutput;

@@ -13,7 +13,9 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::ThreadItem;
+use codex_state::ThreadMetadata;
 
 use crate::StoredThread;
 use crate::ThreadStoreError;
@@ -48,6 +50,13 @@ pub(super) fn scoped_rollout_path(
             ),
         })
     }
+}
+
+pub(super) fn rollout_path_is_archived(codex_home: &Path, path: &Path) -> bool {
+    path.starts_with(codex_home.join(ARCHIVED_SESSIONS_SUBDIR))
+        || path
+            .components()
+            .any(|component| component.as_os_str() == OsStr::new(ARCHIVED_SESSIONS_SUBDIR))
 }
 
 pub(super) fn matching_rollout_file_name(
@@ -131,6 +140,22 @@ pub(super) fn stored_thread_from_rollout_item(
         first_user_message: item.first_user_message,
         history: None,
     })
+}
+
+pub(super) fn distinct_thread_metadata_title(metadata: &ThreadMetadata) -> Option<String> {
+    let title = metadata.title.trim();
+    if title.is_empty() || metadata.first_user_message.as_deref().map(str::trim) == Some(title) {
+        None
+    } else {
+        Some(title.to_string())
+    }
+}
+
+pub(super) fn set_thread_name_from_title(thread: &mut StoredThread, title: String) {
+    if title.trim().is_empty() || thread.preview.trim() == title.trim() {
+        return;
+    }
+    thread.name = Some(title);
 }
 
 fn parse_rfc3339(value: Option<&str>) -> Option<DateTime<Utc>> {

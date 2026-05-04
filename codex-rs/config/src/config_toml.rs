@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::HooksToml;
 use crate::permissions_toml::PermissionsToml;
 use crate::profile_toml::ConfigProfile;
 use crate::types::AnalyticsConfigToml;
@@ -46,10 +47,10 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::ReadOnlyAccess;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path::normalize_for_path_comparison;
 use schemars::JsonSchema;
@@ -63,6 +64,28 @@ const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
     OLLAMA_OSS_PROVIDER_ID,
     LMSTUDIO_OSS_PROVIDER_ID,
 ];
+
+pub const DEFAULT_PROJECT_DOC_MAX_BYTES: usize = 32 * 1024;
+
+const fn default_allow_login_shell() -> Option<bool> {
+    Some(true)
+}
+
+fn default_history() -> Option<History> {
+    Some(History::default())
+}
+
+const fn default_project_doc_max_bytes() -> Option<usize> {
+    Some(DEFAULT_PROJECT_DOC_MAX_BYTES)
+}
+
+fn default_project_doc_fallback_filenames() -> Option<Vec<String>> {
+    Some(Vec::new())
+}
+
+const fn default_hide_agent_reasoning() -> Option<bool> {
+    Some(false)
+}
 
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
@@ -90,6 +113,10 @@ pub struct ConfigToml {
     /// ARC.
     pub approvals_reviewer: Option<ApprovalsReviewer>,
 
+    /// Optional policy instructions for the guardian auto-reviewer.
+    #[serde(default)]
+    pub auto_review: Option<AutoReviewToml>,
+
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
@@ -101,6 +128,7 @@ pub struct ConfigToml {
     /// If `false`, the model can never use a login shell: `login = true`
     /// requests are rejected, and omitting `login` defaults to a non-login
     /// shell.
+    #[serde(default = "default_allow_login_shell")]
     pub allow_login_shell: Option<bool>,
 
     /// Sandbox mode to use.
@@ -109,7 +137,8 @@ pub struct ConfigToml {
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
-    /// Default named permissions profile to apply from the `[permissions]`
+    /// Default permissions profile to apply. Names starting with `:` refer to
+    /// built-in profiles; other names are resolved from the `[permissions]`
     /// table.
     pub default_permissions: Option<String>,
 
@@ -117,7 +146,7 @@ pub struct ConfigToml {
     #[serde(default)]
     pub permissions: Option<PermissionsToml>,
 
-    /// Optional external command to spawn for end-user notifications.
+    /// Deprecated optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
 
@@ -196,9 +225,11 @@ pub struct ConfigToml {
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
+    #[serde(default = "default_project_doc_max_bytes")]
     pub project_doc_max_bytes: Option<usize>,
 
     /// Ordered list of fallback filenames to look for when AGENTS.md is missing.
+    #[serde(default = "default_project_doc_fallback_filenames")]
     pub project_doc_fallback_filenames: Option<Vec<String>>,
 
     /// Token budget applied when storing tool/function outputs in the context manager.
@@ -208,10 +239,12 @@ pub struct ConfigToml {
     /// Default: `300000` (5 minutes).
     pub background_terminal_max_timeout: Option<u64>,
 
-    /// Optional absolute path to the Node runtime used by `js_repl`.
+    /// Deprecated: ignored.
+    #[schemars(skip)]
     pub js_repl_node_path: Option<AbsolutePathBuf>,
 
-    /// Ordered list of directories to search for Node modules in `js_repl`.
+    /// Deprecated: ignored.
+    #[schemars(skip)]
     pub js_repl_node_module_dirs: Option<Vec<AbsolutePathBuf>>,
 
     /// Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution.
@@ -225,7 +258,7 @@ pub struct ConfigToml {
     pub profiles: HashMap<String, ConfigProfile>,
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
-    #[serde(default)]
+    #[serde(default = "default_history")]
     pub history: Option<History>,
 
     /// Directory where Codex stores the SQLite state DB.
@@ -236,6 +269,9 @@ pub struct ConfigToml {
     /// Defaults to `$CODEX_HOME/log`.
     pub log_dir: Option<AbsolutePathBuf>,
 
+    /// Debugging and reproducibility settings.
+    pub debug: Option<DebugToml>,
+
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: Option<UriBasedFileOpener>,
@@ -245,6 +281,7 @@ pub struct ConfigToml {
 
     /// When set to `true`, `AgentReasoning` events will be hidden from the
     /// UI/output. Defaults to `false`.
+    #[serde(default = "default_hide_agent_reasoning")]
     pub hide_agent_reasoning: Option<bool>,
 
     /// When set to `true`, `AgentReasoningRawContentEvent` events will be shown in the UI/output.
@@ -308,6 +345,13 @@ pub struct ConfigToml {
     /// Experimental / do not use. When set, app-server uses a remote thread
     /// store at this endpoint instead of the local filesystem/SQLite store.
     pub experimental_thread_store_endpoint: Option<String>,
+
+    /// Experimental / do not use. When set, app-server fetches thread-scoped
+    /// config from a remote service at this endpoint.
+    pub experimental_thread_config_endpoint: Option<String>,
+
+    /// Experimental / do not use. Selects the thread store implementation.
+    pub experimental_thread_store: Option<ThreadStoreToml>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, or live.
@@ -328,6 +372,9 @@ pub struct ConfigToml {
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
 
+    /// Lifecycle hooks configured inline in TOML plus user-level overrides.
+    pub hooks: Option<HooksToml>,
+
     /// User-level plugin config entries keyed by plugin name.
     #[serde(default)]
     pub plugins: HashMap<String, PluginConfig>,
@@ -345,7 +392,8 @@ pub struct ConfigToml {
     /// Suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: Option<bool>,
 
-    /// Settings for ghost snapshots (used for undo).
+    /// Compatibility-only settings retained so legacy `ghost_snapshot`
+    /// config still loads.
     #[serde(default)]
     pub ghost_snapshot: Option<GhostSnapshotToml>,
 
@@ -399,6 +447,57 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ConfigLockfileToml {
+    pub version: u32,
+    pub codex_version: String,
+
+    /// Replayable effective config captured in the lockfile.
+    pub config: ConfigToml,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct DebugToml {
+    pub config_lockfile: Option<DebugConfigLockToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct DebugConfigLockToml {
+    /// Directory where Codex writes effective session config lock files.
+    pub export_dir: Option<AbsolutePathBuf>,
+
+    /// Lockfile to replay as the authoritative effective config.
+    pub load_path: Option<AbsolutePathBuf>,
+
+    /// Allow replaying a lock generated by a different Codex version.
+    pub allow_codex_version_mismatch: Option<bool>,
+
+    /// Save fields resolved from the model catalog/session configuration.
+    pub save_fields_resolved_from_model_catalog: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ThreadStoreToml {
+    Local {},
+    Remote {
+        endpoint: String,
+    },
+    #[schemars(skip)]
+    InMemory {
+        id: String,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+pub struct AutoReviewToml {
+    /// Additional policy instructions inserted into the guardian prompt.
+    pub policy: Option<String>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -548,6 +647,9 @@ pub struct AgentsToml {
     /// Default maximum runtime in seconds for agent job workers.
     #[schemars(range(min = 1))]
     pub job_max_runtime_seconds: Option<u64>,
+    /// Whether to record a model-visible message when an agent turn is interrupted.
+    /// Defaults to true.
+    pub interrupt_message: Option<bool>,
 
     /// User-defined role declarations keyed by role name.
     ///
@@ -589,27 +691,30 @@ impl From<ToolsToml> for Tools {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct GhostSnapshotToml {
-    /// Exclude untracked files larger than this many bytes from ghost snapshots.
+    /// Legacy no-op setting retained for compatibility.
     #[serde(alias = "ignore_untracked_files_over_bytes")]
     pub ignore_large_untracked_files: Option<i64>,
-    /// Ignore untracked directories that contain this many files or more.
-    /// (Still emits a warning unless warnings are disabled.)
+    /// Legacy no-op setting retained for compatibility.
     #[serde(alias = "large_untracked_dir_warning_threshold")]
     pub ignore_large_untracked_dirs: Option<i64>,
-    /// Disable all ghost snapshot warning events.
+    /// Legacy no-op setting retained for compatibility.
     pub disable_warnings: Option<bool>,
 }
 
 impl ConfigToml {
-    /// Derive the effective sandbox policy from the configuration.
-    pub async fn derive_sandbox_policy(
+    /// Derive the effective permission profile from legacy sandbox config.
+    ///
+    /// Call this only after ruling out `default_permissions`: named
+    /// `[permissions]` profiles must be compiled through the permissions
+    /// profile pipeline, not reconstructed from `sandbox_mode`.
+    pub async fn derive_permission_profile(
         &self,
         sandbox_mode_override: Option<SandboxMode>,
         profile_sandbox_mode: Option<SandboxMode>,
         windows_sandbox_level: WindowsSandboxLevel,
         active_project: Option<&ProjectConfig>,
-        sandbox_policy_constraint: Option<&crate::Constrained<SandboxPolicy>>,
-    ) -> SandboxPolicy {
+        permission_profile_constraint: Option<&crate::Constrained<PermissionProfile>>,
+    ) -> PermissionProfile {
         let sandbox_mode_was_explicit = sandbox_mode_override.is_some()
             || profile_sandbox_mode.is_some()
             || self.sandbox_mode.is_some();
@@ -637,49 +742,53 @@ impl ConfigToml {
                 })
             })
             .unwrap_or_default();
-        let mut sandbox_policy = match resolved_sandbox_mode {
-            SandboxMode::ReadOnly => SandboxPolicy::new_read_only_policy(),
+        let effective_sandbox_mode = if cfg!(target_os = "windows")
+            // If the experimental Windows sandbox is enabled, do not force a downgrade.
+            && windows_sandbox_level == WindowsSandboxLevel::Disabled
+            && matches!(resolved_sandbox_mode, SandboxMode::WorkspaceWrite)
+        {
+            SandboxMode::ReadOnly
+        } else {
+            resolved_sandbox_mode
+        };
+
+        let permission_profile = match effective_sandbox_mode {
+            SandboxMode::ReadOnly => PermissionProfile::read_only(),
             SandboxMode::WorkspaceWrite => match self.sandbox_workspace_write.as_ref() {
                 Some(SandboxWorkspaceWrite {
                     writable_roots,
                     network_access,
                     exclude_tmpdir_env_var,
                     exclude_slash_tmp,
-                }) => SandboxPolicy::WorkspaceWrite {
-                    writable_roots: writable_roots.clone(),
-                    read_only_access: ReadOnlyAccess::FullAccess,
-                    network_access: *network_access,
-                    exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
-                    exclude_slash_tmp: *exclude_slash_tmp,
-                },
-                None => SandboxPolicy::new_workspace_write_policy(),
+                }) => {
+                    let network_policy = if *network_access {
+                        NetworkSandboxPolicy::Enabled
+                    } else {
+                        NetworkSandboxPolicy::Restricted
+                    };
+                    PermissionProfile::workspace_write_with(
+                        writable_roots,
+                        network_policy,
+                        *exclude_tmpdir_env_var,
+                        *exclude_slash_tmp,
+                    )
+                }
+                None => PermissionProfile::workspace_write(),
             },
-            SandboxMode::DangerFullAccess => SandboxPolicy::DangerFullAccess,
+            SandboxMode::DangerFullAccess => PermissionProfile::Disabled,
         };
-        let downgrade_workspace_write_if_unsupported = |policy: &mut SandboxPolicy| {
-            if cfg!(target_os = "windows")
-                // If the experimental Windows sandbox is enabled, do not force a downgrade.
-                && windows_sandbox_level == WindowsSandboxLevel::Disabled
-                && matches!(&*policy, SandboxPolicy::WorkspaceWrite { .. })
-            {
-                *policy = SandboxPolicy::new_read_only_policy();
-            }
-        };
-        if matches!(resolved_sandbox_mode, SandboxMode::WorkspaceWrite) {
-            downgrade_workspace_write_if_unsupported(&mut sandbox_policy);
-        }
         if !sandbox_mode_was_explicit
-            && let Some(constraint) = sandbox_policy_constraint
-            && let Err(err) = constraint.can_set(&sandbox_policy)
+            && let Some(constraint) = permission_profile_constraint
+            && let Err(err) = constraint.can_set(&permission_profile)
         {
             tracing::warn!(
                 error = %err,
                 "default sandbox policy is disallowed by requirements; falling back to required default"
             );
-            sandbox_policy = constraint.get().clone();
-            downgrade_workspace_write_if_unsupported(&mut sandbox_policy);
+            PermissionProfile::read_only()
+        } else {
+            permission_profile
         }
-        sandbox_policy
     }
 
     /// Resolves the cwd to an existing project, or returns None if ConfigToml

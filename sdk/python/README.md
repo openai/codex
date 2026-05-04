@@ -8,13 +8,15 @@ The generated wire-model layer is currently sourced from the bundled v2 schema a
 
 ```bash
 cd sdk/python
-python -m pip install -e .
+uv sync
+source .venv/bin/activate
 ```
 
-Published SDK builds pin an exact `codex-cli-bin` runtime dependency. For local
-repo development, either pass `AppServerConfig(codex_bin=...)` to point at a
-local build explicitly, or use the repo examples/notebook bootstrap which
-installs the pinned runtime package automatically.
+Published SDK builds pin an exact `openai-codex-cli-bin` runtime dependency
+with the same version as the SDK. For local repo development, either pass
+`AppServerConfig(codex_bin=...)` to point at a local build explicitly, or use
+the repo examples/notebook bootstrap which installs the pinned runtime package
+automatically.
 
 ## Quickstart
 
@@ -53,9 +55,9 @@ python examples/01_quickstart_constructor/async.py
 
 The repo no longer checks `codex` binaries into `sdk/python`.
 
-Published SDK builds are pinned to an exact `codex-cli-bin` package version,
-and that runtime package carries the platform-specific binary for the target
-wheel.
+Published SDK builds are pinned to an exact `openai-codex-cli-bin` package
+version, and that runtime package carries the platform-specific binary for the
+target wheel. The SDK package version and runtime package version must match.
 
 For local repo development, the checked-in `sdk/python-runtime` package is only
 a template for staged release artifacts. Editable installs should use an
@@ -69,30 +71,35 @@ cd sdk/python
 python scripts/update_sdk_artifacts.py generate-types
 python scripts/update_sdk_artifacts.py \
   stage-sdk \
-  /tmp/codex-python-release/codex-app-server-sdk \
-  --runtime-version 1.2.3
+  /tmp/codex-python-release/openai-codex-app-server-sdk \
+  --codex-version <codex-release-tag-or-pep440-version>
 python scripts/update_sdk_artifacts.py \
   stage-runtime \
-  /tmp/codex-python-release/codex-cli-bin \
+  /tmp/codex-python-release/openai-codex-cli-bin \
   /path/to/codex \
-  --runtime-version 1.2.3
+  --codex-version <codex-release-tag-or-pep440-version>
 ```
+
+Pass `--platform-tag ...` to `stage-runtime` when the wheel should be tagged for
+a Rust target that differs from the Python build host. The intended one-off
+matrix is `macosx_11_0_arm64`, `macosx_10_9_x86_64`,
+`musllinux_1_1_aarch64`, `musllinux_1_1_x86_64`, `win_arm64`, and
+`win_amd64`.
 
 This supports the CI release flow:
 
 - run `generate-types` before packaging
-- stage `codex-app-server-sdk` once with an exact `codex-cli-bin==...` dependency
-- stage `codex-cli-bin` on each supported platform runner with the same pinned runtime version
-- build and publish `codex-cli-bin` as platform wheels only; do not publish an sdist
+- stage `openai-codex-app-server-sdk` once with an exact `openai-codex-cli-bin==...` dependency
+- stage `openai-codex-cli-bin` on each supported platform runner with the same pinned runtime version
+- build and publish `openai-codex-cli-bin` as platform wheels only; do not publish an sdist
 
 ## Compatibility and versioning
 
-- Package: `codex-app-server-sdk`
-- Runtime package: `codex-cli-bin`
-- Current SDK version in this repo: `0.2.0`
+- Package: `openai-codex-app-server-sdk`
+- Runtime package: `openai-codex-cli-bin`
 - Python: `>=3.10`
 - Target protocol: Codex `app-server` JSON-RPC v2
-- Recommendation: keep SDK and `codex` CLI reasonably up to date together
+- Versioning rule: the SDK package version is the underlying Codex runtime version
 
 ## Notes
 

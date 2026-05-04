@@ -108,12 +108,12 @@ fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
     };
     if shell.program.is_empty() {
         command.arg(&handler.command);
-        command
     } else {
         command.args(&shell.args);
         command.arg(&handler.command);
-        command
     }
+    command.envs(&handler.env);
+    command
 }
 
 fn default_shell_command() -> Command {

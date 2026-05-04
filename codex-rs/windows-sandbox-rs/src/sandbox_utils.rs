@@ -19,16 +19,16 @@ fn find_git_root(start: &Path) -> Option<PathBuf> {
             return Some(cur);
         }
         if marker.is_file() {
-            if let Ok(txt) = std::fs::read_to_string(&marker) {
-                if let Some(rest) = txt.trim().strip_prefix("gitdir:") {
-                    let gitdir = rest.trim();
-                    let resolved = if Path::new(gitdir).is_absolute() {
-                        PathBuf::from(gitdir)
-                    } else {
-                        cur.join(gitdir)
-                    };
-                    return resolved.parent().map(|p| p.to_path_buf()).or(Some(cur));
-                }
+            if let Ok(txt) = std::fs::read_to_string(&marker)
+                && let Some(rest) = txt.trim().strip_prefix("gitdir:")
+            {
+                let gitdir = rest.trim();
+                let resolved = if Path::new(gitdir).is_absolute() {
+                    PathBuf::from(gitdir)
+                } else {
+                    cur.join(gitdir)
+                };
+                return resolved.parent().map(Path::to_path_buf).or(Some(cur));
             }
             return Some(cur);
         }

@@ -32,6 +32,8 @@ pub const CURATED_PLUGINS_STARTUP_SYNC_METRIC: &str = "codex.plugins.startup_syn
 pub const CURATED_PLUGINS_STARTUP_SYNC_FINAL_METRIC: &str = "codex.plugins.startup_sync.final";
 pub const HOOK_RUN_METRIC: &str = "codex.hooks.run";
 pub const HOOK_RUN_DURATION_METRIC: &str = "codex.hooks.run.duration_ms";
+pub const LEGACY_NOTIFY_CONFIGURED_METRIC: &str = "codex.notify.configured";
+pub const LEGACY_NOTIFY_RUN_METRIC: &str = "codex.notify.run";
 /// Total runtime of a startup prewarm attempt until it completes, tagged by final status.
 pub const STARTUP_PREWARM_DURATION_METRIC: &str = "codex.startup_prewarm.duration_ms";
 /// Age of the startup prewarm attempt when the first real turn resolves it, tagged by outcome.
@@ -40,4 +42,6 @@ pub const STARTUP_PREWARM_AGE_AT_FIRST_TURN_METRIC: &str =
 pub const THREAD_STARTED_METRIC: &str = "codex.thread.started";
 pub const THREAD_SKILLS_ENABLED_TOTAL_METRIC: &str = "codex.thread.skills.enabled_total";
 pub const THREAD_SKILLS_KEPT_TOTAL_METRIC: &str = "codex.thread.skills.kept_total";
+pub const THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC: &str =
+    "codex.thread.skills.description_truncated_chars";
 pub const THREAD_SKILLS_TRUNCATED_METRIC: &str = "codex.thread.skills.truncated";

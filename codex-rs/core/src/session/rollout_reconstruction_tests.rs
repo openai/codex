@@ -19,7 +19,6 @@ fn user_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
-        end_turn: None,
         phase: None,
     }
 }
@@ -31,7 +30,6 @@ fn assistant_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
-        end_turn: None,
         phase: None,
     }
 }
@@ -50,7 +48,6 @@ fn inter_agent_assistant_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: serde_json::to_string(&communication).unwrap(),
         }],
-        end_turn: None,
         phase: None,
     }
 }
@@ -67,7 +64,8 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
-        sandbox_policy: turn_context.sandbox_policy.get().clone(),
+        sandbox_policy: turn_context.sandbox_policy(),
+        permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
@@ -87,7 +85,7 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
 
@@ -107,7 +105,8 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lif
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
-        sandbox_policy: turn_context.sandbox_policy.get().clone(),
+        sandbox_policy: turn_context.sandbox_policy(),
+        permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
@@ -151,6 +150,7 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lif
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
     ];
@@ -159,7 +159,7 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lif
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
 
@@ -218,6 +218,7 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -245,6 +246,7 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
@@ -314,6 +316,7 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_inc
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -403,6 +406,7 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -429,6 +433,7 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -446,6 +451,7 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
@@ -518,6 +524,7 @@ async fn reconstruct_history_rollback_counts_inter_agent_assistant_turns() {
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -537,6 +544,7 @@ async fn reconstruct_history_rollback_counts_inter_agent_assistant_turns() {
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
@@ -604,6 +612,7 @@ async fn reconstruct_history_rollback_clears_history_and_metadata_when_exceeding
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
@@ -653,6 +662,7 @@ async fn record_initial_history_resumed_rollback_skips_only_user_turns() {
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
         // Standalone task turn (no UserMessage) should not consume rollback skips.
@@ -670,6 +680,7 @@ async fn record_initial_history_resumed_rollback_skips_only_user_turns() {
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
@@ -681,7 +692,7 @@ async fn record_initial_history_resumed_rollback_skips_only_user_turns() {
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
 
@@ -723,6 +734,7 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -754,7 +766,7 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
 
@@ -783,7 +795,7 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_seed_referenc
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
 
@@ -806,7 +818,7 @@ async fn record_initial_history_resumed_does_not_seed_reference_context_item_aft
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
 
@@ -879,6 +891,7 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_clear
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
     ];
@@ -902,7 +915,8 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
-        sandbox_policy: turn_context.sandbox_policy.get().clone(),
+        sandbox_policy: turn_context.sandbox_policy(),
+        permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
@@ -949,6 +963,7 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
     ];
@@ -957,7 +972,7 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
 
@@ -978,7 +993,8 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
             current_date: turn_context.current_date.clone(),
             timezone: turn_context.timezone.clone(),
             approval_policy: turn_context.approval_policy.value(),
-            sandbox_policy: turn_context.sandbox_policy.get().clone(),
+            sandbox_policy: turn_context.sandbox_policy(),
+            permission_profile: None,
             network: None,
             file_system_sandbox_policy: None,
             model: previous_model.to_string(),
@@ -1008,7 +1024,8 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
-        sandbox_policy: turn_context.sandbox_policy.get().clone(),
+        sandbox_policy: turn_context.sandbox_policy(),
+        permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
@@ -1052,6 +1069,7 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -1088,7 +1106,7 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
 
@@ -1121,7 +1139,8 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
-        sandbox_policy: turn_context.sandbox_policy.get().clone(),
+        sandbox_policy: turn_context.sandbox_policy(),
+        permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
         model: current_model.to_string(),
@@ -1160,6 +1179,7 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -1193,6 +1213,7 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
     ];
@@ -1201,7 +1222,7 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
 
@@ -1232,7 +1253,8 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
-        sandbox_policy: turn_context.sandbox_policy.get().clone(),
+        sandbox_policy: turn_context.sandbox_policy(),
+        permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
@@ -1276,6 +1298,7 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -1304,7 +1327,7 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
 
@@ -1351,7 +1374,7 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_preserves_turn_
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
 
@@ -1382,7 +1405,8 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
-        sandbox_policy: turn_context.sandbox_policy.get().clone(),
+        sandbox_policy: turn_context.sandbox_policy(),
+        permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
@@ -1427,6 +1451,7 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -1465,7 +1490,7 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
             history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
 

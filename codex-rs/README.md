@@ -46,7 +46,7 @@ Use `codex mcp` to add/list/get/remove MCP server launchers defined in `config.t
 
 ### Notifications
 
-You can enable notifications by configuring a script that is run whenever the agent finishes a turn. The [notify documentation](../docs/config.md#notify) includes a detailed example that explains how to get desktop notifications via [terminal-notifier](https://github.com/julienXX/terminal-notifier) on macOS. When Codex detects that it is running under WSL 2 inside Windows Terminal (`WT_SESSION` is set), the TUI automatically falls back to native Windows toast notifications so approval prompts and completed turns surface even though Windows Terminal does not implement OSC 9.
+The legacy `notify` setting is deprecated and will be removed in a future release. Existing configurations still work, but new automation should use lifecycle hooks instead. The [notify documentation](../docs/config.md#notify) explains the remaining compatibility behavior. When Codex detects that it is running under WSL 2 inside Windows Terminal (`WT_SESSION` is set), the TUI automatically falls back to native Windows toast notifications so approval prompts and completed turns surface even though Windows Terminal does not implement OSC 9.
 
 ### `codex exec` to run Codex programmatically/non-interactively
 
@@ -59,18 +59,21 @@ To test to see what happens when a command is run under the sandbox provided by 
 
 ```
 # macOS
-codex sandbox macos [--full-auto] [--log-denials] [COMMAND]...
+codex sandbox macos [--log-denials] [COMMAND]...
 
 # Linux
-codex sandbox linux [--full-auto] [COMMAND]...
+codex sandbox linux [COMMAND]...
 
 # Windows
-codex sandbox windows [--full-auto] [COMMAND]...
+codex sandbox windows [COMMAND]...
 
 # Legacy aliases
-codex debug seatbelt [--full-auto] [--log-denials] [COMMAND]...
-codex debug landlock [--full-auto] [COMMAND]...
+codex debug seatbelt [--log-denials] [COMMAND]...
+codex debug landlock [COMMAND]...
 ```
+
+To try a writable legacy sandbox mode with these commands, pass an explicit config override such
+as `-c 'sandbox_mode="workspace-write"'`.
 
 ### Selecting a sandbox policy via `--sandbox`
 
@@ -94,7 +97,7 @@ In `workspace-write`, Codex also includes `~/.codex/memories` in its writable ro
 
 This folder is the root of a Cargo workspace. It contains quite a bit of experimental code, but here are the key crates:
 
-- [`core/`](./core) contains the business logic for Codex. Ultimately, we hope this to be a library crate that is generally useful for building other Rust/native applications that use Codex.
+- [`core/`](./core) contains the business logic for Codex. Ultimately, we hope this becomes a library crate that is generally useful for building other Rust/native applications that use Codex.
 - [`exec/`](./exec) "headless" CLI for use in automation.
 - [`tui/`](./tui) CLI that launches a fullscreen TUI built with [Ratatui](https://ratatui.rs/).
 - [`cli/`](./cli) CLI multitool that provides the aforementioned CLIs via subcommands.

@@ -1,10 +1,11 @@
-#[cfg(test)]
-use codex_config::types::EnvironmentVariablePattern;
-use codex_config::types::ShellEnvironmentPolicy;
 use codex_protocol::ThreadId;
+#[cfg(test)]
+use codex_protocol::config_types::EnvironmentVariablePattern;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::shell_environment;
 use std::collections::HashMap;
 
-pub use codex_config::shell_environment::CODEX_THREAD_ID_ENV_VAR;
+pub use codex_protocol::shell_environment::CODEX_THREAD_ID_ENV_VAR;
 
 /// Construct an environment map based on the rules in the specified policy. The
 /// resulting map can be passed directly to `Command::envs()` after calling
@@ -21,7 +22,7 @@ pub fn create_env(
     thread_id: Option<ThreadId>,
 ) -> HashMap<String, String> {
     let thread_id = thread_id.map(|thread_id| thread_id.to_string());
-    codex_config::shell_environment::create_env(policy, thread_id.as_deref())
+    shell_environment::create_env(policy, thread_id.as_deref())
 }
 
 #[cfg(all(test, target_os = "windows"))]
@@ -34,7 +35,7 @@ where
     I: IntoIterator<Item = (String, String)>,
 {
     let thread_id = thread_id.map(|thread_id| thread_id.to_string());
-    codex_config::shell_environment::create_env_from_vars(vars, policy, thread_id.as_deref())
+    shell_environment::create_env_from_vars(vars, policy, thread_id.as_deref())
 }
 
 #[cfg(test)]
@@ -47,7 +48,7 @@ where
     I: IntoIterator<Item = (String, String)>,
 {
     let thread_id = thread_id.map(|thread_id| thread_id.to_string());
-    codex_config::shell_environment::populate_env(vars, policy, thread_id.as_deref())
+    shell_environment::populate_env(vars, policy, thread_id.as_deref())
 }
 
 #[cfg(test)]

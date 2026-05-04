@@ -3,7 +3,6 @@ use super::threads::push_thread_filters;
 use super::threads::push_thread_order_and_limit;
 use super::*;
 use crate::SortDirection;
-use crate::model::Phase2InputSelection;
 use crate::model::Phase2JobClaimOutcome;
 use crate::model::Stage1JobClaim;
 use crate::model::Stage1JobClaimOutcome;
@@ -11,17 +10,16 @@ use crate::model::Stage1Output;
 use crate::model::Stage1OutputRow;
 use crate::model::Stage1StartupClaimParams;
 use crate::model::ThreadRow;
-use crate::model::stage1_output_ref_from_parts;
 use chrono::Duration;
 use sqlx::Executor;
 use sqlx::QueryBuilder;
 use sqlx::Sqlite;
-use std::collections::HashSet;
 use uuid::Uuid;
 
 const JOB_KIND_MEMORY_STAGE1: &str = "memory_stage1";
 const JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL: &str = "memory_consolidate_global";
 const MEMORY_CONSOLIDATION_JOB_KEY: &str = "global";
+const PHASE2_SUCCESS_COOLDOWN_SECONDS: i64 = 6 * 60 * 60;
 
 const DEFAULT_RETRY_REMAINING: i64 = 3;
 
@@ -175,6 +173,7 @@ LEFT JOIN jobs
                 archived_only: false,
                 allowed_sources,
                 model_providers: None,
+                cwd_filters: None,
                 anchor: None,
                 sort_key: SortKey::UpdatedAt,
                 sort_direction: SortDirection::Desc,
@@ -330,65 +329,71 @@ WHERE thread_id IN (
         Ok(rows_affected as usize)
     }
 
-    /// Returns the current phase-2 input set along with its diff against the
-    /// last successful phase-2 selection.
+    /// Returns the current phase-2 input set.
     ///
     /// Query behavior:
     /// - current selection keeps only non-empty stage-1 outputs whose
     ///   `last_usage` is within `max_unused_days`, or whose
     ///   `source_updated_at` is within that window when the memory has never
     ///   been used
-    /// - eligible rows are ordered by `usage_count DESC`,
+    /// - eligible rows are ranked by `usage_count DESC`,
     ///   `COALESCE(last_usage, source_updated_at) DESC`, `source_updated_at DESC`,
     ///   `thread_id DESC`
-    /// - previously selected rows are identified by `selected_for_phase2 = 1`
-    /// - `previous_selected` contains the current persisted rows that belonged
-    ///   to the last successful phase-2 baseline, even if those threads are no
-    ///   longer memory-eligible
-    /// - `retained_thread_ids` records which current rows still match the exact
-    ///   snapshot selected in the last successful phase-2 run
-    /// - removed rows are previously selected rows that are still present in
-    ///   `stage1_outputs` but are no longer in the current selection, including
-    ///   threads that are no longer memory-eligible
+    /// - the selected top-N rows are returned in stable `thread_id ASC` order
+    ///
+    /// The returned rows are the complete Phase 2 filesystem input. Phase 2
+    /// syncs these rows directly; deletions are represented by the workspace
+    /// diff against the previous successful memory baseline.
     pub async fn get_phase2_input_selection(
         &self,
         n: usize,
         max_unused_days: i64,
-    ) -> anyhow::Result<Phase2InputSelection> {
+    ) -> anyhow::Result<Vec<Stage1Output>> {
         if n == 0 {
-            return Ok(Phase2InputSelection::default());
+            return Ok(Vec::new());
         }
         let cutoff = (Utc::now() - Duration::days(max_unused_days.max(0))).timestamp();
 
         let current_rows = sqlx::query(
             r#"
 SELECT
-    so.thread_id,
-    COALESCE(t.rollout_path, '') AS rollout_path,
-    so.source_updated_at,
-    so.raw_memory,
-    so.rollout_summary,
-    so.rollout_slug,
-    so.generated_at,
-    COALESCE(t.cwd, '') AS cwd,
-    t.git_branch AS git_branch,
-    so.selected_for_phase2,
-    so.selected_for_phase2_source_updated_at
-FROM stage1_outputs AS so
-LEFT JOIN threads AS t
-    ON t.id = so.thread_id
-WHERE t.memory_mode = 'enabled'
-  AND (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
-  AND (
-        (so.last_usage IS NOT NULL AND so.last_usage >= ?)
-        OR (so.last_usage IS NULL AND so.source_updated_at >= ?)
-  )
-ORDER BY
-    COALESCE(so.usage_count, 0) DESC,
-    COALESCE(so.last_usage, so.source_updated_at) DESC,
-    so.source_updated_at DESC,
-    so.thread_id DESC
-LIMIT ?
+    selected.thread_id,
+    selected.rollout_path,
+    selected.source_updated_at,
+    selected.raw_memory,
+    selected.rollout_summary,
+    selected.rollout_slug,
+    selected.generated_at,
+    selected.cwd,
+    selected.git_branch
+FROM (
+    SELECT
+        so.thread_id,
+        COALESCE(t.rollout_path, '') AS rollout_path,
+        so.source_updated_at,
+        so.raw_memory,
+        so.rollout_summary,
+        so.rollout_slug,
+        so.generated_at,
+        COALESCE(t.cwd, '') AS cwd,
+        t.git_branch AS git_branch
+    FROM stage1_outputs AS so
+    LEFT JOIN threads AS t
+        ON t.id = so.thread_id
+    WHERE t.memory_mode = 'enabled'
+      AND (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
+      AND (
+            (so.last_usage IS NOT NULL AND so.last_usage >= ?)
+            OR (so.last_usage IS NULL AND so.source_updated_at >= ?)
+      )
+    ORDER BY
+        COALESCE(so.usage_count, 0) DESC,
+        COALESCE(so.last_usage, so.source_updated_at) DESC,
+        so.source_updated_at DESC,
+        so.thread_id DESC
+    LIMIT ?
+) AS selected
+ORDER BY selected.thread_id ASC
             "#,
         )
         .bind(cutoff)
@@ -397,70 +402,14 @@ LIMIT ?
         .fetch_all(self.pool.as_ref())
         .await?;
 
-        let mut current_thread_ids = HashSet::with_capacity(current_rows.len());
         let mut selected = Vec::with_capacity(current_rows.len());
-        let mut retained_thread_ids = Vec::new();
         for row in current_rows {
-            let thread_id = row.try_get::<String, _>("thread_id")?;
-            current_thread_ids.insert(thread_id.clone());
-            let source_updated_at = row.try_get::<i64, _>("source_updated_at")?;
-            if row.try_get::<i64, _>("selected_for_phase2")? != 0
-                && row.try_get::<Option<i64>, _>("selected_for_phase2_source_updated_at")?
-                    == Some(source_updated_at)
-            {
-                retained_thread_ids.push(ThreadId::try_from(thread_id.clone())?);
-            }
             selected.push(Stage1Output::try_from(Stage1OutputRow::try_from_row(
                 &row,
             )?)?);
         }
 
-        let previous_rows = sqlx::query(
-            r#"
-SELECT
-    so.thread_id,
-    COALESCE(t.rollout_path, '') AS rollout_path,
-    so.source_updated_at,
-    so.raw_memory,
-    so.rollout_summary,
-    so.rollout_slug,
-    so.generated_at,
-    COALESCE(t.cwd, '') AS cwd,
-    t.git_branch AS git_branch
-FROM stage1_outputs AS so
-LEFT JOIN threads AS t
-    ON t.id = so.thread_id
-WHERE so.selected_for_phase2 = 1
-ORDER BY so.source_updated_at DESC, so.thread_id DESC
-            "#,
-        )
-        .fetch_all(self.pool.as_ref())
-        .await?;
-
-        let previous_selected = previous_rows
-            .iter()
-            .map(Stage1OutputRow::try_from_row)
-            .map(|row| row.and_then(Stage1Output::try_from))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut removed = Vec::new();
-        for row in previous_rows {
-            let thread_id = row.try_get::<String, _>("thread_id")?;
-            if current_thread_ids.contains(thread_id.as_str()) {
-                continue;
-            }
-            removed.push(stage1_output_ref_from_parts(
-                thread_id,
-                row.try_get("source_updated_at")?,
-                row.try_get("rollout_slug")?,
-            )?);
-        }
-
-        Ok(Phase2InputSelection {
-            selected,
-            previous_selected,
-            retained_thread_ids,
-            removed,
-        })
+        Ok(selected)
     }
 
     /// Marks a thread as polluted and enqueues phase-2 forgetting when the
@@ -908,20 +857,25 @@ WHERE kind = ? AND job_key = ?
     /// Enqueues or advances the global phase-2 consolidation job watermark.
     ///
     /// The underlying upsert keeps the job `running` when already running, resets
-    /// `pending/error` jobs to `pending`, and advances `input_watermark` so each
-    /// enqueue marks new consolidation work even when `source_updated_at` is
-    /// older than prior maxima.
+    /// `pending/error` jobs to `pending`, and advances `input_watermark` as
+    /// bookkeeping even when `source_updated_at` is older than prior maxima.
+    /// Phase 2 does not use this watermark as a dirty check; git workspace diffing
+    /// decides whether consolidation work exists after the lock is claimed.
     pub async fn enqueue_global_consolidation(&self, input_watermark: i64) -> anyhow::Result<()> {
         enqueue_global_consolidation_with_executor(self.pool.as_ref(), input_watermark).await
     }
 
-    /// Attempts to claim the global phase-2 consolidation job.
+    /// Attempts to claim the global phase-2 consolidation lock.
     ///
     /// Claim semantics:
     /// - reads the singleton global job row (`kind='memory_consolidate_global'`)
-    /// - returns `SkippedNotDirty` when `input_watermark <= last_success_watermark`
-    /// - returns `SkippedNotDirty` when retries are exhausted or retry backoff is active
+    /// - creates and claims the singleton row when it does not exist yet
+    /// - does not use DB watermarks to decide whether Phase 2 has work; git workspace
+    ///   dirtiness is the source of truth after the caller materializes inputs
+    /// - returns `SkippedRetryUnavailable` when retry backoff is active
     /// - returns `SkippedRunning` when an active running lease exists
+    /// - returns `SkippedCooldown` when the latest successful run finished
+    ///   within the phase-2 success cooldown
     /// - otherwise updates the row to `running`, sets ownership + lease, and
     ///   returns `Claimed`
     pub async fn try_claim_global_phase2_job(
@@ -931,6 +885,7 @@ WHERE kind = ? AND job_key = ?
     ) -> anyhow::Result<Phase2JobClaimOutcome> {
         let now = Utc::now().timestamp();
         let lease_until = now.saturating_add(lease_seconds.max(0));
+        let cooldown_cutoff = now.saturating_sub(PHASE2_SUCCESS_COOLDOWN_SECONDS);
         let ownership_token = Uuid::new_v4().to_string();
         let worker_id = worker_id.to_string();
 
@@ -938,7 +893,7 @@ WHERE kind = ? AND job_key = ?
 
         let existing_job = sqlx::query(
             r#"
-SELECT status, lease_until, retry_at, retry_remaining, input_watermark, last_success_watermark
+SELECT status, lease_until, retry_at, input_watermark, finished_at, last_error
 FROM jobs
 WHERE kind = ? AND job_key = ?
             "#,
@@ -949,35 +904,68 @@ WHERE kind = ? AND job_key = ?
         .await?;
 
         let Some(existing_job) = existing_job else {
+            let rows_affected = sqlx::query(
+                r#"
+INSERT INTO jobs (
+    kind,
+    job_key,
+    status,
+    worker_id,
+    ownership_token,
+    started_at,
+    finished_at,
+    lease_until,
+    retry_at,
+    retry_remaining,
+    last_error,
+    input_watermark,
+    last_success_watermark
+) VALUES (?, ?, 'running', ?, ?, ?, NULL, ?, NULL, ?, NULL, 0, 0)
+                "#,
+            )
+            .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+            .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+            .bind(worker_id.as_str())
+            .bind(ownership_token.as_str())
+            .bind(now)
+            .bind(lease_until)
+            .bind(DEFAULT_RETRY_REMAINING)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+
             tx.commit().await?;
-            return Ok(Phase2JobClaimOutcome::SkippedNotDirty);
+            return if rows_affected == 0 {
+                Ok(Phase2JobClaimOutcome::SkippedRunning)
+            } else {
+                Ok(Phase2JobClaimOutcome::Claimed {
+                    ownership_token,
+                    input_watermark: 0,
+                })
+            };
         };
 
         let input_watermark: Option<i64> = existing_job.try_get("input_watermark")?;
         let input_watermark_value = input_watermark.unwrap_or(0);
-        let last_success_watermark: Option<i64> = existing_job.try_get("last_success_watermark")?;
-        if input_watermark_value <= last_success_watermark.unwrap_or(0) {
-            tx.commit().await?;
-            return Ok(Phase2JobClaimOutcome::SkippedNotDirty);
-        }
-
         let status: String = existing_job.try_get("status")?;
         let existing_lease_until: Option<i64> = existing_job.try_get("lease_until")?;
         let retry_at: Option<i64> = existing_job.try_get("retry_at")?;
-        let retry_remaining: i64 = existing_job.try_get("retry_remaining")?;
-
-        if retry_remaining <= 0 {
-            tx.commit().await?;
-            return Ok(Phase2JobClaimOutcome::SkippedNotDirty);
-        }
+        let finished_at: Option<i64> = existing_job.try_get("finished_at")?;
+        let last_error: Option<String> = existing_job.try_get("last_error")?;
         if retry_at.is_some_and(|retry_at| retry_at > now) {
             tx.commit().await?;
-            return Ok(Phase2JobClaimOutcome::SkippedNotDirty);
+            return Ok(Phase2JobClaimOutcome::SkippedRetryUnavailable);
         }
         if status == "running" && existing_lease_until.is_some_and(|lease_until| lease_until > now)
         {
             tx.commit().await?;
             return Ok(Phase2JobClaimOutcome::SkippedRunning);
+        }
+        if last_error.is_none()
+            && finished_at.is_some_and(|finished_at| finished_at > cooldown_cutoff)
+        {
+            tx.commit().await?;
+            return Ok(Phase2JobClaimOutcome::SkippedCooldown);
         }
 
         let rows_affected = sqlx::query(
@@ -993,10 +981,9 @@ SET
     retry_at = NULL,
     last_error = NULL
 WHERE kind = ? AND job_key = ?
-  AND input_watermark > COALESCE(last_success_watermark, 0)
   AND (status != 'running' OR lease_until IS NULL OR lease_until <= ?)
   AND (retry_at IS NULL OR retry_at <= ?)
-  AND retry_remaining > 0
+  AND (last_error IS NOT NULL OR finished_at IS NULL OR finished_at <= ?)
             "#,
         )
         .bind(worker_id.as_str())
@@ -1007,6 +994,7 @@ WHERE kind = ? AND job_key = ?
         .bind(MEMORY_CONSOLIDATION_JOB_KEY)
         .bind(now)
         .bind(now)
+        .bind(cooldown_cutoff)
         .execute(&mut *tx)
         .await?
         .rows_affected();
@@ -1062,37 +1050,17 @@ WHERE kind = ? AND job_key = ?
     ///   `max(existing_last_success_watermark, completed_watermark)`
     /// - rewrites `selected_for_phase2` so only the exact selected stage-1
     ///   snapshots remain marked as part of the latest successful phase-2
-    ///   selection, and persists each selected snapshot's
-    ///   `source_updated_at` for future retained-vs-added diffing
+    ///   selection, and persists each selected snapshot's `source_updated_at`
     pub async fn mark_global_phase2_job_succeeded(
         &self,
         ownership_token: &str,
         completed_watermark: i64,
         selected_outputs: &[Stage1Output],
     ) -> anyhow::Result<bool> {
-        let now = Utc::now().timestamp();
         let mut tx = self.pool.begin().await?;
-        let rows_affected = sqlx::query(
-            r#"
-UPDATE jobs
-SET
-    status = 'done',
-    finished_at = ?,
-    lease_until = NULL,
-    last_error = NULL,
-    last_success_watermark = max(COALESCE(last_success_watermark, 0), ?)
-WHERE kind = ? AND job_key = ?
-  AND status = 'running' AND ownership_token = ?
-            "#,
-        )
-        .bind(now)
-        .bind(completed_watermark)
-        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
-        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
-        .bind(ownership_token)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
+        let rows_affected =
+            mark_global_phase2_job_succeeded_row(&mut *tx, ownership_token, completed_watermark)
+                .await?;
 
         if rows_affected == 0 {
             tx.commit().await?;
@@ -1138,7 +1106,7 @@ WHERE thread_id = ? AND source_updated_at = ?
     /// - updates only the owned running singleton global row
     /// - sets `status='error'`, clears lease
     /// - writes failure reason and retry time
-    /// - decrements `retry_remaining`
+    /// - decrements `retry_remaining` without going below zero
     pub async fn mark_global_phase2_job_failed(
         &self,
         ownership_token: &str,
@@ -1155,7 +1123,7 @@ SET
     finished_at = ?,
     lease_until = NULL,
     retry_at = ?,
-    retry_remaining = retry_remaining - 1,
+    retry_remaining = max(retry_remaining - 1, 0),
     last_error = ?
 WHERE kind = ? AND job_key = ?
   AND status = 'running' AND ownership_token = ?
@@ -1196,7 +1164,7 @@ SET
     finished_at = ?,
     lease_until = NULL,
     retry_at = ?,
-    retry_remaining = retry_remaining - 1,
+    retry_remaining = max(retry_remaining - 1, 0),
     last_error = ?
 WHERE kind = ? AND job_key = ?
   AND status = 'running'
@@ -1215,6 +1183,40 @@ WHERE kind = ? AND job_key = ?
 
         Ok(rows_affected > 0)
     }
+}
+
+async fn mark_global_phase2_job_succeeded_row<'e, E>(
+    executor: E,
+    ownership_token: &str,
+    completed_watermark: i64,
+) -> anyhow::Result<u64>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let now = Utc::now().timestamp();
+    let rows_affected = sqlx::query(
+        r#"
+UPDATE jobs
+SET
+    status = 'done',
+    finished_at = ?,
+    lease_until = NULL,
+    last_error = NULL,
+    last_success_watermark = max(COALESCE(last_success_watermark, 0), ?)
+WHERE kind = ? AND job_key = ?
+  AND status = 'running' AND ownership_token = ?
+            "#,
+    )
+    .bind(now)
+    .bind(completed_watermark)
+    .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+    .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+    .bind(ownership_token)
+    .execute(executor)
+    .await?
+    .rows_affected();
+
+    Ok(rows_affected)
 }
 
 async fn enqueue_global_consolidation_with_executor<'e, E>(
@@ -1272,6 +1274,8 @@ ON CONFLICT(kind, job_key) DO UPDATE SET
 mod tests {
     use super::JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL;
     use super::JOB_KIND_MEMORY_STAGE1;
+    use super::MEMORY_CONSOLIDATION_JOB_KEY;
+    use super::PHASE2_SUCCESS_COOLDOWN_SECONDS;
     use super::StateRuntime;
     use super::test_support::test_thread_metadata;
     use super::test_support::unique_temp_dir;
@@ -1285,6 +1289,20 @@ mod tests {
     use sqlx::Row;
     use std::sync::Arc;
     use uuid::Uuid;
+
+    fn stable_thread_id(value: &str) -> ThreadId {
+        ThreadId::from_string(value).expect("thread id")
+    }
+
+    async fn age_phase2_success_beyond_cooldown(runtime: &StateRuntime) {
+        sqlx::query("UPDATE jobs SET finished_at = ? WHERE kind = ? AND job_key = ?")
+            .bind(Utc::now().timestamp() - PHASE2_SUCCESS_COOLDOWN_SECONDS - 1)
+            .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+            .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("age phase2 success beyond cooldown");
+    }
 
     #[tokio::test]
     async fn stage1_claim_skips_when_up_to_date() {
@@ -2270,16 +2288,6 @@ WHERE kind = 'memory_stage1'
             "no-output without an existing stage1 output should not enqueue phase2"
         );
 
-        let claim_phase2 = runtime
-            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
-            .await
-            .expect("claim phase2");
-        assert_eq!(
-            claim_phase2,
-            Phase2JobClaimOutcome::SkippedNotDirty,
-            "phase2 should remain clean when no-output deleted nothing"
-        );
-
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 
@@ -2349,7 +2357,7 @@ WHERE kind = 'memory_stage1'
                 )
                 .await
                 .expect("mark initial phase2 succeeded"),
-            "initial phase2 success should clear global dirty state"
+            "initial phase2 success should finalize the global job"
         );
 
         let no_output_claim = runtime
@@ -2381,6 +2389,7 @@ WHERE kind = 'memory_stage1'
                 .expect("stage1 output count");
         assert_eq!(output_row_count, 0);
 
+        age_phase2_success_beyond_cooldown(&runtime).await;
         let claim_phase2 = runtime
             .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
@@ -2504,7 +2513,7 @@ WHERE kind = 'memory_stage1'
     }
 
     #[tokio::test]
-    async fn phase2_global_consolidation_reruns_when_watermark_advances() {
+    async fn phase2_global_lock_respects_success_cooldown() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -2536,24 +2545,100 @@ WHERE kind = 'memory_stage1'
             "phase2 success should finalize for current token"
         );
 
-        let claim_up_to_date = runtime
+        let claim_after_success = runtime
             .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
-            .expect("claim phase2 up-to-date");
-        assert_eq!(claim_up_to_date, Phase2JobClaimOutcome::SkippedNotDirty);
+            .expect("claim phase2 after success");
+        assert_eq!(claim_after_success, Phase2JobClaimOutcome::SkippedCooldown);
 
         runtime
             .enqueue_global_consolidation(/*input_watermark*/ 101)
             .await
-            .expect("enqueue global consolidation again");
-
-        let claim_rerun = runtime
+            .expect("enqueue global consolidation after success");
+        let claim_after_enqueue = runtime
             .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
-            .expect("claim phase2 rerun");
+            .expect("claim phase2 after enqueue");
+        assert_eq!(claim_after_enqueue, Phase2JobClaimOutcome::SkippedCooldown);
+
+        age_phase2_success_beyond_cooldown(&runtime).await;
+        let claim_after_cooldown = runtime
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
+            .await
+            .expect("claim phase2 after cooldown");
+        assert!(matches!(
+            claim_after_cooldown,
+            Phase2JobClaimOutcome::Claimed { .. }
+        ));
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase2_global_lock_can_be_claimed_after_retry_budget_is_exhausted() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .enqueue_global_consolidation(/*input_watermark*/ 100)
+            .await
+            .expect("enqueue global consolidation");
+
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        for attempt in 0..3 {
+            let claim = runtime
+                .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3_600)
+                .await
+                .expect("claim phase2 before retry exhaustion");
+            let ownership_token = match claim {
+                Phase2JobClaimOutcome::Claimed {
+                    ownership_token, ..
+                } => ownership_token,
+                other => panic!(
+                    "attempt {} should claim phase2 before retries are exhausted: {other:?}",
+                    attempt + 1
+                ),
+            };
+            assert!(
+                runtime
+                    .mark_global_phase2_job_failed(
+                        ownership_token.as_str(),
+                        "boom",
+                        /*retry_delay_seconds*/ 0,
+                    )
+                    .await
+                    .expect("mark phase2 failed"),
+                "attempt {} should decrement retry budget",
+                attempt + 1
+            );
+        }
+
+        let job_row =
+            sqlx::query("SELECT retry_remaining FROM jobs WHERE kind = ? AND job_key = ?")
+                .bind("memory_consolidate_global")
+                .bind("global")
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("load phase2 job row after retry exhaustion");
+        assert_eq!(
+            job_row
+                .try_get::<i64, _>("retry_remaining")
+                .expect("retry_remaining"),
+            0
+        );
+
+        let claim_after_exhaustion = runtime
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3_600)
+            .await
+            .expect("claim phase2 after retry exhaustion");
         assert!(
-            matches!(claim_rerun, Phase2JobClaimOutcome::Claimed { .. }),
-            "advanced watermark should be claimable"
+            matches!(
+                claim_after_exhaustion,
+                Phase2JobClaimOutcome::Claimed { .. }
+            ),
+            "phase2 claim should only lock; workspace diffing decides whether there is work"
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -2800,15 +2885,15 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
-    async fn get_phase2_input_selection_reports_added_retained_and_removed_rows() {
+    async fn get_phase2_input_selection_returns_current_selected_rows() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
-        let thread_id_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        let thread_id_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        let thread_id_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let thread_id_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
+        let thread_id_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
+        let thread_id_c = stable_thread_id("00000000-0000-4000-8000-000000000003");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
         for (thread_id, workspace) in [
@@ -2894,28 +2979,28 @@ VALUES (?, ?, ?, ?, ?)
             .await
             .expect("load phase2 input selection");
 
-        assert_eq!(selection.selected.len(), 2);
-        assert_eq!(selection.previous_selected.len(), 2);
-        assert_eq!(selection.selected[0].thread_id, thread_id_c);
+        assert_eq!(selection.len(), 2);
         assert_eq!(
-            selection.selected[0].rollout_path,
-            codex_home.join(format!("rollout-{thread_id_c}.jsonl"))
+            selection
+                .iter()
+                .map(|output| output.thread_id)
+                .collect::<Vec<_>>(),
+            vec![thread_id_b, thread_id_c]
         );
-        assert_eq!(selection.selected[1].thread_id, thread_id_b);
-        assert_eq!(selection.retained_thread_ids, vec![thread_id_c]);
-
-        assert_eq!(selection.removed.len(), 1);
-        assert_eq!(selection.removed[0].thread_id, thread_id_a);
+        let selected_c = selection
+            .iter()
+            .find(|output| output.thread_id == thread_id_c)
+            .expect("thread c should be selected");
         assert_eq!(
-            selection.removed[0].rollout_slug.as_deref(),
-            Some("rollout-a")
+            selected_c.rollout_path,
+            codex_home.join(format!("rollout-{thread_id_c}.jsonl"))
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 
     #[tokio::test]
-    async fn get_phase2_input_selection_marks_polluted_previous_selection_as_removed() {
+    async fn get_phase2_input_selection_excludes_polluted_previous_selection() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -3001,24 +3086,8 @@ VALUES (?, ?, ?, ?, ?)
             .await
             .expect("load phase2 input selection");
 
-        assert_eq!(selection.selected.len(), 1);
-        assert_eq!(selection.selected[0].thread_id, thread_id_enabled);
-        assert_eq!(selection.previous_selected.len(), 2);
-        assert!(
-            selection
-                .previous_selected
-                .iter()
-                .any(|item| item.thread_id == thread_id_enabled)
-        );
-        assert!(
-            selection
-                .previous_selected
-                .iter()
-                .any(|item| item.thread_id == thread_id_polluted)
-        );
-        assert_eq!(selection.retained_thread_ids, vec![thread_id_enabled]);
-        assert_eq!(selection.removed.len(), 1);
-        assert_eq!(selection.removed[0].thread_id, thread_id_polluted);
+        assert_eq!(selection.len(), 1);
+        assert_eq!(selection[0].thread_id, thread_id_enabled);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -3102,6 +3171,7 @@ VALUES (?, ?, ?, ?, ?)
             "thread should transition to polluted"
         );
 
+        age_phase2_success_beyond_cooldown(&runtime).await;
         let next_claim = runtime
             .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
@@ -3112,7 +3182,7 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
-    async fn get_phase2_input_selection_treats_regenerated_selected_rows_as_added() {
+    async fn get_phase2_input_selection_returns_regenerated_selected_rows() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -3212,12 +3282,9 @@ VALUES (?, ?, ?, ?, ?)
             .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 36_500)
             .await
             .expect("load phase2 input selection");
-        assert_eq!(selection.selected.len(), 1);
-        assert_eq!(selection.previous_selected.len(), 1);
-        assert_eq!(selection.selected[0].thread_id, thread_id);
-        assert_eq!(selection.selected[0].source_updated_at.timestamp(), 101);
-        assert!(selection.retained_thread_ids.is_empty());
-        assert!(selection.removed.is_empty());
+        assert_eq!(selection.len(), 1);
+        assert_eq!(selection[0].thread_id, thread_id);
+        assert_eq!(selection[0].source_updated_at.timestamp(), 101);
 
         let (selected_for_phase2, selected_for_phase2_source_updated_at) =
             sqlx::query_as::<_, (i64, Option<i64>)>(
@@ -3234,16 +3301,16 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
-    async fn get_phase2_input_selection_reports_regenerated_previous_selection_as_removed() {
+    async fn get_phase2_input_selection_uses_current_ranking_after_refreshes() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
-        let thread_id_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread a");
-        let thread_id_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread b");
-        let thread_id_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread c");
-        let thread_id_d = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread d");
+        let thread_id_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
+        let thread_id_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
+        let thread_id_c = stable_thread_id("00000000-0000-4000-8000-000000000003");
+        let thread_id_d = stable_thread_id("00000000-0000-4000-8000-000000000004");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
         for (thread_id, workspace) in [
@@ -3367,28 +3434,10 @@ VALUES (?, ?, ?, ?, ?)
             .expect("load phase2 input selection");
         assert_eq!(
             selection
-                .selected
                 .iter()
                 .map(|output| output.thread_id)
                 .collect::<Vec<_>>(),
-            vec![thread_id_d, thread_id_c]
-        );
-        assert_eq!(
-            selection
-                .previous_selected
-                .iter()
-                .map(|output| output.thread_id)
-                .collect::<Vec<_>>(),
-            vec![thread_id_a, thread_id_b]
-        );
-        assert!(selection.retained_thread_ids.is_empty());
-        assert_eq!(
-            selection
-                .removed
-                .iter()
-                .map(|output| (output.thread_id, output.source_updated_at.timestamp()))
-                .collect::<Vec<_>>(),
-            vec![(thread_id_a, 102), (thread_id_b, 101)]
+            vec![thread_id_c, thread_id_d]
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -3491,6 +3540,7 @@ VALUES (?, ?, ?, ?, ?)
             "refreshed stage1 success should persist output"
         );
 
+        age_phase2_success_beyond_cooldown(&runtime).await;
         let second_phase2_claim = runtime
             .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
@@ -3526,7 +3576,8 @@ VALUES (?, ?, ?, ?, ?)
             .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 36_500)
             .await
             .expect("load phase2 input selection after refresh");
-        assert_eq!(selection.retained_thread_ids, vec![thread_id]);
+        assert_eq!(selection.len(), 1);
+        assert_eq!(selection[0].thread_id, thread_id);
 
         let (selected_for_phase2, selected_for_phase2_source_updated_at) =
             sqlx::query_as::<_, (i64, Option<i64>)>(
@@ -3656,9 +3707,8 @@ VALUES (?, ?, ?, ?, ?)
             .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 36_500)
             .await
             .expect("load phase2 input selection");
-        assert_eq!(selection.selected.len(), 1);
-        assert_eq!(selection.selected[0].source_updated_at.timestamp(), 101);
-        assert!(selection.retained_thread_ids.is_empty());
+        assert_eq!(selection.len(), 1);
+        assert_eq!(selection[0].source_updated_at.timestamp(), 101);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -3791,9 +3841,9 @@ VALUES (?, ?, ?, ?, ?)
 
         let now = Utc::now();
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
-        let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id a");
-        let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id b");
-        let thread_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id c");
+        let thread_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
+        let thread_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
+        let thread_c = stable_thread_id("00000000-0000-4000-8000-000000000003");
 
         for (thread_id, workspace) in [
             (thread_a, "workspace-a"),
@@ -3863,17 +3913,16 @@ VALUES (?, ?, ?, ?, ?)
         }
 
         let selection = runtime
-            .get_phase2_input_selection(/*n*/ 3, /*max_unused_days*/ 30)
+            .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 30)
             .await
             .expect("load phase2 input selection");
 
         assert_eq!(
             selection
-                .selected
                 .iter()
                 .map(|output| output.thread_id)
                 .collect::<Vec<_>>(),
-            vec![thread_b, thread_a, thread_c]
+            vec![thread_b]
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -3888,9 +3937,9 @@ VALUES (?, ?, ?, ?, ?)
 
         let now = Utc::now();
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
-        let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id a");
-        let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id b");
-        let thread_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id c");
+        let thread_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
+        let thread_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
+        let thread_c = stable_thread_id("00000000-0000-4000-8000-000000000003");
 
         for (thread_id, workspace) in [
             (thread_a, "workspace-a"),
@@ -3966,11 +4015,10 @@ VALUES (?, ?, ?, ?, ?)
 
         assert_eq!(
             selection
-                .selected
                 .iter()
                 .map(|output| output.thread_id)
                 .collect::<Vec<_>>(),
-            vec![thread_c, thread_b]
+            vec![thread_b, thread_c]
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -4055,9 +4103,9 @@ VALUES (?, ?, ?, ?, ?)
             .await
             .expect("load phase2 input selection");
 
-        assert_eq!(selection.selected.len(), 1);
-        assert_eq!(selection.selected[0].thread_id, newer_thread);
-        assert_eq!(selection.selected[0].source_updated_at.timestamp(), 200);
+        assert_eq!(selection.len(), 1);
+        assert_eq!(selection[0].thread_id, newer_thread);
+        assert_eq!(selection[0].source_updated_at.timestamp(), 200);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -4411,6 +4459,56 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
+    async fn phase2_global_lock_creates_missing_job_row() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner a");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner b");
+
+        let claim = runtime
+            .try_claim_global_phase2_job(owner_a, /*lease_seconds*/ 3_600)
+            .await
+            .expect("claim global phase2 lock");
+        let ownership_token = match claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => {
+                assert_eq!(input_watermark, 0);
+                ownership_token
+            }
+            other => panic!("unexpected phase2 lock claim outcome: {other:?}"),
+        };
+
+        let second_claim = runtime
+            .try_claim_global_phase2_job(owner_b, /*lease_seconds*/ 3_600)
+            .await
+            .expect("claim global phase2 lock from second owner");
+        assert_eq!(second_claim, Phase2JobClaimOutcome::SkippedRunning);
+
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(
+                    ownership_token.as_str(),
+                    /*completed_watermark*/ 0,
+                    &[]
+                )
+                .await
+                .expect("mark phase2 lock success")
+        );
+        let claim_after_success = runtime
+            .try_claim_global_phase2_job(owner_b, /*lease_seconds*/ 3_600)
+            .await
+            .expect("claim global phase2 lock after success");
+        assert_eq!(claim_after_success, Phase2JobClaimOutcome::SkippedCooldown);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
     async fn phase2_global_lock_stale_lease_allows_takeover() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
@@ -4486,7 +4584,7 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
-    async fn phase2_backfilled_inputs_below_last_success_still_become_dirty() {
+    async fn enqueue_global_consolidation_keeps_phase2_input_watermark_monotonic() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -4526,23 +4624,24 @@ VALUES (?, ?, ?, ?, ?)
         runtime
             .enqueue_global_consolidation(/*input_watermark*/ 400)
             .await
-            .expect("enqueue backfilled consolidation");
+            .expect("enqueue lower-watermark consolidation");
 
+        age_phase2_success_beyond_cooldown(&runtime).await;
         let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner b");
         let claim_b = runtime
             .try_claim_global_phase2_job(owner_b, /*lease_seconds*/ 3_600)
             .await
-            .expect("claim backfilled consolidation");
+            .expect("claim lower-watermark consolidation");
         match claim_b {
             Phase2JobClaimOutcome::Claimed {
                 input_watermark, ..
             } => {
                 assert!(
                     input_watermark > 500,
-                    "backfilled enqueue should advance dirty watermark beyond last success"
+                    "lower-watermark enqueue should still advance the bookkeeping watermark"
                 );
             }
-            other => panic!("unexpected backfilled phase2 claim outcome: {other:?}"),
+            other => panic!("unexpected lower-watermark phase2 claim outcome: {other:?}"),
         }
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -4607,7 +4706,7 @@ VALUES (?, ?, ?, ?, ?)
             .try_claim_global_phase2_job(ThreadId::new(), /*lease_seconds*/ 3_600)
             .await
             .expect("claim after fallback failure");
-        assert_eq!(claim, Phase2JobClaimOutcome::SkippedNotDirty);
+        assert_eq!(claim, Phase2JobClaimOutcome::SkippedRetryUnavailable);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

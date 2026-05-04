@@ -41,6 +41,7 @@ jobs:
           for f in "${files[@]}"; do
             [[ $f == codex-rs/* ]] && codex=true
             [[ $f == codex-rs/* || $f == tools/argument-comment-lint/* || $f == justfile ]] && argument_comment_lint=true
+            [[ $f == defs.bzl || $f == workspace_root_test_launcher.sh.tpl || $f == workspace_root_test_launcher.bat.tpl ]] && argument_comment_lint=true
             [[ $f == tools/argument-comment-lint/* || $f == .github/workflows/rust-ci.yml || $f == .github/workflows/rust-ci-full.yml ]] && argument_comment_lint_package=true
             [[ $f == .github/* ]] && workflows=true
           done
@@ -130,13 +131,14 @@ jobs:
       - name: Test argument comment lint package
         working-directory: tools/argument-comment-lint
         run: cargo test
+        env:
+          RUST_MIN_STACK: "8388608" # 8 MiB
 
   argument_comment_lint_prebuilt:
     name: Argument comment lint - ${{ matrix.name }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     needs: changed
-    if: ${{ needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -154,43 +156,28 @@ jobs:
               group: codex-runners
               labels: codex-windows-x64
     steps:
+      - name: Check whether argument comment lint should run
+        id: argument_comment_lint_gate
+        shell: bash
+        env:
+          ARGUMENT_COMMENT_LINT: ${{ needs.changed.outputs.argument_comment_lint }}
+          WORKFLOWS: ${{ needs.changed.outputs.workflows }}
+        run: |
+          if [[ "$ARGUMENT_COMMENT_LINT" == "true" || "$WORKFLOWS" == "true" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "No argument-comment-lint relevant changes."
+          echo "run=false" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: ./.github/actions/setup-bazel-ci
+        if: ${{ steps.argument_comment_lint_gate.outputs.run == 'true' }}
+      - name: Run argument comment lint on codex-rs via Bazel
+        if: ${{ steps.argument_comment_lint_gate.outputs.run == 'true' }}
+        uses: ./.github/actions/run-argument-comment-lint
         with:
           target: ${{ runner.os }}
-          install-test-prereqs: true
-      - name: Install Linux sandbox build dependencies
-        if: ${{ runner.os == 'Linux' }}
-        shell: bash
-        run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
-      - name: Run argument comment lint on codex-rs via Bazel
-        if: ${{ runner.os != 'Windows' }}
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
-        shell: bash
-        run: |
-          bazel_targets="$(./tools/argument-comment-lint/list-bazel-targets.sh)"
-          ./.github/scripts/run-bazel-ci.sh \
-            -- \
-            build \
-            --config=argument-comment-lint \
-            --keep_going \
-            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
-            -- \
-            ${bazel_targets}
-      - name: Run argument comment lint on codex-rs via Bazel
-        if: ${{ runner.os == 'Windows' }}
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
-        shell: bash
-        run: |
-          ./.github/scripts/run-argument-comment-lint-bazel.sh \
-            --config=argument-comment-lint \
-            --platforms=//:local_windows \
-            --keep_going \
-            --build_metadata=COMMIT_SHA=${GITHUB_SHA}
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
   # --- Gatherer job that you mark as the ONLY required status -----------------
   results:

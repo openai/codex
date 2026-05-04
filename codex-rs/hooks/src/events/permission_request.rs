@@ -22,7 +22,6 @@ use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::PermissionRequestCommandInput;
-use crate::schema::PermissionRequestToolInput;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
@@ -30,6 +29,7 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use serde_json::Value;
 
 #[derive(Debug, Clone)]
 pub struct PermissionRequestRequest {
@@ -40,9 +40,9 @@ pub struct PermissionRequestRequest {
     pub model: String,
     pub permission_mode: String,
     pub tool_name: String,
+    pub matcher_aliases: Vec<String>,
     pub run_id_suffix: String,
-    pub command: String,
-    pub description: Option<String>,
+    pub tool_input: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,10 +66,11 @@ pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
     request: &PermissionRequestRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
+    let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
+    dispatcher::select_handlers_for_matcher_inputs(
         handlers,
         HookEventName::PermissionRequest,
-        Some(&request.tool_name),
+        &matcher_inputs,
     )
     .into_iter()
     .map(|handler| {
@@ -86,10 +87,11 @@ pub(crate) async fn run(
     shell: &CommandShell,
     request: PermissionRequestRequest,
 ) -> PermissionRequestOutcome {
-    let matched = dispatcher::select_handlers(
+    let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
+    let matched = dispatcher::select_handlers_for_matcher_inputs(
         handlers,
         HookEventName::PermissionRequest,
-        Some(&request.tool_name),
+        &matcher_inputs,
     );
     if matched.is_empty() {
         return PermissionRequestOutcome {
@@ -175,10 +177,7 @@ fn build_command_input(request: &PermissionRequestRequest) -> PermissionRequestC
         model: request.model.clone(),
         permission_mode: request.permission_mode.clone(),
         tool_name: request.tool_name.clone(),
-        tool_input: PermissionRequestToolInput {
-            command: request.command.clone(),
-            description: request.description.clone(),
-        },
+        tool_input: request.tool_input.clone(),
     }
 }
 

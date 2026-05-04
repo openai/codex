@@ -56,7 +56,7 @@ const handleEvent = (event: ThreadEvent): void => {
       break;
     case "turn.completed":
       console.log(
-        `Used ${event.usage.input_tokens} input tokens, ${event.usage.cached_input_tokens} cached input tokens, ${event.usage.output_tokens} output tokens.`,
+        `Used ${event.usage.input_tokens} input tokens, ${event.usage.cached_input_tokens} cached input tokens, ${event.usage.output_tokens} output tokens, ${event.usage.reasoning_output_tokens} reasoning output tokens.`,
       );
       break;
     case "turn.failed":

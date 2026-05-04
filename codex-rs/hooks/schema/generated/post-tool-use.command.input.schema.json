@@ -7,18 +7,6 @@
         "string",
         "null"
       ]
-    },
-    "PostToolUseToolInput": {
-      "additionalProperties": false,
-      "properties": {
-        "command": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "command"
-      ],
-      "type": "object"
     }
   },
   "properties": {
@@ -45,11 +33,8 @@
     "session_id": {
       "type": "string"
     },
-    "tool_input": {
-      "$ref": "#/definitions/PostToolUseToolInput"
-    },
+    "tool_input": true,
     "tool_name": {
-      "const": "Bash",
       "type": "string"
     },
     "tool_response": true,

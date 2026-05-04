@@ -18,9 +18,14 @@ impl App {
         cwd: AbsolutePathBuf,
         env_map: std::collections::HashMap<String, String>,
         logs_base_dir: AbsolutePathBuf,
-        sandbox_policy: codex_protocol::protocol::SandboxPolicy,
+        permission_profile: PermissionProfile,
         tx: AppEventSender,
     ) {
+        let Ok(sandbox_policy) = permission_profile.to_legacy_sandbox_policy(cwd.as_path()) else {
+            send_world_writable_scan_failed(&tx);
+            return;
+        };
+
         tokio::task::spawn_blocking(move || {
             let logs_base_dir_path = logs_base_dir.as_path();
             let result = codex_windows_sandbox::apply_world_writable_scan_and_denies(
@@ -32,15 +37,20 @@ impl App {
             );
             if result.is_err() {
                 // Scan failed: warn without examples.
-                tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
-                    preset: None,
-                    sample_paths: Vec::new(),
-                    extra_count: 0usize,
-                    failed_scan: true,
-                });
+                send_world_writable_scan_failed(&tx);
             }
         });
     }
+}
+
+#[cfg(target_os = "windows")]
+fn send_world_writable_scan_failed(tx: &AppEventSender) {
+    tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
+        preset: None,
+        sample_paths: Vec::new(),
+        extra_count: 0usize,
+        failed_scan: true,
+    });
 }
 
 pub(super) fn side_return_shortcut_matches(key_event: KeyEvent) -> bool {
@@ -55,7 +65,50 @@ pub(super) fn side_return_shortcut_matches(key_event: KeyEvent) -> bool {
             modifiers,
             kind: KeyEventKind::Press,
             ..
-        } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c') => true,
+        } if modifiers.contains(KeyModifiers::CONTROL)
+            && (c.eq_ignore_ascii_case(&'c') || c.eq_ignore_ascii_case(&'d')) =>
+        {
+            true
+        }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn side_return_shortcuts_match_esc_ctrl_c_and_ctrl_d() {
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new_with_kind(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('C'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('D'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(!side_return_shortcut_matches(KeyEvent::new_with_kind(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        )));
     }
 }

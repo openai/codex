@@ -11,6 +11,7 @@ pub(crate) mod zsh_fork_backend;
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecCapturePolicy;
 use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::guardian::review_approval_request;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
@@ -19,6 +20,7 @@ use crate::shell::ShellType;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
+use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
@@ -30,11 +32,12 @@ use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::exec_output::ExecToolCallOutput;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
@@ -52,7 +55,7 @@ pub struct ShellRequest {
     pub explicit_env_overrides: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
-    pub additional_permissions: Option<PermissionProfile>,
+    pub additional_permissions: Option<AdditionalPermissionProfile>,
     #[cfg(unix)]
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
@@ -96,7 +99,7 @@ pub(crate) struct ApprovalKey {
     command: Vec<String>,
     cwd: AbsolutePathBuf,
     sandbox_permissions: SandboxPermissions,
-    additional_permissions: Option<PermissionProfile>,
+    additional_permissions: Option<AdditionalPermissionProfile>,
 }
 
 impl ShellRuntime {
@@ -200,11 +203,10 @@ impl Approvable<ShellRequest> for ShellRuntime {
     }
 
     fn permission_request_payload(&self, req: &ShellRequest) -> Option<PermissionRequestPayload> {
-        Some(PermissionRequestPayload {
-            tool_name: "Bash".to_string(),
-            command: req.hook_command.clone(),
-            description: req.justification.clone(),
-        })
+        Some(PermissionRequestPayload::bash(
+            req.hook_command.clone(),
+            req.justification.clone(),
+        ))
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {
@@ -216,12 +218,23 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
     fn network_approval_spec(
         &self,
         req: &ShellRequest,
-        _ctx: &ToolCtx,
+        ctx: &ToolCtx,
     ) -> Option<NetworkApprovalSpec> {
-        req.network.as_ref()?;
+        let network =
+            managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions)?;
         Some(NetworkApprovalSpec {
-            network: req.network.clone(),
+            network: Some(network.clone()),
             mode: NetworkApprovalMode::Immediate,
+            trigger: GuardianNetworkAccessTrigger {
+                call_id: ctx.call_id.clone(),
+                tool_name: ctx.tool_name.clone(),
+                command: req.command.clone(),
+                cwd: req.cwd.clone(),
+                sandbox_permissions: req.sandbox_permissions,
+                additional_permissions: req.additional_permissions.clone(),
+                justification: req.justification.clone(),
+                tty: None,
+            },
             command: req.hook_command.clone(),
         })
     }
@@ -233,12 +246,15 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
         let session_shell = ctx.session.user_shell();
+        let managed_network =
+            managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions);
+        let env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
         let command = maybe_wrap_shell_lc_with_snapshot(
             &req.command,
             session_shell.as_ref(),
             &req.cwd,
             &req.explicit_env_overrides,
-            &req.env,
+            &env,
         );
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell) {
             prefix_powershell_script_with_utf8(&command)
@@ -257,18 +273,18 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             }
         }
 
-        let command = build_sandbox_command(
-            &command,
-            &req.cwd,
-            &req.env,
-            req.additional_permissions.clone(),
-        )?;
+        let command =
+            build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())?;
+        let mut expiration: crate::exec::ExecExpiration = req.timeout_ms.into();
+        if let Some(cancellation) = attempt.network_denial_cancellation_token.clone() {
+            expiration = expiration.with_cancellation(cancellation);
+        }
         let options = ExecOptions {
-            expiration: req.timeout_ms.into(),
+            expiration,
             capture_policy: ExecCapturePolicy::ShellTool,
         };
         let env = attempt
-            .env_for(command, options, req.network.as_ref())
+            .env_for(command, options, managed_network)
             .map_err(|err| ToolError::Codex(err.into()))?;
         let out = execute_env(env, Self::stdout_stream(ctx))
             .await

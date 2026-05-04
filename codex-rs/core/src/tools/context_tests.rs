@@ -98,8 +98,10 @@ fn mcp_tool_output_response_item_includes_wall_time() {
             is_error: Some(false),
             meta: None,
         },
+        tool_input: json!({}),
         wall_time: std::time::Duration::from_millis(1250),
         original_image_detail_supported: false,
+        truncation_policy: TruncationPolicy::Bytes(1024),
     };
 
     let response = output.to_response_item(
@@ -137,6 +139,51 @@ fn mcp_tool_output_response_item_includes_wall_time() {
 }
 
 #[test]
+fn mcp_tool_output_response_item_truncates_large_structured_content() {
+    let output = McpToolOutput {
+        result: CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": "ignored when structured content is present",
+            })],
+            structured_content: Some(serde_json::json!({
+                "items": "large structured value ".repeat(1_000),
+            })),
+            is_error: Some(false),
+            meta: None,
+        },
+        tool_input: json!({}),
+        wall_time: std::time::Duration::from_millis(1250),
+        original_image_detail_supported: false,
+        truncation_policy: TruncationPolicy::Bytes(128),
+    };
+
+    let response = output.to_response_item(
+        "mcp-call-large",
+        &ToolPayload::Mcp {
+            server: "server".to_string(),
+            tool: "tool".to_string(),
+            raw_arguments: "{}".to_string(),
+        },
+    );
+
+    match response {
+        ResponseInputItem::FunctionCallOutput { call_id, output } => {
+            assert_eq!(call_id, "mcp-call-large");
+            assert_eq!(output.success, Some(true));
+            let text = output
+                .body
+                .to_text()
+                .expect("MCP output should serialize as text");
+            assert!(text.starts_with("Wall time: 1.2500 seconds\nOutput:\n"));
+            assert!(text.contains("chars truncated"));
+            assert!(!text.contains("ignored when structured content is present"));
+        }
+        other => panic!("expected FunctionCallOutput, got {other:?}"),
+    }
+}
+
+#[test]
 fn mcp_tool_output_response_item_preserves_content_items() {
     let image_url = "data:image/png;base64,AAA";
     let output = McpToolOutput {
@@ -150,8 +197,10 @@ fn mcp_tool_output_response_item_preserves_content_items() {
             is_error: Some(false),
             meta: None,
         },
+        tool_input: json!({}),
         wall_time: std::time::Duration::from_millis(500),
         original_image_detail_supported: false,
+        truncation_policy: TruncationPolicy::Bytes(1024),
     };
 
     let response = output.to_response_item(
@@ -191,6 +240,7 @@ fn mcp_tool_output_response_item_preserves_content_items() {
 
 #[test]
 fn mcp_tool_output_code_mode_result_stays_raw_call_tool_result() {
+    let large_content = "large structured value ".repeat(1_000);
     let output = McpToolOutput {
         result: CallToolResult {
             content: vec![serde_json::json!({
@@ -198,13 +248,15 @@ fn mcp_tool_output_code_mode_result_stays_raw_call_tool_result() {
                 "text": "ignored",
             })],
             structured_content: Some(serde_json::json!({
-                "content": "done",
+                "content": large_content,
             })),
             is_error: Some(false),
             meta: None,
         },
+        tool_input: json!({}),
         wall_time: std::time::Duration::from_millis(1250),
         original_image_detail_supported: false,
+        truncation_policy: TruncationPolicy::Bytes(64),
     };
 
     let result = output.code_mode_result(&ToolPayload::Mcp {
@@ -221,7 +273,7 @@ fn mcp_tool_output_code_mode_result_stays_raw_call_tool_result() {
                 "text": "ignored",
             }],
             "structuredContent": {
-                "content": "done",
+                "content": "large structured value ".repeat(1_000),
             },
             "isError": false,
         })
@@ -390,7 +442,7 @@ fn exec_command_tool_output_formats_truncated_response() {
         process_id: None,
         exit_code: Some(0),
         original_token_count: Some(10),
-        session_command: None,
+        hook_command: None,
     }
     .to_response_item("call-42", &payload);
 

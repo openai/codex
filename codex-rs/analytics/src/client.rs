@@ -1,5 +1,6 @@
 use crate::events::AppServerRpcTransport;
-use crate::events::GuardianReviewEventParams;
+use crate::events::GuardianReviewAnalyticsResult;
+use crate::events::GuardianReviewTrackContext;
 use crate::events::TrackEventRequest;
 use crate::events::TrackEventsRequest;
 use crate::events::current_runtime_metadata;
@@ -21,11 +22,13 @@ use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::ClientResponse;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerResponse;
 use codex_login::AuthManager;
 use codex_login::default_client::create_client;
 use codex_plugin::PluginTelemetryMetadata;
@@ -48,8 +51,7 @@ pub(crate) struct AnalyticsEventsQueue {
 
 #[derive(Clone)]
 pub struct AnalyticsEventsClient {
-    queue: AnalyticsEventsQueue,
-    analytics_enabled: Option<bool>,
+    queue: Option<AnalyticsEventsQueue>,
 }
 
 impl AnalyticsEventsQueue {
@@ -118,9 +120,13 @@ impl AnalyticsEventsClient {
         analytics_enabled: Option<bool>,
     ) -> Self {
         Self {
-            queue: AnalyticsEventsQueue::new(Arc::clone(&auth_manager), base_url),
-            analytics_enabled,
+            queue: (analytics_enabled != Some(false))
+                .then(|| AnalyticsEventsQueue::new(Arc::clone(&auth_manager), base_url)),
         }
+    }
+
+    pub fn disabled() -> Self {
+        Self { queue: None }
     }
 
     pub fn track_skill_invocations(
@@ -161,9 +167,13 @@ impl AnalyticsEventsClient {
         ));
     }
 
-    pub fn track_guardian_review(&self, input: GuardianReviewEventParams) {
+    pub fn track_guardian_review(
+        &self,
+        tracking: &GuardianReviewTrackContext,
+        result: GuardianReviewAnalyticsResult,
+    ) {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::GuardianReview(
-            Box::new(input),
+            Box::new(tracking.event_params(result)),
         )));
     }
 
@@ -176,16 +186,30 @@ impl AnalyticsEventsClient {
         )));
     }
 
-    pub fn track_request(&self, connection_id: u64, request_id: RequestId, request: ClientRequest) {
-        self.record_fact(AnalyticsFact::Request {
+    pub fn track_request(
+        &self,
+        connection_id: u64,
+        request_id: RequestId,
+        request: &ClientRequest,
+    ) {
+        if !matches!(
+            request,
+            ClientRequest::TurnStart { .. } | ClientRequest::TurnSteer { .. }
+        ) {
+            return;
+        }
+        self.record_fact(AnalyticsFact::ClientRequest {
             connection_id,
             request_id,
-            request: Box::new(request),
+            request: Box::new(request.clone()),
         });
     }
 
     pub fn track_app_used(&self, tracking: TrackEventsContext, app: AppInvocation) {
-        if !self.queue.should_enqueue_app_used(&tracking, &app) {
+        let Some(queue) = self.queue.as_ref() else {
+            return;
+        };
+        if !queue.should_enqueue_app_used(&tracking, &app) {
             return;
         }
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::AppUsed(
@@ -200,7 +224,10 @@ impl AnalyticsEventsClient {
     }
 
     pub fn track_plugin_used(&self, tracking: TrackEventsContext, plugin: PluginTelemetryMetadata) {
-        if !self.queue.should_enqueue_plugin_used(&tracking, &plugin) {
+        let Some(queue) = self.queue.as_ref() else {
+            return;
+        };
+        if !queue.should_enqueue_plugin_used(&tracking, &plugin) {
             return;
         }
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::PluginUsed(
@@ -263,15 +290,30 @@ impl AnalyticsEventsClient {
     }
 
     pub(crate) fn record_fact(&self, input: AnalyticsFact) {
-        if self.analytics_enabled == Some(false) {
-            return;
+        if let Some(queue) = self.queue.as_ref() {
+            queue.try_send(input);
         }
-        self.queue.try_send(input);
     }
 
-    pub fn track_response(&self, connection_id: u64, response: ClientResponse) {
-        self.record_fact(AnalyticsFact::Response {
+    pub fn track_response(
+        &self,
+        connection_id: u64,
+        request_id: RequestId,
+        response: ClientResponsePayload,
+    ) {
+        if !matches!(
+            response,
+            ClientResponsePayload::ThreadStart(_)
+                | ClientResponsePayload::ThreadResume(_)
+                | ClientResponsePayload::ThreadFork(_)
+                | ClientResponsePayload::TurnStart(_)
+                | ClientResponsePayload::TurnSteer(_)
+        ) {
+            return;
+        }
+        self.record_fact(AnalyticsFact::ClientResponse {
             connection_id,
+            request_id,
             response: Box::new(response),
         });
     }
@@ -294,10 +336,23 @@ impl AnalyticsEventsClient {
     pub fn track_notification(&self, notification: ServerNotification) {
         self.record_fact(AnalyticsFact::Notification(Box::new(notification)));
     }
+
+    pub fn track_server_request(&self, connection_id: u64, request: ServerRequest) {
+        self.record_fact(AnalyticsFact::ServerRequest {
+            connection_id,
+            request: Box::new(request),
+        });
+    }
+
+    pub fn track_server_response(&self, response: ServerResponse) {
+        self.record_fact(AnalyticsFact::ServerResponse {
+            response: Box::new(response),
+        });
+    }
 }
 
 async fn send_track_events(
-    auth_manager: &Arc<AuthManager>,
+    auth_manager: &AuthManager,
     base_url: &str,
     events: Vec<TrackEventRequest>,
 ) {
@@ -307,34 +362,22 @@ async fn send_track_events(
     let Some(auth) = auth_manager.auth().await else {
         return;
     };
-    if !auth.is_chatgpt_auth() {
+    if !auth.uses_codex_backend() {
         return;
     }
-    let Some(authorization_header_value) = auth_manager
-        .chatgpt_authorization_header_for_auth(&auth)
-        .await
-    else {
-        return;
-    };
-    let Some(account_id) = auth.get_account_id() else {
-        return;
-    };
 
     let base_url = base_url.trim_end_matches('/');
     let url = format!("{base_url}/codex/analytics-events/events");
     let payload = TrackEventsRequest { events };
 
-    let mut request = create_client()
+    let response = create_client()
         .post(&url)
         .timeout(ANALYTICS_EVENTS_TIMEOUT)
-        .header("authorization", authorization_header_value)
-        .header("chatgpt-account-id", &account_id)
+        .headers(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers())
         .header("Content-Type", "application/json")
-        .json(&payload);
-    if auth.is_fedramp_account() {
-        request = request.header("X-OpenAI-Fedramp", "true");
-    }
-    let response = request.send().await;
+        .json(&payload)
+        .send()
+        .await;
 
     match response {
         Ok(response) if response.status().is_success() => {}
@@ -348,3 +391,7 @@ async fn send_track_events(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;

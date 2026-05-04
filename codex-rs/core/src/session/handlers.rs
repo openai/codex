@@ -14,32 +14,32 @@ use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
 
 use crate::config::Config;
-use crate::config_loader::CloudRequirementsLoader;
-use crate::config_loader::LoaderOverrides;
-use crate::config_loader::load_config_layers_state;
 use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
 use crate::realtime_context::truncate_realtime_text_to_token_budget;
 use crate::realtime_conversation::REALTIME_USER_TEXT_PREFIX;
 use crate::realtime_conversation::prefix_realtime_v2_text;
 use crate::session::spawn_review_thread;
+use codex_config::CloudRequirementsLoader;
+use codex_config::LoaderOverrides;
+use codex_config::loader::load_config_layers_state;
 use codex_exec_server::LOCAL_FS;
-use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::review_prompts::resolve_review_request;
-use crate::rollout::RolloutRecorder;
-use crate::rollout::read_session_meta_line;
 use crate::tasks::CompactTask;
-use crate::tasks::UndoTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
 use codex_mcp::collect_mcp_snapshot_from_manager;
 use codex_mcp::compute_auth_statuses;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GuardianAssessmentEvent;
+use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::McpServerRefreshConfig;
@@ -131,6 +131,7 @@ pub(super) async fn user_input_or_turn_inner(
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
+            permission_profile,
             model,
             effort,
             summary,
@@ -139,6 +140,7 @@ pub(super) async fn user_input_or_turn_inner(
             items,
             collaboration_mode,
             personality,
+            environments,
         } => {
             let collaboration_mode = collaboration_mode.or_else(|| {
                 Some(CollaborationMode {
@@ -157,11 +159,14 @@ pub(super) async fn user_input_or_turn_inner(
                     approval_policy: Some(approval_policy),
                     approvals_reviewer,
                     sandbox_policy: Some(sandbox_policy),
+                    permission_profile,
+                    active_permission_profile: None,
                     windows_sandbox_level: None,
                     collaboration_mode,
                     reasoning_summary: summary,
                     service_tier,
                     final_output_json_schema: Some(final_output_json_schema),
+                    environments,
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
@@ -169,14 +174,68 @@ pub(super) async fn user_input_or_turn_inner(
                 None,
             )
         }
+        Op::UserInputWithTurnContext {
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            permission_profile,
+            active_permission_profile,
+            windows_sandbox_level,
+            model,
+            effort,
+            summary,
+            service_tier,
+            final_output_json_schema,
+            items,
+            responsesapi_client_metadata,
+            collaboration_mode,
+            personality,
+            environments,
+        } => {
+            let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
+                Some(collab_mode)
+            } else {
+                let state = sess.state.lock().await;
+                Some(
+                    state
+                        .session_configuration
+                        .collaboration_mode
+                        .with_updates(model, effort, /*developer_instructions*/ None),
+                )
+            };
+            (
+                items,
+                SessionSettingsUpdate {
+                    cwd,
+                    approval_policy,
+                    approvals_reviewer,
+                    sandbox_policy,
+                    permission_profile,
+                    active_permission_profile,
+                    windows_sandbox_level,
+                    collaboration_mode,
+                    reasoning_summary: summary,
+                    service_tier,
+                    final_output_json_schema: Some(final_output_json_schema),
+                    environments,
+                    personality,
+                    app_server_client_name: None,
+                    app_server_client_version: None,
+                },
+                responsesapi_client_metadata,
+            )
+        }
         Op::UserInput {
             items,
+            environments,
             final_output_json_schema,
             responsesapi_client_metadata,
         } => (
             items,
             SessionSettingsUpdate {
                 final_output_json_schema: Some(final_output_json_schema),
+                environments,
                 ..Default::default()
             },
             responsesapi_client_metadata,
@@ -475,26 +534,19 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
 pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
     let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
     let auth = sess.services.auth_manager.auth().await;
-    let background_authorization_header_value = if let Some(auth) = auth.as_ref() {
-        sess.services
-            .auth_manager
-            .chatgpt_authorization_header_for_auth(auth)
-            .await
-    } else {
-        None
-    };
     let mcp_servers = sess
         .services
         .mcp_manager
-        .effective_servers_with_authorization_header(
-            config,
-            auth.as_ref(),
-            background_authorization_header_value.as_deref(),
-        )
+        .effective_servers(config, auth.as_ref())
         .await;
     let snapshot = collect_mcp_snapshot_from_manager(
         &mcp_connection_manager,
-        compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode).await,
+        compute_auth_statuses(
+            mcp_servers.iter(),
+            config.mcp_oauth_credentials_store_mode,
+            auth.as_ref(),
+        )
+        .await,
     )
     .await;
     let event = Event {
@@ -519,8 +571,8 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
     let plugins_manager = &sess.services.plugins_manager;
     let fs = sess
         .services
-        .environment
-        .as_ref()
+        .environment_manager
+        .default_environment()
         .map(|environment| environment.get_filesystem());
     let config = sess.get_config().await;
     let codex_home = sess.codex_home().await;
@@ -550,7 +602,6 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
             &codex_config::NoopThreadConfigLoader,
-            /*host_name*/ None,
         )
         .await
         {
@@ -568,11 +619,9 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
                 continue;
             }
         };
+        let plugins_input = config.plugins_config_input();
         let effective_skill_roots = plugins_manager
-            .effective_skill_roots_for_layer_stack(
-                &config_layer_stack,
-                config.features.enabled(Feature::Plugins),
-            )
+            .effective_skill_roots_for_layer_stack(&config_layer_stack, &plugins_input)
             .await;
         let skills_input = crate::SkillsLoadInput::new(
             cwd_abs.clone(),
@@ -599,12 +648,6 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
     sess.send_event_raw(event).await;
 }
 
-pub async fn undo(sess: &Arc<Session>, sub_id: String) {
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-    sess.spawn_task(turn_context, Vec::new(), UndoTask::new())
-        .await;
-}
-
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
@@ -617,66 +660,6 @@ pub async fn compact(sess: &Arc<Session>, sub_id: String) {
         }],
         CompactTask,
     )
-    .await;
-}
-
-pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
-    let mut errors = Vec::new();
-
-    if let Some(state_db) = sess.services.state_db.as_deref() {
-        if let Err(err) = state_db.clear_memory_data().await {
-            errors.push(format!("failed clearing memory rows from state db: {err}"));
-        }
-    } else {
-        errors.push("state db unavailable; memory rows were not cleared".to_string());
-    }
-
-    if let Err(err) = crate::memories::clear_memory_roots_contents(&config.codex_home).await {
-        errors.push(format!(
-            "failed clearing memory directories under {}: {err}",
-            config.codex_home.display()
-        ));
-    }
-
-    if errors.is_empty() {
-        let memory_root = crate::memories::memory_root(&config.codex_home);
-        sess.send_event_raw(Event {
-            id: sub_id,
-            msg: EventMsg::Warning(WarningEvent {
-                message: format!(
-                    "Dropped memories at {} and cleared memory rows from state db.",
-                    memory_root.display()
-                ),
-            }),
-        })
-        .await;
-        return;
-    }
-
-    sess.send_event_raw(Event {
-        id: sub_id,
-        msg: EventMsg::Error(ErrorEvent {
-            message: format!("Memory drop completed with errors: {}", errors.join("; ")),
-            codex_error_info: Some(CodexErrorInfo::Other),
-        }),
-    })
-    .await;
-}
-
-pub async fn update_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
-    let session_source = {
-        let state = sess.state.lock().await;
-        state.session_configuration.session_source.clone()
-    };
-
-    crate::memories::start_memories_startup_task(sess, Arc::clone(config), &session_source);
-
-    sess.send_event_raw(Event {
-        id: sub_id.clone(),
-        msg: EventMsg::Warning(WarningEvent {
-            message: "Memory update triggered.".to_string(),
-        }),
-    })
     .await;
 }
 
@@ -707,36 +690,25 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
     }
 
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-    let rollout_path = {
-        let recorder = {
-            let guard = sess.services.rollout.lock().await;
-            guard.clone()
-        };
-        let Some(recorder) = recorder else {
+    let live_thread = match sess.live_thread_for_persistence("rollback thread") {
+        Ok(live_thread) => live_thread,
+        Err(_) => {
             sess.send_event_raw(Event {
                 id: turn_context.sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
-                    message: "thread rollback requires a persisted rollout path".to_string(),
+                    message: "thread rollback requires persisted thread history".to_string(),
                     codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
                 }),
             })
             .await;
             return;
-        };
-        recorder.rollout_path().to_path_buf()
+        }
     };
-    if let Some(recorder) = {
-        let guard = sess.services.rollout.lock().await;
-        guard.clone()
-    } && let Err(err) = recorder.flush().await
-    {
+    if let Err(err) = live_thread.flush().await {
         sess.send_event_raw(Event {
             id: turn_context.sub_id.clone(),
             msg: EventMsg::Error(ErrorEvent {
-                message: format!(
-                    "failed to flush rollout `{}` for rollback replay: {err}",
-                    rollout_path.display()
-                ),
+                message: format!("failed to flush thread persistence for rollback replay: {err}"),
                 codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
             }),
         })
@@ -744,16 +716,13 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         return;
     }
 
-    let initial_history = match RolloutRecorder::get_rollout_history(rollout_path.as_path()).await {
+    let stored_history = match live_thread.load_history(/*include_archived*/ false).await {
         Ok(history) => history,
         Err(err) => {
             sess.send_event_raw(Event {
                 id: turn_context.sub_id.clone(),
                 msg: EventMsg::Error(ErrorEvent {
-                    message: format!(
-                        "failed to load rollout `{}` for rollback replay: {err}",
-                        rollout_path.display()
-                    ),
+                    message: format!("failed to load thread history for rollback replay: {err}"),
                     codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
                 }),
             })
@@ -764,8 +733,8 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
 
     let rollback_event = ThreadRolledBackEvent { num_turns };
     let rollback_msg = EventMsg::ThreadRolledBack(rollback_event.clone());
-    let replay_items = initial_history
-        .get_rollout_items()
+    let replay_items = stored_history
+        .items
         .into_iter()
         .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
         .collect::<Vec<_>>();
@@ -800,14 +769,12 @@ async fn persist_thread_name_update(
 ) -> anyhow::Result<EventMsg> {
     let msg = EventMsg::ThreadNameUpdated(event);
     let item = RolloutItem::EventMsg(msg.clone());
-    let recorder = {
-        let guard = sess.services.rollout.lock().await;
-        guard.clone()
-    }
-    .ok_or_else(|| anyhow::anyhow!("Session persistence is disabled; cannot rename thread."))?;
-    recorder.persist().await?;
-    recorder.record_items(std::slice::from_ref(&item)).await?;
-    recorder.flush().await?;
+    let live_thread = sess.live_thread_for_persistence("rename thread")?;
+    live_thread.persist().await?;
+    live_thread
+        .append_items(std::slice::from_ref(&item))
+        .await?;
+    live_thread.flush().await?;
     Ok(msg)
 }
 
@@ -815,36 +782,13 @@ pub(super) async fn persist_thread_memory_mode_update(
     sess: &Arc<Session>,
     mode: ThreadMemoryMode,
 ) -> anyhow::Result<()> {
-    let recorder = {
-        let guard = sess.services.rollout.lock().await;
-        guard.clone()
-    }
-    .ok_or_else(|| {
-        anyhow::anyhow!("Session persistence is disabled; cannot update thread memory mode.")
-    })?;
-    recorder.persist().await?;
-    recorder.flush().await?;
-
-    let rollout_path = recorder.rollout_path().to_path_buf();
-    let mut session_meta = read_session_meta_line(rollout_path.as_path()).await?;
-    if session_meta.meta.id != sess.conversation_id {
-        anyhow::bail!(
-            "rollout session metadata id mismatch: expected {}, found {}",
-            sess.conversation_id,
-            session_meta.meta.id
-        );
-    }
-    session_meta.meta.memory_mode = Some(
-        match mode {
-            ThreadMemoryMode::Enabled => "enabled",
-            ThreadMemoryMode::Disabled => "disabled",
-        }
-        .to_string(),
-    );
-
-    let item = RolloutItem::SessionMeta(session_meta);
-    recorder.record_items(std::slice::from_ref(&item)).await?;
-    recorder.flush().await?;
+    let live_thread = sess.live_thread_for_persistence("update thread memory mode")?;
+    live_thread.persist().await?;
+    live_thread.flush().await?;
+    live_thread
+        .update_memory_mode(mode, /*include_archived*/ false)
+        .await?;
+    live_thread.flush().await?;
     Ok(())
 }
 
@@ -932,6 +876,11 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         .unified_exec_manager
         .terminate_all_processes()
         .await;
+    let mcp_shutdown = {
+        let mut manager = sess.services.mcp_connection_manager.write().await;
+        manager.begin_shutdown()
+    };
+    mcp_shutdown.await;
     sess.guardian_review_session.shutdown().await;
     info!("Shutting down Codex instance");
     let history = sess.clone_history().await;
@@ -946,20 +895,16 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         &[],
     );
 
-    // Gracefully flush and shutdown rollout recorder on session end so tests
-    // that inspect the rollout file do not race with the background writer.
-    let recorder_opt = {
-        let mut guard = sess.services.rollout.lock().await;
-        guard.take()
-    };
-    if let Some(rec) = recorder_opt
-        && let Err(e) = rec.shutdown().await
+    // Gracefully flush and shutdown thread persistence on session end so tests
+    // that inspect durable state do not race with the background writer.
+    if let Some(live_thread) = sess.live_thread()
+        && let Err(e) = live_thread.shutdown().await
     {
-        warn!("failed to shutdown rollout recorder: {e}");
+        warn!("failed to shutdown thread persistence: {e}");
         let event = Event {
             id: sub_id.clone(),
             msg: EventMsg::Error(ErrorEvent {
-                message: "Failed to shutdown rollout recorder".to_string(),
+                message: "Failed to shutdown thread persistence".to_string(),
                 codex_error_info: Some(CodexErrorInfo::Other),
             }),
         };
@@ -970,7 +915,13 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         id: sub_id,
         msg: EventMsg::ShutdownComplete,
     };
-    sess.send_event_raw(event).await;
+    sess.services
+        .rollout_thread_trace
+        .record_protocol_event(&event.msg);
+    sess.deliver_event_raw(event).await;
+    sess.services
+        .rollout_thread_trace
+        .record_ended(codex_rollout_trace::RolloutStatus::Completed);
     true
 }
 
@@ -1063,6 +1014,7 @@ pub(super) async fn submission_loop(
                     approval_policy,
                     approvals_reviewer,
                     sandbox_policy,
+                    permission_profile,
                     windows_sandbox_level,
                     model,
                     effort,
@@ -1089,6 +1041,7 @@ pub(super) async fn submission_loop(
                             approval_policy,
                             approvals_reviewer,
                             sandbox_policy,
+                            permission_profile,
                             windows_sandbox_level,
                             collaboration_mode: Some(collaboration_mode),
                             reasoning_summary: summary,
@@ -1100,7 +1053,9 @@ pub(super) async fn submission_loop(
                     .await;
                     false
                 }
-                Op::UserInput { .. } | Op::UserTurn { .. } => {
+                Op::UserInput { .. }
+                | Op::UserInputWithTurnContext { .. }
+                | Op::UserTurn { .. } => {
                     user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
@@ -1156,20 +1111,8 @@ pub(super) async fn submission_loop(
                     list_skills(&sess, sub.id.clone(), cwds, force_reload).await;
                     false
                 }
-                Op::Undo => {
-                    undo(&sess, sub.id.clone()).await;
-                    false
-                }
                 Op::Compact => {
                     compact(&sess, sub.id.clone()).await;
-                    false
-                }
-                Op::DropMemories => {
-                    drop_memories(&sess, &config, sub.id.clone()).await;
-                    false
-                }
-                Op::UpdateMemories => {
-                    update_memories(&sess, &config, sub.id.clone()).await;
                     false
                 }
                 Op::ThreadRollback { num_turns } => {
@@ -1204,6 +1147,10 @@ pub(super) async fn submission_loop(
                     review(&sess, &config, sub.id.clone(), review_request).await;
                     false
                 }
+                Op::ApproveGuardianDeniedAction { event } => {
+                    approve_guardian_denied_action(&sess, event).await;
+                    false
+                }
                 _ => false, // Ignore unknown ops; enum is non_exhaustive to allow extensions.
             }
         }
@@ -1213,10 +1160,62 @@ pub(super) async fn submission_loop(
             break;
         }
     }
-    // Also drain cached guardian state if the submission loop exits because
-    // the channel closed without receiving an explicit shutdown op.
+    // If the submission loop exits because the channel closed without an
+    // explicit shutdown op, still run process teardown for child processes
+    // owned by this session.
+    sess.services
+        .unified_exec_manager
+        .terminate_all_processes()
+        .await;
+    let mcp_shutdown = {
+        let mut manager = sess.services.mcp_connection_manager.write().await;
+        manager.begin_shutdown()
+    };
+    mcp_shutdown.await;
+    // Also drain cached guardian state on this implicit shutdown path.
     sess.guardian_review_session.shutdown().await;
     debug!("Agent loop exited");
+}
+
+async fn approve_guardian_denied_action(sess: &Arc<Session>, event: GuardianAssessmentEvent) {
+    if event.status != GuardianAssessmentStatus::Denied {
+        warn!(
+            review_id = event.id.as_str(),
+            "ignoring approval for non-denied Guardian assessment"
+        );
+        return;
+    }
+
+    let approved_action = serde_json::json!({
+        "action": &event.action,
+        "outcome": "allowed",
+    });
+    let approved_action_json = match serde_json::to_string_pretty(&approved_action) {
+        Ok(approved_action_json) => approved_action_json,
+        Err(error) => {
+            warn!(%error, review_id = event.id.as_str(), "failed to serialize approved Guardian action");
+            return;
+        }
+    };
+    let approval_prefix = crate::guardian::AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX;
+    let text = format!(
+        r#"{approval_prefix}
+
+Treat this as approval to perform that exact action in the same context in which it was originally requested.
+Do not assume this also authorizes similar operations with different payloads.
+
+Approved action:
+{approved_action_json}"#,
+    );
+    let items = vec![ResponseInputItem::Message {
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText { text }],
+        phase: None,
+    }];
+
+    if let Err(items) = sess.inject_response_items(items).await {
+        sess.queue_response_items_for_next_turn(items).await;
+    }
 }
 
 pub(super) fn submission_dispatch_span(sub: &Submission) -> tracing::Span {

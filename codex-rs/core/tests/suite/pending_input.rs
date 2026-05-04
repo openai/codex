@@ -3,11 +3,11 @@ use std::sync::Arc;
 use codex_core::CodexThread;
 use codex_protocol::AgentPath;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -25,6 +25,7 @@ use core_test_support::streaming_sse::StreamingSseServer;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -95,6 +96,7 @@ async fn build_codex(server: &StreamingSseServer) -> Arc<CodexThread> {
 async fn submit_user_input(codex: &CodexThread, text: &str) {
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: text.to_string(),
                 text_elements: Vec::new(),
@@ -107,8 +109,11 @@ async fn submit_user_input(codex: &CodexThread, text: &str) {
 }
 
 async fn submit_danger_full_access_user_turn(test: &TestCodex, text: &str) {
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: text.to_string(),
                 text_elements: Vec::new(),
@@ -117,7 +122,8 @@ async fn submit_danger_full_access_user_turn(test: &TestCodex, text: &str) {
             cwd: test.config.cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            sandbox_policy,
+            permission_profile,
             model: test.session_configured.model.clone(),
             effort: None,
             summary: None,
@@ -272,6 +278,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "first prompt".into(),
                 text_elements: Vec::new(),
@@ -289,6 +296,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "second prompt".into(),
                 text_elements: Vec::new(),
@@ -667,12 +675,24 @@ async fn steered_user_input_follows_compact_when_only_the_steer_needs_follow_up(
 async fn steered_user_input_waits_when_tool_output_triggers_compact_before_next_request() {
     let (gate_first_completed_tx, gate_first_completed_rx) = oneshot::channel();
 
+    let large_output_command = if cfg!(windows) {
+        "[Console]::Out.Write([string]::new([char]'0', 4000))"
+    } else {
+        "printf '%04000d' 0"
+    };
+    let large_output_args = json!({
+        "command": large_output_command,
+        "login": false,
+        "timeout_ms": 2000,
+    })
+    .to_string();
+
     let first_chunks = vec![
         chunk(ev_response_created("resp-1")),
         chunk(ev_function_call(
             "call-1",
             "shell_command",
-            r#"{"command":"printf '%04000d' 0","login":false,"timeout_ms":2000}"#,
+            &large_output_args,
         )),
         gated_chunk(
             gate_first_completed_rx,

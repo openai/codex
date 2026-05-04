@@ -4,7 +4,12 @@ from pathlib import Path
 from typing import Any
 
 from codex_app_server.client import AppServerClient, _params_dict
-from codex_app_server.generated.v2_all import ThreadListParams, ThreadTokenUsageUpdatedNotification
+from codex_app_server.generated.v2_all import (
+    ApprovalsReviewer,
+    ThreadListParams,
+    ThreadResumeResponse,
+    ThreadTokenUsageUpdatedNotification,
+)
 from codex_app_server.models import UnknownNotification
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +43,34 @@ def test_generated_params_models_are_snake_case_and_dump_by_alias() -> None:
 def test_generated_v2_bundle_has_single_shared_plan_type_definition() -> None:
     source = (ROOT / "src" / "codex_app_server" / "generated" / "v2_all.py").read_text()
     assert source.count("class PlanType(") == 1
+
+
+def test_thread_resume_response_accepts_auto_review_reviewer() -> None:
+    response = ThreadResumeResponse.model_validate(
+        {
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "auto_review",
+            "cwd": "/tmp",
+            "model": "gpt-5",
+            "modelProvider": "openai",
+            "sandbox": {"type": "dangerFullAccess"},
+            "thread": {
+                "cliVersion": "1.0.0",
+                "createdAt": 1,
+                "cwd": "/tmp",
+                "ephemeral": False,
+                "id": "thread-1",
+                "modelProvider": "openai",
+                "preview": "",
+                "source": "cli",
+                "status": {"type": "idle"},
+                "turns": [],
+                "updatedAt": 1,
+            },
+        }
+    )
+
+    assert response.approvals_reviewer is ApprovalsReviewer.auto_review
 
 
 def test_notifications_are_typed_with_canonical_v2_methods() -> None:
@@ -89,7 +122,9 @@ def test_unknown_notifications_fall_back_to_unknown_payloads() -> None:
 
 def test_invalid_notification_payload_falls_back_to_unknown() -> None:
     client = AppServerClient()
-    event = client._coerce_notification("thread/tokenUsage/updated", {"threadId": "missing"})
+    event = client._coerce_notification(
+        "thread/tokenUsage/updated", {"threadId": "missing"}
+    )
 
     assert event.method == "thread/tokenUsage/updated"
     assert isinstance(event.payload, UnknownNotification)

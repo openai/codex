@@ -1,17 +1,27 @@
 #[cfg(test)]
 use super::*;
 #[cfg(test)]
+use crate::linux_run_main::install_bwrap_signal_forwarders;
+#[cfg(test)]
+use crate::linux_run_main::wait_for_bwrap_child;
+#[cfg(test)]
+use codex_protocol::models::PermissionProfile;
+#[cfg(test)]
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 #[cfg(test)]
 use codex_protocol::protocol::NetworkSandboxPolicy;
 #[cfg(test)]
-use codex_protocol::protocol::ReadOnlyAccess;
-#[cfg(test)]
-use codex_protocol::protocol::SandboxPolicy;
-#[cfg(test)]
 use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(test)]
 use pretty_assertions::assert_eq;
+
+fn read_only_permission_profile() -> PermissionProfile {
+    PermissionProfile::read_only()
+}
+
+fn read_only_file_system_policy() -> FileSystemSandboxPolicy {
+    read_only_permission_profile().file_system_sandbox_policy()
+}
 
 #[test]
 fn detects_proc_mount_invalid_argument_failure() {
@@ -39,10 +49,10 @@ fn ignores_non_proc_mount_errors() {
 
 #[test]
 fn inserts_bwrap_argv0_before_command_separator() {
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let file_system_sandbox_policy = read_only_file_system_policy();
     let mut argv = build_bwrap_argv(
         vec!["/bin/true".to_string()],
-        &FileSystemSandboxPolicy::from(&sandbox_policy),
+        &file_system_sandbox_policy,
         Path::new("/"),
         Path::new("/"),
         BwrapOptions {
@@ -82,10 +92,10 @@ fn inserts_bwrap_argv0_before_command_separator() {
 
 #[test]
 fn rewrites_inner_command_path_when_bwrap_lacks_argv0() {
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let file_system_sandbox_policy = read_only_file_system_policy();
     let mut argv = build_bwrap_argv(
         vec!["/bin/true".to_string()],
-        &FileSystemSandboxPolicy::from(&sandbox_policy),
+        &file_system_sandbox_policy,
         Path::new("/"),
         Path::new("/"),
         BwrapOptions {
@@ -150,10 +160,10 @@ fn rewrites_bwrap_helper_command_not_nested_user_command_when_current_exe_appear
 
 #[test]
 fn inserts_unshare_net_when_network_isolation_requested() {
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let file_system_sandbox_policy = read_only_file_system_policy();
     let argv = build_bwrap_argv(
         vec!["/bin/true".to_string()],
-        &FileSystemSandboxPolicy::from(&sandbox_policy),
+        &file_system_sandbox_policy,
         Path::new("/"),
         Path::new("/"),
         BwrapOptions {
@@ -168,10 +178,10 @@ fn inserts_unshare_net_when_network_isolation_requested() {
 
 #[test]
 fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let file_system_sandbox_policy = read_only_file_system_policy();
     let argv = build_bwrap_argv(
         vec!["/bin/true".to_string()],
-        &FileSystemSandboxPolicy::from(&sandbox_policy),
+        &file_system_sandbox_policy,
         Path::new("/"),
         Path::new("/"),
         BwrapOptions {
@@ -202,7 +212,9 @@ fn split_only_filesystem_policy_requires_direct_runtime_enforcement() {
     let policy = FileSystemSandboxPolicy::restricted(vec![
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Special {
-                value: codex_protocol::permissions::FileSystemSpecialPath::CurrentWorkingDirectory,
+                value: codex_protocol::permissions::FileSystemSpecialPath::project_roots(
+                    /*subpath*/ None,
+                ),
             },
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
         },
@@ -250,7 +262,7 @@ fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
     let argv = build_preflight_bwrap_argv(
         Path::new("/"),
         Path::new("/"),
-        &FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
+        &FileSystemSandboxPolicy::unrestricted(),
         mode,
     )
     .args;
@@ -258,14 +270,186 @@ fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
 }
 
 #[test]
+fn cleanup_synthetic_mount_targets_removes_only_empty_mount_targets() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let empty_file = temp_dir.path().join(".git");
+    let empty_dir = temp_dir.path().join(".agents");
+    let non_empty_file = temp_dir.path().join("non-empty");
+    let missing_file = temp_dir.path().join(".missing");
+    std::fs::write(&empty_file, "").expect("write empty file");
+    std::fs::create_dir(&empty_dir).expect("create empty dir");
+    std::fs::write(&non_empty_file, "keep").expect("write nonempty file");
+
+    let registrations = register_synthetic_mount_targets(&[
+        crate::bwrap::SyntheticMountTarget::missing(&empty_file),
+        crate::bwrap::SyntheticMountTarget::missing_empty_directory(&empty_dir),
+        crate::bwrap::SyntheticMountTarget::missing(&non_empty_file),
+        crate::bwrap::SyntheticMountTarget::missing(&missing_file),
+    ]);
+    cleanup_synthetic_mount_targets(&registrations);
+
+    assert!(!empty_file.exists());
+    assert!(!empty_dir.exists());
+    assert_eq!(
+        std::fs::read_to_string(&non_empty_file).expect("read nonempty file"),
+        "keep"
+    );
+    assert!(!missing_file.exists());
+}
+
+#[test]
+fn cleanup_synthetic_mount_targets_waits_for_other_active_registrations() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let empty_file = temp_dir.path().join(".git");
+    std::fs::write(&empty_file, "").expect("write empty file");
+    let target = crate::bwrap::SyntheticMountTarget::missing(&empty_file);
+
+    let registrations = register_synthetic_mount_targets(std::slice::from_ref(&target));
+    let active_marker = registrations[0].marker_dir.join("1");
+    std::fs::write(&active_marker, "").expect("write active marker");
+
+    cleanup_synthetic_mount_targets(&registrations);
+    assert!(empty_file.exists());
+
+    std::fs::remove_file(active_marker).expect("remove active marker");
+    let registrations = register_synthetic_mount_targets(std::slice::from_ref(&target));
+    cleanup_synthetic_mount_targets(&registrations);
+
+    assert!(!empty_file.exists());
+}
+
+#[test]
+fn cleanup_synthetic_mount_targets_removes_transient_file_after_concurrent_owner_exits() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let empty_file = temp_dir.path().join(".git");
+    let first_target = crate::bwrap::SyntheticMountTarget::missing(&empty_file);
+
+    let first_registrations = register_synthetic_mount_targets(&[first_target]);
+    std::fs::write(&empty_file, "").expect("write transient empty file");
+    let active_marker = first_registrations[0].marker_dir.join("1");
+    std::fs::write(&active_marker, SYNTHETIC_MOUNT_MARKER_SYNTHETIC).expect("write active marker");
+    let metadata = std::fs::symlink_metadata(&empty_file).expect("stat empty file");
+    let second_target =
+        crate::bwrap::SyntheticMountTarget::existing_empty_file(&empty_file, &metadata);
+    let second_registrations = register_synthetic_mount_targets(&[second_target]);
+
+    cleanup_synthetic_mount_targets(&first_registrations);
+    assert!(empty_file.exists());
+
+    std::fs::remove_file(active_marker).expect("remove active marker");
+    cleanup_synthetic_mount_targets(&second_registrations);
+
+    assert!(!empty_file.exists());
+}
+
+#[test]
+fn cleanup_synthetic_mount_targets_preserves_real_pre_existing_empty_file() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let empty_file = temp_dir.path().join(".git");
+    std::fs::write(&empty_file, "").expect("write pre-existing empty file");
+    let metadata = std::fs::symlink_metadata(&empty_file).expect("stat empty file");
+    let first_target =
+        crate::bwrap::SyntheticMountTarget::existing_empty_file(&empty_file, &metadata);
+    let second_target =
+        crate::bwrap::SyntheticMountTarget::existing_empty_file(&empty_file, &metadata);
+
+    let first_registrations = register_synthetic_mount_targets(&[first_target]);
+    let second_registrations = register_synthetic_mount_targets(&[second_target]);
+
+    cleanup_synthetic_mount_targets(&first_registrations);
+    cleanup_synthetic_mount_targets(&second_registrations);
+
+    assert!(empty_file.exists());
+}
+
+#[test]
+fn cleanup_protected_create_targets_removes_created_path_and_reports_violation() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let dot_git = temp_dir.path().join(".git");
+    let target = crate::bwrap::ProtectedCreateTarget::missing(&dot_git);
+
+    let registrations = register_protected_create_targets(&[target]);
+    std::fs::create_dir(&dot_git).expect("create protected path");
+    let violation = cleanup_protected_create_targets(&registrations);
+
+    assert!(violation);
+    assert!(!dot_git.exists());
+}
+
+#[test]
+fn cleanup_protected_create_targets_waits_for_other_active_registrations() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let dot_git = temp_dir.path().join(".git");
+    let target = crate::bwrap::ProtectedCreateTarget::missing(&dot_git);
+
+    let registrations = register_protected_create_targets(std::slice::from_ref(&target));
+    let active_marker = registrations[0].marker_dir.join("1");
+    std::fs::write(&active_marker, PROTECTED_CREATE_MARKER).expect("write active marker");
+    std::fs::write(&dot_git, "").expect("create protected path");
+
+    let violation = cleanup_protected_create_targets(&registrations);
+    assert!(violation);
+    assert!(dot_git.exists());
+
+    std::fs::remove_file(active_marker).expect("remove active marker");
+    let registrations = register_protected_create_targets(std::slice::from_ref(&target));
+    let violation = cleanup_protected_create_targets(&registrations);
+
+    assert!(violation);
+    assert!(!dot_git.exists());
+}
+
+#[test]
+fn bwrap_signal_forwarder_terminates_child_and_keeps_parent_alive() {
+    let supervisor_pid = unsafe { libc::fork() };
+    assert!(supervisor_pid >= 0, "failed to fork supervisor");
+
+    if supervisor_pid == 0 {
+        run_bwrap_signal_forwarder_test_supervisor();
+    }
+
+    let status = wait_for_bwrap_child(supervisor_pid);
+    assert!(libc::WIFEXITED(status), "supervisor status: {status}");
+    assert_eq!(libc::WEXITSTATUS(status), 0);
+}
+
+#[cfg(test)]
+fn run_bwrap_signal_forwarder_test_supervisor() -> ! {
+    let child_pid = unsafe { libc::fork() };
+    if child_pid < 0 {
+        unsafe {
+            libc::_exit(2);
+        }
+    }
+
+    if child_pid == 0 {
+        loop {
+            unsafe {
+                libc::pause();
+            }
+        }
+    }
+
+    install_bwrap_signal_forwarders(child_pid);
+    unsafe {
+        libc::raise(libc::SIGTERM);
+    }
+
+    let status = wait_for_bwrap_child(child_pid);
+    let child_terminated_by_sigterm =
+        libc::WIFSIGNALED(status) && libc::WTERMSIG(status) == libc::SIGTERM;
+    unsafe {
+        libc::_exit(if child_terminated_by_sigterm { 0 } else { 1 });
+    }
+}
+
+#[test]
 fn managed_proxy_inner_command_includes_route_spec() {
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let permission_profile = read_only_permission_profile();
     let args = build_inner_seccomp_command(InnerSeccompCommandArgs {
         sandbox_policy_cwd: Path::new("/tmp"),
         command_cwd: Some(Path::new("/tmp/link")),
-        sandbox_policy: &sandbox_policy,
-        file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
-        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        permission_profile: &permission_profile,
         allow_network_for_proxy: true,
         proxy_route_spec: Some("{\"routes\":[]}".to_string()),
         command: vec!["/bin/true".to_string()],
@@ -276,21 +460,18 @@ fn managed_proxy_inner_command_includes_route_spec() {
 }
 
 #[test]
-fn inner_command_includes_split_policy_flags() {
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+fn inner_command_includes_permission_profile_flag() {
+    let permission_profile = read_only_permission_profile();
     let args = build_inner_seccomp_command(InnerSeccompCommandArgs {
         sandbox_policy_cwd: Path::new("/tmp"),
         command_cwd: Some(Path::new("/tmp/link")),
-        sandbox_policy: &sandbox_policy,
-        file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
-        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        permission_profile: &permission_profile,
         allow_network_for_proxy: false,
         proxy_route_spec: None,
         command: vec!["/bin/true".to_string()],
     });
 
-    assert!(args.iter().any(|arg| arg == "--file-system-sandbox-policy"));
-    assert!(args.iter().any(|arg| arg == "--network-sandbox-policy"));
+    assert!(args.iter().any(|arg| arg == "--permission-profile"));
     assert!(
         args.windows(2)
             .any(|window| { window == ["--command-cwd", "/tmp/link"] })
@@ -299,13 +480,11 @@ fn inner_command_includes_split_policy_flags() {
 
 #[test]
 fn non_managed_inner_command_omits_route_spec() {
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let permission_profile = read_only_permission_profile();
     let args = build_inner_seccomp_command(InnerSeccompCommandArgs {
         sandbox_policy_cwd: Path::new("/tmp"),
         command_cwd: Some(Path::new("/tmp/link")),
-        sandbox_policy: &sandbox_policy,
-        file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
-        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        permission_profile: &permission_profile,
         allow_network_for_proxy: false,
         proxy_route_spec: None,
         command: vec!["/bin/true".to_string()],
@@ -317,13 +496,11 @@ fn non_managed_inner_command_omits_route_spec() {
 #[test]
 fn managed_proxy_inner_command_requires_route_spec() {
     let result = std::panic::catch_unwind(|| {
-        let sandbox_policy = SandboxPolicy::new_read_only_policy();
+        let permission_profile = read_only_permission_profile();
         build_inner_seccomp_command(InnerSeccompCommandArgs {
             sandbox_policy_cwd: Path::new("/tmp"),
             command_cwd: Some(Path::new("/tmp/link")),
-            sandbox_policy: &sandbox_policy,
-            file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
-            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+            permission_profile: &permission_profile,
             allow_network_for_proxy: true,
             proxy_route_spec: None,
             command: vec!["/bin/true".to_string()],
@@ -333,89 +510,28 @@ fn managed_proxy_inner_command_requires_route_spec() {
 }
 
 #[test]
-fn resolve_sandbox_policies_derives_split_policies_from_legacy_policy() {
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+fn resolve_permission_profile_derives_runtime_policies() {
+    let permission_profile = read_only_permission_profile();
+    let resolved = resolve_permission_profile(Some(permission_profile.clone()))
+        .expect("profile should resolve");
 
-    let resolved = resolve_sandbox_policies(
-        Path::new("/tmp"),
-        Some(sandbox_policy.clone()),
-        /*file_system_sandbox_policy*/ None,
-        /*network_sandbox_policy*/ None,
-    )
-    .expect("legacy policy should resolve");
-
-    assert_eq!(resolved.sandbox_policy, sandbox_policy);
+    assert_eq!(resolved.permission_profile, permission_profile);
     assert_eq!(
         resolved.file_system_sandbox_policy,
-        FileSystemSandboxPolicy::from(&sandbox_policy)
+        read_only_file_system_policy()
     );
     assert_eq!(
         resolved.network_sandbox_policy,
-        NetworkSandboxPolicy::from(&sandbox_policy)
+        NetworkSandboxPolicy::Restricted
     );
 }
 
 #[test]
-fn resolve_sandbox_policies_derives_legacy_policy_from_split_policies() {
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
-    let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-
-    let resolved = resolve_sandbox_policies(
-        Path::new("/tmp"),
-        /*sandbox_policy*/ None,
-        Some(file_system_sandbox_policy.clone()),
-        Some(network_sandbox_policy),
-    )
-    .expect("split policies should resolve");
-
-    assert_eq!(resolved.sandbox_policy, sandbox_policy);
-    assert_eq!(
-        resolved.file_system_sandbox_policy,
-        file_system_sandbox_policy
-    );
-    assert_eq!(resolved.network_sandbox_policy, network_sandbox_policy);
-}
-
-#[test]
-fn resolve_sandbox_policies_rejects_partial_split_policies() {
-    let err = resolve_sandbox_policies(
-        Path::new("/tmp"),
-        Some(SandboxPolicy::new_read_only_policy()),
-        Some(FileSystemSandboxPolicy::default()),
-        /*network_sandbox_policy*/ None,
-    )
-    .expect_err("partial split policies should fail");
-
-    assert_eq!(err, ResolveSandboxPoliciesError::PartialSplitPolicies);
-}
-
-#[test]
-fn resolve_sandbox_policies_rejects_mismatched_legacy_and_split_inputs() {
-    let err = resolve_sandbox_policies(
-        Path::new("/tmp"),
-        Some(SandboxPolicy::new_read_only_policy()),
-        Some(FileSystemSandboxPolicy::unrestricted()),
-        Some(NetworkSandboxPolicy::Enabled),
-    )
-    .expect_err("mismatched legacy and split policies should fail");
-
-    assert!(
-        matches!(
-            err,
-            ResolveSandboxPoliciesError::MismatchedLegacyPolicy { .. }
-        ),
-        "{err}"
-    );
-}
-
-#[test]
-fn resolve_sandbox_policies_accepts_split_policies_requiring_direct_runtime_enforcement() {
+fn resolve_permission_profile_preserves_direct_runtime_profile() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
     let docs = temp_dir.path().join("docs");
     std::fs::create_dir_all(&docs).expect("create docs");
     let docs = AbsolutePathBuf::from_absolute_path(&docs).expect("absolute docs");
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Special {
@@ -428,16 +544,14 @@ fn resolve_sandbox_policies_accepts_split_policies_requiring_direct_runtime_enfo
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
         },
     ]);
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    let resolved = resolve_permission_profile(Some(permission_profile.clone()))
+        .expect("profile should resolve");
 
-    let resolved = resolve_sandbox_policies(
-        temp_dir.path(),
-        Some(sandbox_policy.clone()),
-        Some(file_system_sandbox_policy.clone()),
-        Some(NetworkSandboxPolicy::Restricted),
-    )
-    .expect("split-only policy should preserve provided legacy fallback");
-
-    assert_eq!(resolved.sandbox_policy, sandbox_policy);
+    assert_eq!(resolved.permission_profile, permission_profile);
     assert_eq!(
         resolved.file_system_sandbox_policy,
         file_system_sandbox_policy
@@ -449,38 +563,11 @@ fn resolve_sandbox_policies_accepts_split_policies_requiring_direct_runtime_enfo
 }
 
 #[test]
-fn resolve_sandbox_policies_accepts_semantically_equivalent_workspace_write_inputs() {
-    let temp_dir = tempfile::TempDir::new().expect("tempdir");
-    let workspace = temp_dir.path().join("workspace");
-    std::fs::create_dir_all(&workspace).expect("create workspace");
-    let workspace = AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute workspace");
-    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![workspace],
-        read_only_access: ReadOnlyAccess::FullAccess,
-        network_access: false,
-        exclude_tmpdir_env_var: false,
-        exclude_slash_tmp: false,
-    };
-    let file_system_sandbox_policy =
-        FileSystemSandboxPolicy::from(&SandboxPolicy::new_workspace_write_policy());
+fn resolve_permission_profile_rejects_missing_configuration() {
+    let err = resolve_permission_profile(/*permission_profile*/ None)
+        .expect_err("missing profile should fail");
 
-    let resolved = resolve_sandbox_policies(
-        temp_dir.path().join("workspace").as_path(),
-        Some(sandbox_policy.clone()),
-        Some(file_system_sandbox_policy.clone()),
-        Some(NetworkSandboxPolicy::Restricted),
-    )
-    .expect("semantically equivalent legacy workspace-write policy should resolve");
-
-    assert_eq!(resolved.sandbox_policy, sandbox_policy);
-    assert_eq!(
-        resolved.file_system_sandbox_policy,
-        file_system_sandbox_policy
-    );
-    assert_eq!(
-        resolved.network_sandbox_policy,
-        NetworkSandboxPolicy::Restricted
-    );
+    assert_eq!(err, ResolvePermissionProfileError::MissingConfiguration);
 }
 
 #[test]

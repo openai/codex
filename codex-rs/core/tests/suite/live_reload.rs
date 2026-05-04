@@ -8,10 +8,10 @@ use std::time::Duration;
 use anyhow::Result;
 use codex_config::config_toml::ProjectConfig;
 use codex_protocol::config_types::TrustLevel;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ResponsesRequest;
@@ -19,6 +19,7 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use tokio::time::timeout;
 
@@ -46,8 +47,11 @@ fn contains_skill_body(request: &ResponsesRequest, skill_body: &str) -> bool {
 
 async fn submit_skill_turn(test: &TestCodex, skill_path: PathBuf, prompt: &str) -> Result<()> {
     let session_model = test.session_configured.model.clone();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, test.cwd_path());
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![
                 UserInput::Text {
                     text: prompt.to_string(),
@@ -62,7 +66,8 @@ async fn submit_skill_turn(test: &TestCodex, skill_path: PathBuf, prompt: &str) 
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            sandbox_policy,
+            permission_profile,
             model: session_model,
             effort: None,
             summary: None,

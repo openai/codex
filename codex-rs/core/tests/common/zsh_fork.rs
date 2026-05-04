@@ -5,8 +5,9 @@ use anyhow::Result;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_features::Feature;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 
 use crate::test_codex::TestCodex;
 use crate::test_codex::test_codex;
@@ -22,7 +23,7 @@ impl ZshForkRuntime {
         &self,
         config: &mut Config,
         approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
+        permission_profile: PermissionProfile,
     ) {
         config
             .features
@@ -36,18 +37,20 @@ impl ZshForkRuntime {
         config.main_execve_wrapper_exe = Some(self.main_execve_wrapper_exe.clone());
         config.permissions.allow_login_shell = false;
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy);
+        config
+            .permissions
+            .set_permission_profile(permission_profile)
+            .expect("set permission profile");
     }
 }
 
-pub fn restrictive_workspace_write_policy() -> SandboxPolicy {
-    SandboxPolicy::WorkspaceWrite {
-        writable_roots: Vec::new(),
-        read_only_access: Default::default(),
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    }
+pub fn restrictive_workspace_write_profile() -> PermissionProfile {
+    PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    )
 }
 
 pub fn zsh_fork_runtime(test_name: &str) -> Result<Option<ZshForkRuntime>> {
@@ -77,7 +80,7 @@ pub async fn build_zsh_fork_test<F>(
     server: &wiremock::MockServer,
     runtime: ZshForkRuntime,
     approval_policy: AskForApproval,
-    sandbox_policy: SandboxPolicy,
+    permission_profile: PermissionProfile,
     pre_build_hook: F,
 ) -> Result<TestCodex>
 where
@@ -86,7 +89,7 @@ where
     let mut builder = test_codex()
         .with_pre_build_hook(pre_build_hook)
         .with_config(move |config| {
-            runtime.apply_to_config(config, approval_policy, sandbox_policy);
+            runtime.apply_to_config(config, approval_policy, permission_profile);
         });
     builder.build(server).await
 }

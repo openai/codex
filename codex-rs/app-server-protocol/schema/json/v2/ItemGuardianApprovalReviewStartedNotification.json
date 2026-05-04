@@ -25,6 +25,7 @@
           ]
         },
         "read": {
+          "description": "This will be removed in favor of `entries`.",
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
           },
@@ -34,6 +35,7 @@
           ]
         },
         "write": {
+          "description": "This will be removed in favor of `entries`.",
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
           },
@@ -173,21 +175,6 @@
             "kind"
           ],
           "title": "MinimalFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "current_working_directory"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "CurrentWorkingDirectoryFileSystemSpecialPath",
           "type": "object"
         },
         {

@@ -279,7 +279,10 @@ impl ResponsesWebsocketConnection {
             .instrument(current_span),
         );
 
-        Ok(ResponseStream { rx_event })
+        Ok(ResponseStream {
+            rx_event,
+            upstream_request_id: None,
+        })
     }
 }
 
@@ -553,10 +556,15 @@ async fn run_websocket_response_stream(
     trace!("websocket request: {request_text}");
 
     let request_start = Instant::now();
-    let result = ws_stream
-        .send(Message::Text(request_text.into()))
-        .await
-        .map_err(|err| ApiError::Stream(format!("failed to send websocket request: {err}")));
+    let result = tokio::time::timeout(
+        idle_timeout,
+        ws_stream.send(Message::Text(request_text.into())),
+    )
+    .await
+    .map_err(|_| ApiError::Stream("idle timeout sending websocket request".into()))
+    .and_then(|result| {
+        result.map_err(|err| ApiError::Stream(format!("failed to send websocket request: {err}")))
+    });
 
     if let Some(t) = telemetry.as_ref() {
         t.on_ws_request(
@@ -608,6 +616,7 @@ async fn run_websocket_response_stream(
                         continue;
                     }
                 };
+                let model_verifications = event.model_verifications();
                 if event.kind() == "codex.rate_limits" {
                     if let Some(snapshot) = parse_rate_limit_event(&text) {
                         let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
@@ -621,6 +630,16 @@ async fn run_websocket_response_stream(
                         .send(Ok(ResponseEvent::ServerModel(model.clone())))
                         .await;
                     last_server_model = Some(model);
+                }
+                if let Some(verifications) = model_verifications
+                    && tx_event
+                        .send(Ok(ResponseEvent::ModelVerifications(verifications)))
+                        .await
+                        .is_err()
+                {
+                    return Err(ApiError::Stream(
+                        "response event consumer dropped".to_string(),
+                    ));
                 }
                 match process_responses_event(event) {
                     Ok(Some(event)) => {

@@ -26,6 +26,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_rollout_trace::CompactionCheckpointTracePayload;
 use futures::TryFutureExt;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -114,7 +115,16 @@ async fn run_remote_compact_task_inner_impl(
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
-    let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
+    let context_compaction_item = ContextCompactionItem::new();
+    // Use the UI compaction item ID as the trace compaction ID so protocol lifecycle events,
+    // endpoint attempts, and the installed history checkpoint all have one join key.
+    let compaction_trace = sess.services.rollout_thread_trace.compaction_trace_context(
+        turn_context.sub_id.as_str(),
+        context_compaction_item.id.as_str(),
+        turn_context.model_info.slug.as_str(),
+        turn_context.provider.info().name.as_str(),
+    );
+    let compaction_item = TurnItem::ContextCompaction(context_compaction_item);
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
     let mut history = sess.clone_history().await;
@@ -131,14 +141,10 @@ async fn run_remote_compact_task_inner_impl(
             "trimmed history items before remote compaction"
         );
     }
-    // Required to keep `/undo` available after compaction
-    let ghost_snapshots: Vec<ResponseItem> = history
-        .raw_items()
-        .iter()
-        .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
-        .cloned()
-        .collect();
-
+    // This is the history selected for remote compaction, after any trimming required to fit the
+    // compact endpoint. The checkpoint below records it separately from the next sampling request,
+    // whose prompt will repeat current developer/context prefix items.
+    let trace_input_history = history.raw_items().to_vec();
     let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
     let tool_router = built_tools(
         sess.as_ref(),
@@ -156,8 +162,8 @@ async fn run_remote_compact_task_inner_impl(
         base_instructions,
         personality: turn_context.personality,
         output_schema: None,
+        output_schema_strict: true,
     };
-
     let mut new_history = sess
         .services
         .model_client
@@ -167,6 +173,7 @@ async fn run_remote_compact_task_inner_impl(
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
             &turn_context.session_telemetry,
+            &compaction_trace,
         )
         .or_else(|err| async {
             let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
@@ -189,9 +196,6 @@ async fn run_remote_compact_task_inner_impl(
     )
     .await;
 
-    if !ghost_snapshots.is_empty() {
-        new_history.extend(ghost_snapshots);
-    }
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
@@ -200,6 +204,13 @@ async fn run_remote_compact_task_inner_impl(
         message: String::new(),
         replacement_history: Some(new_history.clone()),
     };
+    // Install is the semantic boundary where the compact endpoint's output becomes live
+    // thread history. Keep it distinct from the later inference request so the reducer can
+    // still represent repeated developer/context prefix items exactly as the model saw them.
+    compaction_trace.record_installed(&CompactionCheckpointTracePayload {
+        input_history: &trace_input_history,
+        replacement_history: &new_history,
+    });
     sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
     sess.recompute_token_usage(turn_context).await;
@@ -257,7 +268,7 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
         }
         ResponseItem::Message { role, .. } if role == "assistant" => true,
         ResponseItem::Message { .. } => false,
-        ResponseItem::Compaction { .. } => true,
+        ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
@@ -268,17 +279,16 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
-        | ResponseItem::GhostSnapshot { .. }
         | ResponseItem::Other => false,
     }
 }
 
 #[derive(Debug)]
-struct CompactRequestLogData {
+pub(crate) struct CompactRequestLogData {
     failing_compaction_request_model_visible_bytes: i64,
 }
 
-fn build_compact_request_log_data(
+pub(crate) fn build_compact_request_log_data(
     input: &[ResponseItem],
     instructions: &str,
 ) -> CompactRequestLogData {
@@ -295,7 +305,7 @@ fn build_compact_request_log_data(
     }
 }
 
-fn log_remote_compact_failure(
+pub(crate) fn log_remote_compact_failure(
     turn_context: &TurnContext,
     log_data: &CompactRequestLogData,
     total_usage_breakdown: TotalTokenUsageBreakdown,
@@ -314,7 +324,7 @@ fn log_remote_compact_failure(
     );
 }
 
-fn trim_function_call_history_to_fit_context_window(
+pub(crate) fn trim_function_call_history_to_fit_context_window(
     history: &mut ContextManager,
     turn_context: &TurnContext,
     base_instructions: &BaseInstructions,

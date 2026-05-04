@@ -211,13 +211,6 @@ pub(crate) enum PreToolUseDecisionWire {
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PreToolUseToolInput {
-    pub command: String,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(rename = "pre-tool-use.command.input")]
 pub(crate) struct PreToolUseCommandInput {
@@ -231,19 +224,9 @@ pub(crate) struct PreToolUseCommandInput {
     pub model: String,
     #[schemars(schema_with = "permission_mode_schema")]
     pub permission_mode: String,
-    #[schemars(schema_with = "pre_tool_use_tool_name_schema")]
     pub tool_name: String,
-    pub tool_input: PreToolUseToolInput,
+    pub tool_input: Value,
     pub tool_use_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PermissionRequestToolInput {
-    pub command: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -260,16 +243,8 @@ pub(crate) struct PermissionRequestCommandInput {
     pub model: String,
     #[schemars(schema_with = "permission_mode_schema")]
     pub permission_mode: String,
-    #[schemars(schema_with = "permission_request_tool_name_schema")]
     pub tool_name: String,
-    pub tool_input: PermissionRequestToolInput,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PostToolUseToolInput {
-    pub command: String,
+    pub tool_input: Value,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -286,9 +261,8 @@ pub(crate) struct PostToolUseCommandInput {
     pub model: String,
     #[schemars(schema_with = "permission_mode_schema")]
     pub permission_mode: String,
-    #[schemars(schema_with = "post_tool_use_tool_name_schema")]
     pub tool_name: String,
-    pub tool_input: PostToolUseToolInput,
+    pub tool_input: Value,
     pub tool_response: Value,
     pub tool_use_id: String,
 }
@@ -545,24 +519,12 @@ fn post_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PostToolUse")
 }
 
-fn post_tool_use_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_const_schema("Bash")
-}
-
 fn pre_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PreToolUse")
 }
 
 fn permission_request_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PermissionRequest")
-}
-
-fn pre_tool_use_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_const_schema("Bash")
-}
-
-fn permission_request_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_const_schema("Bash")
 }
 
 fn user_prompt_submit_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {

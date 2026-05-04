@@ -20,10 +20,10 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_arg0::Arg0DispatchPaths;
+use codex_config::CloudRequirementsLoader;
+use codex_config::LoaderOverrides;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::ConfigBuilder;
-use codex_core::config_loader::CloudRequirementsLoader;
-use codex_core::config_loader::LoaderOverrides;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
@@ -204,7 +204,8 @@ async fn mcp_resource_read_returns_error_for_unknown_thread() -> Result<()> {
         thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),
         log_db: None,
-        environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+        state_db: None,
+        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         config_warnings: Vec::new(),
         session_source: SessionSource::Cli,
         enable_codex_api_key_env: false,

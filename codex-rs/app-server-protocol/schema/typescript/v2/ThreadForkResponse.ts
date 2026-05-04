@@ -9,12 +9,15 @@ import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
 
-export type ThreadForkResponse = { thread: Thread, model: string, modelProvider: string, serviceTier: ServiceTier | null, cwd: AbsolutePathBuf,
-/**
+export type ThreadForkResponse = {thread: Thread, model: string, modelProvider: string, serviceTier: ServiceTier | null, cwd: AbsolutePathBuf, /**
  * Instruction source files currently loaded for this thread.
  */
-instructionSources: Array<AbsolutePathBuf>, approvalPolicy: AskForApproval,
-/**
+instructionSources: Array<AbsolutePathBuf>, approvalPolicy: AskForApproval, /**
  * Reviewer currently used for approval requests on this thread.
  */
-approvalsReviewer: ApprovalsReviewer, sandbox: SandboxPolicy, reasoningEffort: ReasoningEffort | null, };
+approvalsReviewer: ApprovalsReviewer, /**
+ * Legacy sandbox policy retained for compatibility. Experimental clients
+ * should prefer `permissionProfile` when they need exact runtime
+ * permissions.
+ */
+sandbox: SandboxPolicy, reasoningEffort: ReasoningEffort | null};

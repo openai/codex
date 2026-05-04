@@ -1,16 +1,23 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
+use crate::goals::GoalRuntimeEvent;
 use crate::session::Codex;
+use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -18,17 +25,21 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
-use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
+use codex_thread_store::StoredThreadHistory;
+use codex_thread_store::ThreadStoreError;
+use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
@@ -41,7 +52,8 @@ pub struct ThreadConfigSnapshot {
     pub service_tier: Option<ServiceTier>,
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
-    pub sandbox_policy: SandboxPolicy,
+    pub permission_profile: PermissionProfile,
+    pub active_permission_profile: Option<ActivePermissionProfile>,
     pub cwd: AbsolutePathBuf,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -49,8 +61,40 @@ pub struct ThreadConfigSnapshot {
     pub session_source: SessionSource,
 }
 
+impl ThreadConfigSnapshot {
+    pub fn sandbox_policy(&self) -> SandboxPolicy {
+        let file_system_sandbox_policy = self.permission_profile.file_system_sandbox_policy();
+        codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
+            &self.permission_profile,
+            &file_system_sandbox_policy,
+            self.permission_profile.network_sandbox_policy(),
+            self.cwd.as_path(),
+        )
+    }
+}
+
+/// Turn context overrides that app-server validates before starting a turn.
+#[derive(Clone, Default)]
+pub struct CodexThreadTurnContextOverrides {
+    pub cwd: Option<PathBuf>,
+    pub approval_policy: Option<AskForApproval>,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    pub sandbox_policy: Option<SandboxPolicy>,
+    pub permission_profile: Option<PermissionProfile>,
+    pub active_permission_profile: Option<ActivePermissionProfile>,
+    pub windows_sandbox_level: Option<WindowsSandboxLevel>,
+    pub model: Option<String>,
+    pub effort: Option<Option<ReasoningEffort>>,
+    pub summary: Option<ReasoningSummary>,
+    pub service_tier: Option<Option<ServiceTier>>,
+    pub collaboration_mode: Option<CollaborationMode>,
+    pub personality: Option<Personality>,
+}
+
 pub struct CodexThread {
     pub(crate) codex: Codex,
+    pub(crate) session_source: SessionSource,
+    session_configured: SessionConfiguredEvent,
     rollout_path: Option<PathBuf>,
     out_of_band_elicitation_count: Mutex<u64>,
     _watch_registration: WatchRegistration,
@@ -61,11 +105,15 @@ pub struct CodexThread {
 impl CodexThread {
     pub(crate) fn new(
         codex: Codex,
+        session_configured: SessionConfiguredEvent,
         rollout_path: Option<PathBuf>,
+        session_source: SessionSource,
         watch_registration: WatchRegistration,
     ) -> Self {
         Self {
             codex,
+            session_source,
+            session_configured,
             rollout_path,
             out_of_band_elicitation_count: Mutex::new(0),
             _watch_registration: watch_registration,
@@ -78,6 +126,58 @@ impl CodexThread {
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
         self.codex.shutdown_and_wait().await
+    }
+
+    /// Wait until the underlying session loop has terminated.
+    pub async fn wait_until_terminated(&self) {
+        self.codex.session_loop_termination.clone().await;
+    }
+
+    pub async fn apply_goal_resume_runtime_effects(&self) -> anyhow::Result<()> {
+        self.codex
+            .session
+            .goal_runtime_apply(GoalRuntimeEvent::ThreadResumed)
+            .await
+    }
+
+    pub async fn continue_active_goal_if_idle(&self) -> anyhow::Result<()> {
+        self.codex
+            .session
+            .goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
+            .await
+    }
+
+    pub async fn prepare_external_goal_mutation(&self) {
+        if let Err(err) = self
+            .codex
+            .session
+            .goal_runtime_apply(GoalRuntimeEvent::ExternalMutationStarting)
+            .await
+        {
+            tracing::warn!("failed to prepare external goal mutation: {err}");
+        }
+    }
+
+    pub async fn apply_external_goal_set(&self, status: codex_state::ThreadGoalStatus) {
+        if let Err(err) = self
+            .codex
+            .session
+            .goal_runtime_apply(GoalRuntimeEvent::ExternalSet { status })
+            .await
+        {
+            tracing::warn!("failed to apply external goal status runtime effects: {err}");
+        }
+    }
+
+    pub async fn apply_external_goal_clear(&self) {
+        if let Err(err) = self
+            .codex
+            .session
+            .goal_runtime_apply(GoalRuntimeEvent::ExternalClear)
+            .await
+        {
+            tracing::warn!("failed to apply external goal clear runtime effects: {err}");
+        }
     }
 
     #[doc(hidden)]
@@ -124,6 +224,53 @@ impl CodexThread {
             .await
     }
 
+    /// Validate persistent turn context overrides without committing them.
+    pub async fn validate_turn_context_overrides(
+        &self,
+        overrides: CodexThreadTurnContextOverrides,
+    ) -> ConstraintResult<()> {
+        let CodexThreadTurnContextOverrides {
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            permission_profile,
+            active_permission_profile,
+            windows_sandbox_level,
+            model,
+            effort,
+            summary,
+            service_tier,
+            collaboration_mode,
+            personality,
+        } = overrides;
+        let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
+            collaboration_mode
+        } else {
+            self.codex
+                .session
+                .collaboration_mode()
+                .await
+                .with_updates(model, effort, /*developer_instructions*/ None)
+        };
+
+        let updates = SessionSettingsUpdate {
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            permission_profile,
+            active_permission_profile,
+            windows_sandbox_level,
+            collaboration_mode: Some(collaboration_mode),
+            reasoning_summary: summary,
+            service_tier,
+            personality,
+            ..Default::default()
+        };
+        self.codex.session.validate_settings(&updates).await
+    }
+
     /// Use sparingly: this is intended to be removed soon.
     pub async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
         self.codex.submit_with_id(sub).await
@@ -139,10 +286,6 @@ impl CodexThread {
 
     pub(crate) fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {
         self.codex.agent_status.clone()
-    }
-
-    pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {
-        self.codex.session.total_token_usage().await
     }
 
     /// Returns the complete token usage snapshot currently cached for this thread.
@@ -162,7 +305,6 @@ impl CodexThread {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText { text: message }],
-            end_turn: None,
             phase: None,
         };
         let pending_item = match pending_message_input_item(&message) {
@@ -239,12 +381,46 @@ impl CodexThread {
         self.rollout_path.clone()
     }
 
+    pub(crate) fn session_configured(&self) -> SessionConfiguredEvent {
+        self.session_configured.clone()
+    }
+
+    pub(crate) fn is_running(&self) -> bool {
+        !self.codex.tx_sub.is_closed()
+    }
+
+    pub async fn guardian_trunk_rollout_path(&self) -> Option<PathBuf> {
+        self.codex
+            .session
+            .guardian_review_session
+            .trunk_rollout_path()
+            .await
+    }
+
+    pub async fn load_history(
+        &self,
+        include_archived: bool,
+    ) -> ThreadStoreResult<StoredThreadHistory> {
+        let live_thread = self
+            .codex
+            .session
+            .live_thread_for_persistence("load history")
+            .map_err(|err| ThreadStoreError::Internal {
+                message: err.to_string(),
+            })?;
+        live_thread.load_history(include_archived).await
+    }
+
     pub fn state_db(&self) -> Option<StateDbHandle> {
         self.codex.state_db()
     }
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
+    }
+
+    pub async fn config(&self) -> Arc<crate::config::Config> {
+        self.codex.session.get_config().await
     }
 
     pub async fn read_mcp_resource(
@@ -322,9 +498,15 @@ impl CodexThread {
 
 fn pending_message_input_item(message: &ResponseItem) -> CodexResult<ResponseInputItem> {
     match message {
-        ResponseItem::Message { role, content, .. } => Ok(ResponseInputItem::Message {
+        ResponseItem::Message {
+            role,
+            content,
+            phase,
+            ..
+        } => Ok(ResponseInputItem::Message {
             role: role.clone(),
             content: content.clone(),
+            phase: phase.clone(),
         }),
         _ => Err(CodexErr::InvalidRequest(
             "append_message only supports ResponseItem::Message".to_string(),

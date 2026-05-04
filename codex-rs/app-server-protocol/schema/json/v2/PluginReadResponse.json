@@ -44,6 +44,23 @@
       ],
       "type": "string"
     },
+    "PluginAvailability": {
+      "oneOf": [
+        {
+          "enum": [
+            "DISABLED_BY_ADMIN"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Plugin-service currently sends `\"ENABLED\"` for available remote plugins. Codex app-server exposes `\"AVAILABLE\"` in its API; the alias keeps decoding compatible with that upstream response.",
+          "enum": [
+            "AVAILABLE"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "PluginDetail": {
       "properties": {
         "apps": {
@@ -62,7 +79,14 @@
           "type": "string"
         },
         "marketplacePath": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "mcpServers": {
           "items": {
@@ -83,7 +107,6 @@
       "required": [
         "apps",
         "marketplaceName",
-        "marketplacePath",
         "mcpServers",
         "skills",
         "summary"
@@ -312,6 +335,15 @@
         "authPolicy": {
           "$ref": "#/definitions/PluginAuthPolicy"
         },
+        "availability": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PluginAvailability"
+            }
+          ],
+          "default": "AVAILABLE",
+          "description": "Availability state for installing and using the plugin."
+        },
         "enabled": {
           "type": "boolean"
         },
@@ -423,7 +455,14 @@
           "type": "string"
         },
         "path": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "shortDescription": {
           "type": [
@@ -435,8 +474,7 @@
       "required": [
         "description",
         "enabled",
-        "name",
-        "path"
+        "name"
       ],
       "type": "object"
     }

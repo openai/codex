@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Plugins
+  Failed to load plugin details.
+
+     Plugin detail unavailable  Failed to load plugin details.
+› 1. Back to plugins            Return to the plugin list.
+
+  Press esc to close.

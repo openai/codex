@@ -5,16 +5,18 @@ use super::model::ExecCall;
 use super::model::ExecCell;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::HistoryCell;
+use crate::motion::MotionMode;
+use crate::motion::ReducedMotionIndicator;
+use crate::motion::activity_indicator;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
-use crate::shimmer::shimmer_spans;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::adaptive_wrap_lines;
 use codex_ansi_escape::ansi_escape_line;
+use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::protocol::ExecCommandSource;
 use codex_shell_command::bash::extract_bash_command;
 use codex_utils_elapsed::format_duration;
 use itertools::Itertools;
@@ -180,20 +182,13 @@ pub(crate) fn output_lines(
     }
 }
 
-pub(crate) fn spinner(start_time: Option<Instant>, animations_enabled: bool) -> Span<'static> {
-    if !animations_enabled {
-        return "•".dim();
-    }
-    let elapsed = start_time.map(|st| st.elapsed()).unwrap_or_default();
-    if supports_color::on_cached(supports_color::Stream::Stdout)
-        .map(|level| level.has_16m)
-        .unwrap_or(false)
-    {
-        shimmer_spans("•")[0].clone()
-    } else {
-        let blink_on = (elapsed.as_millis() / 600).is_multiple_of(2);
-        if blink_on { "•".into() } else { "◦".dim() }
-    }
+fn activity_marker(start_time: Option<Instant>, animations_enabled: bool) -> Span<'static> {
+    activity_indicator(
+        start_time,
+        MotionMode::from_animations_enabled(animations_enabled),
+        ReducedMotionIndicator::StaticBullet,
+    )
+    .unwrap_or_else(|| "•".dim())
 }
 
 impl HistoryCell for ExecCell {
@@ -263,7 +258,7 @@ impl ExecCell {
         let mut out: Vec<Line<'static>> = Vec::new();
         out.push(Line::from(vec![
             if self.is_active() {
-                spinner(self.active_start_time(), self.animations_enabled())
+                activity_marker(self.active_start_time(), self.animations_enabled())
             } else {
                 "•".dim()
             },
@@ -371,7 +366,7 @@ impl ExecCell {
         let bullet = match success {
             Some(true) => "•".green().bold(),
             Some(false) => "•".red().bold(),
-            None => spinner(call.start_time, self.animations_enabled()),
+            None => activity_marker(call.start_time, self.animations_enabled()),
         };
         let is_interaction = call.is_unified_exec_interaction();
         let title = if is_interaction {
@@ -713,7 +708,7 @@ const EXEC_DISPLAY_LAYOUT: ExecDisplayLayout = ExecDisplayLayout::new(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::protocol::ExecCommandSource;
+    use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
     use pretty_assertions::assert_eq;
 
     fn render_line_text(line: &Line<'static>) -> String {
@@ -955,6 +950,35 @@ mod tests {
             1,
             "expected full URL in one rendered line, got: {rendered:?}"
         );
+    }
+
+    #[test]
+    fn active_command_without_animations_is_stable() {
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["bash".into(), "-lc".into(), "echo done".into()],
+            parsed: Vec::new(),
+            output: None,
+            source: ExecCommandSource::Agent,
+            start_time: Some(Instant::now()),
+            duration: None,
+            interaction_input: None,
+        };
+
+        let cell = ExecCell::new(call, /*animations_enabled*/ false);
+        let first: Vec<String> = cell
+            .command_display_lines(/*width*/ 80)
+            .iter()
+            .map(render_line_text)
+            .collect();
+        let second: Vec<String> = cell
+            .command_display_lines(/*width*/ 80)
+            .iter()
+            .map(render_line_text)
+            .collect();
+
+        assert_eq!(first, second);
+        assert_eq!(first, vec!["• Running echo done".to_string()]);
     }
 
     #[test]

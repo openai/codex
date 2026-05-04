@@ -1,5 +1,6 @@
 use anyhow::Context;
 use codex_features::Feature;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -7,7 +8,6 @@ use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecOutputStream;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
@@ -22,6 +22,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
@@ -167,18 +168,24 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
     ]);
     let mock = responses::mount_sse_sequence(&server, vec![first, second]).await;
 
+    let cwd = fixture.cwd.path().to_path_buf();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
+
     fixture
         .codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "run model shell command".to_string(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: fixture.cwd.path().to_path_buf(),
+            cwd,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            sandbox_policy,
+            permission_profile,
             model: fixture.session_configured.model.clone(),
             effort: None,
             summary: None,
@@ -336,7 +343,12 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
 async fn user_shell_command_does_not_set_network_sandbox_env_var() -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
     let mut builder = core_test_support::test_codex::test_codex().with_config(|config| {
-        config.permissions.network_sandbox_policy = NetworkSandboxPolicy::Restricted;
+        let file_system_sandbox_policy = config.permissions.file_system_sandbox_policy();
+        config.permissions.permission_profile =
+            codex_config::Constrained::allow_any(PermissionProfile::from_runtime_permissions(
+                &file_system_sandbox_policy,
+                NetworkSandboxPolicy::Restricted,
+            ));
     });
     let test = builder.build(&server).await?;
 
@@ -476,9 +488,9 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
     .await;
 
     fixture
-        .submit_turn_with_policy(
+        .submit_turn_with_permission_profile(
             "trigger big shell_command output",
-            SandboxPolicy::DangerFullAccess,
+            PermissionProfile::Disabled,
         )
         .await?;
 

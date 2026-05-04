@@ -1,12 +1,12 @@
 use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
-use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -64,8 +64,10 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     // routes ExecApprovalRequest via the parent.
     let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-        config.permissions.sandbox_policy =
-            Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::read_only())
+            .expect("set permission profile");
     });
     let test = builder.build(&server).await.expect("build test codex");
 
@@ -147,8 +149,10 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         // Use a restricted sandbox so patch approval is required
-        config.permissions.sandbox_policy =
-            Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::read_only())
+            .expect("set permission profile");
         config.include_apply_patch_tool = true;
     });
     let test = builder.build(&server).await.expect("build test codex");
@@ -225,21 +229,15 @@ async fn codex_delegate_ignores_legacy_deltas() {
         .expect("submit review");
 
     let mut reasoning_delta_count = 0;
-    let mut legacy_reasoning_delta_count = 0;
 
     loop {
         let ev = wait_for_event(&test.codex, |_| true).await;
         match ev {
             EventMsg::ReasoningContentDelta(_) => reasoning_delta_count += 1,
-            EventMsg::AgentReasoningDelta(_) => legacy_reasoning_delta_count += 1,
             EventMsg::TurnComplete(_) => break,
             _ => {}
         }
     }
 
     assert_eq!(reasoning_delta_count, 1, "expected one new reasoning delta");
-    assert_eq!(
-        legacy_reasoning_delta_count, 1,
-        "expected one legacy reasoning delta"
-    );
 }

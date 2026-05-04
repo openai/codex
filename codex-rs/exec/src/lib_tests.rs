@@ -361,6 +361,11 @@ async fn thread_start_params_include_review_policy_when_review_policy_is_manual_
         params.approvals_reviewer,
         Some(codex_app_server_protocol::ApprovalsReviewer::User)
     );
+    assert_eq!(params.sandbox, None);
+    assert_eq!(
+        params.permissions,
+        permissions_selection_from_config(&config)
+    );
 }
 
 #[tokio::test]
@@ -370,7 +375,7 @@ async fn thread_start_params_include_review_policy_when_auto_review_is_enabled()
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
-            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             ..Default::default()
         })
         .fallback_cwd(Some(cwd.path().to_path_buf()))
@@ -382,13 +387,80 @@ async fn thread_start_params_include_review_policy_when_auto_review_is_enabled()
 
     assert_eq!(
         params.approvals_reviewer,
-        Some(codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent)
+        Some(codex_app_server_protocol::ApprovalsReviewer::AutoReview)
     );
 }
 
-#[test]
-fn session_configured_from_thread_response_uses_review_policy_from_response() {
-    let response = ThreadStartResponse {
+#[tokio::test]
+async fn thread_lifecycle_params_include_legacy_sandbox_when_no_active_profile() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            sandbox_mode: Some(SandboxMode::DangerFullAccess),
+            ..Default::default()
+        })
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config with legacy sandbox override");
+
+    let start_params = thread_start_params_from_config(&config);
+    let resume_params = thread_resume_params_from_config(&config, "thread-id".to_string());
+
+    assert_eq!(config.permissions.active_permission_profile(), None);
+    assert_eq!(
+        start_params.sandbox,
+        Some(codex_app_server_protocol::SandboxMode::DangerFullAccess)
+    );
+    assert_eq!(start_params.permissions, None);
+    assert_eq!(
+        resume_params.sandbox,
+        Some(codex_app_server_protocol::SandboxMode::DangerFullAccess)
+    );
+    assert_eq!(resume_params.permissions, None);
+}
+
+#[tokio::test]
+async fn session_configured_from_thread_response_uses_review_policy_from_response() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config");
+    let response = sample_thread_start_response();
+
+    let event = session_configured_from_thread_start_response(&response, &config)
+        .expect("build bootstrap session configured event");
+
+    assert_eq!(event.approvals_reviewer, ApprovalsReviewer::AutoReview);
+}
+
+#[tokio::test]
+async fn session_configured_from_thread_response_uses_permission_profile_from_response() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config");
+    let mut response = sample_thread_start_response();
+    response.permission_profile = Some(PermissionProfile::Disabled.into());
+
+    let event = session_configured_from_thread_start_response(&response, &config)
+        .expect("build bootstrap session configured event");
+
+    assert_eq!(event.permission_profile, PermissionProfile::Disabled);
+}
+
+fn sample_thread_start_response() -> ThreadStartResponse {
+    ThreadStartResponse {
         thread: codex_app_server_protocol::Thread {
             id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
             forked_from_id: None,
@@ -414,22 +486,15 @@ fn session_configured_from_thread_response_uses_review_policy_from_response() {
         cwd: test_path_buf("/tmp").abs(),
         instruction_sources: Vec::new(),
         approval_policy: codex_app_server_protocol::AskForApproval::OnRequest,
-        approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent,
+        approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
         sandbox: codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
-            read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         },
+        permission_profile: None,
+        active_permission_profile: None,
         reasoning_effort: None,
-    };
-
-    let event = session_configured_from_thread_start_response(&response)
-        .expect("build bootstrap session configured event");
-
-    assert_eq!(
-        event.approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
-    );
+    }
 }

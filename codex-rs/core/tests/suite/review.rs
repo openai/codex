@@ -233,7 +233,6 @@ async fn review_op_with_plain_text_emits_review_fallback() {
 
 /// Ensure review flow suppresses assistant-specific streaming/completion events:
 /// - AgentMessageContentDelta
-/// - AgentMessageDelta (legacy)
 /// - ItemCompleted for TurnItem::AgentMessage
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
@@ -289,9 +288,6 @@ async fn review_filters_agent_message_related_events() {
         // The following must be filtered by review flow
         EventMsg::AgentMessageContentDelta(_) => {
             panic!("unexpected AgentMessageContentDelta surfaced during review")
-        }
-        EventMsg::AgentMessageDelta(_) => {
-            panic!("unexpected AgentMessageDelta surfaced during review")
         }
         _ => false,
     })
@@ -538,7 +534,6 @@ async fn review_input_isolated_from_parent_history() {
             content: vec![codex_protocol::models::ContentItem::InputText {
                 text: "parent: earlier user message".to_string(),
             }],
-            end_turn: None,
             phase: None,
         };
         let user_json = serde_json::to_value(&user).unwrap();
@@ -558,7 +553,6 @@ async fn review_input_isolated_from_parent_history() {
             content: vec![codex_protocol::models::ContentItem::OutputText {
                 text: "parent: assistant reply".to_string(),
             }],
-            end_turn: None,
             phase: None,
         };
         let assistant_json = serde_json::to_value(&assistant).unwrap();
@@ -721,6 +715,7 @@ async fn review_history_surfaces_in_parent_session() {
     let followup = "back to parent".to_string();
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: followup.clone(),
                 text_elements: Vec::new(),
@@ -838,6 +833,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,

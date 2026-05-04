@@ -1,0 +1,26 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-aws-auth"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_aws_auth"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+aws-config = { workspace = true }
+aws-credential-types = { workspace = true }
+aws-sigv4 = { workspace = true }
+aws-types = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

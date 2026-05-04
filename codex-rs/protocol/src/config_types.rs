@@ -1,12 +1,20 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::InstanceType;
+use schemars::schema::Metadata;
+use schemars::schema::Schema;
+use schemars::schema::SchemaObject;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::time::Duration;
 use strum_macros::Display;
 use strum_macros::EnumIter;
 use ts_rs::TS;
+use wildmatch::WildMatchPattern;
 
 use crate::openai_models::ReasoningEffort;
 
@@ -69,20 +77,111 @@ pub enum SandboxMode {
     DangerFullAccess,
 }
 
-#[derive(
-    Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, JsonSchema, TS,
-)]
-#[serde(rename_all = "snake_case")]
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, TS)]
 #[strum(serialize_all = "snake_case")]
+#[ts(type = r#""user" | "auto_review" | "guardian_subagent""#)]
 /// Configures who approval requests are routed to for review. Examples
 /// include sandbox escapes, blocked network access, MCP approval prompts, and
-/// ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully
+/// ARC escalations. Defaults to `user`. `auto_review` uses a carefully
 /// prompted subagent to gather relevant context and apply a risk-based
 /// decision framework before approving or denying the request.
 pub enum ApprovalsReviewer {
     #[default]
+    #[serde(rename = "user")]
     User,
-    GuardianSubagent,
+    #[serde(rename = "guardian_subagent", alias = "auto_review")]
+    #[strum(serialize = "guardian_subagent")]
+    AutoReview,
+}
+
+impl JsonSchema for ApprovalsReviewer {
+    fn schema_name() -> String {
+        "ApprovalsReviewer".to_string()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        string_enum_schema_with_description(
+            &["user", "auto_review", "guardian_subagent"],
+            "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
+        )
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellEnvironmentPolicyInherit {
+    /// "Core" environment variables for the platform. On UNIX, this would
+    /// include HOME, LOGNAME, PATH, SHELL, and USER, among others.
+    Core,
+
+    /// Inherits the full environment from the parent process.
+    #[default]
+    All,
+
+    /// Do not inherit any environment variables from the parent process.
+    None,
+}
+
+pub type EnvironmentVariablePattern = WildMatchPattern<'*', '?'>;
+
+/// Deriving the `env` based on this policy works as follows:
+/// 1. Create an initial map based on the `inherit` policy.
+/// 2. If `ignore_default_excludes` is false, filter the map using the default
+///    exclude pattern(s), which are: `"*KEY*"`, `"*SECRET*"`, and `"*TOKEN*"`.
+/// 3. If `exclude` is not empty, filter the map using the provided patterns.
+/// 4. Insert any entries from `r#set` into the map.
+/// 5. If non-empty, filter the map using the `include_only` patterns.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShellEnvironmentPolicy {
+    /// Starting point when building the environment.
+    pub inherit: ShellEnvironmentPolicyInherit,
+
+    /// True to skip the check to exclude default environment variables that
+    /// contain "KEY", "SECRET", or "TOKEN" in their name. Defaults to true.
+    pub ignore_default_excludes: bool,
+
+    /// Environment variable names to exclude from the environment.
+    pub exclude: Vec<EnvironmentVariablePattern>,
+
+    /// (key, value) pairs to insert in the environment.
+    pub r#set: HashMap<String, String>,
+
+    /// Environment variable names to retain in the environment.
+    pub include_only: Vec<EnvironmentVariablePattern>,
+
+    /// If true, the shell profile will be used to run the command.
+    pub use_profile: bool,
+}
+
+impl Default for ShellEnvironmentPolicy {
+    fn default() -> Self {
+        Self {
+            inherit: ShellEnvironmentPolicyInherit::All,
+            ignore_default_excludes: true,
+            exclude: Vec::new(),
+            r#set: HashMap::new(),
+            include_only: Vec::new(),
+            use_profile: false,
+        }
+    }
+}
+
+fn string_enum_schema_with_description(values: &[&str], description: &str) -> Schema {
+    let mut schema = SchemaObject {
+        instance_type: Some(InstanceType::String.into()),
+        metadata: Some(Box::new(Metadata {
+            description: Some(description.to_string()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    schema.enum_values = Some(
+        values
+            .iter()
+            .map(|value| Value::String((*value).to_string()))
+            .collect(),
+    );
+    Schema::Object(schema)
 }
 
 #[derive(
@@ -559,6 +658,31 @@ mod tests {
             let json = format!("\"{alias}\"");
             let mode: ModeKind = serde_json::from_str(&json).expect("deserialize mode");
             assert_eq!(ModeKind::Default, mode);
+        }
+    }
+
+    #[test]
+    fn approvals_reviewer_serializes_auto_review_and_accepts_legacy_guardian_subagent() {
+        assert_eq!(ApprovalsReviewer::User.to_string(), "user");
+        assert_eq!(
+            serde_json::to_string(&ApprovalsReviewer::User).expect("serialize reviewer"),
+            "\"user\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ApprovalsReviewer::AutoReview).expect("serialize reviewer"),
+            "\"guardian_subagent\""
+        );
+
+        for value in ["user", "auto_review", "guardian_subagent"] {
+            let json = format!("\"{value}\"");
+            let reviewer: ApprovalsReviewer =
+                serde_json::from_str(&json).expect("deserialize reviewer");
+            let expected = if value == "user" {
+                ApprovalsReviewer::User
+            } else {
+                ApprovalsReviewer::AutoReview
+            };
+            assert_eq!(expected, reviewer);
         }
     }
 

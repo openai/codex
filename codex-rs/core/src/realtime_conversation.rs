@@ -590,7 +590,7 @@ pub(crate) async fn handle_start(
 struct PreparedRealtimeConversationStart {
     api_provider: ApiProvider,
     extra_headers: Option<HeaderMap>,
-    requested_session_id: Option<String>,
+    requested_realtime_session_id: Option<String>,
     version: RealtimeWsVersion,
     session_config: RealtimeSessionConfig,
     transport: ConversationStartTransport,
@@ -619,28 +619,31 @@ async fn prepare_realtime_start(
     let session_config = build_realtime_session_config(
         sess,
         params.prompt,
-        params.session_id,
+        params.realtime_session_id,
         params.output_modality,
         params.voice,
     )
     .await?;
-    let requested_session_id = session_config.session_id.clone();
+    let requested_realtime_session_id = session_config.session_id.clone();
     let extra_headers = match transport {
         ConversationStartTransport::Websocket => {
             let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
             realtime_request_headers(
-                requested_session_id.as_deref(),
+                requested_realtime_session_id.as_deref(),
                 Some(realtime_api_key.as_str()),
             )?
         }
         ConversationStartTransport::Webrtc { .. } => {
-            realtime_request_headers(requested_session_id.as_deref(), /*api_key*/ None)?
+            realtime_request_headers(
+                requested_realtime_session_id.as_deref(),
+                /*api_key*/ None,
+            )?
         }
     };
     Ok(PreparedRealtimeConversationStart {
         api_provider,
         extra_headers,
-        requested_session_id,
+        requested_realtime_session_id,
         version,
         session_config,
         transport,
@@ -650,7 +653,7 @@ async fn prepare_realtime_start(
 pub(crate) async fn build_realtime_session_config(
     sess: &Arc<Session>,
     prompt: Option<Option<String>>,
-    session_id: Option<String>,
+    realtime_session_id: Option<String>,
     output_modality: RealtimeOutputModality,
     voice: Option<RealtimeVoice>,
 ) -> CodexResult<RealtimeSessionConfig> {
@@ -701,7 +704,7 @@ pub(crate) async fn build_realtime_session_config(
     Ok(RealtimeSessionConfig {
         instructions: prompt,
         model,
-        session_id: Some(session_id.unwrap_or_else(|| sess.conversation_id.to_string())),
+        session_id: Some(realtime_session_id.unwrap_or_else(|| sess.conversation_id.to_string())),
         event_parser,
         session_mode,
         output_modality,
@@ -761,7 +764,7 @@ async fn handle_start_inner(
     let PreparedRealtimeConversationStart {
         api_provider,
         extra_headers,
-        requested_session_id,
+        requested_realtime_session_id,
         version,
         session_config,
         transport,
@@ -785,7 +788,7 @@ async fn handle_start_inner(
     sess.send_event_raw(Event {
         id: sub_id.to_string(),
         msg: EventMsg::RealtimeConversationStarted(RealtimeConversationStartedEvent {
-            session_id: requested_session_id,
+            realtime_session_id: requested_realtime_session_id,
             version,
         }),
     })
@@ -958,15 +961,15 @@ fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> C
 }
 
 fn realtime_request_headers(
-    session_id: Option<&str>,
+    realtime_session_id: Option<&str>,
     api_key: Option<&str>,
 ) -> CodexResult<Option<HeaderMap>> {
     let mut headers = HeaderMap::new();
 
-    if let Some(session_id) = session_id
-        && let Ok(session_id) = HeaderValue::from_str(session_id)
+    if let Some(realtime_session_id) = realtime_session_id
+        && let Ok(realtime_session_id) = HeaderValue::from_str(realtime_session_id)
     {
-        headers.insert("x-session-id", session_id);
+        headers.insert("x-session-id", realtime_session_id);
     }
 
     if let Some(api_key) = api_key {
@@ -1314,8 +1317,11 @@ async fn handle_realtime_server_event(
             false
         }
         RealtimeEvent::Error(_) => true,
-        RealtimeEvent::SessionUpdated { session_id, .. } => {
-            info!(realtime_session_id = %session_id, "realtime session updated");
+        RealtimeEvent::SessionUpdated {
+            realtime_session_id,
+            ..
+        } => {
+            info!(realtime_session_id = %realtime_session_id, "realtime session updated");
             false
         }
         RealtimeEvent::InputTranscriptDelta(_)

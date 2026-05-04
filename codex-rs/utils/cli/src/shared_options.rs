@@ -38,17 +38,12 @@ pub struct SharedCliOptions {
     #[arg(long = "sandbox", short = 's')]
     pub sandbox_mode: Option<SandboxModeCliArg>,
 
-    /// Convenience alias for low-friction sandboxed automatic execution.
-    #[arg(long = "full-auto", default_value_t = false)]
-    pub full_auto: bool,
-
     /// Skip all confirmation prompts and execute commands without sandboxing.
     /// EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed.
     #[arg(
         long = "dangerously-bypass-approvals-and-sandbox",
         alias = "yolo",
-        default_value_t = false,
-        conflicts_with = "full_auto"
+        default_value_t = false
     )]
     pub dangerously_bypass_approvals_and_sandbox: bool,
 
@@ -63,9 +58,8 @@ pub struct SharedCliOptions {
 
 impl SharedCliOptions {
     pub fn inherit_exec_root_options(&mut self, root: &Self) {
-        let self_selected_sandbox_mode = self.sandbox_mode.is_some()
-            || self.full_auto
-            || self.dangerously_bypass_approvals_and_sandbox;
+        let self_selected_sandbox_mode =
+            self.sandbox_mode.is_some() || self.dangerously_bypass_approvals_and_sandbox;
         let Self {
             images,
             model,
@@ -73,7 +67,6 @@ impl SharedCliOptions {
             oss_provider,
             config_profile,
             sandbox_mode,
-            full_auto,
             dangerously_bypass_approvals_and_sandbox,
             cwd,
             add_dir,
@@ -85,7 +78,6 @@ impl SharedCliOptions {
             oss_provider: root_oss_provider,
             config_profile: root_config_profile,
             sandbox_mode: root_sandbox_mode,
-            full_auto: root_full_auto,
             dangerously_bypass_approvals_and_sandbox: root_dangerously_bypass_approvals_and_sandbox,
             cwd: root_cwd,
             add_dir: root_add_dir,
@@ -107,7 +99,6 @@ impl SharedCliOptions {
             *sandbox_mode = *root_sandbox_mode;
         }
         if !self_selected_sandbox_mode {
-            *full_auto = *root_full_auto;
             *dangerously_bypass_approvals_and_sandbox =
                 *root_dangerously_bypass_approvals_and_sandbox;
         }
@@ -128,7 +119,6 @@ impl SharedCliOptions {
 
     pub fn apply_subcommand_overrides(&mut self, subcommand: Self) {
         let subcommand_selected_sandbox_mode = subcommand.sandbox_mode.is_some()
-            || subcommand.full_auto
             || subcommand.dangerously_bypass_approvals_and_sandbox;
         let Self {
             images,
@@ -137,7 +127,6 @@ impl SharedCliOptions {
             oss_provider,
             config_profile,
             sandbox_mode,
-            full_auto,
             dangerously_bypass_approvals_and_sandbox,
             cwd,
             add_dir,
@@ -157,7 +146,6 @@ impl SharedCliOptions {
         }
         if subcommand_selected_sandbox_mode {
             self.sandbox_mode = sandbox_mode;
-            self.full_auto = full_auto;
             self.dangerously_bypass_approvals_and_sandbox =
                 dangerously_bypass_approvals_and_sandbox;
         }

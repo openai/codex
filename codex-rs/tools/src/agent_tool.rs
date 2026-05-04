@@ -16,6 +16,7 @@ pub struct SpawnAgentToolOptions<'a> {
     pub hide_agent_type_model_reasoning: bool,
     pub include_usage_hint: bool,
     pub usage_hint_text: Option<String>,
+    pub max_concurrent_threads_per_session: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +72,7 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions<'_>) -> ToolSpe
             available_models_description.as_deref(),
             options.include_usage_hint,
             options.usage_hint_text,
+            options.max_concurrent_threads_per_session,
         ),
         strict: false,
         defer_loading: None,
@@ -137,7 +139,7 @@ pub fn create_send_message_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_message".to_string(),
-        description: "Send a string message to an existing agent without triggering a new turn."
+        description: "Send a message to an existing agent. The message will be delivered promptly. Does not trigger a new turn."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -164,18 +166,11 @@ pub fn create_followup_task_tool() -> ToolSpec {
                 "Message text to send to the target agent.".to_string(),
             )),
         ),
-        (
-            "interrupt".to_string(),
-            JsonSchema::boolean(Some(
-                "When true, stop the agent's current task and handle this immediately. When false (default), queue this message; if the target is already running, it starts the target's next turn after the current turn completes."
-                    .to_string(),
-            )),
-        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "followup_task".to_string(),
-        description: "Send a string message to an existing non-root agent and trigger a turn in the target. Use interrupt=true to redirect work immediately. If interrupt=false and the target's turn has not completed, the message is queued and starts the target's next turn after the current turn completes."
+        description: "Send a message to an existing non-root target agent and trigger a turn in that target. If the target is currently mid-turn, the message is queued and will be used to start the target's next turn, after the current turn completes."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -655,8 +650,16 @@ fn spawn_agent_tool_description_v2(
     available_models_description: Option<&str>,
     include_usage_hint: bool,
     usage_hint_text: Option<String>,
+    max_concurrent_threads_per_session: Option<usize>,
 ) -> String {
     let agent_role_guidance = available_models_description.unwrap_or_default();
+    let concurrency_guidance = max_concurrent_threads_per_session
+        .map(|limit| {
+            format!(
+                "This session is configured with `max_concurrent_threads_per_session = {limit}` for concurrently open agent threads."
+            )
+        })
+        .unwrap_or_default();
 
     let tool_description = format!(
         r#"
@@ -666,7 +669,8 @@ You are then able to refer to this agent as `task_3` or `/root/task1/task_3` int
 The spawned agent will have the same tools as you and the ability to spawn its own subagents.
 {SPAWN_AGENT_INHERITED_MODEL_GUIDANCE}
 It will be able to send you and other running agents messages, and its final answer will be provided to you when it finishes.
-The new agent's canonical task name will be provided to it along with the message."#
+The new agent's canonical task name will be provided to it along with the message.
+{concurrency_guidance}"#
     );
 
     if !include_usage_hint {

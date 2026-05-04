@@ -36,8 +36,9 @@ pub(crate) enum RpcCallError {
 
 type PendingRequest = oneshot::Sender<Result<Value, RpcCallError>>;
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
-type RequestRoute<S> =
-    Box<dyn Fn(Arc<S>, JSONRPCRequest) -> BoxFuture<RpcServerOutboundMessage> + Send + Sync>;
+type RequestRoute<S> = Box<
+    dyn Fn(Arc<S>, JSONRPCRequest) -> BoxFuture<Option<RpcServerOutboundMessage>> + Send + Sync,
+>;
 type NotificationRoute<S> =
     Box<dyn Fn(Arc<S>, JSONRPCNotification) -> BoxFuture<Result<(), String>> + Send + Sync>;
 
@@ -70,6 +71,17 @@ pub(crate) struct RpcNotificationSender {
 impl RpcNotificationSender {
     pub(crate) fn new(outgoing_tx: mpsc::Sender<RpcServerOutboundMessage>) -> Self {
         Self { outgoing_tx }
+    }
+
+    pub(crate) async fn response(
+        &self,
+        request_id: RequestId,
+        result: Value,
+    ) -> Result<(), JSONRPCErrorError> {
+        self.outgoing_tx
+            .send(RpcServerOutboundMessage::Response { request_id, result })
+            .await
+            .map_err(|_| internal_error("RPC connection closed while sending response".into()))
     }
 
     #[allow(dead_code)]
@@ -131,10 +143,10 @@ where
                     let response = match response {
                         Ok(response) => response.await,
                         Err(error) => {
-                            return RpcServerOutboundMessage::Error { request_id, error };
+                            return Some(RpcServerOutboundMessage::Error { request_id, error });
                         }
                     };
-                    match response {
+                    Some(match response {
                         Ok(result) => match serde_json::to_value(result) {
                             Ok(result) => RpcServerOutboundMessage::Response { request_id, result },
                             Err(err) => RpcServerOutboundMessage::Error {
@@ -143,6 +155,34 @@ where
                             },
                         },
                         Err(error) => RpcServerOutboundMessage::Error { request_id, error },
+                    })
+                })
+            }),
+        );
+    }
+
+    pub(crate) fn request_with_id<P, F, Fut>(&mut self, method: &'static str, handler: F)
+    where
+        P: DeserializeOwned + Send + 'static,
+        F: Fn(Arc<S>, RequestId, P) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), JSONRPCErrorError>> + Send + 'static,
+    {
+        self.request_routes.insert(
+            method,
+            Box::new(move |state, request| {
+                let request_id = request.id;
+                let params = decode_request_params::<P>(request.params)
+                    .map(|params| handler(state, request_id.clone(), params));
+                Box::pin(async move {
+                    let response = match params {
+                        Ok(response) => response.await,
+                        Err(error) => {
+                            return Some(RpcServerOutboundMessage::Error { request_id, error });
+                        }
+                    };
+                    match response {
+                        Ok(()) => None,
+                        Err(error) => Some(RpcServerOutboundMessage::Error { request_id, error }),
                     }
                 })
             }),

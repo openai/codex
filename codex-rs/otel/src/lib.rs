@@ -15,6 +15,7 @@ pub use crate::config::OtelExporter;
 pub use crate::config::OtelHttpProtocol;
 pub use crate::config::OtelSettings;
 pub use crate::config::OtelTlsConfig;
+pub use crate::config::StatsigMetricsSettings;
 pub use crate::events::session_telemetry::AuthEnvTelemetryMetadata;
 pub use crate::events::session_telemetry::SessionTelemetry;
 pub use crate::events::session_telemetry::SessionTelemetryMetadata;
@@ -52,7 +53,8 @@ impl From<codex_app_server_protocol::AuthMode> for TelemetryAuthMode {
         match mode {
             codex_app_server_protocol::AuthMode::ApiKey => Self::ApiKey,
             codex_app_server_protocol::AuthMode::Chatgpt
-            | codex_app_server_protocol::AuthMode::ChatgptAuthTokens => Self::Chatgpt,
+            | codex_app_server_protocol::AuthMode::ChatgptAuthTokens
+            | codex_app_server_protocol::AuthMode::AgentIdentity => Self::Chatgpt,
         }
     }
 }
@@ -63,4 +65,10 @@ pub fn start_global_timer(name: &str, tags: &[(&str, &str)]) -> MetricsResult<Ti
         return Err(MetricsError::ExporterDisabled);
     };
     metrics.start_timer(name, tags)
+}
+
+/// Returns the resolved Statsig metrics settings for the globally installed
+/// OTEL metrics client, if the active metrics exporter is Statsig.
+pub fn global_statsig_metrics_settings() -> Option<StatsigMetricsSettings> {
+    crate::metrics::global_statsig_settings()
 }

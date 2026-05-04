@@ -16,11 +16,11 @@
 //! 3.  We do **not** walk past the project root.
 
 use crate::config::Config;
-use crate::config_loader::ConfigLayerStackOrdering;
-use crate::config_loader::default_project_root_markers;
-use crate::config_loader::merge_toml_values;
-use crate::config_loader::project_root_markers_from_config;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::ConfigLayerStackOrdering;
+use codex_config::default_project_root_markers;
+use codex_config::merge_toml_values;
+use codex_config::project_root_markers_from_config;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
@@ -41,41 +41,6 @@ pub const LOCAL_AGENTS_MD_FILENAME: &str = "AGENTS.override.md";
 /// When both `Config::instructions` and AGENTS.md docs are present, they will
 /// be concatenated with the following separator.
 const AGENTS_MD_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
-
-fn render_js_repl_instructions(config: &Config) -> Option<String> {
-    if !config.features.enabled(Feature::JsRepl) {
-        return None;
-    }
-
-    let mut section = String::from("## JavaScript REPL (Node)\n");
-    section.push_str(
-        "- Use `js_repl` for Node-backed JavaScript with top-level await in a persistent kernel.\n",
-    );
-    section.push_str("- `js_repl` is a freeform/custom tool. Direct `js_repl` calls must send raw JavaScript tool input (optionally with first-line `// codex-js-repl: timeout_ms=15000`). Do not wrap code in JSON (for example `{\"code\":\"...\"}`), quotes, or markdown code fences.\n");
-    section.push_str(
-        "- Helpers: `codex.cwd`, `codex.homeDir`, `codex.tmpDir`, `codex.tool(name, args?)`, and `codex.emitImage(imageLike)`.\n",
-    );
-    section.push_str("- `codex.tool` executes a normal tool call and resolves to the raw tool output object. Use it for shell and non-shell tools alike. Nested tool outputs stay inside JavaScript unless you emit them explicitly.\n");
-    section.push_str("- `codex.emitImage(...)` adds one image to the outer `js_repl` function output each time you call it, so you can call it multiple times to emit multiple images. It accepts a data URL, a single `input_image` item, an object like `{ bytes, mimeType }`, or a raw tool response object with exactly one image and no text. It rejects mixed text-and-image content.\n");
-    section.push_str("- `codex.tool(...)` and `codex.emitImage(...)` keep stable helper identities across cells. Saved references and persisted objects can reuse them in later cells, but async callbacks that fire after a cell finishes still fail because no exec is active.\n");
-    section.push_str("- Request full-resolution image processing with `detail: \"original\"` only when the `view_image` tool schema includes a `detail` argument. The same availability applies to `codex.emitImage(...)`: if `view_image.detail` is present, you may also pass `detail: \"original\"` there. Use this when high-fidelity image perception or precise localization is needed, especially for CUA agents.\n");
-    section.push_str("- Raw MCP image blocks can request the same behavior by returning `_meta: { \"codex/imageDetail\": \"original\" }` on the image content item.\n");
-    section.push_str("- Example of sharing an in-memory Playwright screenshot: `await codex.emitImage({ bytes: await page.screenshot({ type: \"jpeg\", quality: 85 }), mimeType: \"image/jpeg\", detail: \"original\" })`.\n");
-    section.push_str("- Example of sharing a local image tool result: `await codex.emitImage(codex.tool(\"view_image\", { path: \"/absolute/path\", detail: \"original\" }))`.\n");
-    section.push_str("- When encoding an image to send with `codex.emitImage(...)` or `view_image`, prefer JPEG at about 85 quality when lossy compression is acceptable; use PNG when transparency or lossless detail matters. Smaller uploads are faster and less likely to hit size limits.\n");
-    section.push_str("- Top-level bindings persist across cells. If a cell throws, prior bindings remain available and bindings that finished initializing before the throw often remain usable in later cells. For code you plan to reuse across cells, prefer declaring or assigning it in direct top-level statements before operations that might throw. If you hit `SyntaxError: Identifier 'x' has already been declared`, first reuse the existing binding, reassign a previously declared `let`, or pick a new descriptive name. Use `{ ... }` only for a short temporary block when you specifically need local scratch names; do not wrap an entire cell in block scope if you want those names reusable later. Reset the kernel with `js_repl_reset` only when you need a clean state.\n");
-    section.push_str("- Top-level static import declarations (for example `import x from \"./file.js\"`) are currently unsupported in `js_repl`; use dynamic imports with `await import(\"pkg\")`, `await import(\"./file.js\")`, or `await import(\"/abs/path/file.mjs\")` instead. Imported local files must be ESM `.js`/`.mjs` files and run in the same REPL VM context. Bare package imports always resolve from REPL-global search roots (`CODEX_JS_REPL_NODE_MODULE_DIRS`, then cwd), not relative to the imported file location. Local files may statically import only other local relative/absolute/`file://` `.js`/`.mjs` files; package and builtin imports from local files must stay dynamic. `import.meta.resolve()` returns importable strings such as `file://...`, bare package names, and `node:...` specifiers. Local file modules reload between execs, while top-level bindings persist until `js_repl_reset`.\n");
-
-    if config.features.enabled(Feature::JsReplToolsOnly) {
-        section.push_str("- Do not call tools directly; use `js_repl` + `codex.tool(...)` for all tool calls, including shell commands.\n");
-        section
-            .push_str("- MCP tools (if any) can also be called by name via `codex.tool(...)`.\n");
-    }
-
-    section.push_str("- Avoid direct access to `process.stdout` / `process.stderr` / `process.stdin`; it can corrupt the JSON line protocol. Use `console.log`, `codex.tool(...)`, and `codex.emitImage(...)`.");
-
-    Some(section)
-}
 
 /// Resolves AGENTS.md files into model-visible user instructions and source
 /// paths.
@@ -146,13 +111,6 @@ impl<'a> AgentsMdManager<'a> {
                 error!("error trying to find AGENTS.md docs: {e:#}");
             }
         };
-
-        if let Some(js_repl_section) = render_js_repl_instructions(self.config) {
-            if !output.is_empty() {
-                output.push_str("\n\n");
-            }
-            output.push_str(&js_repl_section);
-        }
 
         if self.config.features.enabled(Feature::ChildAgentsMd) {
             if !output.is_empty() {

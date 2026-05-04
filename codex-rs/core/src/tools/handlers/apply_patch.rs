@@ -16,12 +16,16 @@ use crate::tools::context::ApplyPatchToolOutput;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -29,14 +33,13 @@ use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::sandboxing::ToolCtx;
 use codex_apply_patch::ApplyPatchAction;
-use codex_apply_patch::ApplyPatchArgs;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_apply_patch::Hunk;
-use codex_apply_patch::parse_patch_streaming;
+use codex_apply_patch::StreamingPatchParser;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::PatchApplyUpdatedEvent;
@@ -52,8 +55,7 @@ pub struct ApplyPatchHandler;
 
 #[derive(Default)]
 struct ApplyPatchArgumentDiffConsumer {
-    input: String,
-    last_progress: Option<Vec<Hunk>>,
+    parser: StreamingPatchParser,
     last_sent_at: Option<Instant>,
     pending: Option<PatchApplyUpdatedEvent>,
 }
@@ -73,26 +75,19 @@ impl ToolArgumentDiffConsumer for ApplyPatchArgumentDiffConsumer {
             .map(EventMsg::PatchApplyUpdated)
     }
 
-    fn flush_on_complete(&mut self) -> Option<EventMsg> {
-        self.flush_update_on_complete()
-            .map(EventMsg::PatchApplyUpdated)
+    fn finish(&mut self) -> Result<Option<EventMsg>, FunctionCallError> {
+        self.finish_update_on_complete()
+            .map(|event| event.map(EventMsg::PatchApplyUpdated))
     }
 }
 
 impl ApplyPatchArgumentDiffConsumer {
     fn push_delta(&mut self, call_id: String, delta: &str) -> Option<PatchApplyUpdatedEvent> {
-        self.input.push_str(delta);
-
-        let ApplyPatchArgs { hunks, .. } = parse_patch_streaming(&self.input).ok()?;
+        let hunks = self.parser.push_delta(delta).ok()?;
         if hunks.is_empty() {
             return None;
         }
-        if self.last_progress.as_ref() == Some(&hunks) {
-            return None;
-        }
-
         let changes = convert_apply_patch_hunks_to_protocol(&hunks);
-        self.last_progress = Some(hunks);
         let event = PatchApplyUpdatedEvent { call_id, changes };
         let now = Instant::now();
         match self.last_sent_at {
@@ -110,12 +105,18 @@ impl ApplyPatchArgumentDiffConsumer {
         }
     }
 
-    fn flush_update_on_complete(&mut self) -> Option<PatchApplyUpdatedEvent> {
+    fn finish_update_on_complete(
+        &mut self,
+    ) -> Result<Option<PatchApplyUpdatedEvent>, FunctionCallError> {
+        self.parser.finish().map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to parse apply_patch: {err}"))
+        })?;
+
         let event = self.pending.take();
         if event.is_some() {
             self.last_sent_at = Some(Instant::now());
         }
-        event
+        Ok(event)
     }
 }
 
@@ -211,7 +212,7 @@ fn write_permissions_for_paths(
     file_paths: &[AbsolutePathBuf],
     file_system_sandbox_policy: &codex_protocol::permissions::FileSystemSandboxPolicy,
     cwd: &AbsolutePathBuf,
-) -> Option<PermissionProfile> {
+) -> Option<AdditionalPermissionProfile> {
     let write_paths = file_paths
         .iter()
         .map(|path| {
@@ -228,7 +229,7 @@ fn write_permissions_for_paths(
         .collect::<Result<Vec<_>, _>>()
         .ok()?;
 
-    let permissions = (!write_paths.is_empty()).then_some(PermissionProfile {
+    let permissions = (!write_paths.is_empty()).then_some(AdditionalPermissionProfile {
         file_system: Some(FileSystemPermissions::from_read_write_roots(
             Some(vec![]),
             Some(write_paths),
@@ -237,6 +238,21 @@ fn write_permissions_for_paths(
     })?;
 
     normalize_additional_permissions(permissions).ok()
+}
+
+/// Extracts the raw patch text used as the command-shaped hook input for apply_patch.
+///
+/// The apply_patch tool can arrive as the older JSON/function shape or as a
+/// freeform custom tool call. Both represent the same file edit operation, so
+/// hooks see the raw patch body in `tool_input.command` either way.
+fn apply_patch_payload_command(payload: &ToolPayload) -> Option<String> {
+    match payload {
+        ToolPayload::Function { arguments } => parse_arguments::<ApplyPatchToolArgs>(arguments)
+            .ok()
+            .map(|args| args.input),
+        ToolPayload::Custom { input } => Some(input.clone()),
+        _ => None,
+    }
 }
 
 async fn effective_patch_permissions(
@@ -253,12 +269,14 @@ async fn effective_patch_permissions(
         session.granted_session_permissions().await.as_ref(),
         session.granted_turn_permissions().await.as_ref(),
     );
+    let base_file_system_sandbox_policy = turn.file_system_sandbox_policy();
     let file_system_sandbox_policy = effective_file_system_sandbox_policy(
-        &turn.file_system_sandbox_policy,
+        &base_file_system_sandbox_policy,
         granted_permissions.as_ref(),
     );
     let effective_additional_permissions = apply_granted_turn_permissions(
         session,
+        turn.cwd.as_path(),
         crate::sandboxing::SandboxPermissions::UseDefault,
         write_permissions_for_paths(&file_paths, &file_system_sandbox_policy, &turn.cwd),
     )
@@ -293,6 +311,30 @@ impl ToolHandler for ApplyPatchHandler {
         Some(Box::<ApplyPatchArgumentDiffConsumer>::default())
     }
 
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        apply_patch_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
+            tool_name: HookToolName::apply_patch(),
+            tool_input: serde_json::json!({ "command": command }),
+        })
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        result: &Self::Output,
+    ) -> Option<PostToolUsePayload> {
+        let tool_response =
+            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
+        Some(PostToolUsePayload {
+            tool_name: HookToolName::apply_patch(),
+            tool_use_id: invocation.call_id.clone(),
+            tool_input: serde_json::json!({
+                "command": apply_patch_payload_command(&invocation.payload)?,
+            }),
+            tool_response,
+        })
+    }
+
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
@@ -321,13 +363,14 @@ impl ToolHandler for ApplyPatchHandler {
         // Avoid building temporary ExecParams/command vectors; derive directly from inputs.
         let cwd = turn.cwd.clone();
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
-        let Some(environment) = turn.environment.as_ref() else {
+        let Some(turn_environment) = turn.environments.primary() else {
             return Err(FunctionCallError::RespondToModel(
                 "apply_patch is unavailable in this session".to_string(),
             ));
         };
-        let fs = environment.get_filesystem();
-        let sandbox = environment
+        let fs = turn_environment.environment.get_filesystem();
+        let sandbox = turn_environment
+            .environment
             .is_remote()
             .then(|| turn.file_system_sandbox_context(/*additional_permissions*/ None));
         match codex_apply_patch::maybe_parse_apply_patch_verified(
@@ -432,9 +475,9 @@ pub(crate) async fn intercept_apply_patch(
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
     let sandbox = turn
-        .environment
-        .as_ref()
-        .filter(|env| env.is_remote())
+        .environments
+        .primary()
+        .filter(|env| env.environment.is_remote())
         .map(|_| turn.file_system_sandbox_context(/*additional_permissions*/ None));
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, sandbox.as_ref())
         .await

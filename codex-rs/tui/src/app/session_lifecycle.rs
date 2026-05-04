@@ -385,13 +385,8 @@ impl App {
     }
 
     pub(super) fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        self.overlay = None;
-        self.transcript_cells.clear();
-        self.deferred_history_lines.clear();
+        self.reset_transcript_state_after_clear();
         tui.clear_pending_history_lines();
-        self.has_emitted_history_lines = false;
-        self.backtrack = BacktrackState::default();
-        self.backtrack_render_pending = false;
         Self::clear_terminal_for_thread_switch(&mut tui.terminal)?;
         Ok(())
     }
@@ -622,7 +617,8 @@ impl App {
 
     pub(super) fn fresh_session_config(&self) -> Config {
         let mut config = self.config.clone();
-        config.service_tier = self.chat_widget.current_service_tier();
+        config.service_tier = self.chat_widget.configured_service_tier();
+        config.notices.fast_default_opt_out = self.chat_widget.fast_default_opt_out();
         config
     }
     pub(super) async fn resume_target_session(
@@ -640,9 +636,9 @@ impl App {
         let resume_cwd = if self.remote_app_server_url.is_some() {
             current_cwd.clone()
         } else {
-            match crate::resolve_cwd_for_resume_or_fork(
+            match crate::session_resume::resolve_cwd_for_resume_or_fork(
                 tui,
-                &self.config,
+                self.state_db.as_deref(),
                 &current_cwd,
                 target_session.thread_id,
                 target_session.path.as_deref(),
@@ -651,9 +647,9 @@ impl App {
             )
             .await?
             {
-                crate::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
-                crate::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
-                crate::ResolveCwdOutcome::Exit => {
+                crate::session_resume::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
+                crate::session_resume::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
+                crate::session_resume::ResolveCwdOutcome::Exit => {
                     return Ok(AppRunControl::Exit(ExitReason::UserRequested));
                 }
             }
@@ -684,6 +680,7 @@ impl App {
             .await
         {
             Ok(resumed) => {
+                let resumed_thread_id = resumed.session.thread_id;
                 self.shutdown_current_thread(app_server).await;
                 self.config = resume_config;
                 tui.set_notification_settings(
@@ -711,6 +708,11 @@ impl App {
                             }
                             self.chat_widget.add_plain_history_lines(lines);
                         }
+                        self.maybe_prompt_resume_paused_goal_after_resume(
+                            app_server,
+                            resumed_thread_id,
+                        )
+                        .await;
                     }
                     Err(err) => {
                         self.chat_widget.add_error_message(format!(
@@ -728,5 +730,63 @@ impl App {
         }
 
         Ok(AppRunControl::Continue)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_thread_read_error_detection_matches_not_loaded_errors() {
+        let err = color_eyre::eyre::eyre!(
+            "thread/read failed during TUI session lookup: thread/read failed: thread not loaded: thr_123"
+        );
+
+        assert!(App::is_terminal_thread_read_error(&err));
+    }
+
+    #[test]
+    fn terminal_thread_read_error_detection_ignores_transient_failures() {
+        let err = color_eyre::eyre::eyre!(
+            "thread/read failed during TUI session lookup: thread/read transport error: broken pipe"
+        );
+
+        assert!(!App::is_terminal_thread_read_error(&err));
+    }
+
+    #[test]
+    fn closed_state_for_thread_read_error_preserves_live_state_without_cache_on_transient_error() {
+        let err = color_eyre::eyre::eyre!(
+            "thread/read failed during TUI session lookup: thread/read transport error: broken pipe"
+        );
+
+        assert!(!App::closed_state_for_thread_read_error(
+            &err, /*existing_is_closed*/ None
+        ));
+    }
+
+    #[test]
+    fn closed_state_for_thread_read_error_marks_terminal_uncached_threads_closed() {
+        let err = color_eyre::eyre::eyre!(
+            "thread/read failed during TUI session lookup: thread/read failed: thread not loaded: thr_123"
+        );
+
+        assert!(App::closed_state_for_thread_read_error(
+            &err, /*existing_is_closed*/ None
+        ));
+    }
+
+    #[test]
+    fn include_turns_fallback_detection_handles_unmaterialized_and_ephemeral_threads() {
+        let unmaterialized = color_eyre::eyre::eyre!(
+            "thread/read failed during TUI session lookup: thread/read failed: thread thr_123 is not materialized yet; includeTurns is unavailable before first user message"
+        );
+        let ephemeral = color_eyre::eyre::eyre!(
+            "thread/read failed during TUI session lookup: thread/read failed: ephemeral threads do not support includeTurns"
+        );
+
+        assert!(App::can_fallback_from_include_turns_error(&unmaterialized));
+        assert!(App::can_fallback_from_include_turns_error(&ephemeral));
     }
 }

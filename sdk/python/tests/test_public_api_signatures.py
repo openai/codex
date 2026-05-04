@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import importlib.resources as resources
 import inspect
+import tomllib
+from pathlib import Path
 from typing import Any
 
+import codex_app_server
 from codex_app_server import AppServerConfig, RunResult
 from codex_app_server.models import InitializeResponse
 from codex_app_server.api import AsyncCodex, AsyncThread, Codex, Thread
@@ -22,7 +25,9 @@ def _assert_no_any_annotations(fn: object) -> None:
     signature = inspect.signature(fn)
     for param in signature.parameters.values():
         if param.annotation is Any:
-            raise AssertionError(f"{fn} has public parameter typed as Any: {param.name}")
+            raise AssertionError(
+                f"{fn} has public parameter typed as Any: {param.name}"
+            )
     if signature.return_annotation is Any:
         raise AssertionError(f"{fn} has public return annotation typed as Any")
 
@@ -33,6 +38,14 @@ def test_root_exports_app_server_config() -> None:
 
 def test_root_exports_run_result() -> None:
     assert RunResult.__name__ == "RunResult"
+
+
+def test_package_and_default_client_versions_follow_project_version() -> None:
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    pyproject = tomllib.loads(pyproject_path.read_text())
+
+    assert codex_app_server.__version__ == pyproject["project"]["version"]
+    assert AppServerConfig().client_version == codex_app_server.__version__
 
 
 def test_package_includes_py_typed_marker() -> None:
@@ -56,6 +69,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "sandbox",
             "service_name",
             "service_tier",
+            "session_start_source",
         ],
         Codex.thread_list: [
             "archived",
@@ -64,8 +78,10 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "limit",
             "model_providers",
             "search_term",
+            "sort_direction",
             "sort_key",
             "source_kinds",
+            "use_state_db_only",
         ],
         Codex.thread_resume: [
             "approval_policy",
@@ -131,6 +147,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "sandbox",
             "service_name",
             "service_tier",
+            "session_start_source",
         ],
         AsyncCodex.thread_list: [
             "archived",
@@ -139,8 +156,10 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "limit",
             "model_providers",
             "search_term",
+            "sort_direction",
             "sort_key",
             "source_kinds",
+            "use_state_db_only",
         ],
         AsyncCodex.thread_resume: [
             "approval_policy",
@@ -197,7 +216,9 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
     for fn, expected_kwargs in expected.items():
         actual = _keyword_only_names(fn)
         assert actual == expected_kwargs, f"unexpected kwargs for {fn}: {actual}"
-        assert all(name == name.lower() for name in actual), f"non snake_case kwargs in {fn}: {actual}"
+        assert all(name == name.lower() for name in actual), (
+            f"non snake_case kwargs in {fn}: {actual}"
+        )
         _assert_no_any_annotations(fn)
 
 
@@ -247,4 +268,6 @@ def test_initialize_metadata_requires_non_empty_information() -> None:
     except RuntimeError as exc:
         assert "missing required metadata" in str(exc)
     else:
-        raise AssertionError("expected RuntimeError when initialize metadata is missing")
+        raise AssertionError(
+            "expected RuntimeError when initialize metadata is missing"
+        )

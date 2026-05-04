@@ -64,6 +64,15 @@ pub fn quote_windows_arg(arg: &str) -> String {
     quoted
 }
 
+/// Build a Windows command line for CreateProcess-style APIs.
+#[cfg(target_os = "windows")]
+pub fn argv_to_command_line(argv: &[String]) -> String {
+    argv.iter()
+        .map(|arg| quote_windows_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 // Produce a readable description for a Win32 error code.
 pub fn format_last_error(err: i32) -> String {
     unsafe {
@@ -189,4 +198,39 @@ fn sid_bytes_from_string(sid_str: &str) -> Result<Vec<u8>> {
         return Err(anyhow::anyhow!("CopySid failed for {sid_str}"));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::argv_to_command_line;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn argv_to_command_line_quotes_each_argument_independently() {
+        let argv = vec![
+            "cmd.exe".to_string(),
+            "/c".to_string(),
+            "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -EncodedCommand abc=="
+                .to_string(),
+        ];
+
+        assert_eq!(
+            argv_to_command_line(&argv),
+            "cmd.exe /c \"\\\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\\\" -NoProfile -EncodedCommand abc==\""
+        );
+    }
+
+    #[test]
+    fn argv_to_command_line_quotes_regular_program_args() {
+        let argv = vec![
+            "pwsh.exe".to_string(),
+            "-Command".to_string(),
+            "Write-Output \"hello world\"".to_string(),
+        ];
+
+        assert_eq!(
+            argv_to_command_line(&argv),
+            "pwsh.exe -Command \"Write-Output \\\"hello world\\\"\""
+        );
+    }
 }

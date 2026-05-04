@@ -17,6 +17,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence, get_args, get_origin
 
+SDK_DISTRIBUTION_NAME = "openai-codex-app-server-sdk"
+RUNTIME_DISTRIBUTION_NAME = "openai-codex-cli-bin"
+
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
@@ -76,6 +79,24 @@ def current_sdk_version() -> str:
     return match.group(1)
 
 
+def normalize_codex_version(version: str) -> str:
+    normalized = version.strip()
+    if normalized.startswith("rust-v"):
+        normalized = normalized.removeprefix("rust-v")
+    elif normalized.startswith("v"):
+        normalized = normalized.removeprefix("v")
+
+    normalized = re.sub(r"-alpha\.?([0-9]+)$", r"a\1", normalized)
+    normalized = re.sub(r"-beta\.?([0-9]+)$", r"b\1", normalized)
+    normalized = re.sub(r"-rc\.?([0-9]+)$", r"rc\1", normalized)
+
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*(?:(?:a|b|rc)[0-9]+)?", normalized):
+        raise RuntimeError(
+            f"Could not normalize Codex version {version!r} to a PEP 440 version"
+        )
+    return normalized
+
+
 def _copy_package_tree(src: Path, dst: Path) -> None:
     if dst.exists():
         if dst.is_dir():
@@ -110,6 +131,46 @@ def _rewrite_project_version(pyproject_text: str, version: str) -> str:
     return updated
 
 
+def _rewrite_runtime_platform_tag(pyproject_text: str, platform_tag: str) -> str:
+    section = "[tool.hatch.build.targets.wheel.hooks.custom]"
+    section_index = pyproject_text.find(section)
+    if section_index == -1:
+        raise RuntimeError("Could not find runtime wheel custom hook config")
+
+    next_section_index = pyproject_text.find("\n[", section_index + len(section))
+    if next_section_index == -1:
+        section_text = pyproject_text[section_index:]
+        tail = ""
+    else:
+        section_text = pyproject_text[section_index:next_section_index]
+        tail = pyproject_text[next_section_index:]
+
+    updated_section, count = re.subn(
+        r'^platform-tag = "[^"]*"$',
+        f'platform-tag = "{platform_tag}"',
+        section_text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count == 0:
+        updated_section = section_text.rstrip() + f'\nplatform-tag = "{platform_tag}"\n'
+
+    return pyproject_text[:section_index] + updated_section + tail
+
+
+def _rewrite_project_name(pyproject_text: str, name: str) -> str:
+    updated, count = re.subn(
+        r'^name = "[^"]+"$',
+        f'name = "{name}"',
+        pyproject_text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count != 1:
+        raise RuntimeError("Could not rewrite project name in pyproject.toml")
+    return updated
+
+
 def _rewrite_sdk_runtime_dependency(pyproject_text: str, runtime_version: str) -> str:
     match = re.search(r"^dependencies = \[(.*?)\]$", pyproject_text, flags=re.MULTILINE)
     if match is None:
@@ -118,15 +179,19 @@ def _rewrite_sdk_runtime_dependency(pyproject_text: str, runtime_version: str) -
         )
 
     raw_items = [item.strip() for item in match.group(1).split(",") if item.strip()]
-    raw_items = [item for item in raw_items if "codex-cli-bin" not in item]
-    raw_items.append(f'"codex-cli-bin=={runtime_version}"')
+    raw_items = [
+        item
+        for item in raw_items
+        if RUNTIME_DISTRIBUTION_NAME.removeprefix("openai-") not in item
+        and RUNTIME_DISTRIBUTION_NAME not in item
+    ]
+    raw_items.append(f'"{RUNTIME_DISTRIBUTION_NAME}=={runtime_version}"')
     replacement = "dependencies = [\n  " + ",\n  ".join(raw_items) + ",\n]"
     return pyproject_text[: match.start()] + replacement + pyproject_text[match.end() :]
 
 
-def stage_python_sdk_package(
-    staging_dir: Path, sdk_version: str, runtime_version: str
-) -> Path:
+def stage_python_sdk_package(staging_dir: Path, codex_version: str) -> Path:
+    package_version = normalize_codex_version(codex_version)
     _copy_package_tree(sdk_root(), staging_dir)
     sdk_bin_dir = staging_dir / "src" / "codex_app_server" / "bin"
     if sdk_bin_dir.exists():
@@ -134,21 +199,29 @@ def stage_python_sdk_package(
 
     pyproject_path = staging_dir / "pyproject.toml"
     pyproject_text = pyproject_path.read_text()
-    pyproject_text = _rewrite_project_version(pyproject_text, sdk_version)
-    pyproject_text = _rewrite_sdk_runtime_dependency(pyproject_text, runtime_version)
+    pyproject_text = _rewrite_project_name(pyproject_text, SDK_DISTRIBUTION_NAME)
+    pyproject_text = _rewrite_project_version(pyproject_text, package_version)
+    pyproject_text = _rewrite_sdk_runtime_dependency(pyproject_text, package_version)
     pyproject_path.write_text(pyproject_text)
     return staging_dir
 
 
 def stage_python_runtime_package(
-    staging_dir: Path, runtime_version: str, binary_path: Path
+    staging_dir: Path,
+    codex_version: str,
+    binary_path: Path,
+    platform_tag: str | None = None,
 ) -> Path:
+    package_version = normalize_codex_version(codex_version)
     _copy_package_tree(python_runtime_root(), staging_dir)
 
     pyproject_path = staging_dir / "pyproject.toml"
-    pyproject_path.write_text(
-        _rewrite_project_version(pyproject_path.read_text(), runtime_version)
-    )
+    pyproject_text = pyproject_path.read_text()
+    pyproject_text = _rewrite_project_name(pyproject_text, RUNTIME_DISTRIBUTION_NAME)
+    pyproject_text = _rewrite_project_version(pyproject_text, package_version)
+    if platform_tag is not None:
+        pyproject_text = _rewrite_runtime_platform_tag(pyproject_text, platform_tag)
+    pyproject_path.write_text(pyproject_text)
 
     out_bin = staged_runtime_bin_path(staging_dir)
     out_bin.parent.mkdir(parents=True, exist_ok=True)
@@ -558,8 +631,8 @@ class PublicFieldSpec:
 @dataclass(frozen=True)
 class CliOps:
     generate_types: Callable[[], None]
-    stage_python_sdk_package: Callable[[Path, str, str], Path]
-    stage_python_runtime_package: Callable[[Path, str, Path], Path]
+    stage_python_sdk_package: Callable[[Path, str], Path]
+    stage_python_runtime_package: Callable[[Path, str, Path, str | None], Path]
     current_sdk_version: Callable[[], str]
 
 
@@ -926,13 +999,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output directory for the staged SDK package",
     )
     stage_sdk_parser.add_argument(
+        "--codex-version",
+        help=(
+            "Codex release version to write into the staged SDK package and exact "
+            f"{RUNTIME_DISTRIBUTION_NAME} dependency. Accepts PEP 440 versions "
+            "or release tags such as rust-v0.116.0-alpha.1."
+        ),
+    )
+    stage_sdk_parser.add_argument(
         "--runtime-version",
-        required=True,
-        help="Pinned codex-cli-bin version for the staged SDK package",
+        help=argparse.SUPPRESS,
     )
     stage_sdk_parser.add_argument(
         "--sdk-version",
-        help="Version to write into the staged SDK package (defaults to sdk/python current version)",
+        help=argparse.SUPPRESS,
     )
 
     stage_runtime_parser = subparsers.add_parser(
@@ -950,9 +1030,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the codex binary to package for this platform",
     )
     stage_runtime_parser.add_argument(
+        "--codex-version",
+        help=(
+            "Codex release version to write into the staged runtime package. "
+            "Accepts PEP 440 versions or release tags such as rust-v0.116.0-alpha.1."
+        ),
+    )
+    stage_runtime_parser.add_argument(
         "--runtime-version",
-        required=True,
-        help="Version to write into the staged runtime package",
+        help=argparse.SUPPRESS,
+    )
+    stage_runtime_parser.add_argument(
+        "--platform-tag",
+        help=(
+            "Optional wheel platform tag override, for example "
+            "macosx_11_0_arm64 or musllinux_1_1_x86_64."
+        ),
     )
     return parser
 
@@ -970,21 +1063,44 @@ def default_cli_ops() -> CliOps:
     )
 
 
+def _resolve_codex_version(args: argparse.Namespace) -> str:
+    versions = [
+        value
+        for value in (
+            getattr(args, "codex_version", None),
+            getattr(args, "runtime_version", None),
+            getattr(args, "sdk_version", None),
+        )
+        if value is not None
+    ]
+    if not versions:
+        raise RuntimeError("Pass --codex-version to stage Python release artifacts")
+
+    normalized_versions = [normalize_codex_version(version) for version in versions]
+    if len(set(normalized_versions)) != 1:
+        raise RuntimeError(
+            "SDK and runtime package versions must match; pass one --codex-version"
+        )
+    return normalized_versions[0]
+
+
 def run_command(args: argparse.Namespace, ops: CliOps) -> None:
     if args.command == "generate-types":
         ops.generate_types()
     elif args.command == "stage-sdk":
+        codex_version = _resolve_codex_version(args)
         ops.generate_types()
         ops.stage_python_sdk_package(
             args.staging_dir,
-            args.sdk_version or ops.current_sdk_version(),
-            args.runtime_version,
+            codex_version,
         )
     elif args.command == "stage-runtime":
+        codex_version = _resolve_codex_version(args)
         ops.stage_python_runtime_package(
             args.staging_dir,
-            args.runtime_version,
+            codex_version,
             args.runtime_binary.resolve(),
+            args.platform_tag,
         )
 
 

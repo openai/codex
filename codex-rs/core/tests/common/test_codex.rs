@@ -12,11 +12,13 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_config::CloudRequirementsLoader;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
+use codex_core::thread_store_from_config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
@@ -25,8 +27,8 @@ use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -35,6 +37,7 @@ use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
@@ -46,6 +49,7 @@ use crate::PathBufExt;
 use crate::TempDirExt;
 use crate::get_remote_test_env;
 use crate::load_default_config_for_test;
+use crate::load_default_config_for_test_with_cloud_requirements;
 use crate::responses::WebSocketTestServer;
 use crate::responses::output_value_to_text;
 use crate::responses::start_mock_server;
@@ -76,7 +80,8 @@ impl TestEnv {
     pub async fn local() -> Result<Self> {
         let local_cwd_temp_dir = Arc::new(TempDir::new()?);
         let cwd = local_cwd_temp_dir.abs();
-        let environment = codex_exec_server::Environment::create(/*exec_server_url*/ None).await?;
+        let environment =
+            codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)?;
         Ok(Self {
             environment,
             cwd,
@@ -115,7 +120,8 @@ pub async fn test_env() -> Result<TestEnv> {
     match get_remote_test_env() {
         Some(remote_env) => {
             let websocket_url = remote_exec_server_url()?;
-            let environment = codex_exec_server::Environment::create(Some(websocket_url)).await?;
+            let environment =
+                codex_exec_server::Environment::create_for_tests(Some(websocket_url))?;
             let cwd = remote_aware_cwd_path();
             environment
                 .get_filesystem()
@@ -197,13 +203,27 @@ pub enum ShellModelOutput {
     // UnifiedExec has its own set of tests
 }
 
+/// Returns the permission fields required by `Op::UserTurn` for tests that
+/// construct the op directly.
+pub fn turn_permission_fields(
+    permission_profile: PermissionProfile,
+    cwd: &Path,
+) -> (SandboxPolicy, Option<PermissionProfile>) {
+    let sandbox_policy = permission_profile
+        .to_legacy_sandbox_policy(cwd)
+        .unwrap_or_else(|_| SandboxPolicy::new_read_only_policy());
+    (sandbox_policy, Some(permission_profile))
+}
+
 pub struct TestCodexBuilder {
     config_mutators: Vec<Box<ConfigMutator>>,
     auth: CodexAuth,
     pre_build_hooks: Vec<Box<PreBuildHook>>,
     workspace_setups: Vec<Box<WorkspaceSetup>>,
     home: Option<Arc<TempDir>>,
+    cloud_requirements: Option<CloudRequirementsLoader>,
     user_shell_override: Option<Shell>,
+    exec_server_url: Option<String>,
 }
 
 impl TestCodexBuilder {
@@ -250,8 +270,18 @@ impl TestCodexBuilder {
         self
     }
 
+    pub fn with_cloud_requirements(mut self, cloud_requirements: CloudRequirementsLoader) -> Self {
+        self.cloud_requirements = Some(cloud_requirements);
+        self
+    }
+
     pub fn with_user_shell(mut self, user_shell: Shell) -> Self {
         self.user_shell_override = Some(user_shell);
+        self
+    }
+
+    pub fn with_exec_server_url(mut self, exec_server_url: impl Into<String>) -> Self {
+        self.exec_server_url = Some(exec_server_url.into());
         self
     }
 
@@ -350,9 +380,21 @@ impl TestCodexBuilder {
         let (config, fallback_cwd) = self
             .prepare_config(base_url, &home, test_env.cwd().clone())
             .await?;
-        let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
-            test_env.exec_server_url().map(str::to_owned),
-        ));
+        let exec_server_url = self
+            .exec_server_url
+            .clone()
+            .or_else(|| test_env.exec_server_url().map(str::to_owned));
+        let local_runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
+            std::env::current_exe()?,
+            /*codex_linux_sandbox_exe*/ None,
+        )?;
+        let environment_manager = Arc::new(
+            codex_exec_server::EnvironmentManager::create_for_tests(
+                exec_server_url,
+                local_runtime_paths,
+            )
+            .await,
+        );
         let file_system = test_env.environment().get_filesystem();
         let mut workspace_setups = vec![];
         swap(&mut self.workspace_setups, &mut workspace_setups);
@@ -381,21 +423,24 @@ impl TestCodexBuilder {
         environment_manager: Arc<codex_exec_server::EnvironmentManager>,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
+        let state_db = codex_core::init_state_db(&config).await;
         let thread_manager = if config.model_catalog.is_some() {
             ThreadManager::new(
                 &config,
                 codex_core::test_support::auth_manager_from_auth(auth.clone()),
                 SessionSource::Exec,
-                CollaborationModesConfig::default(),
                 Arc::clone(&environment_manager),
                 /*analytics_events_client*/ None,
+                thread_store_from_config(&config, state_db.clone()),
+                state_db.clone(),
             )
         } else {
-            codex_core::test_support::thread_manager_with_models_provider_and_home(
+            codex_core::test_support::thread_manager_with_models_provider_home_and_state(
                 auth.clone(),
                 config.model_provider.clone(),
                 config.codex_home.to_path_buf(),
                 Arc::clone(&environment_manager),
+                state_db.clone(),
             )
         };
         let thread_manager = Arc::new(thread_manager);
@@ -463,12 +508,16 @@ impl TestCodexBuilder {
             ..built_in_model_providers(/*openai_base_url*/ None)["openai"].clone()
         };
         let cwd = Arc::new(TempDir::new()?);
-        let mut config = load_default_config_for_test(home).await;
-        config.cwd = cwd_override;
-        config.model_provider = model_provider;
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());
         }
+        let mut config = if let Some(cloud_requirements) = self.cloud_requirements.take() {
+            load_default_config_for_test_with_cloud_requirements(home, cloud_requirements).await
+        } else {
+            load_default_config_for_test(home).await
+        };
+        config.cwd = cwd_override;
+        config.model_provider = model_provider;
         if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
             config.codex_self_exe = Some(path);
         } else if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex-exec") {
@@ -560,10 +609,19 @@ impl TestCodex {
     }
 
     pub async fn submit_turn(&self, prompt: &str) -> Result<()> {
-        self.submit_turn_with_policies(
+        self.submit_turn_with_permission_profile(prompt, PermissionProfile::Disabled)
+            .await
+    }
+
+    pub async fn submit_turn_with_permission_profile(
+        &self,
+        prompt: &str,
+        permission_profile: PermissionProfile,
+    ) -> Result<()> {
+        self.submit_turn_with_approval_and_permission_profile(
             prompt,
             AskForApproval::Never,
-            SandboxPolicy::DangerFullAccess,
+            permission_profile,
         )
         .await
     }
@@ -582,11 +640,12 @@ impl TestCodex {
         prompt: &str,
         service_tier: Option<ServiceTier>,
     ) -> Result<()> {
-        self.submit_turn_with_context(
+        self.submit_turn_with_permission_profile_context(
             prompt,
             AskForApproval::Never,
-            SandboxPolicy::DangerFullAccess,
+            PermissionProfile::Disabled,
             Some(service_tier),
+            /*environments*/ None,
         )
         .await
     }
@@ -597,11 +656,65 @@ impl TestCodex {
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
     ) -> Result<()> {
+        let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+            &sandbox_policy,
+            self.config.cwd.as_path(),
+        );
         self.submit_turn_with_context(
             prompt,
             approval_policy,
-            sandbox_policy,
+            permission_profile,
             /*service_tier*/ None,
+            /*environments*/ None,
+        )
+        .await
+    }
+
+    pub async fn submit_turn_with_approval_and_permission_profile(
+        &self,
+        prompt: &str,
+        approval_policy: AskForApproval,
+        permission_profile: PermissionProfile,
+    ) -> Result<()> {
+        self.submit_turn_with_permission_profile_context(
+            prompt,
+            approval_policy,
+            permission_profile,
+            /*service_tier*/ None,
+            /*environments*/ None,
+        )
+        .await
+    }
+
+    pub async fn submit_turn_with_environments(
+        &self,
+        prompt: &str,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
+    ) -> Result<()> {
+        self.submit_turn_with_permission_profile_context(
+            prompt,
+            AskForApproval::Never,
+            PermissionProfile::Disabled,
+            /*service_tier*/ None,
+            environments,
+        )
+        .await
+    }
+
+    async fn submit_turn_with_permission_profile_context(
+        &self,
+        prompt: &str,
+        approval_policy: AskForApproval,
+        permission_profile: PermissionProfile,
+        service_tier: Option<Option<ServiceTier>>,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
+    ) -> Result<()> {
+        self.submit_turn_with_context(
+            prompt,
+            approval_policy,
+            permission_profile,
+            service_tier,
+            environments,
         )
         .await
     }
@@ -610,12 +723,16 @@ impl TestCodex {
         &self,
         prompt: &str,
         approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
+        permission_profile: PermissionProfile,
         service_tier: Option<Option<ServiceTier>>,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> Result<()> {
+        let (sandbox_policy, permission_profile) =
+            turn_permission_fields(permission_profile, self.config.cwd.as_path());
         let session_model = self.session_configured.model.clone();
         self.codex
             .submit(Op::UserTurn {
+                environments,
                 items: vec![UserInput::Text {
                     text: prompt.into(),
                     text_elements: Vec::new(),
@@ -625,6 +742,7 @@ impl TestCodex {
                 approval_policy,
                 approvals_reviewer: None,
                 sandbox_policy,
+                permission_profile,
                 model: session_model,
                 effort: None,
                 summary: None,
@@ -784,6 +902,16 @@ impl TestCodexHarness {
             .await
     }
 
+    pub async fn submit_with_permission_profile(
+        &self,
+        prompt: &str,
+        permission_profile: PermissionProfile,
+    ) -> Result<()> {
+        self.test
+            .submit_turn_with_permission_profile(prompt, permission_profile)
+            .await
+    }
+
     pub async fn request_bodies(&self) -> Vec<Value> {
         let path_matcher = path_regex(".*/responses$");
         self.server
@@ -884,7 +1012,9 @@ pub fn test_codex() -> TestCodexBuilder {
         pre_build_hooks: vec![],
         workspace_setups: vec![],
         home: None,
+        cloud_requirements: None,
         user_shell_override: None,
+        exec_server_url: None,
     }
 }
 

@@ -8,17 +8,18 @@ use codex_protocol::items::TurnItem;
 use codex_utils_stream_parser::strip_citations;
 use tokio_util::sync::CancellationToken;
 
+use crate::context::ContextualUserFragment;
+use crate::context::ImageGenerationInstructions;
 use crate::function_tool::FunctionCallError;
-use crate::memories::citations::parse_memory_citation;
-use crate::memories::citations::thread_ids_from_memory_citation;
 use crate::parse_turn_item;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
+use codex_memories_read::citations::parse_memory_citation;
+use codex_memories_read::citations::thread_ids_from_memory_citation;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
-use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::MessagePhase;
@@ -137,8 +138,11 @@ pub(crate) async fn record_completed_response_item(
             .await;
     }
     mark_thread_memory_mode_polluted_if_external_context(sess, turn_context, item).await;
-    let has_memory_citation =
-        record_stage1_output_usage_and_detect_memory_citation(turn_context, item).await;
+    let has_memory_citation = record_stage1_output_usage_and_detect_memory_citation(
+        sess.services.state_db.as_ref(),
+        item,
+    )
+    .await;
     if has_memory_citation {
         sess.record_memory_citation_for_turn(&turn_context.sub_id)
             .await;
@@ -173,7 +177,7 @@ pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
 }
 
 async fn record_stage1_output_usage_and_detect_memory_citation(
-    turn_context: &TurnContext,
+    state_db_ctx: Option<&state_db::StateDbHandle>,
     item: &ResponseItem,
 ) -> bool {
     let Some(raw_text) = raw_assistant_output_text_from_item(item) else {
@@ -189,7 +193,7 @@ async fn record_stage1_output_usage_and_detect_memory_citation(
         return true;
     }
 
-    if let Some(db) = state_db::get_state_db(turn_context.config.as_ref()).await {
+    if let Some(db) = state_db_ctx {
         let _ = db.record_stage1_output_usage(&thread_ids).await;
     }
     true
@@ -254,14 +258,14 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
-            if let Some(turn_item) = handle_non_tool_response_item(
+            let turn_item = handle_non_tool_response_item(
                 ctx.sess.as_ref(),
                 ctx.turn_context.as_ref(),
                 &item,
                 plan_mode,
             )
-            .await
-            {
+            .await;
+            if let Some(turn_item) = turn_item {
                 if previously_active_item.is_none() {
                     let mut started_item = turn_item.clone();
                     if let TurnItem::ImageGeneration(item) = &mut started_item {
@@ -392,12 +396,11 @@ pub(crate) async fn handle_non_tool_response_item(
                         let image_output_dir = image_output_path
                             .parent()
                             .unwrap_or_else(|| turn_context.config.codex_home.clone());
-                        let message: ResponseItem = DeveloperInstructions::new(format!(
-                            "Generated images are saved to {} as {} by default.\nIf you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it.",
-                            image_output_dir.display(),
-                            image_output_path.display(),
-                        ))
-                        .into();
+                        let message: ResponseItem =
+                            ContextualUserFragment::into(ImageGenerationInstructions::new(
+                                image_output_dir.display(),
+                                image_output_path.display(),
+                            ));
                         sess.record_conversation_items(turn_context, &[message])
                             .await;
                     }

@@ -8,7 +8,7 @@ inputs:
     description: Logical namespace used to keep concurrent Bazel jobs from reserving the same repository cache key.
     required: true
   install-test-prereqs:
-    description: Install Node.js and DotSlash for Bazel-backed test jobs.
+    description: Install DotSlash for Bazel-backed test jobs.
     required: false
     default: "false"
 outputs:

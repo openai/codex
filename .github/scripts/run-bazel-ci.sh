@@ -4,9 +4,9 @@ set -euo pipefail
 
 print_failed_bazel_test_logs=0
 print_failed_bazel_action_summary=0
-use_node_test_env=0
 remote_download_toplevel=0
 windows_msvc_host_platform=0
+windows_cross_compile=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -18,16 +18,16 @@ while [[ $# -gt 0 ]]; do
       print_failed_bazel_action_summary=1
       shift
       ;;
-    --use-node-test-env)
-      use_node_test_env=1
-      shift
-      ;;
     --remote-download-toplevel)
       remote_download_toplevel=1
       shift
       ;;
     --windows-msvc-host-platform)
       windows_msvc_host_platform=1
+      shift
+      ;;
+    --windows-cross-compile)
+      windows_cross_compile=1
       shift
       ;;
     --)
@@ -42,7 +42,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $# -eq 0 ]]; then
-  echo "Usage: $0 [--print-failed-test-logs] [--print-failed-action-summary] [--use-node-test-env] [--remote-download-toplevel] [--windows-msvc-host-platform] -- <bazel args> -- <targets>" >&2
+  echo "Usage: $0 [--print-failed-test-logs] [--print-failed-action-summary] [--remote-download-toplevel] [--windows-msvc-host-platform] [--windows-cross-compile] -- <bazel args> -- <targets>" >&2
   exit 1
 fi
 
@@ -66,7 +66,11 @@ case "${RUNNER_OS:-}" in
     ci_config=ci-macos
     ;;
   Windows)
-    ci_config=ci-windows
+    if [[ $windows_cross_compile -eq 1 ]]; then
+      ci_config=ci-windows-cross
+    else
+      ci_config=ci-windows
+    fi
     ;;
 esac
 
@@ -110,8 +114,8 @@ print_bazel_test_log_tails() {
   while IFS= read -r target; do
     failed_targets+=("$target")
   done < <(
-    grep -E '^FAIL: //' "$console_log" \
-      | sed -E 's#^FAIL: (//[^ ]+).*#\1#' \
+    grep -E '^(FAIL: //|ERROR: .* Testing //)' "$console_log" \
+      | sed -E 's#^FAIL: (//[^ ]+).*#\1#; s#^ERROR: .* Testing (//[^ ]+) failed:.*#\1#' \
       | sort -u
   )
 
@@ -249,14 +253,10 @@ if [[ ${#bazel_args[@]} -eq 0 || ${#bazel_targets[@]} -eq 0 ]]; then
   exit 1
 fi
 
-if [[ $use_node_test_env -eq 1 ]]; then
-  # Bazel test sandboxes on macOS may resolve an older Homebrew `node`
-  # before the `actions/setup-node` runtime on PATH.
-  node_bin="$(which node)"
-  if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-    node_bin="$(cygpath -w "${node_bin}")"
-  fi
-  bazel_args+=("--test_env=CODEX_JS_REPL_NODE_PATH=${node_bin}")
+if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
+  # Fork PRs do not receive the BuildBuddy secret needed for the remote
+  # cross-compile config. Preserve the previous local Windows build shape.
+  windows_msvc_host_platform=1
 fi
 
 post_config_bazel_args=()
@@ -284,6 +284,25 @@ if [[ $remote_download_toplevel -eq 1 ]]; then
   post_config_bazel_args+=(--remote_download_toplevel)
 fi
 
+if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+  # `--enable_platform_specific_config` expands `common:windows` on Windows
+  # hosts after ordinary rc configs, which can override `ci-windows-cross`'s
+  # RBE host platform. Repeat the host platform on the command line so V8 and
+  # other genrules execute on Linux RBE workers instead of Git Bash locally.
+  #
+  # Bazel also derives the default genrule shell from the client host. Without
+  # an explicit shell executable, remote Linux actions can be asked to run
+  # `C:\Program Files\Git\usr\bin\bash.exe`.
+  post_config_bazel_args+=(--host_platform=//:rbe --shell_executable=/bin/bash)
+fi
+
+if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
+  # The Windows cross-compile config depends on remote execution. Fork PRs do
+  # not receive the BuildBuddy secret, so fall back to the existing local build
+  # shape and keep its lower concurrency cap.
+  post_config_bazel_args+=(--jobs=8)
+fi
+
 if [[ -n "${BAZEL_REPO_CONTENTS_CACHE:-}" ]]; then
   # Windows self-hosted runners can run multiple Bazel jobs concurrently. Give
   # each job its own repo contents cache so they do not fight over the shared
@@ -302,27 +321,57 @@ if [[ -n "${CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR:-}" ]]; then
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-  windows_action_env_vars=(
-    INCLUDE
-    LIB
-    LIBPATH
-    PATH
-    UCRTVersion
-    UniversalCRTSdkDir
-    VCINSTALLDIR
-    VCToolsInstallDir
-    WindowsLibPath
-    WindowsSdkBinPath
-    WindowsSdkDir
-    WindowsSDKLibVersion
-    WindowsSDKVersion
-  )
+  pass_windows_build_env=1
+  if [[ $windows_cross_compile -eq 1 && -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+    # Remote build actions execute on Linux RBE workers. Passing the Windows
+    # runner's build environment there makes Bazel genrules try to execute
+    # C:\Program Files\Git\usr\bin\bash.exe on Linux.
+    pass_windows_build_env=0
+  fi
 
-  for env_var in "${windows_action_env_vars[@]}"; do
-    if [[ -n "${!env_var:-}" ]]; then
-      post_config_bazel_args+=("--action_env=${env_var}" "--host_action_env=${env_var}")
-    fi
-  done
+  if [[ $pass_windows_build_env -eq 1 ]]; then
+    windows_action_env_vars=(
+      INCLUDE
+      LIB
+      LIBPATH
+      UCRTVersion
+      UniversalCRTSdkDir
+      VCINSTALLDIR
+      VCToolsInstallDir
+      WindowsLibPath
+      WindowsSdkBinPath
+      WindowsSdkDir
+      WindowsSDKLibVersion
+      WindowsSDKVersion
+    )
+
+    for env_var in "${windows_action_env_vars[@]}"; do
+      if [[ -n "${!env_var:-}" ]]; then
+        post_config_bazel_args+=("--action_env=${env_var}" "--host_action_env=${env_var}")
+      fi
+    done
+  fi
+
+  if [[ -z "${CODEX_BAZEL_WINDOWS_PATH:-}" ]]; then
+    echo "CODEX_BAZEL_WINDOWS_PATH must be set for Windows Bazel CI." >&2
+    exit 1
+  fi
+
+  if [[ $pass_windows_build_env -eq 1 ]]; then
+    post_config_bazel_args+=(
+      "--action_env=PATH=${CODEX_BAZEL_WINDOWS_PATH}"
+      "--host_action_env=PATH=${CODEX_BAZEL_WINDOWS_PATH}"
+    )
+  elif [[ $windows_cross_compile -eq 1 ]]; then
+    # Remote build actions run on Linux RBE workers. Give their shell snippets
+    # a Linux PATH while preserving CODEX_BAZEL_WINDOWS_PATH below for local
+    # Windows test execution.
+    post_config_bazel_args+=(
+      "--action_env=PATH=/usr/bin:/bin"
+      "--host_action_env=PATH=/usr/bin:/bin"
+    )
+  fi
+  post_config_bazel_args+=("--test_env=PATH=${CODEX_BAZEL_WINDOWS_PATH}")
 fi
 
 bazel_console_log="$(mktemp)"

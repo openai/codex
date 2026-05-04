@@ -2,12 +2,10 @@ use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 use codex_network_proxy::NetworkProxy;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_sandboxing::landlock::allow_network_for_proxy;
-use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_policies;
+use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_permission_profile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::Path;
@@ -18,15 +16,14 @@ use tokio::process::Child;
 /// isolation plus seccomp for network restrictions.
 ///
 /// Unlike macOS Seatbelt where we directly embed the policy text, the Linux
-/// helper is a separate executable. We pass the legacy [`SandboxPolicy`] plus
-/// split filesystem/network policies as JSON so the helper can migrate
-/// incrementally without breaking older call sites.
+/// helper is a separate executable. We pass the canonical permission profile
+/// as JSON and let the helper derive the runtime filesystem/network policies.
 #[allow(clippy::too_many_arguments)]
 pub async fn spawn_command_under_linux_sandbox<P>(
     codex_linux_sandbox_exe: P,
     command: Vec<String>,
     command_cwd: AbsolutePathBuf,
-    sandbox_policy: &SandboxPolicy,
+    permission_profile: &PermissionProfile,
     sandbox_policy_cwd: &AbsolutePathBuf,
     use_legacy_landlock: bool,
     stdio_policy: StdioPolicy,
@@ -36,15 +33,11 @@ pub async fn spawn_command_under_linux_sandbox<P>(
 where
     P: AsRef<Path>,
 {
-    let file_system_sandbox_policy =
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, sandbox_policy_cwd);
-    let network_sandbox_policy = NetworkSandboxPolicy::from(sandbox_policy);
-    let args = create_linux_sandbox_command_args_for_policies(
+    let network_sandbox_policy = permission_profile.network_sandbox_policy();
+    let args = create_linux_sandbox_command_args_for_permission_profile(
         command,
         command_cwd.as_path(),
-        sandbox_policy,
-        &file_system_sandbox_policy,
-        network_sandbox_policy,
+        permission_profile,
         sandbox_policy_cwd,
         use_legacy_landlock,
         allow_network_for_proxy(/*enforce_managed_network*/ false),

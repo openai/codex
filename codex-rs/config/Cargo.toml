@@ -4,23 +4,32 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[example]]
+name = "generate-proto"
+path = "examples/generate-proto.rs"
+
 [lints]
 workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+base64 = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-features = { workspace = true }
+codex-file-system = { workspace = true }
+codex-git-utils = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path = { workspace = true }
+dunce = { workspace = true }
 futures = { workspace = true, features = ["alloc", "std"] }
 gethostname = { workspace = true }
 multimap = { workspace = true }
+prost = "0.14.3"
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -30,6 +39,8 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 toml = { workspace = true }
 toml_edit = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
 tracing = { workspace = true }
 wildmatch = { workspace = true }
 
@@ -37,10 +48,21 @@ wildmatch = { workspace = true }
 dns-lookup = { workspace = true }
 libc = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.9"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 winapi-util = { workspace = true }
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+tokio-stream = { workspace = true, features = ["net"] }
+tonic = { workspace = true, features = ["router", "transport"] }
+tonic-prost-build = { version = "=0.14.3", default-features = false, features = ["transport"] }

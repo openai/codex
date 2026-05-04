@@ -18,8 +18,22 @@
 //!     app_event_tx,
 //! )
 //! .items(vec![
-//!     MultiSelectItem { id: "a".into(), name: "Item A".into(), description: None, enabled: true },
-//!     MultiSelectItem { id: "b".into(), name: "Item B".into(), description: None, enabled: false },
+//!     MultiSelectItem {
+//!         id: "a".into(),
+//!         name: "Item A".into(),
+//!         description: None,
+//!         enabled: true,
+//!         orderable: true,
+//!         section_break_after: false,
+//!     },
+//!     MultiSelectItem {
+//!         id: "b".into(),
+//!         name: "Item B".into(),
+//!         description: None,
+//!         enabled: false,
+//!         orderable: true,
+//!         section_break_after: false,
+//!     },
 //! ])
 //! .on_confirm(|selected_ids, tx| { /* handle confirmation */ })
 //! .build();
@@ -64,6 +78,8 @@ const SEARCH_PLACEHOLDER: &str = "Type to search";
 /// Prefix displayed before the search query (mimics a command prompt).
 const SEARCH_PROMPT_PREFIX: &str = "> ";
 
+const SECTION_BREAK_ROW: &str = "  ───────────────────────";
+
 /// Direction for reordering items in the list.
 enum Direction {
     Up,
@@ -89,7 +105,6 @@ pub type PreviewCallback = Box<dyn Fn(&[MultiSelectItem]) -> Option<Line<'static
 ///
 /// Each item has a unique identifier, display name, optional description,
 /// and an enabled/disabled state that can be toggled by the user.
-#[derive(Default)]
 pub(crate) struct MultiSelectItem {
     /// Unique identifier returned in the confirm callback when this item is enabled.
     pub id: String,
@@ -102,6 +117,30 @@ pub(crate) struct MultiSelectItem {
 
     /// Whether this item is currently selected/enabled.
     pub enabled: bool,
+
+    /// Whether this item can be moved when ordering is enabled.
+    pub orderable: bool,
+
+    /// Whether to draw a divider after this item when another visible item follows.
+    pub section_break_after: bool,
+}
+
+impl Default for MultiSelectItem {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            description: None,
+            enabled: false,
+            orderable: true,
+            section_break_after: false,
+        }
+    }
+}
+
+struct BuiltRows {
+    rows: Vec<GenericDisplayRow>,
+    state: ScrollState,
 }
 
 /// A multi-select picker widget with fuzzy search and optional reordering.
@@ -240,33 +279,61 @@ impl MultiSelectPicker {
     }
 
     /// Calculates the height needed for the row list area.
-    fn rows_height(&self, rows: &[GenericDisplayRow]) -> u16 {
-        rows.len().clamp(1, MAX_POPUP_ROWS).try_into().unwrap_or(1)
+    fn rows_height(&self, rows: &BuiltRows) -> u16 {
+        rows.rows
+            .len()
+            .clamp(1, MAX_POPUP_ROWS)
+            .try_into()
+            .unwrap_or(1)
     }
 
     /// Builds the display rows for all currently visible (filtered) items.
     ///
     /// Each row shows: `› [x] Item Name` where `›` indicates cursor position
     /// and `[x]` or `[ ]` indicates enabled/disabled state.
-    fn build_rows(&self) -> Vec<GenericDisplayRow> {
-        self.filtered_indices
-            .iter()
-            .enumerate()
-            .filter_map(|(visible_idx, actual_idx)| {
-                self.items.get(*actual_idx).map(|item| {
-                    let is_selected = self.state.selected_idx == Some(visible_idx);
-                    let prefix = if is_selected { '›' } else { ' ' };
-                    let marker = if item.enabled { 'x' } else { ' ' };
-                    let item_name = truncate_text(&item.name, ITEM_NAME_TRUNCATE_LEN);
-                    let name = format!("{prefix} [{marker}] {item_name}");
-                    GenericDisplayRow {
-                        name,
-                        description: item.description.clone(),
-                        ..Default::default()
-                    }
-                })
-            })
-            .collect()
+    fn build_rows(&self) -> BuiltRows {
+        let mut rows = Vec::new();
+        let mut visible_to_row = Vec::with_capacity(self.filtered_indices.len());
+        for (visible_idx, actual_idx) in self.filtered_indices.iter().enumerate() {
+            let Some(item) = self.items.get(*actual_idx) else {
+                continue;
+            };
+            visible_to_row.push(rows.len());
+            let is_selected = self.state.selected_idx == Some(visible_idx);
+            let prefix = if is_selected { '›' } else { ' ' };
+            let marker = if item.enabled { 'x' } else { ' ' };
+            let item_name = truncate_text(&item.name, ITEM_NAME_TRUNCATE_LEN);
+            let name = format!("{prefix} [{marker}] {item_name}");
+            rows.push(GenericDisplayRow {
+                name,
+                description: item.description.clone(),
+                ..Default::default()
+            });
+
+            if item.section_break_after && visible_idx + 1 < self.filtered_indices.len() {
+                rows.push(GenericDisplayRow {
+                    name: SECTION_BREAK_ROW.to_string(),
+                    is_disabled: true,
+                    ..Default::default()
+                });
+            }
+        }
+
+        let selected_idx = self
+            .state
+            .selected_idx
+            .and_then(|visible_idx| visible_to_row.get(visible_idx).copied());
+        let scroll_top = visible_to_row
+            .get(self.state.scroll_top)
+            .copied()
+            .unwrap_or(0);
+        BuiltRows {
+            rows,
+            state: ScrollState {
+                selected_idx,
+                scroll_top,
+            },
+        }
     }
 
     /// Moves the selection cursor up, wrapping to the bottom if at the top.
@@ -351,11 +418,23 @@ impl MultiSelectPicker {
             return;
         }
 
+        if !self
+            .items
+            .get(actual_idx)
+            .is_some_and(|item| item.orderable)
+        {
+            return;
+        }
+
         let new_idx = match direction {
             Direction::Up if actual_idx > 0 => actual_idx - 1,
             Direction::Down if actual_idx + 1 < len => actual_idx + 1,
             _ => return,
         };
+
+        if !self.items.get(new_idx).is_some_and(|item| item.orderable) {
+            return;
+        }
 
         // move item in underlying list
         self.items.swap(actual_idx, new_idx);
@@ -570,8 +649,8 @@ impl Renderable for MultiSelectPicker {
             render_rows_single_line(
                 render_area,
                 buf,
-                &rows,
-                &self.state,
+                &rows.rows,
+                &rows.state,
                 render_area.height as usize,
                 "no matches",
             );
@@ -792,4 +871,97 @@ pub(crate) fn match_item(
         return Some((None, score));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    fn test_picker(items: Vec<MultiSelectItem>) -> MultiSelectPicker {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        MultiSelectPicker::builder(
+            "Test".to_string(),
+            /*subtitle*/ None,
+            AppEventSender::new(tx),
+        )
+        .items(items)
+        .enable_ordering()
+        .build()
+    }
+
+    fn item(id: &str, orderable: bool, section_break_after: bool) -> MultiSelectItem {
+        MultiSelectItem {
+            id: id.to_string(),
+            name: id.to_string(),
+            orderable,
+            section_break_after,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn non_orderable_items_cannot_move_or_be_crossed() {
+        let mut picker = test_picker(vec![
+            item(
+                "theme-colors",
+                /*orderable*/ false,
+                /*section_break_after*/ true,
+            ),
+            item(
+                "model", /*orderable*/ true, /*section_break_after*/ false,
+            ),
+            item(
+                "branch", /*orderable*/ true, /*section_break_after*/ false,
+            ),
+        ]);
+
+        picker.move_selected_item(Direction::Down);
+        assert_eq!(
+            picker
+                .items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["theme-colors", "model", "branch"]
+        );
+
+        picker.move_down();
+        picker.move_selected_item(Direction::Up);
+        assert_eq!(
+            picker
+                .items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["theme-colors", "model", "branch"]
+        );
+    }
+
+    #[test]
+    fn section_break_after_item_renders_separator_row() {
+        let picker = test_picker(vec![
+            item(
+                "theme-colors",
+                /*orderable*/ false,
+                /*section_break_after*/ true,
+            ),
+            item(
+                "model", /*orderable*/ true, /*section_break_after*/ false,
+            ),
+        ]);
+
+        let rows = picker.build_rows();
+
+        assert_eq!(
+            rows.rows
+                .iter()
+                .map(|row| row.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["› [ ] theme-colors", SECTION_BREAK_ROW, "  [ ] model"]
+        );
+        assert_eq!(rows.state.selected_idx, Some(0));
+    }
 }

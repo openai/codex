@@ -1,5 +1,10 @@
 use std::env;
+use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
+use std::process::Stdio;
+use std::time::Duration;
 
 use codex_exec_server::CODEX_FS_HELPER_ARG1;
 use codex_exec_server::ExecServerRuntimePaths;
@@ -10,6 +15,11 @@ use codex_test_binary_support::configure_test_binary_dispatch;
 use ctor::ctor;
 
 pub(crate) mod exec_server;
+
+pub(crate) const DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG: &str =
+    "--codex-test-delayed-output-after-exit-parent";
+
+const DELAYED_OUTPUT_AFTER_EXIT_CHILD_ARG: &str = "--codex-test-delayed-output-after-exit-child";
 
 #[ctor]
 pub static TEST_BINARY_DISPATCH_GUARD: Option<TestBinaryDispatchGuard> = {
@@ -22,6 +32,7 @@ pub static TEST_BINARY_DISPATCH_GUARD: Option<TestBinaryDispatchGuard> = {
         }
         TestBinaryDispatchMode::InstallAliases
     });
+    maybe_run_delayed_output_after_exit_from_test_binary();
     maybe_run_exec_server_from_test_binary(guard.as_ref());
     guard
 };
@@ -37,6 +48,82 @@ pub(crate) fn current_test_binary_helper_paths() -> anyhow::Result<(PathBuf, Opt
         None
     };
     Ok((current_exe, codex_linux_sandbox_exe))
+}
+
+fn maybe_run_delayed_output_after_exit_from_test_binary() {
+    let mut args = env::args();
+    let _program = args.next();
+    let Some(command) = args.next() else {
+        return;
+    };
+    match command.as_str() {
+        DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG => {
+            let release_path = next_release_path_arg(args);
+            run_delayed_output_after_exit_parent(&release_path);
+        }
+        DELAYED_OUTPUT_AFTER_EXIT_CHILD_ARG => {
+            let release_path = next_release_path_arg(args);
+            run_delayed_output_after_exit_child(&release_path);
+        }
+        _ => {}
+    }
+}
+
+fn next_release_path_arg(mut args: impl Iterator<Item = String>) -> PathBuf {
+    let Some(release_path) = args.next() else {
+        eprintln!("expected release path");
+        std::process::exit(1);
+    };
+    if args.next().is_some() {
+        eprintln!("unexpected extra arguments");
+        std::process::exit(1);
+    }
+    PathBuf::from(release_path)
+}
+
+fn run_delayed_output_after_exit_parent(release_path: &Path) {
+    let current_exe = match env::current_exe() {
+        Ok(current_exe) => current_exe,
+        Err(error) => {
+            eprintln!("failed to resolve current test binary: {error}");
+            std::process::exit(1);
+        }
+    };
+    match Command::new(current_exe)
+        .arg(DELAYED_OUTPUT_AFTER_EXIT_CHILD_ARG)
+        .arg(release_path)
+        .stdin(Stdio::null())
+        .spawn()
+    {
+        Ok(_) => std::process::exit(0),
+        Err(error) => {
+            eprintln!("failed to spawn delayed output child: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_delayed_output_after_exit_child(release_path: &Path) {
+    for _ in 0..1_000 {
+        if release_path.exists() {
+            let mut stdout = std::io::stdout().lock();
+            if let Err(error) = writeln!(stdout, "late output after exit") {
+                eprintln!("failed to write delayed output: {error}");
+                std::process::exit(1);
+            }
+            if let Err(error) = stdout.flush() {
+                eprintln!("failed to flush delayed output: {error}");
+                std::process::exit(1);
+            }
+            std::process::exit(0);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    eprintln!(
+        "timed out waiting for release path {}",
+        release_path.display()
+    );
+    std::process::exit(1);
 }
 
 fn maybe_run_exec_server_from_test_binary(guard: Option<&TestBinaryDispatchGuard>) {

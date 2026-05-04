@@ -1,6 +1,7 @@
 mod auth_status;
 mod elicitation_client_service;
 mod executor_process_transport;
+mod http_client_adapter;
 mod logging_client_handler;
 mod oauth;
 mod perform_oauth_login;
