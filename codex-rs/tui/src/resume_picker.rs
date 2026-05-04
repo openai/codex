@@ -3356,11 +3356,13 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
+        let expected_directory =
+            format_directory_display(row.cwd.as_deref().expect("cwd"), /*max_width*/ None);
 
         assert!(rendered.contains("Session:    feat(tui): add raw scrollback mode"));
         assert!(rendered.contains("Created:    17 minutes ago · 2026-05-02 14:31:08"));
         assert!(rendered.contains("Updated:    now · 2026-05-02 14:48:19"));
-        assert!(rendered.contains("Directory:  ~/code/codex"));
+        assert!(rendered.contains(&format!("Directory:  {expected_directory}")));
         assert!(rendered.contains("Branch:      codex/raw-scrollback-mode"));
         assert!(rendered.contains("Conversation:"));
     }
