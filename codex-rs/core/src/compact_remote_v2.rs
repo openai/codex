@@ -278,11 +278,34 @@ async fn run_remote_compaction_request_v2(
 async fn collect_context_compaction_output(
     mut stream: ResponseStream,
 ) -> CodexResult<ResponseItem> {
-    let mut output_items = Vec::new();
+    let mut output_item_count = 0usize;
+    let mut context_compaction_count = 0usize;
+    let mut context_compaction_output = None;
     let mut completed = false;
     while let Some(event) = stream.next().await {
         match event? {
-            ResponseEvent::OutputItemDone(item) => output_items.push(item),
+            ResponseEvent::OutputItemDone(item) => {
+                output_item_count += 1;
+                match item {
+                    ResponseItem::ContextCompaction {
+                        encrypted_content: Some(_),
+                    } => {
+                        context_compaction_count += 1;
+                        if context_compaction_output.is_none() {
+                            context_compaction_output = Some(item);
+                        }
+                    }
+                    ResponseItem::ContextCompaction {
+                        encrypted_content: None,
+                    } => {
+                        return Err(CodexErr::Fatal(
+                            "remote compaction v2 returned context_compaction without encrypted_content"
+                                .to_string(),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
             ResponseEvent::Completed { .. } => {
                 completed = true;
                 break;
@@ -297,26 +320,16 @@ async fn collect_context_compaction_output(
         ));
     }
 
-    let [item] = output_items.as_slice() else {
+    if context_compaction_count != 1 {
         return Err(CodexErr::Fatal(format!(
-            "remote compaction v2 expected exactly one output item, got {}",
-            output_items.len()
+            "remote compaction v2 expected exactly one context_compaction output item, got {context_compaction_count} from {output_item_count} output items"
         )));
-    };
-    match item {
-        ResponseItem::ContextCompaction {
-            encrypted_content: Some(_),
-        } => Ok(item.clone()),
-        ResponseItem::ContextCompaction {
-            encrypted_content: None,
-        } => Err(CodexErr::Fatal(
-            "remote compaction v2 returned context_compaction without encrypted_content"
-                .to_string(),
-        )),
-        other => Err(CodexErr::Fatal(format!(
-            "remote compaction v2 returned unexpected output item: {other:?}"
-        ))),
     }
+
+    let Some(context_compaction_output) = context_compaction_output else {
+        unreachable!("context compaction output must exist when count is exactly one");
+    };
+    Ok(context_compaction_output)
 }
 
 fn build_v2_compacted_history(
@@ -363,6 +376,8 @@ mod tests {
     use codex_protocol::openai_models::WebSearchToolType;
     use codex_protocol::openai_models::default_input_modalities;
     use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
 
     fn message(role: &str, text: &str, phase: Option<MessagePhase>) -> ResponseItem {
         ResponseItem::Message {
@@ -411,6 +426,20 @@ mod tests {
         }
     }
 
+    fn response_stream(events: Vec<CodexResult<ResponseEvent>>) -> ResponseStream {
+        let (tx_event, rx_event) = mpsc::channel(events.len().max(1));
+        for event in events {
+            tx_event
+                .try_send(event)
+                .expect("response stream test channel should have capacity");
+        }
+        drop(tx_event);
+        ResponseStream {
+            rx_event,
+            consumer_dropped: CancellationToken::new(),
+        }
+    }
+
     #[test]
     fn build_v2_compacted_history_matches_prod_retention_shape() {
         let input = vec![
@@ -446,5 +475,31 @@ mod tests {
                 output,
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn collect_context_compaction_output_accepts_additional_output_items() {
+        let context_compaction = ResponseItem::ContextCompaction {
+            encrypted_content: Some("encrypted".to_string()),
+        };
+        let stream = response_stream(vec![
+            Ok(ResponseEvent::OutputItemDone(message(
+                "assistant",
+                "IGNORED_COMPACT_REPLY",
+                Some(MessagePhase::FinalAnswer),
+            ))),
+            Ok(ResponseEvent::OutputItemDone(context_compaction.clone())),
+            Ok(ResponseEvent::Completed {
+                response_id: "resp-compact".to_string(),
+                token_usage: None,
+                end_turn: Some(true),
+            }),
+        ]);
+
+        let output = collect_context_compaction_output(stream)
+            .await
+            .expect("context compaction should be collected");
+
+        assert_eq!(output, context_compaction);
     }
 }
