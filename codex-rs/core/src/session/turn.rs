@@ -20,6 +20,7 @@ use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
+use crate::hook_output::cap_model_visible_hook_text;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::emit_hook_completed_events;
 use crate::hook_runtime::inspect_pending_input;
@@ -540,8 +541,25 @@ pub(crate) async fn run_turn(
                     emit_hook_completed_events(&sess, &turn_context, stop_outcome.hook_events)
                         .await;
                     if stop_outcome.should_block {
+                        let mut continuation_fragments =
+                            Vec::with_capacity(stop_outcome.continuation_fragments.len());
+                        for fragment in stop_outcome.continuation_fragments {
+                            continuation_fragments.push(
+                                codex_protocol::items::HookPromptFragment {
+                                    text: cap_model_visible_hook_text(
+                                        &turn_context.config.codex_home,
+                                        sess.conversation_id,
+                                        fragment.text,
+                                        turn_context.truncation_policy,
+                                        sess.state_db(),
+                                    )
+                                    .await,
+                                    hook_run_id: fragment.hook_run_id,
+                                },
+                            );
+                        }
                         if let Some(hook_prompt_message) =
-                            build_hook_prompt_message(&stop_outcome.continuation_fragments)
+                            build_hook_prompt_message(&continuation_fragments)
                         {
                             sess.record_conversation_items(
                                 &turn_context,

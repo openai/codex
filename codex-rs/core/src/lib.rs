@@ -40,6 +40,7 @@ mod flags;
 mod git_info_tests;
 mod goals;
 mod guardian;
+mod hook_output;
 mod hook_runtime;
 mod installation_id;
 pub(crate) mod landlock;

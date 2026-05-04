@@ -585,6 +585,38 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     Ok(())
 }
 
+fn write_session_start_hook_with_context(home: &Path, additional_context: &str) -> Result<()> {
+    let script_path = home.join("session_start_hook.py");
+    let additional_context_json = serde_json::to_string(additional_context)
+        .context("serialize session start additional context for test")?;
+    let script = format!(
+        r#"import json
+
+print(json.dumps({{
+    "hookSpecificOutput": {{
+        "hookEventName": "SessionStart",
+        "additionalContext": {additional_context_json}
+    }}
+}}))
+"#,
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "statusMessage": "running session start hook",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&script_path, script).context("write session start hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn rollout_hook_prompt_texts(text: &str) -> Result<Vec<String>> {
     let mut texts = Vec::new();
     for line in text.lines() {
@@ -616,6 +648,11 @@ fn request_hook_prompt_texts(
         .into_iter()
         .filter_map(|text| parse_hook_prompt_fragment(&text).map(|fragment| fragment.text))
         .collect()
+}
+
+fn spilled_hook_output_path(text: &str) -> Option<&str> {
+    text.lines()
+        .find_map(|line| line.strip_prefix("Full hook output saved to: "))
 }
 
 fn read_stop_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
@@ -901,6 +938,111 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
         Some(false)
     );
     assert_eq!(hook_inputs[0].get("exists"), Some(&Value::Bool(true)));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_start_hook_spills_large_additional_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hello from the reef"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let additional_context = "remember the reef ".repeat(200);
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_pre_build_hook({
+            let additional_context = additional_context.clone();
+            move |home| {
+                if let Err(error) = write_session_start_hook_with_context(home, &additional_context)
+                {
+                    panic!("failed to write session start hook test fixture: {error}");
+                }
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config.tool_output_token_limit = Some(50);
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello").await?;
+
+    let request = response.single_request();
+    let developer_messages = request.message_input_texts("developer");
+    assert_eq!(developer_messages.len(), 1);
+    let developer_message = &developer_messages[0];
+    assert!(developer_message.contains("tokens truncated"));
+    let path = spilled_hook_output_path(developer_message).context("spill path")?;
+    assert_eq!(fs::read_to_string(path)?, additional_context);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn stop_hook_spills_large_continuation_prompt() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "draft one"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "draft two"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let continuation_prompt = "retry with the reef note ".repeat(200);
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_pre_build_hook({
+            let continuation_prompt = continuation_prompt.clone();
+            move |home| {
+                if let Err(error) = write_stop_hook(home, &[&continuation_prompt]) {
+                    panic!("failed to write stop hook test fixture: {error}");
+                }
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config.tool_output_token_limit = Some(50);
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello from the sea").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let hook_prompt_texts = request_hook_prompt_texts(&requests[1]);
+    assert_eq!(hook_prompt_texts.len(), 1);
+    let hook_prompt_text = &hook_prompt_texts[0];
+    assert!(hook_prompt_text.contains("tokens truncated"));
+    let path = spilled_hook_output_path(hook_prompt_text).context("spill path")?;
+    assert_eq!(fs::read_to_string(path)?, continuation_prompt);
 
     Ok(())
 }
