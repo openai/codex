@@ -149,6 +149,10 @@ pub async fn run_main(
         )
         .await;
         async move {
+            let Some(mut processor) = processor else {
+                error!("failed to initialize MCP processor");
+                return;
+            };
             while let Some(msg) = incoming_rx.recv().await {
                 match msg {
                     JsonRpcMessage::Request(r) => processor.process_request(r).await,

@@ -442,8 +442,8 @@ impl Session {
             otel.name = "session_init.thread_persistence",
             session_init.ephemeral = config.ephemeral,
         ));
-        let state_db_fut =
-            async { if config.ephemeral { None } else { state_db } }.instrument(info_span!(
+        let state_db_fut = std::future::ready(if config.ephemeral { None } else { state_db })
+            .instrument(info_span!(
                 "session_init.state_db",
                 otel.name = "session_init.state_db",
                 session_init.ephemeral = config.ephemeral,
