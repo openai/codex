@@ -1,4 +1,5 @@
 use crate::CommandToolOptions;
+use crate::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 use crate::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
@@ -6,7 +7,6 @@ use crate::ShellToolOptions;
 use crate::SpawnAgentToolOptions;
 use crate::TOOL_SEARCH_DEFAULT_LIMIT;
 use crate::TOOL_SEARCH_TOOL_NAME;
-use crate::TOOL_SUGGEST_TOOL_NAME;
 use crate::ToolHandlerKind;
 use crate::ToolName;
 use crate::ToolRegistryPlan;
@@ -19,8 +19,8 @@ use crate::ViewImageToolOptions;
 use crate::WebSearchToolOptions;
 use crate::coalesce_loadable_tool_specs;
 use crate::collect_code_mode_exec_prompt_tool_definitions;
+use crate::collect_request_plugin_install_entries;
 use crate::collect_tool_search_source_infos;
-use crate::collect_tool_suggest_entries;
 use crate::create_apply_patch_freeform_tool;
 use crate::create_apply_patch_json_tool;
 use crate::create_close_agent_tool_v1;
@@ -39,6 +39,7 @@ use crate::create_local_shell_tool;
 use crate::create_read_mcp_resource_tool;
 use crate::create_report_agent_job_result_tool;
 use crate::create_request_permissions_tool;
+use crate::create_request_plugin_install_tool;
 use crate::create_request_user_input_tool;
 use crate::create_resume_agent_tool;
 use crate::create_send_input_tool_v1;
@@ -50,7 +51,6 @@ use crate::create_spawn_agent_tool_v2;
 use crate::create_spawn_agents_on_csv_tool;
 use crate::create_test_sync_tool;
 use crate::create_tool_search_tool;
-use crate::create_tool_suggest_tool;
 use crate::create_update_goal_tool;
 use crate::create_update_plan_tool;
 use crate::create_view_image_tool;
@@ -312,11 +312,16 @@ pub fn build_tool_registry_plan(
             params.discoverable_tools.filter(|tools| !tools.is_empty())
     {
         plan.push_spec(
-            create_tool_suggest_tool(&collect_tool_suggest_entries(discoverable_tools)),
+            create_request_plugin_install_tool(&collect_request_plugin_install_entries(
+                discoverable_tools,
+            )),
             /*supports_parallel_tool_calls*/ true,
             /*code_mode_enabled*/ false,
         );
-        plan.register_handler(TOOL_SUGGEST_TOOL_NAME, ToolHandlerKind::ToolSuggest);
+        plan.register_handler(
+            REQUEST_PLUGIN_INSTALL_TOOL_NAME,
+            ToolHandlerKind::RequestPluginInstall,
+        );
     }
 
     if config.has_environment

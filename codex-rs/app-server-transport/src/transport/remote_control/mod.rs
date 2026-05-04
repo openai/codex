@@ -36,14 +36,14 @@ pub(super) struct QueuedServerEnvelope {
 }
 
 #[derive(Clone)]
-pub(crate) struct RemoteControlHandle {
+pub struct RemoteControlHandle {
     enabled_tx: Arc<watch::Sender<bool>>,
     status_tx: Arc<watch::Sender<RemoteControlStatusChangedNotification>>,
     state_db_available: bool,
 }
 
 impl RemoteControlHandle {
-    pub(crate) fn set_enabled(&self, enabled: bool) {
+    pub fn set_enabled(&self, enabled: bool) {
         let requested_enabled = enabled;
         let enabled = enabled && self.state_db_available;
         if requested_enabled && !self.state_db_available {
@@ -56,14 +56,12 @@ impl RemoteControlHandle {
         });
     }
 
-    pub(crate) fn status_receiver(
-        &self,
-    ) -> watch::Receiver<RemoteControlStatusChangedNotification> {
+    pub fn status_receiver(&self) -> watch::Receiver<RemoteControlStatusChangedNotification> {
         self.status_tx.subscribe()
     }
 }
 
-pub(crate) async fn start_remote_control(
+pub async fn start_remote_control(
     remote_control_url: String,
     state_db: Option<Arc<StateRuntime>>,
     auth_manager: Arc<AuthManager>,

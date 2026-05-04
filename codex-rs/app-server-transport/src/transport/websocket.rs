@@ -128,7 +128,7 @@ async fn websocket_upgrade_handler(
         .into_response()
 }
 
-pub(crate) async fn start_websocket_acceptor(
+pub async fn start_websocket_acceptor(
     bind_address: SocketAddr,
     transport_event_tx: mpsc::Sender<TransportEvent>,
     shutdown_token: CancellationToken,

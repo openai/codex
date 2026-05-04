@@ -27,7 +27,7 @@ schema and Responses API tool primitives that no longer need to live in
 - collaboration and agent-job `ToolSpec` builders for spawn/send/wait/close,
   `request_user_input`, and CSV fanout/reporting
 - discoverable-tool models, client filtering, and `ToolSpec` builders for
-  `tool_search` and `tool_suggest`
+  `tool_search` and `request_plugin_install`
 - `parse_tool_input_schema()`
 - `parse_dynamic_tool()`
 - `parse_mcp_tool()`

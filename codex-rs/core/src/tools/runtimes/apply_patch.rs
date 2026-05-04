@@ -191,11 +191,11 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let environment = ctx.turn.environment.as_ref().ok_or_else(|| {
+        let turn_environment = ctx.turn.primary_environment().ok_or_else(|| {
             ToolError::Rejected("apply_patch is unavailable in this session".to_string())
         })?;
         let started_at = Instant::now();
-        let fs = environment.get_filesystem();
+        let fs = turn_environment.environment.get_filesystem();
         let sandbox = Self::file_system_sandbox_context_for_attempt(req, attempt);
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();

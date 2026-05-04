@@ -99,12 +99,6 @@ mod imp {
             }
             self.value
         }
-
-        fn refresh_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
-            self.value = init();
-            self.attempted = true;
-            self.value
-        }
     }
 
     fn default_colors_cache() -> &'static Mutex<Cache<DefaultColors>> {
@@ -115,7 +109,7 @@ mod imp {
     pub(super) fn default_colors() -> Option<DefaultColors> {
         let cache = default_colors_cache();
         let mut cache = cache.lock().ok()?;
-        cache.get_or_init_with(|| query_default_colors().unwrap_or_default())
+        cache.get_or_init_with(query_default_colors)
     }
 
     pub(super) fn requery_default_colors() {
@@ -124,14 +118,36 @@ mod imp {
             if cache.attempted && cache.value.is_none() {
                 return;
             }
-            cache.refresh_with(|| query_default_colors().unwrap_or_default());
+
+            // Focus events arrive after crossterm's event stream is active. Requery through
+            // crossterm here so unrelated input stays in crossterm's skipped-event queue instead
+            // of being consumed by the bounded startup probe's direct tty reads.
+            let fg = query_foreground_color()
+                .ok()
+                .flatten()
+                .and_then(color_to_tuple);
+            let bg = query_background_color()
+                .ok()
+                .flatten()
+                .and_then(color_to_tuple);
+            cache.value = fg.zip(bg).map(|(fg, bg)| DefaultColors { fg, bg });
+            cache.attempted = true;
         }
     }
 
-    fn query_default_colors() -> std::io::Result<Option<DefaultColors>> {
-        let fg = query_foreground_color()?.and_then(color_to_tuple);
-        let bg = query_background_color()?.and_then(color_to_tuple);
-        Ok(fg.zip(bg).map(|(fg, bg)| DefaultColors { fg, bg }))
+    /// Queries terminal default colors through the bounded startup probe path.
+    ///
+    /// The palette cache treats `None` as an attempted-but-unavailable result, so this function
+    /// collapses I/O errors and missing responses into the same fallback path used for terminals
+    /// that simply do not support OSC 10/11 queries.
+    fn query_default_colors() -> Option<DefaultColors> {
+        crate::terminal_probe::default_colors(crate::terminal_probe::DEFAULT_TIMEOUT)
+            .ok()
+            .flatten()
+            .map(|colors| DefaultColors {
+                fg: colors.fg,
+                bg: colors.bg,
+            })
     }
 
     fn color_to_tuple(color: CrosstermColor) -> Option<(u8, u8, u8)> {

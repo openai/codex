@@ -20,7 +20,7 @@ use tracing::warn;
 #[cfg(unix)]
 const CONTROL_SOCKET_MODE: u32 = 0o600;
 
-pub(crate) async fn start_control_socket_acceptor(
+pub async fn start_control_socket_acceptor(
     socket_path: AbsolutePathBuf,
     transport_event_tx: mpsc::Sender<TransportEvent>,
     shutdown_token: CancellationToken,

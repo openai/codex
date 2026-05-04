@@ -165,6 +165,7 @@ mod tests {
         assert_eq!(
             commands,
             vec![
+                SlashCommand::Ide,
                 SlashCommand::Copy,
                 SlashCommand::Diff,
                 SlashCommand::Mention,

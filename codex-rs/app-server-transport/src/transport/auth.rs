@@ -86,7 +86,7 @@ pub enum AppServerWebsocketCapabilityTokenSource {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct WebsocketAuthPolicy {
+pub struct WebsocketAuthPolicy {
     pub(crate) mode: Option<WebsocketAuthMode>,
 }
 
@@ -219,7 +219,7 @@ impl AppServerWebsocketAuthArgs {
     }
 }
 
-pub(crate) fn policy_from_settings(
+pub fn policy_from_settings(
     settings: &AppServerWebsocketAuthSettings,
 ) -> io::Result<WebsocketAuthPolicy> {
     let mode = match settings.config.as_ref() {

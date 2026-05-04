@@ -146,7 +146,7 @@ pub struct ConfigToml {
     #[serde(default)]
     pub permissions: Option<PermissionsToml>,
 
-    /// Optional external command to spawn for end-user notifications.
+    /// Deprecated optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
 

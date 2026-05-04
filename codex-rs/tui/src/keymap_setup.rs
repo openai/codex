@@ -1150,7 +1150,7 @@ mod tests {
             &TuiKeymap::default(),
             "composer",
             "submit",
-            &["ctrl-enter".to_string(), "alt-enter".to_string()],
+            &["ctrl-enter".to_string(), "alt-shift-enter".to_string()],
         )
         .expect("multi binding");
         let multi_runtime = RuntimeKeymap::from_config(&multi_keymap).expect("runtime keymap");
@@ -1465,7 +1465,7 @@ mod tests {
             &TuiKeymap::default(),
             "composer",
             "submit",
-            &["ctrl-enter".to_string(), "alt-enter".to_string()],
+            &["ctrl-enter".to_string(), "alt-shift-enter".to_string()],
         )
         .expect("multi binding");
         let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
@@ -1586,7 +1586,7 @@ mod tests {
             &TuiKeymap::default(),
             "composer",
             "submit",
-            &["ctrl-enter".to_string(), "alt-enter".to_string()],
+            &["ctrl-enter".to_string(), "alt-shift-enter".to_string()],
         )
         .expect("multi binding");
         let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
@@ -1610,12 +1610,12 @@ mod tests {
         else {
             panic!("expected updated keymap");
         };
-        assert_eq!(bindings, vec!["ctrl-shift-enter", "alt-enter"]);
+        assert_eq!(bindings, vec!["ctrl-shift-enter", "alt-shift-enter"]);
         assert_eq!(
             keymap_config.composer.submit,
             Some(KeybindingsSpec::Many(vec![
                 KeybindingSpec("ctrl-shift-enter".to_string()),
-                KeybindingSpec("alt-enter".to_string())
+                KeybindingSpec("alt-shift-enter".to_string())
             ]))
         );
     }
@@ -1626,7 +1626,7 @@ mod tests {
             &TuiKeymap::default(),
             "composer",
             "submit",
-            &["ctrl-enter".to_string(), "alt-enter".to_string()],
+            &["ctrl-enter".to_string(), "ctrl-shift-enter".to_string()],
         )
         .expect("multi binding");
         let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
@@ -1635,7 +1635,7 @@ mod tests {
             &runtime,
             "composer",
             "submit",
-            "alt-enter",
+            "ctrl-shift-enter",
             &KeymapEditIntent::ReplaceOne {
                 old_key: "ctrl-enter".to_string(),
             },
@@ -1650,11 +1650,11 @@ mod tests {
         else {
             panic!("expected updated keymap");
         };
-        assert_eq!(bindings, vec!["alt-enter"]);
+        assert_eq!(bindings, vec!["ctrl-shift-enter"]);
         assert_eq!(
             keymap_config.composer.submit,
             Some(KeybindingsSpec::One(KeybindingSpec(
-                "alt-enter".to_string()
+                "ctrl-shift-enter".to_string()
             )))
         );
     }

@@ -1332,6 +1332,32 @@ async fn status_line_branch_refreshes_after_interrupt() {
 }
 
 #[tokio::test]
+async fn interrupted_turn_clears_visible_running_hook() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            "pre-tool-use:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PreToolUse,
+            Some("checking command policy"),
+        ),
+    );
+    reveal_running_hooks(&mut chat);
+    let before_interrupt = active_hook_blob(&chat);
+
+    handle_turn_interrupted(&mut chat, "turn-1");
+
+    assert_chatwidget_snapshot!(
+        "interrupted_turn_clears_visible_running_hook",
+        format!(
+            "before interrupt:\n{before_interrupt}after interrupt:\n{}",
+            active_hook_blob(&chat)
+        )
+    );
+}
+
+#[tokio::test]
 async fn status_line_fast_mode_renders_on_and_off() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.tui_status_line = Some(vec!["fast-mode".to_string()]);

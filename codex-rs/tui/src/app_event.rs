@@ -15,6 +15,7 @@ use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
+use codex_app_server_protocol::MarketplaceUpgradeResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::PluginInstallResponse;
@@ -352,6 +353,23 @@ pub(crate) enum AppEvent {
         marketplace_name: String,
         marketplace_display_name: String,
         result: Result<MarketplaceRemoveResponse, String>,
+    },
+
+    /// Replace the plugins popup with a marketplace-upgrade loading state.
+    OpenMarketplaceUpgradeLoading {
+        marketplace_name: Option<String>,
+    },
+
+    /// Upgrade configured Git marketplaces.
+    FetchMarketplaceUpgrade {
+        cwd: PathBuf,
+        marketplace_name: Option<String>,
+    },
+
+    /// Result of upgrading configured Git marketplaces.
+    MarketplaceUpgradeLoaded {
+        cwd: PathBuf,
+        result: Result<MarketplaceUpgradeResponse, String>,
     },
 
     /// Replace the plugins popup with a plugin-detail loading state.

@@ -14,10 +14,9 @@
 //!   `TRUSTED CERTIFICATE` labels and bundles that also contain CRLs
 //! - return user-facing errors that explain how to fix misconfigured CA files
 //!
-//! It does not validate certificate chains or perform a handshake in tests. Its contract is
-//! narrower: produce a transport configuration whose root store contains every parseable
-//! certificate block from the configured PEM bundle, or fail early with a precise error before
-//! the caller starts network traffic.
+//! Its production contract is narrow: produce a transport configuration whose root store contains
+//! every parseable certificate block from the configured PEM bundle, or fail early with a precise
+//! error before the caller starts network traffic.
 //!
 //! In this module's test setup, a hermetic test is one whose result depends only on the CA file
 //! and environment variables that the test chose for itself. That matters here because the normal
@@ -36,7 +35,8 @@
 //! - unit tests in this module cover env-selection logic without constructing a real client
 //! - subprocess integration tests under `tests/` cover real client construction through
 //!   [`build_reqwest_client_for_subprocess_tests`], which disables reqwest proxy autodetection so
-//!   the tests can observe custom-CA success and failure directly
+//!   the tests can observe custom-CA success and failure directly, including one TLS handshake
+//!   through a local HTTPS server
 //! - those subprocess tests also scrub inherited CA environment variables before launch so their
 //!   result depends only on the test fixtures and env vars set by the test itself
 
@@ -266,12 +266,21 @@ fn maybe_build_rustls_client_config_with_env(
 /// This exists so tests can exercise precedence behavior deterministically without mutating the
 /// real process environment. It selects the CA bundle, delegates file parsing to
 /// [`ConfiguredCaBundle::load_certificates`], preserves the caller's chosen `reqwest` builder
-/// configuration, and finally registers each parsed certificate with that builder.
+/// configuration, forces rustls when a custom CA is configured, and finally registers each parsed
+/// certificate with that builder.
 fn build_reqwest_client_with_env(
     env_source: &dyn EnvSource,
     mut builder: reqwest::ClientBuilder,
 ) -> Result<reqwest::Client, BuildCustomCaTransportError> {
     if let Some(bundle) = env_source.configured_ca_bundle() {
+        ensure_rustls_crypto_provider();
+        info!(
+            source_env = bundle.source_env,
+            ca_path = %bundle.path.display(),
+            "building HTTP client with rustls backend for custom CA bundle"
+        );
+        builder = builder.use_rustls_tls();
+
         let certificates = bundle.load_certificates()?;
 
         for (idx, cert) in certificates.iter().enumerate() {

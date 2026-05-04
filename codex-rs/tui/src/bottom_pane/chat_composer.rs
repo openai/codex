@@ -121,7 +121,6 @@
 //! overall state machine, since it affects which transitions are even possible from a given UI
 //! state.
 //!
-use crate::bottom_pane::footer::goal_status_indicator_line;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
@@ -167,7 +166,6 @@ use super::footer::footer_hint_items_width;
 use super::footer::footer_line_width;
 use super::footer::inset_footer_hint_area;
 use super::footer::max_left_width_for_right;
-use super::footer::mode_indicator_line as collaboration_mode_indicator_line;
 use super::footer::passive_footer_status_line;
 use super::footer::render_context_right;
 use super::footer::render_footer_from_props;
@@ -176,6 +174,7 @@ use super::footer::render_footer_line;
 use super::footer::reset_mode_after_activity;
 use super::footer::side_conversation_context_line;
 use super::footer::single_line_footer_layout;
+use super::footer::status_line_right_indicator_line;
 use super::footer::toggle_shortcut_mode;
 use super::footer::uses_passive_footer_status_layout;
 use super::paste_burst::CharDecision;
@@ -385,6 +384,7 @@ pub(crate) struct ChatComposer {
     config: ChatComposerConfig,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     goal_status_indicator: Option<GoalStatusIndicator>,
+    ide_context_active: bool,
     connectors_enabled: bool,
     plugins_command_enabled: bool,
     fast_command_enabled: bool,
@@ -565,6 +565,7 @@ impl ChatComposer {
             config,
             collaboration_mode_indicator: None,
             goal_status_indicator: None,
+            ide_context_active: false,
             connectors_enabled: false,
             plugins_command_enabled: false,
             fast_command_enabled: false,
@@ -722,6 +723,10 @@ impl ChatComposer {
 
     pub fn set_goal_status_indicator(&mut self, indicator: Option<GoalStatusIndicator>) {
         self.goal_status_indicator = indicator;
+    }
+
+    pub fn set_ide_context_active(&mut self, active: bool) {
+        self.ide_context_active = active;
     }
 
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
@@ -1083,14 +1088,16 @@ impl ChatComposer {
         if let Some(vim_mode) = self.vim_mode_indicator_span() {
             spans.push(vim_mode);
         }
-        if let Some(collab) =
-            collaboration_mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint)
-                .or_else(|| goal_status_indicator_line(self.goal_status_indicator.as_ref()))
-        {
+        if let Some(indicators) = status_line_right_indicator_line(
+            self.collaboration_mode_indicator,
+            self.goal_status_indicator.as_ref(),
+            self.ide_context_active,
+            show_cycle_hint,
+        ) {
             if !spans.is_empty() {
                 spans.push(" | ".dim());
             }
-            spans.extend(collab.spans);
+            spans.extend(indicators.spans);
         }
         if spans.is_empty() {
             None

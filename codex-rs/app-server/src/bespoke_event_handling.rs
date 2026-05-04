@@ -836,9 +836,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 crate::dynamic_tools::on_call_response(call_id, rx, conversation).await;
             });
         }
+        EventMsg::McpToolCallBegin(_) | EventMsg::McpToolCallEnd(_) => {
+            // Deprecated MCP tool-call events are still fanned out for legacy clients.
+            // App-server v2 receives the canonical TurnItem::McpToolCall lifecycle instead.
+        }
         msg @ (EventMsg::DynamicToolCallResponse(_)
-        | EventMsg::McpToolCallBegin(_)
-        | EventMsg::McpToolCallEnd(_)
         | EventMsg::CollabAgentSpawnBegin(_)
         | EventMsg::CollabAgentSpawnEnd(_)
         | EventMsg::CollabAgentInteractionBegin(_)
@@ -954,28 +956,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 }))
                 .await;
         }
-        EventMsg::ViewImageToolCall(view_image_event) => {
-            let item = ThreadItem::ImageView {
-                id: view_image_event.call_id.clone(),
-                path: view_image_event.path.clone(),
-            };
-            let started = ItemStartedNotification {
-                thread_id: conversation_id.to_string(),
-                turn_id: event_turn_id.clone(),
-                item: item.clone(),
-            };
-            outgoing
-                .send_server_notification(ServerNotification::ItemStarted(started))
-                .await;
-            let completed = ItemCompletedNotification {
-                thread_id: conversation_id.to_string(),
-                turn_id: event_turn_id.clone(),
-                item,
-            };
-            outgoing
-                .send_server_notification(ServerNotification::ItemCompleted(completed))
-                .await;
-        }
+        EventMsg::ViewImageToolCall(_) => {}
         EventMsg::EnteredReviewMode(review_request) => {
             let review = review_request
                 .user_facing_hint

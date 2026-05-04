@@ -4,8 +4,8 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 #[test]
-fn build_tool_suggestion_elicitation_request_uses_expected_shape() {
-    let args = ToolSuggestArgs {
+fn build_request_plugin_install_elicitation_request_uses_expected_shape() {
+    let args = RequestPluginInstallArgs {
         tool_type: DiscoverableToolType::Connector,
         action_type: DiscoverableToolAction::Install,
         tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
@@ -30,7 +30,7 @@ fn build_tool_suggestion_elicitation_request_uses_expected_shape() {
         plugin_display_names: Vec::new(),
     }));
 
-    let request = build_tool_suggestion_elicitation_request(
+    let request = build_request_plugin_install_elicitation_request(
         "codex-apps",
         "thread-1".to_string(),
         "turn-1".to_string(),
@@ -46,9 +46,9 @@ fn build_tool_suggestion_elicitation_request_uses_expected_shape() {
             turn_id: Some("turn-1".to_string()),
             server_name: "codex-apps".to_string(),
             request: McpServerElicitationRequest::Form {
-                meta: Some(json!(ToolSuggestMeta {
-                    codex_approval_kind: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
-                    persist: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE,
+                meta: Some(json!(RequestPluginInstallMeta {
+                    codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
+                    persist: REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE,
                     tool_type: DiscoverableToolType::Connector,
                     suggest_type: DiscoverableToolAction::Install,
                     suggest_reason: "Plan and reference events from your calendar",
@@ -71,8 +71,8 @@ fn build_tool_suggestion_elicitation_request_uses_expected_shape() {
 }
 
 #[test]
-fn build_tool_suggestion_elicitation_request_for_plugin_omits_install_url() {
-    let args = ToolSuggestArgs {
+fn build_request_plugin_install_elicitation_request_for_plugin_omits_install_url() {
+    let args = RequestPluginInstallArgs {
         tool_type: DiscoverableToolType::Plugin,
         action_type: DiscoverableToolAction::Install,
         tool_id: "sample@openai-curated".to_string(),
@@ -87,7 +87,7 @@ fn build_tool_suggestion_elicitation_request_for_plugin_omits_install_url() {
         app_connector_ids: vec!["connector_calendar".to_string()],
     }));
 
-    let request = build_tool_suggestion_elicitation_request(
+    let request = build_request_plugin_install_elicitation_request(
         "codex-apps",
         "thread-1".to_string(),
         "turn-1".to_string(),
@@ -103,9 +103,9 @@ fn build_tool_suggestion_elicitation_request_for_plugin_omits_install_url() {
             turn_id: Some("turn-1".to_string()),
             server_name: "codex-apps".to_string(),
             request: McpServerElicitationRequest::Form {
-                meta: Some(json!(ToolSuggestMeta {
-                    codex_approval_kind: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
-                    persist: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE,
+                meta: Some(json!(RequestPluginInstallMeta {
+                    codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
+                    persist: REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE,
                     tool_type: DiscoverableToolType::Plugin,
                     suggest_type: DiscoverableToolAction::Install,
                     suggest_reason: "Use the sample plugin's skills and MCP server",
@@ -126,8 +126,8 @@ fn build_tool_suggestion_elicitation_request_for_plugin_omits_install_url() {
 }
 
 #[test]
-fn build_tool_suggestion_meta_uses_expected_shape() {
-    let meta = build_tool_suggestion_meta(
+fn build_request_plugin_install_meta_uses_expected_shape() {
+    let meta = build_request_plugin_install_meta(
         DiscoverableToolType::Connector,
         DiscoverableToolAction::Install,
         "Find and reference emails from your inbox",
@@ -138,9 +138,9 @@ fn build_tool_suggestion_meta_uses_expected_shape() {
 
     assert_eq!(
         meta,
-        ToolSuggestMeta {
-            codex_approval_kind: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
-            persist: TOOL_SUGGEST_PERSIST_ALWAYS_VALUE,
+        RequestPluginInstallMeta {
+            codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
+            persist: REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE,
             tool_type: DiscoverableToolType::Connector,
             suggest_type: DiscoverableToolAction::Install,
             suggest_reason: "Find and reference emails from your inbox",
@@ -154,7 +154,7 @@ fn build_tool_suggestion_meta_uses_expected_shape() {
 }
 
 #[test]
-fn verified_connector_suggestion_completed_requires_accessible_connector() {
+fn verified_connector_install_completed_requires_accessible_connector() {
     let accessible_connectors = vec![AppInfo {
         id: "calendar".to_string(),
         name: "Google Calendar".to_string(),
@@ -171,18 +171,18 @@ fn verified_connector_suggestion_completed_requires_accessible_connector() {
         plugin_display_names: Vec::new(),
     }];
 
-    assert!(verified_connector_suggestion_completed(
+    assert!(verified_connector_install_completed(
         "calendar",
         &accessible_connectors,
     ));
-    assert!(!verified_connector_suggestion_completed(
+    assert!(!verified_connector_install_completed(
         "gmail",
         &accessible_connectors,
     ));
 }
 
 #[test]
-fn all_suggested_connectors_picked_up_requires_every_expected_connector() {
+fn all_requested_connectors_picked_up_requires_every_expected_connector() {
     let accessible_connectors = vec![AppInfo {
         id: "calendar".to_string(),
         name: "Google Calendar".to_string(),
@@ -199,11 +199,11 @@ fn all_suggested_connectors_picked_up_requires_every_expected_connector() {
         plugin_display_names: Vec::new(),
     }];
 
-    assert!(all_suggested_connectors_picked_up(
+    assert!(all_requested_connectors_picked_up(
         &["calendar".to_string()],
         &accessible_connectors,
     ));
-    assert!(!all_suggested_connectors_picked_up(
+    assert!(!all_requested_connectors_picked_up(
         &["calendar".to_string(), "gmail".to_string()],
         &accessible_connectors,
     ));
