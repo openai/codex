@@ -1441,6 +1441,9 @@ async fn plugin_list_sync_upgrades_and_removes_remote_installed_plugin_bundles()
     let new_path = codex_home
         .path()
         .join("plugins/cache/chatgpt-global/linear/1.2.3");
+    let active_version_marker = codex_home
+        .path()
+        .join("plugins/cache/chatgpt-global/linear/.active-version");
     let stale_path = codex_home.path().join("plugins/cache/chatgpt-global/stale");
 
     let mut mcp = McpProcess::new_with_env(
@@ -1477,7 +1480,22 @@ async fn plugin_list_sync_upgrades_and_removes_remote_installed_plugin_bundles()
     );
 
     wait_for_path_exists(&new_path.join(".codex-plugin/plugin.json")).await?;
-    wait_for_path_missing(&old_path).await?;
+    timeout(DEFAULT_TIMEOUT, async {
+        loop {
+            if matches!(
+                std::fs::read_to_string(&active_version_marker).as_deref(),
+                Ok("1.2.3\n")
+            ) {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    assert!(
+        old_path.join(".codex-plugin/plugin.json").is_file(),
+        "inactive old plugin version should remain until later cleanup"
+    );
     wait_for_path_missing(&stale_path).await?;
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(!config.contains("linear@chatgpt-global"));
