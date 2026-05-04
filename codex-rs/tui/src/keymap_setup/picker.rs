@@ -27,6 +27,7 @@ pub(super) const KEYMAP_ALL_TAB_ID: &str = "all-shortcuts";
 pub(super) const KEYMAP_COMMON_TAB_ID: &str = "common-shortcuts";
 pub(super) const KEYMAP_CUSTOM_TAB_ID: &str = "custom-shortcuts";
 pub(super) const KEYMAP_UNBOUND_TAB_ID: &str = "unbound-shortcuts";
+pub(super) const KEYMAP_DEBUG_TAB_ID: &str = "debug-shortcuts";
 const KEYMAP_CONTEXT_LABEL_WIDTH: usize = 12;
 const KEYMAP_ROW_PREFIX_WIDTH: usize = KEYMAP_CONTEXT_LABEL_WIDTH + 3;
 
@@ -237,11 +238,13 @@ fn build_keymap_picker_params_for_action(
             ),
         });
     }
+    tabs.push(keymap_debug_tab());
 
     SelectionViewParams {
         view_id: Some(KEYMAP_PICKER_VIEW_ID),
         header: Box::new(()),
         footer_hint: Some(keymap_picker_hint_line()),
+        tab_footer_hints: vec![(KEYMAP_DEBUG_TAB_ID.to_string(), keymap_debug_hint_line())],
         tabs,
         initial_tab_id: Some(KEYMAP_ALL_TAB_ID.to_string()),
         is_searchable: true,
@@ -251,6 +254,33 @@ fn build_keymap_picker_params_for_action(
         name_column_width,
         initial_selected_idx,
         ..Default::default()
+    }
+}
+
+fn keymap_debug_tab() -> SelectionTab {
+    SelectionTab {
+        id: KEYMAP_DEBUG_TAB_ID.to_string(),
+        label: "Debug".to_string(),
+        header: keymap_header(
+            "Inspect keypresses from your terminal.".to_string(),
+            "See the key Codex detects and any shortcuts assigned to it.".to_string(),
+        ),
+        items: vec![SelectionItem {
+            name: "Inspect keypresses".to_string(),
+            description: Some(
+                "Press Enter to start. Then press any key to inspect it; Ctrl+C exits."
+                    .to_string(),
+            ),
+            selected_description: Some(
+                "Open a live inspector that shows the detected key, config key, and matching actions."
+                    .to_string(),
+            ),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenKeymapDebug);
+            })],
+            search_value: Some("debug inspect keypress key terminal detected actions".to_string()),
+            ..Default::default()
+        }],
     }
 }
 
@@ -387,6 +417,15 @@ fn keymap_picker_hint_line() -> Line<'static> {
         " custom · ".dim(),
         "-".cyan(),
         " unbound · ".dim(),
+        "esc".cyan(),
+        " close".dim(),
+    ])
+}
+
+fn keymap_debug_hint_line() -> Line<'static> {
+    Line::from(vec![
+        "enter".cyan(),
+        " start inspector · ".dim(),
         "esc".cyan(),
         " close".dim(),
     ])

@@ -29,7 +29,7 @@ fn build_environment_update_item(
 
     let prev = previous?;
     let prev_context = EnvironmentContext::from_turn_context_item(prev, shell.name().to_string());
-    let next_context = EnvironmentContext::from_turn_context(next, shell);
+    let next_context = EnvironmentContext::from_turn_context(next);
     if prev_context.equals_except_shell(&next_context) {
         return None;
     }

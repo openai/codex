@@ -270,10 +270,11 @@ impl Session {
     /// starts capture the active goal and token baseline, tool completions
     /// account usage and may inject budget steering, completion accounting
     /// suppresses that steering, external mutations account best-effort before
-    /// changing state, interrupts pause active goals, resumes reactivate paused
-    /// goals, explicit maybe-continue events start idle goal continuation turns,
-    /// and continuation turns with no counted autonomous activity suppress the
-    /// next automatic continuation until user/tool/external activity resets it.
+    /// changing state, interrupts pause active goals, thread resumes restore
+    /// runtime state for already-active goals, explicit maybe-continue events
+    /// start idle goal continuation turns, and continuation turns with no counted
+    /// autonomous activity suppress the next automatic continuation until
+    /// user/tool/external activity resets it.
     pub(crate) fn goal_runtime_apply<'a>(
         self: &'a Arc<Self>,
         event: GoalRuntimeEvent<'a>,
@@ -339,7 +340,7 @@ impl Session {
                 Ok(())
             }),
             GoalRuntimeEvent::ThreadResumed => Box::pin(async move {
-                self.activate_paused_thread_goal_after_resume().await?;
+                self.restore_thread_goal_runtime_after_resume().await?;
                 Ok(())
             }),
         }
@@ -1016,15 +1017,15 @@ impl Session {
         Ok(())
     }
 
-    async fn activate_paused_thread_goal_after_resume(&self) -> anyhow::Result<bool> {
+    async fn restore_thread_goal_runtime_after_resume(&self) -> anyhow::Result<()> {
         if !self.enabled(Feature::Goals) {
-            return Ok(false);
+            return Ok(());
         }
         if should_ignore_goal_for_mode(self.collaboration_mode().await.mode) {
             tracing::debug!(
-                "skipping paused goal auto-resume while current collaboration mode ignores goals"
+                "skipping goal runtime restore while current collaboration mode ignores goals"
             );
-            return Ok(false);
+            return Ok(());
         }
 
         let _continuation_guard = self
@@ -1034,79 +1035,28 @@ impl Session {
             .await
             .context("goal continuation semaphore closed")?;
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
-            return Ok(false);
+            return Ok(());
         };
         let Some(goal) = state_db.get_thread_goal(self.conversation_id).await? else {
-            *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
-            self.goal_runtime
-                .accounting
-                .lock()
-                .await
-                .wall_clock
-                .clear_active_goal();
-            return Ok(false);
+            self.clear_stopped_thread_goal_runtime_state().await;
+            return Ok(());
         };
-        if goal.status != codex_state::ThreadGoalStatus::Paused {
-            let goal_id = goal.goal_id.clone();
-            let is_active = goal.status == codex_state::ThreadGoalStatus::Active;
-            if is_active {
+        match goal.status {
+            codex_state::ThreadGoalStatus::Active => {
                 self.goal_runtime
                     .accounting
                     .lock()
                     .await
                     .wall_clock
-                    .mark_active_goal(goal_id);
-            } else {
-                self.goal_runtime
-                    .accounting
-                    .lock()
-                    .await
-                    .wall_clock
-                    .clear_active_goal();
+                    .mark_active_goal(goal.goal_id);
             }
-            return Ok(false);
+            codex_state::ThreadGoalStatus::Paused
+            | codex_state::ThreadGoalStatus::BudgetLimited
+            | codex_state::ThreadGoalStatus::Complete => {
+                self.clear_stopped_thread_goal_runtime_state().await;
+            }
         }
-
-        let Some(goal) = state_db
-            .update_thread_goal(
-                self.conversation_id,
-                codex_state::ThreadGoalUpdate {
-                    status: Some(codex_state::ThreadGoalStatus::Active),
-                    token_budget: None,
-                    expected_goal_id: Some(goal.goal_id.clone()),
-                },
-            )
-            .await?
-        else {
-            *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
-            self.goal_runtime
-                .accounting
-                .lock()
-                .await
-                .wall_clock
-                .clear_active_goal();
-            return Ok(false);
-        };
-        let goal_id = goal.goal_id.clone();
-        let goal = protocol_goal_from_state(goal);
-        *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
-        let active_turn_id = self
-            .active_turn_context()
-            .await
-            .map(|turn_context| turn_context.sub_id.clone());
-        let current_token_usage = self.total_token_usage().await.unwrap_or_default();
-        self.mark_active_goal_accounting(goal_id, active_turn_id, current_token_usage)
-            .await;
-        self.send_event_raw(Event {
-            id: uuid::Uuid::new_v4().to_string(),
-            msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
-                thread_id: self.conversation_id,
-                turn_id: None,
-                goal,
-            }),
-        })
-        .await;
-        Ok(true)
+        Ok(())
     }
 
     async fn maybe_continue_goal_if_idle_runtime(self: &Arc<Self>) {

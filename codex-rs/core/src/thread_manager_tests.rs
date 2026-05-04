@@ -444,9 +444,15 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .new_turn_with_sub_id("resume-turn".to_string(), SessionSettingsUpdate::default())
         .await
         .expect("build resumed turn context");
-    assert_eq!(resumed_turn.environments.len(), 1);
-    assert_eq!(resumed_turn.environments[0].cwd, default_cwd);
-    assert_ne!(resumed_turn.environments[0].cwd, selected_cwd);
+    assert_eq!(resumed_turn.environments.turn_environments.len(), 1);
+    assert_eq!(
+        resumed_turn.environments.turn_environments[0].cwd,
+        default_cwd
+    );
+    assert_ne!(
+        resumed_turn.environments.turn_environments[0].cwd,
+        selected_cwd
+    );
 
     let forked = manager
         .fork_thread(
@@ -465,9 +471,15 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .new_turn_with_sub_id("fork-turn".to_string(), SessionSettingsUpdate::default())
         .await
         .expect("build forked turn context");
-    assert_eq!(forked_turn.environments.len(), 1);
-    assert_eq!(forked_turn.environments[0].cwd, default_cwd);
-    assert_ne!(forked_turn.environments[0].cwd, selected_cwd);
+    assert_eq!(forked_turn.environments.turn_environments.len(), 1);
+    assert_eq!(
+        forked_turn.environments.turn_environments[0].cwd,
+        default_cwd
+    );
+    assert_ne!(
+        forked_turn.environments.turn_environments[0].cwd,
+        selected_cwd
+    );
 }
 
 #[tokio::test]
@@ -1123,7 +1135,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
 }
 
 #[tokio::test]
-async fn resumed_thread_activates_paused_goal_and_continues_on_request() -> anyhow::Result<()> {
+async fn resumed_thread_keeps_paused_goal_paused() -> anyhow::Result<()> {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -1188,7 +1200,7 @@ async fn resumed_thread_activates_paused_goal_and_continues_on_request() -> anyh
         .get_thread_goal(resumed.thread_id)
         .await?
         .expect("goal should still exist after resume");
-    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
     assert!(
         resumed
             .thread
@@ -1209,7 +1221,7 @@ async fn resumed_thread_activates_paused_goal_and_continues_on_request() -> anyh
             .active_turn
             .lock()
             .await
-            .is_some()
+            .is_none()
     );
 
     resumed.thread.shutdown_and_wait().await?;

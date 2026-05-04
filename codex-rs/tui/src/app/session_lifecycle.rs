@@ -680,6 +680,7 @@ impl App {
             .await
         {
             Ok(resumed) => {
+                let resumed_thread_id = resumed.session.thread_id;
                 self.shutdown_current_thread(app_server).await;
                 self.config = resume_config;
                 tui.set_notification_settings(
@@ -707,6 +708,11 @@ impl App {
                             }
                             self.chat_widget.add_plain_history_lines(lines);
                         }
+                        self.maybe_prompt_resume_paused_goal_after_resume(
+                            app_server,
+                            resumed_thread_id,
+                        )
+                        .await;
                     }
                     Err(err) => {
                         self.chat_widget.add_error_message(format!(

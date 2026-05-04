@@ -2938,6 +2938,12 @@ impl ChatWidget {
     fn finalize_turn(&mut self) {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
+        // Turn-scoped hook rows are transient live state; once the turn is over,
+        // do not leave an orphaned running row behind if no matching completion
+        // event arrived before cancellation.
+        if self.active_hook_cell.take().is_some() {
+            self.bump_active_cell_revision();
+        }
         // Reset running state and clear streaming buffers.
         self.user_turn_pending_start = false;
         self.agent_turn_running = false;
@@ -8114,7 +8120,7 @@ impl ChatWidget {
             .send(AppEvent::PersistModelSelection { model, effort });
     }
 
-    /// Open the permissions popup (alias for /permissions).
+    /// Open the permissions popup.
     pub(crate) fn open_approvals_popup(&mut self) {
         self.open_permissions_popup();
     }
@@ -8687,8 +8693,8 @@ impl ChatWidget {
         // new permission profile, so downstream policy-change hooks don't
         // re-trigger the warning.
         let mut accept_actions: Vec<SelectionAction> = Vec::new();
-        // Suppress the immediate re-scan only when a preset will be applied (i.e., via /approvals or
-        // /permissions), to avoid duplicate warnings from the ensuing policy change.
+        // Suppress the immediate re-scan only when a preset will be applied via
+        // /permissions, to avoid duplicate warnings from the ensuing policy change.
         if preset.is_some() {
             accept_actions.push(Box::new(|tx| {
                 tx.send(AppEvent::SkipNextWorldWritableScan);

@@ -88,7 +88,7 @@ impl ToolHandler for ViewImageHandler {
         };
 
         let abs_path = turn.resolve_path(Some(args.path));
-        let Some(environment) = turn.primary_environment() else {
+        let Some(environment) = turn.environments.primary() else {
             return Err(FunctionCallError::RespondToModel(
                 "view_image is unavailable in this session".to_string(),
             ));

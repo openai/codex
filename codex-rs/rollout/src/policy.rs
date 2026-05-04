@@ -11,7 +11,7 @@ pub enum EventPersistenceMode {
 
 /// Whether a rollout `item` should be persisted in rollout files for the
 /// provided persistence `mode`.
-pub fn is_persisted_response_item(item: &RolloutItem, mode: EventPersistenceMode) -> bool {
+pub fn is_persisted_rollout_item(item: &RolloutItem, mode: EventPersistenceMode) -> bool {
     match item {
         RolloutItem::ResponseItem(item) => should_persist_response_item(item),
         RolloutItem::EventMsg(ev) => should_persist_event_msg(ev, mode),
@@ -37,7 +37,8 @@ pub fn should_persist_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
-        | ResponseItem::Compaction { .. } => true,
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::Other => false,
     }
 }
@@ -58,6 +59,7 @@ pub fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
         ResponseItem::Reasoning { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCompaction { .. }
         | ResponseItem::Other => false,
     }
 }
@@ -114,6 +116,9 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
             } else {
                 None
             }
+        }
+        EventMsg::McpToolCallEnd(event) if event.mcp_app_resource_uri.is_some() => {
+            Some(EventPersistenceMode::Limited)
         }
         EventMsg::Error(_)
         | EventMsg::GuardianAssessment(_)

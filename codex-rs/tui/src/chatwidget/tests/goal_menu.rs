@@ -42,6 +42,56 @@ async fn goal_menu_budget_limited_snapshot() {
     assert_chatwidget_snapshot!("goal_menu_budget_limited", rendered_goal_summary(&mut rx));
 }
 
+#[tokio::test]
+async fn resume_paused_goal_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+
+    chat.show_resume_paused_goal_prompt(
+        thread_id,
+        "Keep improving the bare goal command until it feels calm and useful.".to_string(),
+    );
+
+    assert_chatwidget_snapshot!(
+        "resume_paused_goal_prompt",
+        render_bottom_popup(&chat, /*width*/ 100)
+    );
+}
+
+#[tokio::test]
+async fn resume_paused_goal_prompt_default_resumes_goal() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+
+    chat.show_resume_paused_goal_prompt(thread_id, "Finish the paused goal.".to_string());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::SetThreadGoalStatus {
+            thread_id: event_thread_id,
+            status,
+        }) => {
+            assert_eq!(event_thread_id, thread_id);
+            assert_eq!(status, AppThreadGoalStatus::Active);
+        }
+        other => panic!("expected SetThreadGoalStatus event, got {other:?}"),
+    }
+    assert!(chat.no_modal_or_popup_active());
+}
+
+#[tokio::test]
+async fn resume_paused_goal_prompt_can_leave_goal_paused() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+
+    chat.show_resume_paused_goal_prompt(thread_id, "Finish the paused goal.".to_string());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+    assert!(chat.no_modal_or_popup_active());
+}
+
 fn test_goal(
     thread_id: ThreadId,
     status: AppThreadGoalStatus,

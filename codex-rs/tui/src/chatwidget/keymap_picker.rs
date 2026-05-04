@@ -85,6 +85,13 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Opens the keypress inspector with the current runtime bindings.
+    pub(crate) fn open_keymap_debug(&mut self, runtime_keymap: &RuntimeKeymap) {
+        let view = keymap_setup::build_keymap_debug_view(runtime_keymap, &self.config.tui_keymap);
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
     /// Opens the menu that lets the user choose which existing binding to replace.
     ///
     /// This is only used for actions with multiple effective bindings. The chosen binding is

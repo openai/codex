@@ -49,36 +49,36 @@ fn create_tool_search_tool_deduplicates_and_renders_enabled_sources() {
 }
 
 #[test]
-fn create_tool_suggest_tool_uses_plugin_summary_fallback() {
+fn create_request_plugin_install_tool_uses_plugin_summary_fallback() {
     let expected_description = concat!(
-        "# Tool suggestion discovery\n\n",
+        "# Request plugin/connector install\n\n",
         "Use this tool only to ask the user to install one known plugin or connector from the list below. The list contains known candidates that are not currently installed.\n\n",
         "Use this ONLY when all of the following are true:\n",
-        "- The user explicitly wants a specific plugin or connector that is not already available in the current context or active `tools` list.\n",
+        "- The user explicitly asks to use a specific plugin or connector that is not already available in the current context or active `tools` list.\n",
         "- `tool_search` is not available, or it has already been called and did not find or make the requested tool callable.\n",
-        "- The tool is one of the known installable plugins or connectors listed below. Only ask to install tools from this list.\n\n",
-        "Do not use tool suggestion for adjacent capabilities, broad recommendations, or tools that merely seem useful. The user's intent must clearly match one listed tool.\n\n",
+        "- The plugin or connector is one of the known installable plugins or connectors listed below. Only ask to install plugins or connectors from this list.\n\n",
+        "Do not use this tool for adjacent capabilities, broad recommendations, or tools that merely seem useful. Only use when the user explicitly asks to use that exact listed plugin or connector.\n\n",
         "Known plugins/connectors available to install:\n",
         "- GitHub (id: `github`, type: plugin, action: install): skills; MCP servers: github-mcp; app connectors: github-app\n",
         "- Slack (id: `slack@openai-curated`, type: connector, action: install): No description provided.\n\n",
         "Workflow:\n\n",
-        "1. Check the current context and active `tools` list first. If `tool_search` is available, call `tool_search` before calling `tool_suggest`. Do not use tool suggestion if the needed tool is already available, found through `tool_search`, or callable after discovery.\n",
+        "1. Check the current context and active `tools` list first. If current active tools aren't relevant and `tool_search` is available, only call this tool after `tool_search` has already been tried and found no relevant tool.\n",
         "2. Match the user's explicit request against the known plugin/connector list above. Only proceed when one listed plugin or connector exactly fits.\n",
-        "3. If we found both connectors and plugins to suggest, use plugins first, only use connectors if the corresponding plugin is installed but the connector is not.\n",
-        "4. If one tool clearly fits, call `tool_suggest` with:\n",
+        "3. If we found both connectors and plugins to install, use plugins first, only use connectors if the corresponding plugin is installed but the connector is not.\n",
+        "4. If one plugin or connector clearly fits, call `request_plugin_install` with:\n",
         "   - `tool_type`: `connector` or `plugin`\n",
         "   - `action_type`: `install`\n",
         "   - `tool_id`: exact id from the known plugin/connector list above\n",
-        "   - `suggest_reason`: concise one-line user-facing reason this tool can help with the current request\n",
-        "5. After the suggestion flow completes:\n",
-        "   - if the user finished the install flow, continue by searching again or using the newly available tool\n",
-        "   - if the user did not finish, continue without that tool, and don't suggest that tool again unless the user explicitly asks for it.\n\n",
+        "   - `suggest_reason`: concise one-line user-facing reason this plugin or connector can help with the current request\n",
+        "5. After the request flow completes:\n",
+        "   - if the user finished the install flow, continue by searching again or using the newly available plugin or connector\n",
+        "   - if the user did not finish, continue without that plugin or connector, and don't request it again unless the user explicitly asks for it.\n\n",
         "IMPORTANT: DO NOT call this tool in parallel with other tools.",
     );
 
     assert_eq!(
-        create_tool_suggest_tool(&[
-            ToolSuggestEntry {
+        create_request_plugin_install_tool(&[
+            RequestPluginInstallEntry {
                 id: "slack@openai-curated".to_string(),
                 name: "Slack".to_string(),
                 description: None,
@@ -87,7 +87,7 @@ fn create_tool_suggest_tool_uses_plugin_summary_fallback() {
                 mcp_server_names: Vec::new(),
                 app_connector_ids: Vec::new(),
             },
-            ToolSuggestEntry {
+            RequestPluginInstallEntry {
                 id: "github".to_string(),
                 name: "GitHub".to_string(),
                 description: None,
@@ -98,7 +98,7 @@ fn create_tool_suggest_tool_uses_plugin_summary_fallback() {
             },
         ]),
         ToolSpec::Function(ResponsesApiTool {
-            name: "tool_suggest".to_string(),
+            name: "request_plugin_install".to_string(),
             description: expected_description.to_string(),
             strict: false,
             defer_loading: None,
@@ -113,7 +113,7 @@ fn create_tool_suggest_tool_uses_plugin_summary_fallback() {
                     (
                         "suggest_reason".to_string(),
                         JsonSchema::string(Some(
-                                "Concise one-line user-facing reason why this tool can help with the current request."
+                                "Concise one-line user-facing reason why this plugin or connector can help with the current request."
                                     .to_string(),
                             ),),
                     ),
@@ -157,7 +157,7 @@ fn discoverable_tool_enums_use_expected_wire_names() {
 }
 
 #[test]
-fn filter_tool_suggest_discoverable_tools_for_codex_tui_omits_plugins() {
+fn filter_request_plugin_install_discoverable_tools_for_codex_tui_omits_plugins() {
     let discoverable_tools = vec![
         DiscoverableTool::Connector(Box::new(AppInfo {
             id: "connector_google_calendar".to_string(),
@@ -185,7 +185,10 @@ fn filter_tool_suggest_discoverable_tools_for_codex_tui_omits_plugins() {
     ];
 
     assert_eq!(
-        filter_tool_suggest_discoverable_tools_for_client(discoverable_tools, Some("codex-tui"),),
+        filter_request_plugin_install_discoverable_tools_for_client(
+            discoverable_tools,
+            Some("codex-tui"),
+        ),
         vec![DiscoverableTool::Connector(Box::new(AppInfo {
             id: "connector_google_calendar".to_string(),
             name: "Google Calendar".to_string(),

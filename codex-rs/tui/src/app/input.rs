@@ -122,12 +122,14 @@ impl App {
             return;
         }
 
-        if self.keymap.app.toggle_vim_mode.is_pressed(key_event) {
+        let app_keymap_shortcuts_available = self.app_keymap_shortcuts_available();
+
+        if app_keymap_shortcuts_available && self.keymap.app.toggle_vim_mode.is_pressed(key_event) {
             self.chat_widget.toggle_vim_mode_and_notify();
             return;
         }
 
-        if self.keymap.app.open_transcript.is_pressed(key_event) {
+        if app_keymap_shortcuts_available && self.keymap.app.open_transcript.is_pressed(key_event) {
             // Enter alternate screen and set viewport to full size.
             let _ = tui.enter_alt_screen();
             self.overlay = Some(Overlay::new_transcript(
@@ -138,7 +140,9 @@ impl App {
             return;
         }
 
-        if self.keymap.app.open_external_editor.is_pressed(key_event) {
+        if app_keymap_shortcuts_available
+            && self.keymap.app.open_external_editor.is_pressed(key_event)
+        {
             // Only launch the external editor if there is no overlay and the bottom pane is not in use.
             // Note that it can be launched while a task is running to enable editing while the previous turn is ongoing.
             if self.overlay.is_none()
@@ -166,7 +170,9 @@ impl App {
         }
 
         match key_event {
-            _ if self.keymap.app.clear_terminal.is_pressed(key_event) => {
+            _ if app_keymap_shortcuts_available
+                && self.keymap.app.clear_terminal.is_pressed(key_event) =>
+            {
                 if !self.chat_widget.can_run_ctrl_l_clear_now() {
                     return;
                 }
@@ -217,7 +223,27 @@ impl App {
             && !self.chat_widget.should_handle_vim_insert_escape(key_event)
     }
 
+    fn app_keymap_shortcuts_available(&self) -> bool {
+        self.overlay.is_none() && self.chat_widget.no_modal_or_popup_active()
+    }
+
     pub(super) fn refresh_status_line(&mut self) {
         self.chat_widget.refresh_status_line();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_support::make_test_app;
+
+    #[tokio::test]
+    async fn app_keymap_shortcuts_are_disabled_while_keymap_view_is_active() {
+        let mut app = make_test_app().await;
+        assert!(app.app_keymap_shortcuts_available());
+
+        let keymap = app.keymap.clone();
+        app.chat_widget.open_keymap_debug(&keymap);
+
+        assert!(!app.app_keymap_shortcuts_available());
     }
 }

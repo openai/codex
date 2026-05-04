@@ -1,3 +1,4 @@
+use crate::mcp::CallToolResult;
 use crate::memory_citation::MemoryCitation;
 use crate::models::ContentItem;
 use crate::models::MessagePhase;
@@ -10,6 +11,9 @@ use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::FileChange;
 use crate::protocol::ImageGenerationEndEvent;
+use crate::protocol::McpInvocation;
+use crate::protocol::McpToolCallBeginEvent;
+use crate::protocol::McpToolCallEndEvent;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::PatchApplyStatus;
@@ -27,8 +31,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 use ts_rs::TS;
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 #[serde(tag = "type")]
 #[ts(tag = "type")]
@@ -42,6 +48,7 @@ pub enum TurnItem {
     ImageView(ImageViewItem),
     ImageGeneration(ImageGenerationItem),
     FileChange(FileChangeItem),
+    McpToolCall(McpToolCallItem),
     ContextCompaction(ContextCompactionItem),
 }
 
@@ -158,6 +165,45 @@ pub struct FileChangeItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub stderr: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct McpToolCallItem {
+    pub id: String,
+    pub server: String,
+    pub tool: String,
+    pub arguments: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mcp_app_resource_uri: Option<String>,
+    pub status: McpToolCallStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub result: Option<CallToolResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<McpToolCallError>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "string", optional)]
+    pub duration: Option<Duration>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum McpToolCallStatus {
+    InProgress,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct McpToolCallError {
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -438,6 +484,40 @@ impl FileChangeItem {
     }
 }
 
+impl McpToolCallItem {
+    pub fn as_legacy_begin_event(&self) -> EventMsg {
+        EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+            call_id: self.id.clone(),
+            invocation: McpInvocation {
+                server: self.server.clone(),
+                tool: self.tool.clone(),
+                arguments: (!self.arguments.is_null()).then(|| self.arguments.clone()),
+            },
+            mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
+        })
+    }
+
+    pub fn as_legacy_end_event(&self) -> Option<EventMsg> {
+        let result = match (&self.result, &self.error) {
+            (Some(result), _) => Ok(result.clone()),
+            (None, Some(error)) => Err(error.message.clone()),
+            (None, None) => return None,
+        };
+
+        Some(EventMsg::McpToolCallEnd(McpToolCallEndEvent {
+            call_id: self.id.clone(),
+            invocation: McpInvocation {
+                server: self.server.clone(),
+                tool: self.tool.clone(),
+                arguments: (!self.arguments.is_null()).then(|| self.arguments.clone()),
+            },
+            mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
+            duration: self.duration?,
+            result,
+        }))
+    }
+}
+
 impl TurnItem {
     pub fn id(&self) -> String {
         match self {
@@ -450,6 +530,7 @@ impl TurnItem {
             TurnItem::ImageView(item) => item.id.clone(),
             TurnItem::ImageGeneration(item) => item.id.clone(),
             TurnItem::FileChange(item) => item.id.clone(),
+            TurnItem::McpToolCall(item) => item.id.clone(),
             TurnItem::ContextCompaction(item) => item.id.clone(),
         }
     }
@@ -472,6 +553,7 @@ impl TurnItem {
                 .as_legacy_end_event(String::new())
                 .into_iter()
                 .collect(),
+            TurnItem::McpToolCall(item) => item.as_legacy_end_event().into_iter().collect(),
             TurnItem::Reasoning(item) => item.as_legacy_events(show_raw_agent_reasoning),
             TurnItem::ContextCompaction(item) => vec![item.as_legacy_event()],
         }

@@ -15,7 +15,6 @@ pub enum SlashCommand {
     Model,
     Fast,
     Ide,
-    Approvals,
     Permissions,
     Keymap,
     Vim,
@@ -24,7 +23,7 @@ pub enum SlashCommand {
     #[strum(serialize = "sandbox-add-read-dir")]
     SandboxReadRoot,
     Experimental,
-    #[strum(to_string = "autoreview")]
+    #[strum(to_string = "approve")]
     AutoReview,
     Memories,
     Skills,
@@ -117,7 +116,6 @@ impl SlashCommand {
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::Side => "start a side conversation in an ephemeral fork",
-            SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::Keymap => "remap TUI shortcuts",
             SlashCommand::Vim => "toggle Vim mode for the composer",
@@ -153,6 +151,7 @@ impl SlashCommand {
                 | SlashCommand::Goal
                 | SlashCommand::Fast
                 | SlashCommand::Ide
+                | SlashCommand::Keymap
                 | SlashCommand::Mcp
                 | SlashCommand::Side
                 | SlashCommand::Resume
@@ -183,7 +182,6 @@ impl SlashCommand {
             | SlashCommand::Model
             | SlashCommand::Fast
             | SlashCommand::Personality
-            | SlashCommand::Approvals
             | SlashCommand::Permissions
             | SlashCommand::Keymap
             | SlashCommand::Vim
@@ -273,10 +271,10 @@ mod tests {
     }
 
     #[test]
-    fn auto_review_command_is_autoreview() {
-        assert_eq!(SlashCommand::AutoReview.command(), "autoreview");
+    fn auto_review_command_is_approve() {
+        assert_eq!(SlashCommand::AutoReview.command(), "approve");
         assert_eq!(
-            SlashCommand::from_str("autoreview"),
+            SlashCommand::from_str("approve"),
             Ok(SlashCommand::AutoReview)
         );
     }

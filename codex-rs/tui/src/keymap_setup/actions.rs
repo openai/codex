@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 
 use codex_config::types::KeybindingsSpec;
 use codex_config::types::TuiKeymap;
+use crossterm::event::KeyEvent;
 
 use crate::key_hint::KeyBinding;
 use crate::keymap::RuntimeKeymap;
@@ -372,5 +373,93 @@ pub(super) fn format_binding_summary(bindings: &[KeyBinding]) -> String {
         "unbound".to_string()
     } else {
         specs.join(", ")
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum KeymapDebugBindingSource {
+    Custom,
+    CustomGlobal,
+    Default,
+}
+
+impl KeymapDebugBindingSource {
+    pub(super) const fn label(&self) -> &'static str {
+        match self {
+            Self::Custom => "Custom",
+            Self::CustomGlobal => "Custom global",
+            Self::Default => "Default",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct KeymapDebugActionMatch {
+    pub(super) context: &'static str,
+    pub(super) action: &'static str,
+    pub(super) label: String,
+    pub(super) description: &'static str,
+    pub(super) source: KeymapDebugBindingSource,
+}
+
+pub(super) fn matching_actions_for_key_event(
+    runtime_keymap: &RuntimeKeymap,
+    keymap_config: &TuiKeymap,
+    event: KeyEvent,
+) -> Vec<KeymapDebugActionMatch> {
+    KEYMAP_ACTIONS
+        .iter()
+        .filter_map(|descriptor| {
+            let bindings =
+                bindings_for_action(runtime_keymap, descriptor.context, descriptor.action)?;
+            bindings
+                .iter()
+                .any(|binding| binding.is_press(event))
+                .then(|| KeymapDebugActionMatch {
+                    context: descriptor.context,
+                    action: descriptor.action,
+                    label: action_label(descriptor.action),
+                    description: descriptor.description,
+                    source: debug_binding_source(keymap_config, descriptor),
+                })
+        })
+        .collect()
+}
+
+fn debug_binding_source(
+    keymap_config: &TuiKeymap,
+    descriptor: &KeymapActionDescriptor,
+) -> KeymapDebugBindingSource {
+    let mut keymap_config = keymap_config.clone();
+    let Some(slot) = binding_slot(&mut keymap_config, descriptor.context, descriptor.action) else {
+        return KeymapDebugBindingSource::Default;
+    };
+    if slot.is_some() {
+        return KeymapDebugBindingSource::Custom;
+    }
+
+    let Some(global_slot) = global_fallback_slot(&mut keymap_config, descriptor) else {
+        return KeymapDebugBindingSource::Default;
+    };
+    if global_slot.is_some() {
+        KeymapDebugBindingSource::CustomGlobal
+    } else {
+        KeymapDebugBindingSource::Default
+    }
+}
+
+fn global_fallback_slot<'a>(
+    keymap: &'a mut TuiKeymap,
+    descriptor: &KeymapActionDescriptor,
+) -> Option<&'a mut Option<KeybindingsSpec>> {
+    if descriptor.context != "composer" {
+        return None;
+    }
+
+    match descriptor.action {
+        "submit" => Some(&mut keymap.global.submit),
+        "queue" => Some(&mut keymap.global.queue),
+        "toggle_shortcuts" => Some(&mut keymap.global.toggle_shortcuts),
+        _ => None,
     }
 }

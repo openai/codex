@@ -7,7 +7,7 @@ expression: "render_picker(params, 120)"
   All configurable shortcuts.
   85 actions, 0 customized, 1 unbound.
 
-  [All]  Common  Customized (0)  Unbound (1)  App  Composer  Editor  Vim  Navigation  Approval
+  [All]  Common  Customized (0)  Unbound (1)  App  Composer  Editor  Vim  Navigation  Approval  Debug
 
   Type to search shortcuts
 › Global         Open Transcript            ctrl-t

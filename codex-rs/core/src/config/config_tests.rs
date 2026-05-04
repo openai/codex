@@ -8469,6 +8469,68 @@ hide_spawn_agent_metadata = true
 }
 
 #[tokio::test]
+async fn multi_agent_v2_usage_hint_templates_use_materialized_config_values() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+usage_hint_text = "Limit {{ features.multi_agent_v2.max_concurrent_threads_per_session }}"
+root_agent_usage_hint_text = "Root {{ features.multi_agent_v2.max_concurrent_threads_per_session }}"
+subagent_usage_hint_text = "Subagent {{ features.multi_agent_v2.max_concurrent_threads_per_session }}"
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.multi_agent_v2.usage_hint_text.as_deref(),
+        Some("Limit 4")
+    );
+    assert_eq!(
+        config.multi_agent_v2.root_agent_usage_hint_text.as_deref(),
+        Some("Root 4")
+    );
+    assert_eq!(
+        config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
+        Some("Subagent 4")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_usage_hint_templates_fail_when_placeholder_is_missing() {
+    let codex_home = TempDir::new().expect("create codex home");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+usage_hint_text = "{{ features.multi_agent_v2.does_not_exist }}"
+"#,
+    )
+    .expect("write config");
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+        .expect_err("config load should fail");
+
+    assert!(
+        err.to_string()
+            .contains("features.multi_agent_v2.does_not_exist"),
+        "unexpected error: {err}",
+    );
+}
+
+#[tokio::test]
 async fn profile_multi_agent_v2_config_overrides_base() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(

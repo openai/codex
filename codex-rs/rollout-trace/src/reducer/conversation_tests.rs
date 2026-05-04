@@ -787,6 +787,75 @@ fn compaction_boundary_repeats_prefix_and_reuses_replacement_items() -> anyhow::
 }
 
 #[test]
+fn context_compaction_boundary_repeats_prefix_and_reuses_replacement_items() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = create_started_writer(&temp)?;
+    start_turn(&writer, "turn-1")?;
+
+    let developer = message("developer", "follow repo rules");
+    let user = message("user", "count files");
+    let request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({
+            "input": [developer, user]
+        }),
+    )?;
+    append_inference_start(&writer, "inference-1", "turn-1", request)?;
+
+    let summary = message("user", "summary from compacted history");
+    let compaction_summary = json!({
+        "type": "context_compaction",
+        "encrypted_content": "encrypted-summary",
+    });
+    let checkpoint = writer.write_json_payload(
+        RawPayloadKind::CompactionCheckpoint,
+        &json!({
+            "input_history": [developer, user],
+            "replacement_history": [user, summary, compaction_summary]
+        }),
+    )?;
+    writer.append_with_context(
+        trace_context("turn-1"),
+        RawTraceEventPayload::CompactionInstalled {
+            compaction_id: "compaction-1".to_string(),
+            checkpoint_payload: checkpoint,
+        },
+    )?;
+
+    start_turn(&writer, "turn-2")?;
+    let post_compaction_request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({
+            "input": [developer, user, summary, compaction_summary]
+        }),
+    )?;
+    append_inference_start(&writer, "inference-2", "turn-2", post_compaction_request)?;
+
+    let rollout = replay_bundle(temp.path())?;
+    let compaction = &rollout.compactions["compaction-1"];
+
+    assert_eq!(
+        rollout.conversation_items[&compaction.replacement_item_ids[2]].channel,
+        Some(ConversationChannel::Summary),
+    );
+    assert_eq!(
+        rollout.conversation_items[&compaction.replacement_item_ids[2]].kind,
+        ConversationItemKind::Message,
+    );
+    assert_eq!(
+        rollout.conversation_items[&compaction.replacement_item_ids[2]]
+            .body
+            .parts,
+        vec![ConversationPart::Encoded {
+            label: "encrypted_content".to_string(),
+            value: "encrypted-summary".to_string(),
+        }],
+    );
+
+    Ok(())
+}
+
+#[test]
 fn tool_call_links_model_call_and_followup_output_items() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = create_started_writer(&temp)?;

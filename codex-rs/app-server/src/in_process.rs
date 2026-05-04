@@ -804,7 +804,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn in_process_allows_device_key_requests_to_reach_device_key_api() {
+    async fn in_process_allows_device_key_requests_to_reach_device_key_processor() {
         let client = start_test_client(SessionSource::Cli).await;
         const MALFORMED_KEY_ID_MESSAGE: &str = concat!(
             "invalid device key payload: keyId must be dk_hse_, dk_tpm_, or dk_osn_ ",

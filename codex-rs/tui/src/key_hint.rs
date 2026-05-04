@@ -44,6 +44,11 @@ impl KeyBinding {
         Self { key, modifiers }
     }
 
+    pub(crate) fn from_event(event: KeyEvent) -> Self {
+        let (key, modifiers) = normalize_shifted_ascii_char(event.code, event.modifiers);
+        Self { key, modifiers }
+    }
+
     pub fn is_press(&self, event: KeyEvent) -> bool {
         normalize_shifted_ascii_char(self.key, self.modifiers)
             == normalize_shifted_ascii_char(event.code, event.modifiers)
@@ -52,6 +57,22 @@ impl KeyBinding {
 
     pub(crate) const fn parts(&self) -> (KeyCode, KeyModifiers) {
         (self.key, self.modifiers)
+    }
+
+    pub(crate) fn display_label(&self) -> String {
+        let modifiers = modifiers_to_string(self.modifiers);
+        let key = match self.key {
+            KeyCode::Enter => "enter".to_string(),
+            KeyCode::Char(' ') => "space".to_string(),
+            KeyCode::Up => "↑".to_string(),
+            KeyCode::Down => "↓".to_string(),
+            KeyCode::Left => "←".to_string(),
+            KeyCode::Right => "→".to_string(),
+            KeyCode::PageUp => "pgup".to_string(),
+            KeyCode::PageDown => "pgdn".to_string(),
+            _ => self.key.to_string().to_ascii_lowercase(),
+        };
+        format!("{modifiers}{key}")
     }
 }
 
@@ -143,20 +164,7 @@ impl From<KeyBinding> for Span<'static> {
 }
 impl From<&KeyBinding> for Span<'static> {
     fn from(binding: &KeyBinding) -> Self {
-        let KeyBinding { key, modifiers } = binding;
-        let modifiers = modifiers_to_string(*modifiers);
-        let key = match key {
-            KeyCode::Enter => "enter".to_string(),
-            KeyCode::Char(' ') => "space".to_string(),
-            KeyCode::Up => "↑".to_string(),
-            KeyCode::Down => "↓".to_string(),
-            KeyCode::Left => "←".to_string(),
-            KeyCode::Right => "→".to_string(),
-            KeyCode::PageUp => "pgup".to_string(),
-            KeyCode::PageDown => "pgdn".to_string(),
-            _ => format!("{key}").to_ascii_lowercase(),
-        };
-        Span::styled(format!("{modifiers}{key}"), key_hint_style())
+        Span::styled(binding.display_label(), key_hint_style())
     }
 }
 
