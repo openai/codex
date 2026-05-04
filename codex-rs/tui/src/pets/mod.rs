@@ -19,6 +19,12 @@ use anyhow::Result;
 pub(crate) use ambient::AmbientPet;
 pub(crate) use ambient::AmbientPetDraw;
 pub(crate) use ambient::PetNotificationKind;
+#[cfg(test)]
+pub(crate) use image_protocol::ImageProtocol;
+pub(crate) use image_protocol::PetImageSupport;
+#[cfg(test)]
+pub(crate) use image_protocol::PetImageUnsupportedReason;
+#[cfg(not(test))]
 pub(crate) use image_protocol::detect_pet_image_support;
 pub(crate) use picker::build_pet_picker_params;
 
