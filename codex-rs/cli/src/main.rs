@@ -369,9 +369,6 @@ struct LoginCommand {
     )]
     with_access_token: bool,
 
-    #[arg(long = "with-agent-identity", hide = true)]
-    with_agent_identity: bool,
-
     #[arg(
         long = "api-key",
         num_args = 0..=1,
@@ -969,9 +966,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     run_login_status(login_cli.config_overrides).await;
                 }
                 None => {
-                    let with_access_token =
-                        login_cli.with_access_token || login_cli.with_agent_identity;
-                    if login_cli.with_api_key && with_access_token {
+                    if login_cli.with_api_key && login_cli.with_access_token {
                         eprintln!(
                             "Choose one login credential source: --with-api-key or --with-access-token."
                         );
@@ -991,7 +986,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     } else if login_cli.with_api_key {
                         let api_key = read_api_key_from_stdin();
                         run_login_with_api_key(login_cli.config_overrides, api_key).await;
-                    } else if with_access_token {
+                    } else if login_cli.with_access_token {
                         let access_token = read_access_token_from_stdin();
                         run_login_with_access_token(login_cli.config_overrides, access_token).await;
                     } else {

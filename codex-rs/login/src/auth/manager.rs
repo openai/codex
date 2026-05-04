@@ -465,7 +465,6 @@ impl ChatgptAuth {
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 pub const CODEX_API_KEY_ENV_VAR: &str = "CODEX_API_KEY";
 pub const CODEX_ACCESS_TOKEN_ENV_VAR: &str = "CODEX_ACCESS_TOKEN";
-pub const CODEX_AGENT_IDENTITY_ENV_VAR: &str = "CODEX_AGENT_IDENTITY";
 
 pub fn read_openai_api_key_from_env() -> Option<String> {
     env::var(OPENAI_API_KEY_ENV_VAR)
@@ -480,7 +479,6 @@ pub fn read_codex_api_key_from_env() -> Option<String> {
 
 pub fn read_codex_access_token_from_env() -> Option<String> {
     read_non_empty_env_var(CODEX_ACCESS_TOKEN_ENV_VAR)
-        .or_else(|| read_non_empty_env_var(CODEX_AGENT_IDENTITY_ENV_VAR))
 }
 
 pub fn read_codex_agent_identity_from_env() -> Option<String> {
