@@ -685,6 +685,8 @@ async fn handle_process_write(
             .map_err(|_| invalid_request("stdin is already closed"))?;
     }
     if close_stdin {
+        // Closing drops our sender; the writer task still drains any bytes
+        // accepted above before its receiver observes EOF and closes stdin.
         session.close_stdin();
     }
     Ok(())
