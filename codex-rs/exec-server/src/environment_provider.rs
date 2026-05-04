@@ -11,21 +11,20 @@ use crate::environment::REMOTE_ENVIRONMENT_ID;
 
 /// Lists the concrete environments available to Codex.
 ///
-/// Implementations should return the provider-owned startup snapshot that
-/// `EnvironmentManager` will cache. Providers that want the local environment to
-/// be addressable by id should include it explicitly in the returned map.
+/// Implementations own both the available environment list and the default
+/// environment id. Providers that want the local environment to be addressable
+/// by id should include it explicitly in the returned map.
 #[async_trait]
 pub trait EnvironmentProvider: Send + Sync {
     /// Returns the environments available for a new manager.
-    async fn get_environment_snapshot(
+    async fn get_environments(
         &self,
         local_runtime_paths: &ExecServerRuntimePaths,
-    ) -> Result<EnvironmentProviderSnapshot, ExecServerError>;
-}
+    ) -> Result<HashMap<String, Environment>, ExecServerError>;
 
-pub struct EnvironmentProviderSnapshot {
-    pub environments: HashMap<String, Environment>,
-    pub default_environment_id: Option<String>,
+    /// Returns the provider-selected default environment id, or `None` to
+    /// disable model-facing environment access.
+    fn default_environment_id(&self) -> Option<String>;
 }
 
 /// Default provider backed by `CODEX_EXEC_SERVER_URL`.
@@ -45,15 +44,15 @@ impl DefaultEnvironmentProvider {
         Self::new(std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok())
     }
 
-    pub(crate) fn snapshot(
+    pub(crate) fn environments(
         &self,
         local_runtime_paths: &ExecServerRuntimePaths,
-    ) -> EnvironmentProviderSnapshot {
+    ) -> HashMap<String, Environment> {
         let mut environments = HashMap::from([(
             LOCAL_ENVIRONMENT_ID.to_string(),
             Environment::local(local_runtime_paths.clone()),
         )]);
-        let (exec_server_url, disabled) = normalize_exec_server_url(self.exec_server_url.clone());
+        let (exec_server_url, _disabled) = normalize_exec_server_url(self.exec_server_url.clone());
 
         if let Some(exec_server_url) = exec_server_url {
             environments.insert(
@@ -62,36 +61,32 @@ impl DefaultEnvironmentProvider {
             );
         }
 
-        let default_environment_id = if disabled {
-            None
-        } else {
-            derived_default_environment_id(&environments)
-        };
+        environments
+    }
 
-        EnvironmentProviderSnapshot {
-            environments,
-            default_environment_id,
+    pub(crate) fn default_id(&self) -> Option<String> {
+        let (exec_server_url, disabled) = normalize_exec_server_url(self.exec_server_url.clone());
+        if disabled {
+            None
+        } else if exec_server_url.is_some() {
+            Some(REMOTE_ENVIRONMENT_ID.to_string())
+        } else {
+            Some(LOCAL_ENVIRONMENT_ID.to_string())
         }
     }
 }
 
 #[async_trait]
 impl EnvironmentProvider for DefaultEnvironmentProvider {
-    async fn get_environment_snapshot(
+    async fn get_environments(
         &self,
         local_runtime_paths: &ExecServerRuntimePaths,
-    ) -> Result<EnvironmentProviderSnapshot, ExecServerError> {
-        Ok(self.snapshot(local_runtime_paths))
+    ) -> Result<HashMap<String, Environment>, ExecServerError> {
+        Ok(self.environments(local_runtime_paths))
     }
-}
 
-fn derived_default_environment_id(environments: &HashMap<String, Environment>) -> Option<String> {
-    if environments.contains_key(REMOTE_ENVIRONMENT_ID) {
-        Some(REMOTE_ENVIRONMENT_ID.to_string())
-    } else if environments.contains_key(LOCAL_ENVIRONMENT_ID) {
-        Some(LOCAL_ENVIRONMENT_ID.to_string())
-    } else {
-        None
+    fn default_environment_id(&self) -> Option<String> {
+        self.default_id()
     }
 }
 
@@ -122,11 +117,10 @@ mod tests {
     async fn default_provider_returns_local_environment_when_url_is_missing() {
         let provider = DefaultEnvironmentProvider::new(/*exec_server_url*/ None);
         let runtime_paths = test_runtime_paths();
-        let snapshot = provider
-            .get_environment_snapshot(&runtime_paths)
+        let environments = provider
+            .get_environments(&runtime_paths)
             .await
-            .expect("environment snapshot");
-        let environments = snapshot.environments;
+            .expect("environments");
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
         assert_eq!(
@@ -140,11 +134,10 @@ mod tests {
     async fn default_provider_returns_local_environment_when_url_is_empty() {
         let provider = DefaultEnvironmentProvider::new(Some(String::new()));
         let runtime_paths = test_runtime_paths();
-        let snapshot = provider
-            .get_environment_snapshot(&runtime_paths)
+        let environments = provider
+            .get_environments(&runtime_paths)
             .await
-            .expect("environment snapshot");
-        let environments = snapshot.environments;
+            .expect("environments");
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
         assert!(!environments.contains_key(REMOTE_ENVIRONMENT_ID));
@@ -154,26 +147,24 @@ mod tests {
     async fn default_provider_returns_local_environment_for_none_value() {
         let provider = DefaultEnvironmentProvider::new(Some("none".to_string()));
         let runtime_paths = test_runtime_paths();
-        let snapshot = provider
-            .get_environment_snapshot(&runtime_paths)
+        let environments = provider
+            .get_environments(&runtime_paths)
             .await
-            .expect("environment snapshot");
-        let environments = snapshot.environments;
+            .expect("environments");
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
         assert!(!environments.contains_key(REMOTE_ENVIRONMENT_ID));
-        assert_eq!(snapshot.default_environment_id, None);
+        assert_eq!(provider.default_environment_id(), None);
     }
 
     #[tokio::test]
     async fn default_provider_adds_remote_environment_for_websocket_url() {
         let provider = DefaultEnvironmentProvider::new(Some("ws://127.0.0.1:8765".to_string()));
         let runtime_paths = test_runtime_paths();
-        let snapshot = provider
-            .get_environment_snapshot(&runtime_paths)
+        let environments = provider
+            .get_environments(&runtime_paths)
             .await
-            .expect("environment snapshot");
-        let environments = snapshot.environments;
+            .expect("environments");
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
         let remote_environment = &environments[REMOTE_ENVIRONMENT_ID];
@@ -188,11 +179,10 @@ mod tests {
     async fn default_provider_normalizes_exec_server_url() {
         let provider = DefaultEnvironmentProvider::new(Some(" ws://127.0.0.1:8765 ".to_string()));
         let runtime_paths = test_runtime_paths();
-        let snapshot = provider
-            .get_environment_snapshot(&runtime_paths)
+        let environments = provider
+            .get_environments(&runtime_paths)
             .await
-            .expect("environment snapshot");
-        let environments = snapshot.environments;
+            .expect("environments");
 
         assert_eq!(
             environments[REMOTE_ENVIRONMENT_ID].exec_server_url(),
