@@ -118,6 +118,20 @@ impl TurnContext {
         )
     }
 
+    pub(crate) fn effective_reasoning_effort_for_tracing(&self) -> String {
+        if self.model_info.supports_reasoning_summaries {
+            match self
+                .reasoning_effort
+                .or(self.model_info.default_reasoning_level)
+            {
+                Some(effort) => effort.to_string(),
+                None => "default".to_string(),
+            }
+        } else {
+            "default".to_string()
+        }
+    }
+
     pub(crate) fn model_context_window(&self) -> Option<i64> {
         let effective_context_window_percent = self.model_info.effective_context_window_percent;
         self.model_info

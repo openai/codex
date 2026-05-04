@@ -107,6 +107,7 @@ use tracing::warn;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
+use crate::feedback_tags;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::map_api_error;
@@ -1685,6 +1686,9 @@ where
         let mut items_added: Vec<ResponseItem> = Vec::new();
         let mut api_stream = api_stream;
         let upstream_request_id = upstream_request_id.as_deref();
+        if let Some(upstream_request_id) = upstream_request_id {
+            feedback_tags!(last_model_request_id = upstream_request_id);
+        }
         loop {
             let event = tokio::select! {
                 _ = consumer_dropped.cancelled() => {
@@ -1721,6 +1725,7 @@ where
                     token_usage,
                     end_turn,
                 }) => {
+                    feedback_tags!(last_model_response_id = &response_id);
                     if let Some(usage) = &token_usage {
                         session_telemetry.sse_event_completed(
                             usage.input_tokens,
@@ -1769,6 +1774,9 @@ where
                         extract_response_debug_context_from_api_error(&err);
                     let upstream_request_id =
                         upstream_request_id.or(response_debug_context.request_id.as_deref());
+                    if let Some(upstream_request_id) = upstream_request_id {
+                        feedback_tags!(last_model_request_id = upstream_request_id);
+                    }
                     let mapped = map_api_error(err);
                     inference_trace_attempt.record_failed(
                         &mapped,

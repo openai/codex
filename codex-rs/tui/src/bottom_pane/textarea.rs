@@ -2780,6 +2780,53 @@ mod tests {
     }
 
     #[test]
+    fn shift_backspace_and_shift_delete_keep_grapheme_delete_behavior() {
+        let mut t = ta_with("abc");
+        t.set_cursor(/*pos*/ 2);
+
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::SHIFT));
+        assert_eq!(t.text(), "ac");
+        assert_eq!(t.cursor(), 1);
+
+        let mut t = ta_with("abc");
+        t.set_cursor(/*pos*/ 1);
+
+        t.input(KeyEvent::new(KeyCode::Delete, KeyModifiers::SHIFT));
+        assert_eq!(t.text(), "ac");
+        assert_eq!(t.cursor(), 1);
+    }
+
+    #[test]
+    fn control_backspace_variants_delete_backward_word() {
+        for modifiers in [
+            KeyModifiers::CONTROL,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ] {
+            let mut t = ta_with("hello world");
+            t.set_cursor(t.text().len());
+
+            t.input(KeyEvent::new(KeyCode::Backspace, modifiers));
+            assert_eq!(t.text(), "hello ");
+            assert_eq!(t.cursor(), 6);
+        }
+    }
+
+    #[test]
+    fn control_delete_variants_delete_forward_word() {
+        for modifiers in [
+            KeyModifiers::CONTROL,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ] {
+            let mut t = ta_with("hello world");
+            t.set_cursor(/*pos*/ 0);
+
+            t.input(KeyEvent::new(KeyCode::Delete, modifiers));
+            assert_eq!(t.text(), " world");
+            assert_eq!(t.cursor(), 0);
+        }
+    }
+
+    #[test]
     fn delete_backward_word_handles_narrow_no_break_space() {
         let mut t = ta_with("32\u{202F}AM");
         t.set_cursor(t.text().len());

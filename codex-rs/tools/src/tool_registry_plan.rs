@@ -282,7 +282,7 @@ pub fn build_tool_registry_plan(
                     ToolSearchSource {
                         server_name: tool.server_name,
                         connector_name: tool.connector_name,
-                        connector_description: tool.connector_description,
+                        description: tool.description,
                     }
                 }))
             })

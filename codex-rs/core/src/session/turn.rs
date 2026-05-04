@@ -1885,6 +1885,7 @@ async fn try_run_sampling_request(
         Box<dyn ToolArgumentDiffConsumer>,
     )> = None;
     let mut should_emit_turn_diff = false;
+    let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
@@ -1896,6 +1897,7 @@ async fn try_run_sampling_request(
             otel.name = field::Empty,
             tool_name = field::Empty,
             from = field::Empty,
+            codex.request.reasoning_effort = %reasoning_effort,
             gen_ai.usage.input_tokens = field::Empty,
             gen_ai.usage.cache_read.input_tokens = field::Empty,
             gen_ai.usage.output_tokens = field::Empty,

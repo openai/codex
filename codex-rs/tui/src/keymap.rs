@@ -588,11 +588,21 @@ impl RuntimeKeymap {
                 move_line_end: default_bindings![plain(KeyCode::End), ctrl(KeyCode::Char('e'))],
                 delete_backward: default_bindings![
                     plain(KeyCode::Backspace),
+                    shift(KeyCode::Backspace),
                     ctrl(KeyCode::Char('h'))
                 ],
-                delete_forward: default_bindings![plain(KeyCode::Delete), ctrl(KeyCode::Char('d'))],
+                delete_forward: default_bindings![
+                    plain(KeyCode::Delete),
+                    shift(KeyCode::Delete),
+                    ctrl(KeyCode::Char('d'))
+                ],
                 delete_backward_word: default_bindings![
                     alt(KeyCode::Backspace),
+                    ctrl(KeyCode::Backspace),
+                    raw(KeyBinding::new(
+                        KeyCode::Backspace,
+                        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+                    )),
                     ctrl(KeyCode::Char('w')),
                     raw(KeyBinding::new(
                         KeyCode::Char('h'),
@@ -601,6 +611,11 @@ impl RuntimeKeymap {
                 ],
                 delete_forward_word: default_bindings![
                     alt(KeyCode::Delete),
+                    ctrl(KeyCode::Delete),
+                    raw(KeyBinding::new(
+                        KeyCode::Delete,
+                        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+                    )),
                     alt(KeyCode::Char('d'))
                 ],
                 kill_line_start: default_bindings![ctrl(KeyCode::Char('u'))],
@@ -1916,6 +1931,54 @@ mod tests {
                 .editor
                 .delete_forward_word
                 .contains(&key_hint::alt(KeyCode::Char('d')))
+        );
+    }
+
+    #[test]
+    fn default_editor_deletion_includes_modified_backspace_delete_aliases() {
+        let runtime = RuntimeKeymap::defaults();
+
+        assert!(
+            runtime
+                .editor
+                .delete_backward
+                .contains(&key_hint::shift(KeyCode::Backspace))
+        );
+        assert!(
+            runtime
+                .editor
+                .delete_forward
+                .contains(&key_hint::shift(KeyCode::Delete))
+        );
+        assert!(
+            runtime
+                .editor
+                .delete_backward_word
+                .contains(&key_hint::ctrl(KeyCode::Backspace))
+        );
+        assert!(
+            runtime
+                .editor
+                .delete_backward_word
+                .contains(&KeyBinding::new(
+                    KeyCode::Backspace,
+                    KeyModifiers::CONTROL | KeyModifiers::SHIFT
+                ))
+        );
+        assert!(
+            runtime
+                .editor
+                .delete_forward_word
+                .contains(&key_hint::ctrl(KeyCode::Delete))
+        );
+        assert!(
+            runtime
+                .editor
+                .delete_forward_word
+                .contains(&KeyBinding::new(
+                    KeyCode::Delete,
+                    KeyModifiers::CONTROL | KeyModifiers::SHIFT
+                ))
         );
     }
 
