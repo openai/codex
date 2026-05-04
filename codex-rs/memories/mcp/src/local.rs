@@ -299,8 +299,11 @@ fn reject_symlink(path: &str, metadata: &std::fs::Metadata) -> Result<(), Memori
 fn display_relative_path(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
-        .display()
-        .to_string()
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .filter(|component| !component.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[cfg(test)]
