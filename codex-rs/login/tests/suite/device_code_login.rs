@@ -106,7 +106,6 @@ fn server_opts(
         codex_home.path().to_path_buf(),
         "client-id".to_string(),
         /*forced_chatgpt_workspace_id*/ None,
-        /*codex_streamlined_login*/ false,
         cli_auth_credentials_store_mode,
     );
     opts.issuer = issuer;
