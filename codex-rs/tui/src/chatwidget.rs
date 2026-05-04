@@ -8120,7 +8120,7 @@ impl ChatWidget {
             .send(AppEvent::PersistModelSelection { model, effort });
     }
 
-    /// Open the permissions popup (alias for /permissions).
+    /// Open the permissions popup.
     pub(crate) fn open_approvals_popup(&mut self) {
         self.open_permissions_popup();
     }
@@ -8693,8 +8693,8 @@ impl ChatWidget {
         // new permission profile, so downstream policy-change hooks don't
         // re-trigger the warning.
         let mut accept_actions: Vec<SelectionAction> = Vec::new();
-        // Suppress the immediate re-scan only when a preset will be applied (i.e., via /approvals or
-        // /permissions), to avoid duplicate warnings from the ensuing policy change.
+        // Suppress the immediate re-scan only when a preset will be applied via
+        // /permissions, to avoid duplicate warnings from the ensuing policy change.
         if preset.is_some() {
             accept_actions.push(Box::new(|tx| {
                 tx.send(AppEvent::SkipNextWorldWritableScan);
