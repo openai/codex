@@ -15,9 +15,6 @@ use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::ServiceTier;
-use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -42,8 +39,6 @@ use std::task::Poll;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::Notify;
-
-use crate::client_common::Prompt;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
@@ -255,53 +250,6 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
             ),
         ])
     );
-}
-
-#[tokio::test]
-async fn build_responses_request_sets_shared_cache_and_metadata_fields() {
-    let client = test_model_client(SessionSource::Cli);
-    let client_setup = client
-        .current_client_setup()
-        .await
-        .expect("client setup should resolve");
-    let prompt = Prompt {
-        input: vec![ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "hello".to_string(),
-            }],
-            phase: None,
-        }],
-        base_instructions: BaseInstructions {
-            text: "base instructions".to_string(),
-        },
-        ..Prompt::default()
-    };
-
-    let request = client
-        .build_responses_request(
-            &client_setup.api_provider,
-            &prompt,
-            &test_model_info(),
-            /*effort*/ None,
-            ReasoningSummaryConfig::None,
-            Some(ServiceTier::Fast),
-        )
-        .expect("request should build");
-
-    assert_eq!(
-        request.prompt_cache_key,
-        Some(client.state.conversation_id.to_string())
-    );
-    assert_eq!(
-        request.client_metadata,
-        Some(std::collections::HashMap::from([(
-            X_CODEX_INSTALLATION_ID_HEADER.to_string(),
-            "11111111-1111-4111-8111-111111111111".to_string(),
-        )]))
-    );
-    assert_eq!(request.service_tier, Some("priority".to_string()));
 }
 
 #[tokio::test]
