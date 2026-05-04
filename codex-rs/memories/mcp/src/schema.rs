@@ -75,6 +75,7 @@ pub(crate) fn search_input_schema() -> JsonObject {
         "properties": {
             "query": { "type": "string" },
             "path": { "type": "string" },
+            "cursor": { "type": "string" },
             "max_results": { "type": "integer", "minimum": 1 }
         },
         "required": ["query"],
@@ -88,6 +89,9 @@ pub(crate) fn search_output_schema() -> JsonObject {
         "properties": {
             "query": { "type": "string" },
             "path": {
+                "anyOf": [{ "type": "string" }, { "type": "null" }]
+            },
+            "next_cursor": {
                 "anyOf": [{ "type": "string" }, { "type": "null" }]
             },
             "matches": {
@@ -105,7 +109,7 @@ pub(crate) fn search_output_schema() -> JsonObject {
             },
             "truncated": { "type": "boolean" }
         },
-        "required": ["query", "path", "matches", "truncated"],
+        "required": ["query", "path", "matches", "next_cursor", "truncated"],
         "additionalProperties": false
     }))
 }

@@ -65,6 +65,7 @@ pub struct ReadMemoryResponse {
 pub struct SearchMemoriesRequest {
     pub query: String,
     pub path: Option<String>,
+    pub cursor: Option<String>,
     pub max_results: usize,
 }
 
@@ -73,6 +74,7 @@ pub struct SearchMemoriesResponse {
     pub query: String,
     pub path: Option<String>,
     pub matches: Vec<MemorySearchMatch>,
+    pub next_cursor: Option<String>,
     pub truncated: bool,
 }
 

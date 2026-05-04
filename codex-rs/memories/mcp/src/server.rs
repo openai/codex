@@ -57,6 +57,7 @@ struct ReadArgs {
 struct SearchArgs {
     query: String,
     path: Option<String>,
+    cursor: Option<String>,
     max_results: Option<usize>,
 }
 
@@ -146,6 +147,7 @@ impl<B: MemoriesBackend> ServerHandler for MemoriesMcpServer<B> {
                         .search(SearchMemoriesRequest {
                             query: args.query,
                             path: args.path,
+                            cursor: args.cursor,
                             max_results: clamp_max_results(
                                 args.max_results,
                                 DEFAULT_SEARCH_MAX_RESULTS,
@@ -215,7 +217,7 @@ fn read_tool() -> Tool {
 fn search_tool() -> Tool {
     let mut tool = Tool::new(
         Cow::Borrowed(SEARCH_TOOL_NAME),
-        Cow::Borrowed("Search Codex memory files for exact text matches."),
+        Cow::Borrowed("Search Codex memory files for exact text matches, with pagination."),
         Arc::new(schema::search_input_schema()),
     );
     tool.output_schema = Some(Arc::new(schema::search_output_schema()));

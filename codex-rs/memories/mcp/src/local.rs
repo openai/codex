@@ -192,18 +192,44 @@ impl MemoriesBackend for LocalMemoriesBackend {
 
         let max_results = request.max_results.min(MAX_SEARCH_RESULTS);
         let start = self.resolve_scoped_path(request.path.as_deref())?;
+        let start_index = match request.cursor.as_deref() {
+            Some(cursor) => cursor.parse::<usize>().map_err(|_| {
+                MemoriesBackendError::invalid_cursor(cursor, "must be a non-negative integer")
+            })?,
+            None => 0,
+        };
+        let Some(metadata) = Self::metadata_or_none(&start).await? else {
+            return Ok(SearchMemoriesResponse {
+                query: request.query,
+                path: request.path,
+                matches: Vec::new(),
+                next_cursor: None,
+                truncated: false,
+            });
+        };
+        reject_symlink(&display_relative_path(&self.root, &start), &metadata)?;
+
         let mut matches = Vec::new();
-        let truncated =
-            search_entries(&self.root, &start, query, &mut matches, max_results).await?;
+        search_entries(&self.root, &start, &metadata, query, &mut matches).await?;
         matches.sort_by(|left, right| {
             left.path
                 .cmp(&right.path)
                 .then(left.line_number.cmp(&right.line_number))
         });
+        if start_index > matches.len() {
+            return Err(MemoriesBackendError::invalid_cursor(
+                start_index.to_string(),
+                "exceeds result count",
+            ));
+        }
+        let end_index = start_index.saturating_add(max_results).min(matches.len());
+        let next_cursor = (end_index < matches.len()).then(|| end_index.to_string());
+        let truncated = next_cursor.is_some();
         Ok(SearchMemoriesResponse {
             query: request.query,
             path: request.path,
-            matches,
+            matches: matches.drain(start_index..end_index).collect(),
+            next_cursor,
             truncated,
         })
     }
@@ -212,30 +238,21 @@ impl MemoriesBackend for LocalMemoriesBackend {
 async fn search_entries(
     root: &Path,
     current: &Path,
+    current_metadata: &std::fs::Metadata,
     query: &str,
     matches: &mut Vec<MemorySearchMatch>,
-    max_results: usize,
-) -> Result<bool, MemoriesBackendError> {
-    if max_results == 0 {
-        return Ok(false);
+ ) -> Result<(), MemoriesBackendError> {
+    if current_metadata.is_file() {
+        search_file(root, current, query, matches).await?;
+        return Ok(());
     }
-    let Some(metadata) = LocalMemoriesBackend::metadata_or_none(current).await? else {
-        return Ok(false);
-    };
-    reject_symlink(&display_relative_path(root, current), &metadata)?;
-    if metadata.is_file() {
-        return search_file(root, current, query, matches, max_results).await;
-    }
-    if !metadata.is_dir() {
-        return Ok(false);
+    if !current_metadata.is_dir() {
+        return Ok(());
     }
 
     let mut pending = vec![current.to_path_buf()];
     while let Some(dir_path) = pending.pop() {
         for path in read_sorted_dir_paths(&dir_path).await? {
-            if matches.len() >= max_results {
-                return Ok(true);
-            }
             let Some(metadata) = LocalMemoriesBackend::metadata_or_none(&path).await? else {
                 continue;
             };
@@ -244,15 +261,13 @@ async fn search_entries(
             }
             if metadata.is_dir() {
                 pending.push(path);
-            } else if metadata.is_file()
-                && search_file(root, &path, query, matches, max_results).await?
-            {
-                return Ok(true);
+            } else if metadata.is_file() {
+                search_file(root, &path, query, matches).await?;
             }
         }
     }
 
-    Ok(false)
+    Ok(())
 }
 
 async fn search_file(
@@ -260,17 +275,13 @@ async fn search_file(
     path: &Path,
     query: &str,
     matches: &mut Vec<MemorySearchMatch>,
-    max_results: usize,
-) -> Result<bool, MemoriesBackendError> {
+) -> Result<(), MemoriesBackendError> {
     let content = match tokio::fs::read_to_string(path).await {
         Ok(content) => content,
-        Err(err) if err.kind() == std::io::ErrorKind::InvalidData => return Ok(false),
+        Err(err) if err.kind() == std::io::ErrorKind::InvalidData => return Ok(()),
         Err(err) => return Err(err.into()),
     };
     for (idx, line) in content.lines().enumerate() {
-        if matches.len() >= max_results {
-            return Ok(true);
-        }
         if line.contains(query) {
             matches.push(MemorySearchMatch {
                 path: display_relative_path(root, path),
@@ -279,7 +290,7 @@ async fn search_file(
             });
         }
     }
-    Ok(false)
+    Ok(())
 }
 
 async fn read_sorted_dir_paths(dir_path: &Path) -> Result<Vec<PathBuf>, MemoriesBackendError> {

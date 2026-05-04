@@ -384,6 +384,7 @@ async fn search_supports_directory_and_file_scopes() {
         .search(SearchMemoriesRequest {
             query: "needle".to_string(),
             path: None,
+            cursor: None,
             max_results: DEFAULT_SEARCH_MAX_RESULTS,
         })
         .await
@@ -396,17 +397,99 @@ async fn search_supports_directory_and_file_scopes() {
             .collect::<Vec<_>>(),
         vec![("MEMORY.md", 2), ("rollout_summaries/a.jsonl", 1)]
     );
+    assert_eq!(response.next_cursor, None);
+    assert_eq!(response.truncated, false);
 
     let file_response = backend(&tempdir)
         .search(SearchMemoriesRequest {
             query: "needle".to_string(),
             path: Some("MEMORY.md".to_string()),
+            cursor: None,
             max_results: DEFAULT_SEARCH_MAX_RESULTS,
         })
         .await
         .expect("search one memory file");
     assert_eq!(file_response.matches.len(), 1);
     assert_eq!(file_response.matches[0].path, "MEMORY.md");
+    assert_eq!(file_response.next_cursor, None);
+    assert_eq!(file_response.truncated, false);
+}
+
+#[tokio::test]
+async fn search_supports_pagination() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::create_dir_all(tempdir.path().join("rollout_summaries"))
+        .await
+        .expect("create rollout summaries dir");
+    tokio::fs::write(tempdir.path().join("MEMORY.md"), "needle one\nneedle two\n")
+        .await
+        .expect("write memory file");
+    tokio::fs::write(
+        tempdir.path().join("rollout_summaries/a.jsonl"),
+        "needle three\n",
+    )
+    .await
+    .expect("write rollout summary");
+
+    let page1 = backend(&tempdir)
+        .search(SearchMemoriesRequest {
+            query: "needle".to_string(),
+            path: None,
+            cursor: None,
+            max_results: 2,
+        })
+        .await
+        .expect("search first page");
+    assert_eq!(
+        page1
+            .matches
+            .iter()
+            .map(|entry| (entry.path.as_str(), entry.line_number))
+            .collect::<Vec<_>>(),
+        vec![("MEMORY.md", 1), ("MEMORY.md", 2)]
+    );
+    assert_eq!(page1.next_cursor.as_deref(), Some("2"));
+    assert_eq!(page1.truncated, true);
+
+    let page2 = backend(&tempdir)
+        .search(SearchMemoriesRequest {
+            query: "needle".to_string(),
+            path: None,
+            cursor: page1.next_cursor,
+            max_results: 2,
+        })
+        .await
+        .expect("search second page");
+    assert_eq!(
+        page2
+            .matches
+            .iter()
+            .map(|entry| (entry.path.as_str(), entry.line_number))
+            .collect::<Vec<_>>(),
+        vec![("rollout_summaries/a.jsonl", 1)]
+    );
+    assert_eq!(page2.next_cursor, None);
+    assert_eq!(page2.truncated, false);
+}
+
+#[tokio::test]
+async fn search_rejects_invalid_cursor() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::write(tempdir.path().join("MEMORY.md"), "needle\n")
+        .await
+        .expect("write memory file");
+
+    let err = backend(&tempdir)
+        .search(SearchMemoriesRequest {
+            query: "needle".to_string(),
+            path: None,
+            cursor: Some("bogus".to_string()),
+            max_results: DEFAULT_SEARCH_MAX_RESULTS,
+        })
+        .await
+        .expect_err("cursor should be rejected");
+
+    assert!(matches!(err, MemoriesBackendError::InvalidCursor { .. }));
 }
 
 #[tokio::test]
