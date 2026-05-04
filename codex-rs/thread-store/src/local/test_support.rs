@@ -13,14 +13,13 @@ use super::LocalThreadStoreConfig;
 pub(super) fn test_config(codex_home: &Path) -> LocalThreadStoreConfig {
     LocalThreadStoreConfig {
         codex_home: codex_home.to_path_buf(),
-        sqlite_home: codex_home.to_path_buf(),
         default_model_provider_id: "test-provider".to_string(),
     }
 }
 
 pub(super) async fn init_test_state_db(config: &LocalThreadStoreConfig) -> StateDbHandle {
     codex_state::StateRuntime::init(
-        config.sqlite_home.clone(),
+        config.codex_home.clone(),
         config.default_model_provider_id.clone(),
     )
     .await

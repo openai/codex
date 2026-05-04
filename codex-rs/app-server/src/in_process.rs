@@ -82,7 +82,6 @@ use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
-use codex_core::config::ThreadStoreConfig;
 use codex_core::init_state_db_from_config;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
