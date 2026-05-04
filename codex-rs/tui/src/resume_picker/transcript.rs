@@ -76,12 +76,12 @@ pub(crate) fn thread_to_transcript_cells(
             ThreadItem::Reasoning {
                 summary, content, ..
             } => {
-                let text = if !summary.is_empty() {
-                    summary.join("\n\n")
-                } else if matches!(raw_reasoning_visibility, RawReasoningVisibility::Visible) {
+                let text = if matches!(raw_reasoning_visibility, RawReasoningVisibility::Visible)
+                    && !content.is_empty()
+                {
                     content.join("\n\n")
                 } else {
-                    String::new()
+                    summary.join("\n\n")
                 };
                 if !text.trim().is_empty() {
                     cells.push(Arc::new(ReasoningSummaryCell::new(

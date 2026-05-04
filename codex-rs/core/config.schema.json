@@ -677,7 +677,7 @@
         "tui": {
           "allOf": [
             {
-              "$ref": "#/definitions/Tui"
+              "$ref": "#/definitions/ProfileTui"
             }
           ],
           "default": null,
@@ -1878,6 +1878,22 @@
           },
           "description": "Per-tool approval settings keyed by tool name.",
           "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "ProfileTui": {
+      "additionalProperties": false,
+      "description": "TUI settings supported inside a named profile.",
+      "properties": {
+        "session_picker_view": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SessionPickerViewMode"
+            }
+          ],
+          "default": null,
+          "description": "Preferred layout for resume/fork session picker results."
         }
       },
       "type": "object"

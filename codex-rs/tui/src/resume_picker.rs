@@ -4771,10 +4771,15 @@ session_picker_view = "dense"
         }
         terminal.flush().expect("flush");
 
-        assert_snapshot!(
-            "resume_picker_expanded_session",
-            terminal.backend().to_string()
-        );
+        let rendered = terminal
+            .backend()
+            .to_string()
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_snapshot!("resume_picker_expanded_session", rendered);
     }
 
     #[test]
@@ -5575,6 +5580,54 @@ session_picker_view = "dense"
 
         assert!(!hidden.contains("private raw chain of thought"));
         assert!(visible.contains("private raw chain of thought"));
+    }
+
+    #[test]
+    fn thread_to_transcript_cells_shows_raw_reasoning_over_summary_when_enabled() {
+        use transcript::thread_to_transcript_cells;
+
+        let thread_id = ThreadId::new();
+        let thread = Thread {
+            id: thread_id.to_string(),
+            forked_from_id: None,
+            preview: String::from("preview"),
+            ephemeral: false,
+            model_provider: String::from("openai"),
+            created_at: 1,
+            updated_at: 2,
+            status: codex_app_server_protocol::ThreadStatus::Idle,
+            path: None,
+            cwd: test_path_buf("/tmp").abs(),
+            cli_version: String::from("0.0.0"),
+            source: codex_app_server_protocol::SessionSource::Cli,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: None,
+            turns: vec![codex_app_server_protocol::Turn {
+                id: String::from("turn-1"),
+                items: vec![ThreadItem::Reasoning {
+                    id: String::from("reasoning-1"),
+                    summary: vec![String::from("public summary")],
+                    content: vec![String::from("raw reasoning content")],
+                }],
+                status: codex_app_server_protocol::TurnStatus::Completed,
+                error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            }],
+        };
+
+        let rendered = thread_to_transcript_cells(&thread, RawReasoningVisibility::Visible)
+            .into_iter()
+            .flat_map(|cell| cell.transcript_lines(/*width*/ 80))
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("raw reasoning content"));
+        assert!(!rendered.contains("public summary"));
     }
 
     #[tokio::test]
