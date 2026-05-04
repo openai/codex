@@ -241,7 +241,7 @@ async fn search_entries(
     current_metadata: &std::fs::Metadata,
     query: &str,
     matches: &mut Vec<MemorySearchMatch>,
- ) -> Result<(), MemoriesBackendError> {
+) -> Result<(), MemoriesBackendError> {
     if current_metadata.is_file() {
         search_file(root, current, query, matches).await?;
         return Ok(());
