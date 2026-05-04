@@ -29,6 +29,9 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
     let process_handle = "one-shot-1".to_string();
     let probe_file = codex_home.path().join("process-created");
     let release_file = codex_home.path().join("process-release");
+    // Use a probe/release handshake instead of asserting on wall-clock timing:
+    // the child proves it started by writing the probe file, then waits for the
+    // test to create the release file before it can emit output and exit.
     let command = if cfg!(windows) {
         vec![
             "powershell.exe".to_string(),
