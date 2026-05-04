@@ -194,7 +194,12 @@ impl AppsRequestProcessor {
                 accessible_loaded,
                 all_loaded,
             ) {
-                send_app_list_updated_notification(outgoing, merged.clone()).await;
+                send_app_list_updated_notification(
+                    outgoing,
+                    merged.clone(),
+                    /*is_final*/ false,
+                )
+                .await;
                 last_notified_apps = Some(merged);
             }
         }
@@ -254,7 +259,12 @@ impl AppsRequestProcessor {
                 all_loaded,
             ) && last_notified_apps.as_ref() != Some(&merged)
             {
-                send_app_list_updated_notification(outgoing, merged.clone()).await;
+                send_app_list_updated_notification(
+                    outgoing,
+                    merged.clone(),
+                    /*is_final*/ accessible_loaded && all_loaded,
+                )
+                .await;
                 last_notified_apps = Some(merged.clone());
             }
 
@@ -381,10 +391,11 @@ fn paginate_apps(
 async fn send_app_list_updated_notification(
     outgoing: &Arc<OutgoingMessageSender>,
     data: Vec<AppInfo>,
+    is_final: bool,
 ) {
     outgoing
         .send_server_notification(ServerNotification::AppListUpdated(
-            AppListUpdatedNotification { data },
+            AppListUpdatedNotification { data, is_final },
         ))
         .await;
 }
@@ -428,6 +439,6 @@ async fn send_force_refetched_app_list_updated_notification(
         &config,
     );
     if data != previous_data {
-        send_app_list_updated_notification(outgoing, data).await;
+        send_app_list_updated_notification(outgoing, data, /*is_final*/ true).await;
     }
 }

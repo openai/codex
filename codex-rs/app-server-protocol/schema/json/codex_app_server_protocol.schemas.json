@@ -5919,10 +5919,15 @@
               "$ref": "#/definitions/v2/AppInfo"
             },
             "type": "array"
+          },
+          "isFinal": {
+            "description": "Whether the notification includes the complete merged app list.",
+            "type": "boolean"
           }
         },
         "required": [
-          "data"
+          "data",
+          "isFinal"
         ],
         "title": "AppListUpdatedNotification",
         "type": "object"

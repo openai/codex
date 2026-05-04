@@ -272,7 +272,10 @@ impl ConfigRequestProcessor {
             );
             outgoing
                 .send_server_notification(ServerNotification::AppListUpdated(
-                    AppListUpdatedNotification { data },
+                    AppListUpdatedNotification {
+                        data,
+                        is_final: true,
+                    },
                 ))
                 .await;
         });

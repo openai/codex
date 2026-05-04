@@ -87,6 +87,7 @@ use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::AppListUpdatedNotification;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::CollabAgentTool;
@@ -10034,10 +10035,16 @@ impl ChatWidget {
         }
     }
 
-    fn on_app_list_updated(&mut self, connectors: Vec<AppInfo>) {
+    fn on_app_list_updated(&mut self, notification: AppListUpdatedNotification) {
+        if !notification.is_final && !self.connectors.prefetch_in_flight {
+            return;
+        }
+        let is_final = notification.is_final && !self.connectors.prefetch_in_flight;
         self.on_connectors_loaded(
-            Ok(ConnectorsSnapshot { connectors }),
-            /*is_final*/ !self.connectors.prefetch_in_flight,
+            Ok(ConnectorsSnapshot {
+                connectors: notification.data,
+            }),
+            is_final,
         );
     }
 

@@ -1659,7 +1659,7 @@ async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetc
 }
 
 #[tokio::test]
-async fn apps_popup_keeps_existing_full_snapshot_while_partial_refresh_loads() {
+async fn apps_popup_ignores_stale_partial_app_list_update_after_refresh() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
     chat.config
@@ -1742,6 +1742,7 @@ async fn apps_popup_keeps_existing_full_snapshot_while_partial_refresh_loads() {
                     plugin_display_names: Vec::new(),
                 },
             ],
+            is_final: false,
         }),
         /*replay_kind*/ None,
     );

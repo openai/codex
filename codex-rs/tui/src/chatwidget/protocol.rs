@@ -159,7 +159,7 @@ impl ChatWidget {
             }
             ServerNotification::AppListUpdated(notification) => {
                 if !from_replay {
-                    self.on_app_list_updated(notification.data);
+                    self.on_app_list_updated(notification);
                 }
             }
             ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
