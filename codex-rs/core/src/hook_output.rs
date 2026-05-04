@@ -1,6 +1,4 @@
 use std::io::ErrorKind;
-use std::time::Duration;
-use std::time::SystemTime;
 
 use crate::StateDbHandle;
 use crate::rollout::list::find_thread_path_by_id_str;
@@ -16,7 +14,6 @@ use uuid::Uuid;
 
 const HOOK_OUTPUTS_DIR: &str = "hook_outputs";
 const HOOK_OUTPUT_TOKEN_LIMIT: usize = 2_500;
-const HOOK_OUTPUT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 3);
 
 /// Keeps hook text within the model-visible hook-output budget.
 ///
@@ -51,7 +48,8 @@ pub(crate) async fn cap_model_visible_hook_text(
 
     let cleanup_codex_home = codex_home.clone();
     tokio::spawn(async move {
-        if let Err(err) = cleanup_stale_hook_outputs(&cleanup_codex_home, thread_id, state_db).await
+        if let Err(err) =
+            cleanup_orphaned_hook_outputs(&cleanup_codex_home, thread_id, state_db).await
         {
             warn!("failed to clean up hook outputs: {err:?}");
         }
@@ -78,12 +76,12 @@ fn spilled_hook_output_preview(text: &str, path: &AbsolutePathBuf) -> String {
     format!("{}{footer}", formatted_truncate_text(text, preview_policy))
 }
 
-/// Removes hook-output directories whose threads are no longer live enough to retain.
+/// Removes hook-output directories whose threads no longer have a rollout.
 ///
-/// A thread keeps its spilled outputs while it is active or while its rollout has
-/// been updated within the retention window. Directories without a matching
-/// rollout are treated as orphaned artifacts and removed.
-pub(crate) async fn cleanup_stale_hook_outputs(
+/// A thread keeps its spilled outputs for as long as its rollout exists so saved
+/// recovery paths remain valid when old conversations are reopened. Directories
+/// without a matching rollout are treated as orphaned artifacts and removed.
+pub(crate) async fn cleanup_orphaned_hook_outputs(
     codex_home: &AbsolutePathBuf,
     active_thread_id: ThreadId,
     state_db: Option<StateDbHandle>,
@@ -95,7 +93,6 @@ pub(crate) async fn cleanup_stale_hook_outputs(
         Err(err) => return Err(err.into()),
     };
 
-    let now = SystemTime::now();
     let active_thread_id = active_thread_id.to_string();
 
     while let Some(entry) = entries.next_entry().await? {
@@ -113,30 +110,7 @@ pub(crate) async fn cleanup_stale_hook_outputs(
 
         let rollout_path =
             find_thread_path_by_id_str(codex_home, &thread_id, state_db.as_deref()).await?;
-        let Some(rollout_path) = rollout_path else {
-            remove_hook_output_dir(&path).await;
-            continue;
-        };
-
-        let modified = match fs::metadata(&rollout_path)
-            .await
-            .and_then(|metadata| metadata.modified())
-        {
-            Ok(modified) => modified,
-            Err(err) => {
-                warn!(
-                    "failed to check rollout age for hook outputs {}: {err:?}",
-                    path.display()
-                );
-                continue;
-            }
-        };
-
-        if now
-            .duration_since(modified)
-            .ok()
-            .is_some_and(|age| age >= HOOK_OUTPUT_RETENTION)
-        {
+        if rollout_path.is_none() {
             remove_hook_output_dir(&path).await;
         }
     }
