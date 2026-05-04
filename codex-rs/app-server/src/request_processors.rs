@@ -369,7 +369,6 @@ use codex_rmcp_client::perform_oauth_login_return_url;
 use codex_rollout::EventPersistenceMode;
 use codex_rollout::is_persisted_rollout_item;
 use codex_rollout::state_db::StateDbHandle;
-use codex_rollout::state_db::get_state_db;
 use codex_rollout::state_db::reconcile_rollout;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadata;

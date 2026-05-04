@@ -1,13 +1,5 @@
 use super::*;
 
-pub(super) async fn open_state_db_for_direct_thread_lookup(
-    config: &Config,
-) -> Option<StateDbHandle> {
-    StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone())
-        .await
-        .ok()
-}
-
 pub(crate) async fn read_summary_from_rollout(
     path: &Path,
     fallback_provider: &str,

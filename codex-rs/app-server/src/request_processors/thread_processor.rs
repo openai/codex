@@ -1589,30 +1589,30 @@ impl ThreadRequestProcessor {
         )
         .await
         {
+            Ok(Some(path)) => path,
+            Ok(None) => match find_archived_thread_path_by_id_str(
+                &self.config.codex_home,
+                &thread_uuid.to_string(),
+                self.state_db.as_deref(),
+            )
+            .await
+            {
                 Ok(Some(path)) => path,
-                Ok(None) => match find_archived_thread_path_by_id_str(
-                    &self.config.codex_home,
-                    &thread_uuid.to_string(),
-                    self.state_db.as_deref(),
-                )
-                .await
-                {
-                    Ok(Some(path)) => path,
-                    Ok(None) => {
-                        return Err(invalid_request(format!("thread not found: {thread_uuid}")));
-                    }
-                    Err(err) => {
-                        return Err(internal_error(format!(
-                            "failed to locate archived thread id {thread_uuid}: {err}"
-                        )));
-                    }
-                },
+                Ok(None) => {
+                    return Err(invalid_request(format!("thread not found: {thread_uuid}")));
+                }
                 Err(err) => {
                     return Err(internal_error(format!(
-                        "failed to locate thread id {thread_uuid}: {err}"
+                        "failed to locate archived thread id {thread_uuid}: {err}"
                     )));
                 }
-            };
+            },
+            Err(err) => {
+                return Err(internal_error(format!(
+                    "failed to locate thread id {thread_uuid}: {err}"
+                )));
+            }
+        };
 
         reconcile_rollout(
             Some(state_db_ctx),
@@ -2925,7 +2925,9 @@ impl ThreadRequestProcessor {
     }
 
     async fn attach_thread_name(&self, thread_id: ThreadId, thread: &mut Thread) {
-        if let Some(title) = title_from_state_db(&self.config, self.state_db.as_ref(), thread_id).await {
+        if let Some(title) =
+            title_from_state_db(&self.config, self.state_db.as_ref(), thread_id).await
+        {
             set_thread_name_from_title(thread, title);
         }
     }
