@@ -22,6 +22,7 @@ use codex_core::config::StartedNetworkProxy;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecExpirationOutcome;
 use codex_core::exec::IO_DRAIN_TIMEOUT_MS;
+use codex_core::exec::should_use_windows_restricted_token_sandbox;
 use codex_core::sandboxing::ExecRequest;
 use codex_protocol::exec_output::bytes_to_string_smart;
 use codex_sandboxing::SandboxType;
@@ -175,7 +176,12 @@ impl CommandExecManager {
             process_id: process_id.clone(),
         };
 
-        if matches!(exec_request.sandbox, SandboxType::WindowsRestrictedToken) {
+        let compatibility_sandbox_policy = exec_request.compatibility_sandbox_policy();
+        if should_use_windows_restricted_token_sandbox(
+            exec_request.sandbox,
+            &compatibility_sandbox_policy,
+            &exec_request.file_system_sandbox_policy,
+        ) {
             if tty || stream_stdin || stream_stdout_stderr {
                 return Err(invalid_request(
                     "streaming command/exec is not supported with windows sandbox",
@@ -710,6 +716,32 @@ mod tests {
         )
     }
 
+    fn windows_danger_full_access_exec_request() -> ExecRequest {
+        let cwd = AbsolutePathBuf::current_dir().expect("current dir");
+        let sandbox_policy = codex_protocol::protocol::SandboxPolicy::DangerFullAccess;
+        let permission_profile = PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy);
+        let file_system_sandbox_policy =
+            codex_protocol::permissions::FileSystemSandboxPolicy::from(&sandbox_policy);
+        ExecRequest {
+            command: vec!["cmd".to_string()],
+            cwd: cwd.clone(),
+            env: HashMap::new(),
+            exec_server_env_config: None,
+            network: None,
+            expiration: ExecExpiration::DefaultTimeout,
+            capture_policy: codex_core::exec::ExecCapturePolicy::ShellTool,
+            sandbox: SandboxType::WindowsRestrictedToken,
+            windows_sandbox_policy_cwd: cwd,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+            permission_profile,
+            file_system_sandbox_policy,
+            network_sandbox_policy: codex_protocol::permissions::NetworkSandboxPolicy::Enabled,
+            windows_sandbox_filesystem_overrides: None,
+            arg0: None,
+        }
+    }
+
     #[tokio::test]
     async fn windows_sandbox_streaming_exec_is_rejected() {
         let (tx, _rx) = mpsc::channel(1);
@@ -738,6 +770,41 @@ mod tests {
 
         assert_eq!(err.code, INVALID_REQUEST_ERROR_CODE);
         assert_eq!(
+            err.message,
+            "streaming command/exec is not supported with windows sandbox"
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn windows_danger_full_access_streaming_exec_is_not_treated_as_windows_sandbox() {
+        let (tx, _rx) = mpsc::channel(1);
+        let manager = CommandExecManager::default();
+
+        let err = manager
+            .start(StartCommandExecParams {
+                outgoing: Arc::new(OutgoingMessageSender::new(
+                    tx,
+                    codex_analytics::AnalyticsEventsClient::disabled(),
+                )),
+                request_id: ConnectionRequestId {
+                    connection_id: ConnectionId(2),
+                    request_id: codex_app_server_protocol::RequestId::Integer(43),
+                },
+                process_id: Some("proc-43".to_string()),
+                exec_request: windows_danger_full_access_exec_request(),
+                started_network_proxy: None,
+                tty: false,
+                stream_stdin: false,
+                stream_stdout_stderr: true,
+                output_bytes_cap: None,
+                size: None,
+            })
+            .await
+            .expect_err("non-windows hosts should still fail before the restricted-token path");
+
+        assert_eq!(err.code, INVALID_REQUEST_ERROR_CODE);
+        assert_ne!(
             err.message,
             "streaming command/exec is not supported with windows sandbox"
         );

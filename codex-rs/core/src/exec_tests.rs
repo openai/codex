@@ -378,6 +378,21 @@ async fn process_exec_tool_call_preserves_full_buffer_capture_policy() -> Result
 }
 
 #[test]
+fn windows_restricted_token_skips_danger_full_access_policies() {
+    let policy = SandboxPolicy::DangerFullAccess;
+    let file_system_policy = FileSystemSandboxPolicy::from(&policy);
+
+    assert_eq!(
+        should_use_windows_restricted_token_sandbox(
+            SandboxType::WindowsRestrictedToken,
+            &policy,
+            &file_system_policy,
+        ),
+        false
+    );
+}
+
+#[test]
 fn windows_restricted_token_skips_external_sandbox_policies() {
     let policy = SandboxPolicy::ExternalSandbox {
         network_access: codex_protocol::protocol::NetworkAccess::Restricted,

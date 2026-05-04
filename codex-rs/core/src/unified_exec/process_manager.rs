@@ -11,6 +11,7 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::exec::should_use_windows_restricted_token_sandbox;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
@@ -874,8 +875,13 @@ impl UnifiedExecProcessManager {
         let inherited_fds = spawn_lifecycle.inherited_fds();
 
         #[cfg(target_os = "windows")]
-        if request.sandbox == codex_sandboxing::SandboxType::WindowsRestrictedToken {
-            let sandbox_policy = request.compatibility_sandbox_policy();
+        let sandbox_policy = request.compatibility_sandbox_policy();
+        #[cfg(target_os = "windows")]
+        if should_use_windows_restricted_token_sandbox(
+            request.sandbox,
+            &sandbox_policy,
+            &request.file_system_sandbox_policy,
+        ) {
             let policy_json = serde_json::to_string(&sandbox_policy).map_err(|err| {
                 UnifiedExecError::create_process(format!(
                     "failed to serialize Windows sandbox policy: {err}"
