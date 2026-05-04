@@ -388,7 +388,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 std::process::exit(0);
             }
             AuthMode::AgentIdentity => {
-                eprintln!("{}", access_token_login_status_message());
+                eprintln!("Logged in using access token");
                 std::process::exit(0);
             }
         },
@@ -440,10 +440,6 @@ async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config
     }
 }
 
-fn access_token_login_status_message() -> &'static str {
-    "Logged in using access token"
-}
-
 fn safe_format_key(key: &str) -> String {
     if key.len() <= 13 {
         return "***".to_string();
@@ -455,16 +451,7 @@ fn safe_format_key(key: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::access_token_login_status_message;
     use super::safe_format_key;
-
-    #[test]
-    fn access_token_status_uses_renamed_login_surface() {
-        assert_eq!(
-            access_token_login_status_message(),
-            "Logged in using access token"
-        );
-    }
 
     #[test]
     fn formats_long_key() {
