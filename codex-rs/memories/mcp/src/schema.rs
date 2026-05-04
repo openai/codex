@@ -102,11 +102,11 @@ pub(crate) fn search_output_schema() -> JsonObject {
                     "type": "object",
                     "properties": {
                         "path": { "type": "string" },
-                        "line_number": { "type": "integer" },
-                        "start_line_number": { "type": "integer" },
+                        "match_line_number": { "type": "integer" },
+                        "content_start_line_number": { "type": "integer" },
                         "content": { "type": "string" }
                     },
-                    "required": ["path", "line_number", "start_line_number", "content"],
+                    "required": ["path", "match_line_number", "content_start_line_number", "content"],
                     "additionalProperties": false
                 }
             },

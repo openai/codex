@@ -96,8 +96,8 @@ pub enum MemoryEntryType {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MemorySearchMatch {
     pub path: String,
-    pub line_number: usize,
-    pub start_line_number: usize,
+    pub match_line_number: usize,
+    pub content_start_line_number: usize,
     pub content: String,
 }
 
