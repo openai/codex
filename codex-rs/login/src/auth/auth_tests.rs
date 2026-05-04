@@ -708,17 +708,6 @@ fn remove_access_token_env_var() -> EnvVarGuard {
     EnvVarGuard::remove(CODEX_ACCESS_TOKEN_ENV_VAR)
 }
 
-#[test]
-#[serial(codex_auth_env)]
-fn read_codex_access_token_from_env_prefers_new_name() {
-    let _access_token_guard = EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, "new-token");
-
-    assert_eq!(
-        read_codex_access_token_from_env().as_deref(),
-        Some("new-token")
-    );
-}
-
 #[tokio::test]
 #[serial(codex_auth_env)]
 async fn load_auth_reads_access_token_from_env() {
