@@ -112,28 +112,18 @@ impl ProcessExecRequestProcessor {
             Some(None) => ExecExpiration::Cancellation(CancellationToken::new()),
             None => ExecExpiration::DefaultTimeout,
         };
-        let output_bytes_cap = match output_bytes_cap {
-            Some(output_bytes_cap) => output_bytes_cap,
-            None => Some(DEFAULT_OUTPUT_BYTES_CAP),
-        };
-        let size = match size.map(terminal_size_from_protocol) {
-            Some(Ok(size)) => Some(size),
-            Some(Err(error)) => return Err(error),
-            None => None,
-        };
-        let launch = ProcessLaunchRequest {
-            command,
-            cwd,
-            env,
-            expiration,
-        };
+        let output_bytes_cap = output_bytes_cap.unwrap_or(Some(DEFAULT_OUTPUT_BYTES_CAP));
+        let size = size.map(terminal_size_from_protocol).transpose()?;
 
         self.process_exec_manager
             .start(StartProcessParams {
                 outgoing: self.outgoing.clone(),
                 request_id,
                 process_handle,
-                launch,
+                command,
+                cwd,
+                env,
+                expiration,
                 tty,
                 stream_stdin,
                 stream_stdout_stderr,
@@ -216,19 +206,15 @@ struct StartProcessParams {
     outgoing: Arc<OutgoingMessageSender>,
     request_id: ConnectionRequestId,
     process_handle: String,
-    launch: ProcessLaunchRequest,
+    command: Vec<String>,
+    cwd: AbsolutePathBuf,
+    env: HashMap<String, String>,
+    expiration: ExecExpiration,
     tty: bool,
     stream_stdin: bool,
     stream_stdout_stderr: bool,
     output_bytes_cap: Option<usize>,
     size: Option<TerminalSize>,
-}
-
-struct ProcessLaunchRequest {
-    command: Vec<String>,
-    cwd: AbsolutePathBuf,
-    env: HashMap<String, String>,
-    expiration: ExecExpiration,
 }
 
 struct RunProcessParams {
@@ -266,20 +252,16 @@ impl ProcessExecManager {
             outgoing,
             request_id,
             process_handle,
-            launch,
+            command,
+            cwd,
+            env,
+            expiration,
             tty,
             stream_stdin,
             stream_stdout_stderr,
             output_bytes_cap,
             size,
         } = params;
-
-        let ProcessLaunchRequest {
-            command,
-            cwd,
-            env,
-            expiration,
-        } = launch;
 
         let (program, args) = command
             .split_first()
@@ -717,14 +699,10 @@ fn terminal_size_from_protocol(
 
 fn no_active_process_error(process_handle: &str) -> JSONRPCErrorError {
     invalid_request(format!(
-        "no active process for process handle {}",
-        serde_json::to_string(process_handle).unwrap_or_else(|_| format!("{process_handle:?}")),
+        "no active process for process handle {process_handle:?}"
     ))
 }
 
 fn process_no_longer_running_error(process_handle: &str) -> JSONRPCErrorError {
-    invalid_request(format!(
-        "process {} is no longer running",
-        serde_json::to_string(process_handle).unwrap_or_else(|_| format!("{process_handle:?}")),
-    ))
+    invalid_request(format!("process {process_handle:?} is no longer running"))
 }
