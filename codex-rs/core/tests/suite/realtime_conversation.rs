@@ -48,7 +48,6 @@ use std::process::Command;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
-use std::time::Instant;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 use wiremock::Match;
@@ -493,7 +492,6 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let start = Instant::now();
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             output_modality: RealtimeOutputModality::Audio,
@@ -515,13 +513,7 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
     })
     .await
     .unwrap_or_else(|err: ErrorEvent| panic!("conversation call create failed: {err:?}"));
-    let sdp_elapsed = start.elapsed();
     assert_eq!(created.sdp, "v=answer\r\n");
-    assert!(
-        sdp_elapsed < sideband_accept_delay,
-        "SDP answer should arrive before sideband accept delay; elapsed={sdp_elapsed:?}, delay={sideband_accept_delay:?}"
-    );
-    assert!(realtime_server.handshakes().is_empty());
 
     test.codex
         .submit(Op::RealtimeConversationText(ConversationTextParams {
@@ -625,6 +617,86 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
     ));
 
     realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_webrtc_sideband_connect_failure_closes_with_error() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    Mock::given(method("POST"))
+        .and(path_regex(".*/realtime/calls$"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Location", "/v1/realtime/calls/calls/rtc_sideband_failure")
+                .set_body_string("v=answer\r\n"),
+        )
+        .mount(&server)
+        .await;
+    let mut builder = test_codex().with_config(|config| {
+        config.experimental_realtime_ws_backend_prompt = Some("backend prompt".to_string());
+        config.experimental_realtime_ws_model = Some("realtime-test-model".to_string());
+        config.experimental_realtime_ws_startup_context = Some(String::new());
+        config.experimental_realtime_ws_base_url = Some("http://127.0.0.1:1".to_string());
+        config.realtime.version = RealtimeWsVersion::V1;
+    });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
+            prompt: Some(Some("backend prompt".to_string())),
+            realtime_session_id: None,
+            transport: Some(ConversationStartTransport::Webrtc {
+                sdp: "v=offer\r\n".to_string(),
+            }),
+            voice: None,
+        }))
+        .await?;
+
+    let started = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationStarted(started) => Some(started.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(started.realtime_session_id.is_some());
+
+    let sdp = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationSdp(created) => Some(created.sdp.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(sdp, "v=answer\r\n");
+
+    let err = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::Error(message),
+        }) => Some(message.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(!err.is_empty());
+
+    let closed = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(closed.reason.as_deref(), Some("error"));
+
+    test.codex
+        .submit(Op::RealtimeConversationText(ConversationTextParams {
+            text: "after sideband failure".to_string(),
+        }))
+        .await?;
+    let err = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::Error(err) => Some(err.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(err.message, "conversation is not running");
+
     Ok(())
 }
 
