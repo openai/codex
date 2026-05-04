@@ -157,6 +157,11 @@ impl ChatWidget {
             ServerNotification::McpServerStatusUpdated(notification) => {
                 self.on_mcp_server_status_updated(notification)
             }
+            ServerNotification::AppListUpdated(notification) => {
+                if !from_replay {
+                    self.on_app_list_updated(notification.data);
+                }
+            }
             ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
                 self.on_guardian_review_notification(
                     notification.review_id,
@@ -226,7 +231,6 @@ impl ChatWidget {
             | ServerNotification::FileChangePatchUpdated(_)
             | ServerNotification::McpToolCallProgress(_)
             | ServerNotification::McpServerOauthLoginCompleted(_)
-            | ServerNotification::AppListUpdated(_)
             | ServerNotification::RemoteControlStatusChanged(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::FsChanged(_)

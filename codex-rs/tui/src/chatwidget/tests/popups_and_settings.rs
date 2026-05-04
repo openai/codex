@@ -1306,7 +1306,7 @@ async fn plugins_popup_search_no_matches_and_backspace_restores_results() {
 
 #[tokio::test]
 async fn apps_popup_stays_loading_until_final_snapshot_updates() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
     chat.config
         .features
@@ -1340,6 +1340,13 @@ async fn apps_popup_stays_loading_until_final_snapshot_updates() {
     assert!(
         chat.connectors.prefetch_in_flight,
         "expected /apps to trigger a forced connectors refresh"
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::FetchAppsList {
+            force_refetch: true,
+            thread_id: None,
+        })
     );
 
     let before = render_bottom_popup(&chat, /*width*/ 80);
@@ -1701,9 +1708,9 @@ async fn apps_popup_keeps_existing_full_snapshot_while_partial_refresh_loads() {
     );
     chat.add_connectors_output();
 
-    chat.on_connectors_loaded(
-        Ok(ConnectorsSnapshot {
-            connectors: vec![
+    chat.handle_server_notification(
+        ServerNotification::AppListUpdated(codex_app_server_protocol::AppListUpdatedNotification {
+            data: vec![
                 AppInfo {
                     id: "unit_test_connector_1".to_string(),
                     name: "Notion".to_string(),
@@ -1736,7 +1743,7 @@ async fn apps_popup_keeps_existing_full_snapshot_while_partial_refresh_loads() {
                 },
             ],
         }),
-        /*is_final*/ false,
+        /*replay_kind*/ None,
     );
 
     assert_matches!(
@@ -1858,7 +1865,7 @@ async fn apps_popup_shows_disabled_status_for_installed_but_disabled_apps() {
 }
 
 #[tokio::test]
-async fn apps_initial_load_applies_enabled_state_from_config() {
+async fn apps_initial_load_uses_enabled_state_from_app_list() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
     chat.config
@@ -1866,17 +1873,6 @@ async fn apps_initial_load_applies_enabled_state_from_config() {
         .enable(Feature::Apps)
         .expect("test config should allow feature update");
     chat.bottom_pane.set_connectors_enabled(/*enabled*/ true);
-
-    let temp = tempdir().expect("tempdir");
-    let config_toml_path = temp.path().join("config.toml").abs();
-    let user_config = toml::from_str::<TomlValue>(
-        "[apps.connector_1]\nenabled = false\ndisabled_reason = \"user\"\n",
-    )
-    .expect("apps config");
-    chat.config.config_layer_stack = chat
-        .config
-        .config_layer_stack
-        .with_user_config(&config_toml_path, user_config);
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
@@ -1892,7 +1888,7 @@ async fn apps_initial_load_applies_enabled_state_from_config() {
                 labels: None,
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
-                is_enabled: true,
+                is_enabled: false,
                 plugin_display_names: Vec::new(),
             }],
         }),
@@ -1911,7 +1907,7 @@ async fn apps_initial_load_applies_enabled_state_from_config() {
 }
 
 #[tokio::test]
-async fn apps_initial_load_applies_enabled_state_from_requirements_with_user_override() {
+async fn apps_initial_load_uses_app_list_disabled_state_with_user_override() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
     chat.config
@@ -1959,7 +1955,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_with_user_ove
                 labels: None,
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
-                is_enabled: true,
+                is_enabled: false,
                 plugin_display_names: Vec::new(),
             }],
         }),
@@ -1985,7 +1981,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_with_user_ove
 }
 
 #[tokio::test]
-async fn apps_initial_load_applies_enabled_state_from_requirements_without_user_entry() {
+async fn apps_initial_load_uses_app_list_disabled_state_with_requirements() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
     chat.config
@@ -2024,7 +2020,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_without_user_
                 labels: None,
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
-                is_enabled: true,
+                is_enabled: false,
                 plugin_display_names: Vec::new(),
             }],
         }),
@@ -2050,7 +2046,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_without_user_
 }
 
 #[tokio::test]
-async fn apps_refresh_preserves_toggled_enabled_state() {
+async fn apps_refresh_uses_enabled_state_from_app_list_unless_local_toggle_races() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
     chat.config
@@ -2109,14 +2105,46 @@ async fn apps_refresh_preserves_toggled_enabled_state() {
                 .connectors
                 .iter()
                 .find(|connector| connector.id == "connector_1")
-                .is_some_and(|connector| !connector.is_enabled)
+                .is_some_and(|connector| connector.is_enabled)
     );
 
     chat.add_connectors_output();
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
-        popup.contains("Installed · Disabled. Press Enter to open the app page"),
-        "expected disabled status to persist after reload, got:\n{popup}"
+        popup.contains("Installed. Press Enter to open the app page"),
+        "expected refreshed app-list status to render as enabled, got:\n{popup}"
+    );
+
+    chat.update_connector_enabled("connector_1", /*enabled*/ false);
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![AppInfo {
+                id: "connector_1".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: Vec::new(),
+            }],
+        }),
+        /*is_final*/ true,
+    );
+
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot)
+            if snapshot
+                .connectors
+                .iter()
+                .find(|connector| connector.id == "connector_1")
+                .is_some_and(|connector| !connector.is_enabled)
     );
 }
 

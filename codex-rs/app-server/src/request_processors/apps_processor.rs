@@ -41,15 +41,20 @@ impl AppsRequestProcessor {
         request_id: &ConnectionRequestId,
         params: AppsListParams,
     ) -> Result<Option<AppsListResponse>, JSONRPCErrorError> {
-        let mut config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-
-        if let Some(thread_id) = params.thread_id.as_deref() {
+        let config = if let Some(thread_id) = params.thread_id.as_deref() {
             let (_, thread) = self.load_thread(thread_id).await?;
+            let thread_config = thread.config().await;
+            let mut config = self
+                .load_latest_config(Some(thread_config.cwd.to_path_buf()))
+                .await?;
 
             let _ = config
                 .features
                 .set_enabled(Feature::Apps, thread.enabled(Feature::Apps));
-        }
+            config
+        } else {
+            self.load_latest_config(/*fallback_cwd*/ None).await?
+        };
 
         let auth = self.auth_manager.auth().await;
         if !config
@@ -88,8 +93,35 @@ impl AppsRequestProcessor {
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
     ) {
-        let result = Self::apps_list_response(&outgoing, params, config, environment_manager).await;
-        outgoing.send_result(request_id, result).await;
+        match Self::apps_list_response(
+            &outgoing,
+            params,
+            config.clone(),
+            Arc::clone(&environment_manager),
+        )
+        .await
+        {
+            Ok(result) => {
+                let should_force_refetch_after_response =
+                    result.should_force_refetch_after_response;
+                let full_data = result.full_data;
+                let response: Result<AppsListResponse, JSONRPCErrorError> = Ok(result.response);
+                outgoing.send_result(request_id, response).await;
+                if should_force_refetch_after_response {
+                    send_force_refetched_app_list_updated_notification(
+                        &outgoing,
+                        config,
+                        environment_manager,
+                        full_data,
+                    )
+                    .await;
+                }
+            }
+            Err(err) => {
+                let response: Result<AppsListResponse, JSONRPCErrorError> = Err(err);
+                outgoing.send_result(request_id, response).await;
+            }
+        }
     }
 
     async fn apps_list_response(
@@ -97,7 +129,7 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
-    ) -> Result<AppsListResponse, JSONRPCErrorError> {
+    ) -> Result<AppsListTaskResult, JSONRPCErrorError> {
         let AppsListParams {
             cursor,
             limit,
@@ -130,7 +162,10 @@ impl AppsRequestProcessor {
                     &environment_manager,
                 )
                 .await
-                .map(|status| status.connectors)
+                .map(|status| AccessibleAppsList {
+                    connectors: status.connectors,
+                    codex_apps_ready: status.codex_apps_ready,
+                })
                 .map_err(|err| format!("failed to load accessible apps: {err}"));
             let _ = accessible_tx.send(AppListLoadResult::Accessible(result));
         });
@@ -146,6 +181,7 @@ impl AppsRequestProcessor {
         let app_list_deadline = tokio::time::Instant::now() + APP_LIST_LOAD_TIMEOUT;
         let mut accessible_loaded = false;
         let mut all_loaded = false;
+        let mut codex_apps_ready = true;
         let mut last_notified_apps = None;
 
         if accessible_connectors.is_some() || all_connectors.is_some() {
@@ -178,8 +214,9 @@ impl AppsRequestProcessor {
             };
 
             match result {
-                AppListLoadResult::Accessible(Ok(connectors)) => {
-                    accessible_connectors = Some(connectors);
+                AppListLoadResult::Accessible(Ok(apps)) => {
+                    accessible_connectors = Some(apps.connectors);
+                    codex_apps_ready = apps.codex_apps_ready;
                     accessible_loaded = true;
                 }
                 AppListLoadResult::Accessible(Err(err)) => {
@@ -222,7 +259,12 @@ impl AppsRequestProcessor {
             }
 
             if accessible_loaded && all_loaded {
-                return paginate_apps(merged.as_slice(), start, limit);
+                let response = paginate_apps(merged.as_slice(), start, limit)?;
+                return Ok(AppsListTaskResult {
+                    response,
+                    full_data: merged,
+                    should_force_refetch_after_response: !force_refetch && !codex_apps_ready,
+                });
             }
         }
     }
@@ -278,8 +320,19 @@ impl AppsRequestProcessor {
 
 const APP_LIST_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
 
+struct AppsListTaskResult {
+    response: AppsListResponse,
+    full_data: Vec<AppInfo>,
+    should_force_refetch_after_response: bool,
+}
+
+struct AccessibleAppsList {
+    connectors: Vec<AppInfo>,
+    codex_apps_ready: bool,
+}
+
 enum AppListLoadResult {
-    Accessible(Result<Vec<AppInfo>, String>),
+    Accessible(Result<AccessibleAppsList, String>),
     Directory(Result<Vec<AppInfo>, String>),
 }
 
@@ -334,4 +387,47 @@ async fn send_app_list_updated_notification(
             AppListUpdatedNotification { data },
         ))
         .await;
+}
+
+async fn send_force_refetched_app_list_updated_notification(
+    outgoing: &Arc<OutgoingMessageSender>,
+    config: Config,
+    environment_manager: Arc<EnvironmentManager>,
+    previous_data: Vec<AppInfo>,
+) {
+    let (all_connectors_result, accessible_connectors_result) = tokio::join!(
+        connectors::list_all_connectors_with_options(&config, /*force_refetch*/ true),
+        connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
+            &config,
+            /*force_refetch*/ true,
+            &environment_manager,
+        ),
+    );
+
+    let all_connectors = match all_connectors_result {
+        Ok(connectors) => connectors,
+        Err(err) => {
+            warn!("failed to force-refresh directory apps after app/list response: {err:#}");
+            return;
+        }
+    };
+    let accessible_connectors = match accessible_connectors_result {
+        Ok(status) => status.connectors,
+        Err(err) => {
+            warn!("failed to force-refresh accessible apps after app/list response: {err:#}");
+            return;
+        }
+    };
+
+    let data = connectors::with_app_enabled_state(
+        connectors::merge_connectors_with_accessible(
+            all_connectors,
+            accessible_connectors,
+            /*all_connectors_loaded*/ true,
+        ),
+        &config,
+    );
+    if data != previous_data {
+        send_app_list_updated_notification(outgoing, data).await;
+    }
 }

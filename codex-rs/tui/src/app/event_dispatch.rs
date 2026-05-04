@@ -384,6 +384,12 @@ impl App {
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
             }
+            AppEvent::FetchAppsList {
+                force_refetch,
+                thread_id,
+            } => {
+                self.fetch_apps_list(app_server, force_refetch, thread_id);
+            }
             AppEvent::PluginInstallAuthAdvance { refresh_connectors } => {
                 if refresh_connectors {
                     self.chat_widget.refresh_connectors(/*force_refetch*/ true);

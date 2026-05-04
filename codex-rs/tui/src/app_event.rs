@@ -293,6 +293,12 @@ pub(crate) enum AppEvent {
         is_final: bool,
     },
 
+    /// Fetch app connector state through the app-server app-list API.
+    FetchAppsList {
+        force_refetch: bool,
+        thread_id: Option<ThreadId>,
+    },
+
     /// Result of computing a `/diff` command.
     DiffResult(String),
 
