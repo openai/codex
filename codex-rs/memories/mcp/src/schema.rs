@@ -71,17 +71,40 @@ pub(crate) fn read_output_schema() -> JsonObject {
 
 pub(crate) fn search_input_schema() -> JsonObject {
     json_schema(json!({
-        "type": "object",
-        "properties": {
-            "query": { "type": "string" },
-            "path": { "type": "string" },
-            "cursor": { "type": "string" },
-            "context_lines": { "type": "integer", "minimum": 0 },
-            "case_sensitive": { "type": "boolean" },
-            "max_results": { "type": "integer", "minimum": 1 }
-        },
-        "required": ["query"],
-        "additionalProperties": false
+        "anyOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                    "match_mode": { "type": "string", "enum": ["any", "all"] },
+                    "path": { "type": "string" },
+                    "cursor": { "type": "string" },
+                    "context_lines": { "type": "integer", "minimum": 0 },
+                    "case_sensitive": { "type": "boolean" },
+                    "max_results": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "queries": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "minItems": 1
+                    },
+                    "match_mode": { "type": "string", "enum": ["any", "all"] },
+                    "path": { "type": "string" },
+                    "cursor": { "type": "string" },
+                    "context_lines": { "type": "integer", "minimum": 0 },
+                    "case_sensitive": { "type": "boolean" },
+                    "max_results": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["queries"],
+                "additionalProperties": false
+            }
+        ]
     }))
 }
 
@@ -89,7 +112,11 @@ pub(crate) fn search_output_schema() -> JsonObject {
     json_schema(json!({
         "type": "object",
         "properties": {
-            "query": { "type": "string" },
+            "queries": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "match_mode": { "type": "string", "enum": ["any", "all"] },
             "path": {
                 "anyOf": [{ "type": "string" }, { "type": "null" }]
             },
@@ -104,15 +131,19 @@ pub(crate) fn search_output_schema() -> JsonObject {
                         "path": { "type": "string" },
                         "match_line_number": { "type": "integer" },
                         "content_start_line_number": { "type": "integer" },
-                        "content": { "type": "string" }
+                        "content": { "type": "string" },
+                        "matched_queries": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                        }
                     },
-                    "required": ["path", "match_line_number", "content_start_line_number", "content"],
+                    "required": ["path", "match_line_number", "content_start_line_number", "content", "matched_queries"],
                     "additionalProperties": false
                 }
             },
             "truncated": { "type": "boolean" }
         },
-        "required": ["query", "path", "matches", "next_cursor", "truncated"],
+        "required": ["queries", "match_mode", "path", "matches", "next_cursor", "truncated"],
         "additionalProperties": false
     }))
 }

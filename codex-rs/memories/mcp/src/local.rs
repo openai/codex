@@ -10,11 +10,13 @@ use crate::backend::MemoryEntryType;
 use crate::backend::MemorySearchMatch;
 use crate::backend::ReadMemoryRequest;
 use crate::backend::ReadMemoryResponse;
+use crate::backend::SearchMatchMode;
 use crate::backend::SearchMemoriesRequest;
 use crate::backend::SearchMemoriesResponse;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
+use std::borrow::Cow;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
@@ -185,8 +187,12 @@ impl MemoriesBackend for LocalMemoriesBackend {
         &self,
         request: SearchMemoriesRequest,
     ) -> Result<SearchMemoriesResponse, MemoriesBackendError> {
-        let query = request.query.trim();
-        if query.is_empty() {
+        let queries = request
+            .queries
+            .iter()
+            .map(|query| query.trim().to_string())
+            .collect::<Vec<_>>();
+        if queries.is_empty() || queries.iter().any(std::string::String::is_empty) {
             return Err(MemoriesBackendError::EmptyQuery);
         }
 
@@ -200,7 +206,8 @@ impl MemoriesBackend for LocalMemoriesBackend {
         };
         let Some(metadata) = Self::metadata_or_none(&start).await? else {
             return Ok(SearchMemoriesResponse {
-                query: request.query,
+                queries,
+                match_mode: request.match_mode,
                 path: request.path,
                 matches: Vec::new(),
                 next_cursor: None,
@@ -209,14 +216,15 @@ impl MemoriesBackend for LocalMemoriesBackend {
         };
         reject_symlink(&display_relative_path(&self.root, &start), &metadata)?;
 
+        let matcher =
+            SearchMatcher::new(queries.clone(), request.match_mode, request.case_sensitive);
         let mut matches = Vec::new();
         search_entries(
             &self.root,
             &start,
             &metadata,
-            query,
+            &matcher,
             request.context_lines,
-            request.case_sensitive,
             &mut matches,
         )
         .await?;
@@ -235,7 +243,8 @@ impl MemoriesBackend for LocalMemoriesBackend {
         let next_cursor = (end_index < matches.len()).then(|| end_index.to_string());
         let truncated = next_cursor.is_some();
         Ok(SearchMemoriesResponse {
-            query: request.query,
+            queries,
+            match_mode: request.match_mode,
             path: request.path,
             matches: matches.drain(start_index..end_index).collect(),
             next_cursor,
@@ -248,13 +257,12 @@ async fn search_entries(
     root: &Path,
     current: &Path,
     current_metadata: &std::fs::Metadata,
-    query: &str,
+    matcher: &SearchMatcher,
     context_lines: usize,
-    case_sensitive: bool,
     matches: &mut Vec<MemorySearchMatch>,
 ) -> Result<(), MemoriesBackendError> {
     if current_metadata.is_file() {
-        search_file(root, current, query, context_lines, case_sensitive, matches).await?;
+        search_file(root, current, matcher, context_lines, matches).await?;
         return Ok(());
     }
     if !current_metadata.is_dir() {
@@ -273,7 +281,7 @@ async fn search_entries(
             if metadata.is_dir() {
                 pending.push(path);
             } else if metadata.is_file() {
-                search_file(root, &path, query, context_lines, case_sensitive, matches).await?;
+                search_file(root, &path, matcher, context_lines, matches).await?;
             }
         }
     }
@@ -284,9 +292,8 @@ async fn search_entries(
 async fn search_file(
     root: &Path,
     path: &Path,
-    query: &str,
+    matcher: &SearchMatcher,
     context_lines: usize,
-    case_sensitive: bool,
     matches: &mut Vec<MemorySearchMatch>,
 ) -> Result<(), MemoriesBackendError> {
     let content = match tokio::fs::read_to_string(path).await {
@@ -295,13 +302,9 @@ async fn search_file(
         Err(err) => return Err(err.into()),
     };
     let lines = content.lines().collect::<Vec<_>>();
-    let normalized_query = (!case_sensitive).then(|| query.to_lowercase());
     for (idx, line) in lines.iter().enumerate() {
-        let is_match = match normalized_query.as_deref() {
-            Some(query) => line.to_lowercase().contains(query),
-            None => line.contains(query),
-        };
-        if is_match {
+        let matched_queries = matcher.matched_queries(line);
+        if !matched_queries.is_empty() {
             let start_index = idx.saturating_sub(context_lines);
             let end_index = idx
                 .saturating_add(context_lines)
@@ -312,10 +315,52 @@ async fn search_file(
                 match_line_number: idx + 1,
                 content_start_line_number: start_index + 1,
                 content: lines[start_index..end_index].join("\n"),
+                matched_queries,
             });
         }
     }
     Ok(())
+}
+
+struct SearchMatcher {
+    queries: Vec<String>,
+    normalized_queries: Option<Vec<String>>,
+    match_mode: SearchMatchMode,
+}
+
+impl SearchMatcher {
+    fn new(queries: Vec<String>, match_mode: SearchMatchMode, case_sensitive: bool) -> Self {
+        let normalized_queries = (!case_sensitive).then(|| {
+            queries
+                .iter()
+                .map(|query| query.to_lowercase())
+                .collect::<Vec<_>>()
+        });
+        Self {
+            queries,
+            normalized_queries,
+            match_mode,
+        }
+    }
+
+    fn matched_queries(&self, line: &str) -> Vec<String> {
+        let line = match self.normalized_queries.as_ref() {
+            Some(_) => Cow::Owned(line.to_lowercase()),
+            None => Cow::Borrowed(line),
+        };
+        let queries = self.normalized_queries.as_deref().unwrap_or(&self.queries);
+        let mut matched_queries = Vec::new();
+        for (idx, query) in queries.iter().enumerate() {
+            if line.as_ref().contains(query) {
+                matched_queries.push(self.queries[idx].clone());
+            }
+        }
+        match self.match_mode {
+            SearchMatchMode::Any => matched_queries,
+            SearchMatchMode::All if matched_queries.len() == self.queries.len() => matched_queries,
+            SearchMatchMode::All => Vec::new(),
+        }
+    }
 }
 
 async fn read_sorted_dir_paths(dir_path: &Path) -> Result<Vec<PathBuf>, MemoriesBackendError> {

@@ -8,6 +8,18 @@ fn backend(tempdir: &TempDir) -> LocalMemoriesBackend {
     LocalMemoriesBackend::from_memory_root(tempdir.path())
 }
 
+fn search_request(queries: &[&str]) -> SearchMemoriesRequest {
+    SearchMemoriesRequest {
+        queries: queries.iter().map(|query| (*query).to_string()).collect(),
+        match_mode: SearchMatchMode::Any,
+        path: None,
+        cursor: None,
+        context_lines: 0,
+        case_sensitive: true,
+        max_results: DEFAULT_SEARCH_MAX_RESULTS,
+    }
+}
+
 #[tokio::test]
 async fn list_returns_shallow_memory_paths() {
     let tempdir = TempDir::new().expect("tempdir");
@@ -381,14 +393,7 @@ async fn search_supports_directory_and_file_scopes() {
     .expect("write rollout summary");
 
     let response = backend(&tempdir)
-        .search(SearchMemoriesRequest {
-            query: "needle".to_string(),
-            path: None,
-            cursor: None,
-            context_lines: 0,
-            case_sensitive: true,
-            max_results: DEFAULT_SEARCH_MAX_RESULTS,
-        })
+        .search(search_request(&["needle"]))
         .await
         .expect("search all memories");
     assert_eq!(
@@ -399,27 +404,24 @@ async fn search_supports_directory_and_file_scopes() {
                 match_line_number: 2,
                 content_start_line_number: 2,
                 content: "needle".to_string(),
+                matched_queries: vec!["needle".to_string()],
             },
             MemorySearchMatch {
                 path: "rollout_summaries/a.jsonl".to_string(),
                 match_line_number: 1,
                 content_start_line_number: 1,
                 content: "needle again".to_string(),
+                matched_queries: vec!["needle".to_string()],
             },
         ]
     );
     assert_eq!(response.next_cursor, None);
     assert_eq!(response.truncated, false);
 
+    let mut request = search_request(&["needle"]);
+    request.path = Some("MEMORY.md".to_string());
     let file_response = backend(&tempdir)
-        .search(SearchMemoriesRequest {
-            query: "needle".to_string(),
-            path: Some("MEMORY.md".to_string()),
-            cursor: None,
-            context_lines: 0,
-            case_sensitive: true,
-            max_results: DEFAULT_SEARCH_MAX_RESULTS,
-        })
+        .search(request)
         .await
         .expect("search one memory file");
     assert_eq!(
@@ -429,6 +431,7 @@ async fn search_supports_directory_and_file_scopes() {
             match_line_number: 2,
             content_start_line_number: 2,
             content: "needle".to_string(),
+            matched_queries: vec!["needle".to_string()],
         }]
     );
     assert_eq!(file_response.next_cursor, None);
@@ -451,15 +454,10 @@ async fn search_supports_pagination() {
     .await
     .expect("write rollout summary");
 
+    let mut page1_request = search_request(&["needle"]);
+    page1_request.max_results = 2;
     let page1 = backend(&tempdir)
-        .search(SearchMemoriesRequest {
-            query: "needle".to_string(),
-            path: None,
-            cursor: None,
-            context_lines: 0,
-            case_sensitive: true,
-            max_results: 2,
-        })
+        .search(page1_request)
         .await
         .expect("search first page");
     assert_eq!(
@@ -470,27 +468,25 @@ async fn search_supports_pagination() {
                 match_line_number: 1,
                 content_start_line_number: 1,
                 content: "needle one".to_string(),
+                matched_queries: vec!["needle".to_string()],
             },
             MemorySearchMatch {
                 path: "MEMORY.md".to_string(),
                 match_line_number: 2,
                 content_start_line_number: 2,
                 content: "needle two".to_string(),
+                matched_queries: vec!["needle".to_string()],
             },
         ]
     );
     assert_eq!(page1.next_cursor.as_deref(), Some("2"));
     assert_eq!(page1.truncated, true);
 
+    let mut page2_request = search_request(&["needle"]);
+    page2_request.cursor = page1.next_cursor;
+    page2_request.max_results = 2;
     let page2 = backend(&tempdir)
-        .search(SearchMemoriesRequest {
-            query: "needle".to_string(),
-            path: None,
-            cursor: page1.next_cursor,
-            context_lines: 0,
-            case_sensitive: true,
-            max_results: 2,
-        })
+        .search(page2_request)
         .await
         .expect("search second page");
     assert_eq!(
@@ -500,10 +496,50 @@ async fn search_supports_pagination() {
             match_line_number: 1,
             content_start_line_number: 1,
             content: "needle three".to_string(),
+            matched_queries: vec!["needle".to_string()],
         }]
     );
     assert_eq!(page2.next_cursor, None);
     assert_eq!(page2.truncated, false);
+}
+
+#[tokio::test]
+async fn search_preserves_global_lexicographic_path_order() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::create_dir_all(tempdir.path().join("a"))
+        .await
+        .expect("create nested dir");
+    tokio::fs::write(tempdir.path().join("a/child.md"), "needle in child\n")
+        .await
+        .expect("write nested file");
+    tokio::fs::write(tempdir.path().join("a.txt"), "needle in sibling\n")
+        .await
+        .expect("write sibling file");
+
+    let response = backend(&tempdir)
+        .search(search_request(&["needle"]))
+        .await
+        .expect("search memories");
+
+    assert_eq!(
+        response.matches,
+        vec![
+            MemorySearchMatch {
+                path: "a.txt".to_string(),
+                match_line_number: 1,
+                content_start_line_number: 1,
+                content: "needle in sibling".to_string(),
+                matched_queries: vec!["needle".to_string()],
+            },
+            MemorySearchMatch {
+                path: "a/child.md".to_string(),
+                match_line_number: 1,
+                content_start_line_number: 1,
+                content: "needle in child".to_string(),
+                matched_queries: vec!["needle".to_string()],
+            },
+        ]
+    );
 }
 
 #[tokio::test]
@@ -516,15 +552,10 @@ async fn search_supports_context_lines() {
     .await
     .expect("write memory file");
 
+    let mut request = search_request(&["needle"]);
+    request.context_lines = 1;
     let response = backend(&tempdir)
-        .search(SearchMemoriesRequest {
-            query: "needle".to_string(),
-            path: None,
-            cursor: None,
-            context_lines: 1,
-            case_sensitive: true,
-            max_results: DEFAULT_SEARCH_MAX_RESULTS,
-        })
+        .search(request)
         .await
         .expect("search with context");
 
@@ -536,12 +567,14 @@ async fn search_supports_context_lines() {
                 match_line_number: 2,
                 content_start_line_number: 1,
                 content: "alpha\nneedle\nomega".to_string(),
+                matched_queries: vec!["needle".to_string()],
             },
             MemorySearchMatch {
                 path: "MEMORY.md".to_string(),
                 match_line_number: 4,
                 content_start_line_number: 3,
                 content: "omega\nneedle again".to_string(),
+                matched_queries: vec!["needle".to_string()],
             },
         ]
     );
@@ -555,14 +588,7 @@ async fn search_supports_case_insensitive_matching() {
         .expect("write memory file");
 
     let sensitive_response = backend(&tempdir)
-        .search(SearchMemoriesRequest {
-            query: "needle".to_string(),
-            path: None,
-            cursor: None,
-            context_lines: 0,
-            case_sensitive: true,
-            max_results: DEFAULT_SEARCH_MAX_RESULTS,
-        })
+        .search(search_request(&["needle"]))
         .await
         .expect("search with case-sensitive matching");
     assert_eq!(
@@ -572,18 +598,14 @@ async fn search_supports_case_insensitive_matching() {
             match_line_number: 2,
             content_start_line_number: 2,
             content: "needle".to_string(),
+            matched_queries: vec!["needle".to_string()],
         }]
     );
 
+    let mut request = search_request(&["needle"]);
+    request.case_sensitive = false;
     let insensitive_response = backend(&tempdir)
-        .search(SearchMemoriesRequest {
-            query: "needle".to_string(),
-            path: None,
-            cursor: None,
-            context_lines: 0,
-            case_sensitive: false,
-            max_results: DEFAULT_SEARCH_MAX_RESULTS,
-        })
+        .search(request)
         .await
         .expect("search with case-insensitive matching");
     assert_eq!(
@@ -594,20 +616,82 @@ async fn search_supports_case_insensitive_matching() {
                 match_line_number: 1,
                 content_start_line_number: 1,
                 content: "Needle".to_string(),
+                matched_queries: vec!["needle".to_string()],
             },
             MemorySearchMatch {
                 path: "MEMORY.md".to_string(),
                 match_line_number: 2,
                 content_start_line_number: 2,
                 content: "needle".to_string(),
+                matched_queries: vec!["needle".to_string()],
             },
             MemorySearchMatch {
                 path: "MEMORY.md".to_string(),
                 match_line_number: 3,
                 content_start_line_number: 3,
                 content: "NEEDLE".to_string(),
+                matched_queries: vec!["needle".to_string()],
             },
         ]
+    );
+}
+
+#[tokio::test]
+async fn search_supports_any_and_all_match_modes() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::write(
+        tempdir.path().join("MEMORY.md"),
+        "alpha needle beta\nalpha only\nneedle only\n",
+    )
+    .await
+    .expect("write memory file");
+
+    let any_response = backend(&tempdir)
+        .search(search_request(&["alpha", "needle"]))
+        .await
+        .expect("search with any match mode");
+    assert_eq!(
+        any_response.matches,
+        vec![
+            MemorySearchMatch {
+                path: "MEMORY.md".to_string(),
+                match_line_number: 1,
+                content_start_line_number: 1,
+                content: "alpha needle beta".to_string(),
+                matched_queries: vec!["alpha".to_string(), "needle".to_string()],
+            },
+            MemorySearchMatch {
+                path: "MEMORY.md".to_string(),
+                match_line_number: 2,
+                content_start_line_number: 2,
+                content: "alpha only".to_string(),
+                matched_queries: vec!["alpha".to_string()],
+            },
+            MemorySearchMatch {
+                path: "MEMORY.md".to_string(),
+                match_line_number: 3,
+                content_start_line_number: 3,
+                content: "needle only".to_string(),
+                matched_queries: vec!["needle".to_string()],
+            },
+        ]
+    );
+
+    let mut request = search_request(&["alpha", "needle"]);
+    request.match_mode = SearchMatchMode::All;
+    let all_response = backend(&tempdir)
+        .search(request)
+        .await
+        .expect("search with all match mode");
+    assert_eq!(
+        all_response.matches,
+        vec![MemorySearchMatch {
+            path: "MEMORY.md".to_string(),
+            match_line_number: 1,
+            content_start_line_number: 1,
+            content: "alpha needle beta".to_string(),
+            matched_queries: vec!["alpha".to_string(), "needle".to_string()],
+        }]
     );
 }
 
@@ -618,32 +702,20 @@ async fn search_rejects_invalid_cursor() {
         .await
         .expect("write memory file");
 
+    let mut request = search_request(&["needle"]);
+    request.cursor = Some("bogus".to_string());
     let err = backend(&tempdir)
-        .search(SearchMemoriesRequest {
-            query: "needle".to_string(),
-            path: None,
-            cursor: Some("bogus".to_string()),
-            context_lines: 0,
-            case_sensitive: true,
-            max_results: DEFAULT_SEARCH_MAX_RESULTS,
-        })
+        .search(request)
         .await
         .expect_err("cursor should be rejected");
-
     assert!(matches!(err, MemoriesBackendError::InvalidCursor { .. }));
 
+    let mut request = search_request(&["needle"]);
+    request.cursor = Some("2".to_string());
     let past_end_err = backend(&tempdir)
-        .search(SearchMemoriesRequest {
-            query: "needle".to_string(),
-            path: None,
-            cursor: Some("2".to_string()),
-            context_lines: 0,
-            case_sensitive: true,
-            max_results: DEFAULT_SEARCH_MAX_RESULTS,
-        })
+        .search(request)
         .await
         .expect_err("cursor past end should be rejected");
-
     assert!(matches!(
         past_end_err,
         MemoriesBackendError::InvalidCursor { .. }

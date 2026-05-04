@@ -7,6 +7,7 @@ use crate::backend::MAX_SEARCH_RESULTS;
 use crate::backend::MemoriesBackend;
 use crate::backend::MemoriesBackendError;
 use crate::backend::ReadMemoryRequest;
+use crate::backend::SearchMatchMode;
 use crate::backend::SearchMemoriesRequest;
 use crate::local::LocalMemoriesBackend;
 use crate::schema;
@@ -55,7 +56,9 @@ struct ReadArgs {
 
 #[derive(Deserialize)]
 struct SearchArgs {
-    query: String,
+    query: Option<String>,
+    queries: Option<Vec<String>>,
+    match_mode: Option<SearchMatchMode>,
     path: Option<String>,
     cursor: Option<String>,
     context_lines: Option<usize>,
@@ -144,20 +147,10 @@ impl<B: MemoriesBackend> ServerHandler for MemoriesMcpServer<B> {
             }
             SEARCH_TOOL_NAME => {
                 let args: SearchArgs = parse_args(value)?;
+                let request = args.into_request()?;
                 json!(
                     self.backend
-                        .search(SearchMemoriesRequest {
-                            query: args.query,
-                            path: args.path,
-                            cursor: args.cursor,
-                            context_lines: args.context_lines.unwrap_or(0),
-                            case_sensitive: args.case_sensitive.unwrap_or(true),
-                            max_results: clamp_max_results(
-                                args.max_results,
-                                DEFAULT_SEARCH_MAX_RESULTS,
-                                MAX_SEARCH_RESULTS,
-                            ),
-                        })
+                        .search(request)
                         .await
                         .map_err(backend_error_to_mcp)?
                 )
@@ -222,7 +215,7 @@ fn search_tool() -> Tool {
     let mut tool = Tool::new(
         Cow::Borrowed(SEARCH_TOOL_NAME),
         Cow::Borrowed(
-            "Search Codex memory files for exact text matches, with pagination, optional surrounding context lines, and optional case-insensitive matching.",
+            "Search Codex memory files for line-based substring matches, optionally requiring any or all query substrings on the same line.",
         ),
         Arc::new(schema::search_input_schema()),
     );
@@ -233,6 +226,36 @@ fn search_tool() -> Tool {
 
 fn parse_args<T: for<'de> Deserialize<'de>>(value: serde_json::Value) -> Result<T, McpError> {
     serde_json::from_value(value).map_err(|err| McpError::invalid_params(err.to_string(), None))
+}
+
+impl SearchArgs {
+    fn into_request(self) -> Result<SearchMemoriesRequest, McpError> {
+        let queries = match (self.query, self.queries) {
+            (Some(query), None) => Ok(vec![query]),
+            (None, Some(queries)) => Ok(queries),
+            (Some(_), Some(_)) => Err(McpError::invalid_params(
+                "provide either 'query' or 'queries', but not both".to_string(),
+                None,
+            )),
+            (None, None) => Err(McpError::invalid_params(
+                "missing required field: 'query' or 'queries'".to_string(),
+                None,
+            )),
+        }?;
+        Ok(SearchMemoriesRequest {
+            queries,
+            match_mode: self.match_mode.unwrap_or(SearchMatchMode::Any),
+            path: self.path,
+            cursor: self.cursor,
+            context_lines: self.context_lines.unwrap_or(0),
+            case_sensitive: self.case_sensitive.unwrap_or(true),
+            max_results: clamp_max_results(
+                self.max_results,
+                DEFAULT_SEARCH_MAX_RESULTS,
+                MAX_SEARCH_RESULTS,
+            ),
+        })
+    }
 }
 
 fn clamp_max_results(requested: Option<usize>, default: usize, max: usize) -> usize {
@@ -249,5 +272,75 @@ fn backend_error_to_mcp(err: MemoriesBackendError) -> McpError {
         | MemoriesBackendError::NotFile { .. }
         | MemoriesBackendError::EmptyQuery => McpError::invalid_params(err.to_string(), None),
         MemoriesBackendError::Io(_) => McpError::internal_error(err.to_string(), None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn search_args_accept_legacy_single_query() {
+        let args: SearchArgs = parse_args(json!({
+            "query": "needle",
+            "match_mode": "all"
+        }))
+        .expect("legacy query args should parse");
+
+        let request = args.into_request().expect("query should convert");
+
+        assert_eq!(
+            request,
+            SearchMemoriesRequest {
+                queries: vec!["needle".to_string()],
+                match_mode: SearchMatchMode::All,
+                path: None,
+                cursor: None,
+                context_lines: 0,
+                case_sensitive: true,
+                max_results: DEFAULT_SEARCH_MAX_RESULTS,
+            }
+        );
+    }
+
+    #[test]
+    fn search_args_accept_multiple_queries() {
+        let args: SearchArgs = parse_args(json!({
+            "queries": ["alpha", "needle"],
+            "case_sensitive": false
+        }))
+        .expect("multi-query args should parse");
+
+        let request = args.into_request().expect("queries should convert");
+
+        assert_eq!(
+            request,
+            SearchMemoriesRequest {
+                queries: vec!["alpha".to_string(), "needle".to_string()],
+                match_mode: SearchMatchMode::Any,
+                path: None,
+                cursor: None,
+                context_lines: 0,
+                case_sensitive: false,
+                max_results: DEFAULT_SEARCH_MAX_RESULTS,
+            }
+        );
+    }
+
+    #[test]
+    fn search_args_reject_both_query_forms() {
+        let args: SearchArgs = parse_args(json!({
+            "query": "needle",
+            "queries": ["needle"]
+        }))
+        .expect("args should parse before conversion");
+
+        let err = args
+            .into_request()
+            .expect_err("query and queries should be mutually exclusive");
+
+        assert!(err.message.contains("either 'query' or 'queries'"));
     }
 }
