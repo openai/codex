@@ -293,18 +293,19 @@ impl ProcessExecManager {
             process_handle: process_handle.clone(),
         };
 
-        let mut sessions = self.sessions.lock().await;
-        match sessions.entry(process_key.clone()) {
-            Entry::Occupied(_) => {
-                return Err(invalid_request(format!(
-                    "duplicate active process handle: {process_handle:?}",
-                )));
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(ProcessSession { control_tx });
+        {
+            let mut sessions = self.sessions.lock().await;
+            match sessions.entry(process_key.clone()) {
+                Entry::Occupied(_) => {
+                    return Err(invalid_request(format!(
+                        "duplicate active process handle: {process_handle:?}",
+                    )));
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(ProcessSession { control_tx });
+                }
             }
         }
-        drop(sessions);
 
         let spawned = if tty {
             codex_utils_pty::spawn_pty_process(
@@ -544,13 +545,13 @@ async fn run_process(params: RunProcessParams) {
                                 Ok(())
                             }
                         };
-                        if let Some(response_tx) = response_tx {
-                            if response_tx.send(result).is_err() {
-                                tracing::debug!(
-                                    process_handle = %process_handle,
-                                    "process control response receiver dropped"
-                                );
-                            }
+                        if let Some(response_tx) = response_tx
+                            && response_tx.send(result).is_err()
+                        {
+                            tracing::debug!(
+                                process_handle = %process_handle,
+                                "process control response receiver dropped"
+                            );
                         }
                     },
                     None => {
