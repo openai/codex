@@ -86,6 +86,23 @@ const fn default_hide_agent_reasoning() -> Option<bool> {
     Some(false)
 }
 
+/// Backward-compatible shape for workspace restrictions in config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[serde(untagged)]
+pub enum ForcedChatgptWorkspaceIds {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl ForcedChatgptWorkspaceIds {
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::Single(value) => vec![value],
+            Self::Multiple(values) => values,
+        }
+    }
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
