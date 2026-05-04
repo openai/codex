@@ -15,18 +15,31 @@ use ratatui::text::Line;
 
 pub(crate) type TranscriptCells = Vec<Arc<dyn HistoryCell>>;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RawReasoningVisibility {
+    Hidden,
+    Visible,
+}
+
 pub(crate) async fn load_session_transcript(
     app_server: &mut AppServerSession,
     thread_id: ThreadId,
+    raw_reasoning_visibility: RawReasoningVisibility,
 ) -> std::io::Result<TranscriptCells> {
     let thread = app_server
         .thread_read(thread_id, /*include_turns*/ true)
         .await
         .map_err(std::io::Error::other)?;
-    Ok(thread_to_transcript_cells(&thread))
+    Ok(thread_to_transcript_cells(
+        &thread,
+        raw_reasoning_visibility,
+    ))
 }
 
-pub(crate) fn thread_to_transcript_cells(thread: &Thread) -> TranscriptCells {
+pub(crate) fn thread_to_transcript_cells(
+    thread: &Thread,
+    raw_reasoning_visibility: RawReasoningVisibility,
+) -> TranscriptCells {
     let cwd = thread.cwd.as_path();
     let mut cells: TranscriptCells = Vec::new();
     for item in thread.turns.iter().flat_map(|turn| turn.items.iter()) {
@@ -63,10 +76,12 @@ pub(crate) fn thread_to_transcript_cells(thread: &Thread) -> TranscriptCells {
             ThreadItem::Reasoning {
                 summary, content, ..
             } => {
-                let text = if summary.is_empty() {
+                let text = if !summary.is_empty() {
+                    summary.join("\n\n")
+                } else if matches!(raw_reasoning_visibility, RawReasoningVisibility::Visible) {
                     content.join("\n\n")
                 } else {
-                    summary.join("\n\n")
+                    String::new()
                 };
                 if !text.trim().is_empty() {
                     cells.push(Arc::new(ReasoningSummaryCell::new(

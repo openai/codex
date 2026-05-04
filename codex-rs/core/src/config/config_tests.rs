@@ -2287,7 +2287,7 @@ async fn runtime_config_resolves_session_picker_view_default_and_override() {
     let cfg = Config::load_from_base_config_with_overrides(
         ConfigToml {
             tui: Some(Tui {
-                session_picker_view: Some(SessionPickerViewMode::Dense),
+                session_picker_view: Some(SessionPickerViewMode::Comfortable),
                 ..Default::default()
             }),
             ..Default::default()
@@ -2296,9 +2296,37 @@ async fn runtime_config_resolves_session_picker_view_default_and_override() {
         tempdir().expect("tempdir").abs(),
     )
     .await
-    .expect("load overridden config");
+    .expect("load root override config");
 
-    assert_eq!(cfg.tui_session_picker_view, SessionPickerViewMode::Dense);
+    assert_eq!(
+        cfg.tui_session_picker_view,
+        SessionPickerViewMode::Comfortable
+    );
+
+    let cfg_toml = toml::from_str::<ConfigToml>(
+        r#"profile = "work"
+
+[tui]
+session_picker_view = "dense"
+
+[profiles.work.tui]
+session_picker_view = "comfortable"
+"#,
+    )
+    .expect("parse profile scoped tui config");
+
+    let cfg = Config::load_from_base_config_with_overrides(
+        cfg_toml,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load profile override config");
+
+    assert_eq!(
+        cfg.tui_session_picker_view,
+        SessionPickerViewMode::Comfortable
+    );
 }
 
 #[tokio::test]

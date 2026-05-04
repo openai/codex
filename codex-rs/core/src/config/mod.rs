@@ -3172,10 +3172,11 @@ impl Config {
                 .unwrap_or(true),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
-            tui_session_picker_view: cfg
+            tui_session_picker_view: config_profile
                 .tui
                 .as_ref()
                 .and_then(|t| t.session_picker_view)
+                .or_else(|| cfg.tui.as_ref().and_then(|t| t.session_picker_view))
                 .unwrap_or_default(),
             terminal_resize_reflow,
             tui_keymap: cfg

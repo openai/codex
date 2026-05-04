@@ -56,6 +56,7 @@ use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;
+use transcript::RawReasoningVisibility;
 use transcript::TranscriptCells;
 use transcript::load_session_transcript;
 use unicode_width::UnicodeWidthStr;
@@ -322,7 +323,12 @@ pub async fn run_resume_picker_with_app_server(
     run_session_picker_with_loader(
         tui,
         options,
-        spawn_app_server_page_loader(app_server, include_non_interactive, bg_tx),
+        spawn_app_server_page_loader(
+            app_server,
+            include_non_interactive,
+            raw_reasoning_visibility(config),
+            bg_tx,
+        ),
         bg_rx,
     )
     .await
@@ -359,7 +365,12 @@ pub async fn run_fork_picker_with_app_server(
     run_session_picker_with_loader(
         tui,
         options,
-        spawn_app_server_page_loader(app_server, /*include_non_interactive*/ false, bg_tx),
+        spawn_app_server_page_loader(
+            app_server,
+            /*include_non_interactive*/ false,
+            raw_reasoning_visibility(config),
+            bg_tx,
+        ),
         bg_rx,
     )
     .await
@@ -431,6 +442,14 @@ async fn run_session_picker_with_loader(
     Ok(SessionSelection::StartFresh)
 }
 
+fn raw_reasoning_visibility(config: &Config) -> RawReasoningVisibility {
+    if config.show_raw_agent_reasoning {
+        RawReasoningVisibility::Visible
+    } else {
+        RawReasoningVisibility::Hidden
+    }
+}
+
 fn picker_provider_filter(config: &Config, is_remote: bool) -> ProviderFilter {
     if is_remote {
         ProviderFilter::Any
@@ -463,6 +482,7 @@ fn picker_cwd_filter(
 fn spawn_app_server_page_loader(
     app_server: AppServerSession,
     include_non_interactive: bool,
+    raw_reasoning_visibility: RawReasoningVisibility,
     bg_tx: mpsc::UnboundedSender<BackgroundEvent>,
 ) -> PickerLoader {
     let (request_tx, mut request_rx) = mpsc::unbounded_channel::<PickerLoadRequest>();
@@ -493,7 +513,12 @@ fn spawn_app_server_page_loader(
                     let _ = bg_tx.send(BackgroundEvent::Preview { thread_id, preview });
                 }
                 PickerLoadRequest::Transcript { thread_id } => {
-                    let transcript = load_session_transcript(&mut app_server, thread_id).await;
+                    let transcript = load_session_transcript(
+                        &mut app_server,
+                        thread_id,
+                        raw_reasoning_visibility,
+                    )
+                    .await;
                     let _ = bg_tx.send(BackgroundEvent::Transcript {
                         thread_id,
                         transcript,
@@ -2538,7 +2563,7 @@ fn render_dense_session_lines(
     let mut lines = vec![dense_summary_line(DenseSummaryInput {
         marker,
         date: &date,
-        title: &row.preview,
+        title: row.display_preview(),
         is_selected,
         is_zebra,
         width,
@@ -4549,6 +4574,37 @@ session_picker_view = "dense"
     }
 
     #[test]
+    fn dense_session_line_prefers_thread_name_over_preview() {
+        let mut row = dense_snapshot_row();
+        row.preview = String::from("Raw conversation preview");
+        row.thread_name = Some(String::from("Named session"));
+
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.relative_time_reference =
+            Some(parse_timestamp_str("2026-04-28T18:00:00Z").expect("timestamp"));
+
+        let rendered = render_dense_session_lines(
+            &row, &state, /*is_selected*/ false, /*is_expanded*/ false,
+            /*is_zebra*/ false, /*width*/ 100,
+        )
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+        assert!(rendered.contains("Named session"));
+        assert!(!rendered.contains("Raw conversation preview"));
+    }
+
+    #[test]
     fn dense_selected_summary_line_uses_full_width_selection_style() {
         let line = dense_summary_line(DenseSummaryInput {
             marker: selection_marker(/*is_selected*/ true, /*is_expanded*/ false),
@@ -5454,7 +5510,7 @@ session_picker_view = "dense"
             }],
         };
 
-        let rendered = thread_to_transcript_cells(&thread)
+        let rendered = thread_to_transcript_cells(&thread, RawReasoningVisibility::Visible)
             .into_iter()
             .flat_map(|cell| cell.transcript_lines(/*width*/ 80))
             .map(|line| line.to_string())
@@ -5465,6 +5521,60 @@ session_picker_view = "dense"
         assert!(rendered.contains("hello from assistant"));
         assert!(rendered.contains("Proposed Plan"));
         assert!(rendered.contains("Do the thing"));
+    }
+
+    #[test]
+    fn thread_to_transcript_cells_hides_raw_reasoning_when_not_enabled() {
+        use transcript::thread_to_transcript_cells;
+
+        let thread_id = ThreadId::new();
+        let thread = Thread {
+            id: thread_id.to_string(),
+            forked_from_id: None,
+            preview: String::from("preview"),
+            ephemeral: false,
+            model_provider: String::from("openai"),
+            created_at: 1,
+            updated_at: 2,
+            status: codex_app_server_protocol::ThreadStatus::Idle,
+            path: None,
+            cwd: test_path_buf("/tmp").abs(),
+            cli_version: String::from("0.0.0"),
+            source: codex_app_server_protocol::SessionSource::Cli,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: None,
+            turns: vec![codex_app_server_protocol::Turn {
+                id: String::from("turn-1"),
+                items: vec![ThreadItem::Reasoning {
+                    id: String::from("reasoning-1"),
+                    summary: Vec::new(),
+                    content: vec![String::from("private raw chain of thought")],
+                }],
+                status: codex_app_server_protocol::TurnStatus::Completed,
+                error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            }],
+        };
+
+        let hidden = thread_to_transcript_cells(&thread, RawReasoningVisibility::Hidden)
+            .into_iter()
+            .flat_map(|cell| cell.transcript_lines(/*width*/ 80))
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let visible = thread_to_transcript_cells(&thread, RawReasoningVisibility::Visible)
+            .into_iter()
+            .flat_map(|cell| cell.transcript_lines(/*width*/ 80))
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!hidden.contains("private raw chain of thought"));
+        assert!(visible.contains("private raw chain of thought"));
     }
 
     #[tokio::test]

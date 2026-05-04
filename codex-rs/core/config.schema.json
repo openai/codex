@@ -674,6 +674,15 @@
         "tools_view_image": {
           "type": "boolean"
         },
+        "tui": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Tui"
+            }
+          ],
+          "default": null,
+          "description": "TUI settings scoped to this profile."
+        },
         "web_search": {
           "$ref": "#/definitions/WebSearchMode"
         },
