@@ -23,9 +23,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -210,8 +208,7 @@ async fn run_remote_compact_task_inner_impl(
 
     trace_attempt.record_result(compaction_output_result.as_ref().map(std::slice::from_ref));
     let compaction_output = compaction_output_result?;
-    let compacted_history =
-        build_v2_compacted_history(&prompt_input, compaction_output, &turn_context.model_info);
+    let compacted_history = build_v2_compacted_history(&prompt_input, compaction_output);
     let new_history = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -335,46 +332,32 @@ async fn collect_context_compaction_output(
 fn build_v2_compacted_history(
     prompt_input: &[ResponseItem],
     compaction_output: ResponseItem,
-    model_info: &ModelInfo,
 ) -> Vec<ResponseItem> {
     let mut retained = prompt_input
         .iter()
-        .filter(|item| is_retained_for_remote_compaction_v2(item, model_info))
+        .filter(|item| is_retained_for_remote_compaction_v2(item))
         .cloned()
         .collect::<Vec<_>>();
     retained.push(compaction_output);
     retained
 }
 
-fn is_retained_for_remote_compaction_v2(item: &ResponseItem, model_info: &ModelInfo) -> bool {
-    let ResponseItem::Message { role, phase, .. } = item else {
+fn is_retained_for_remote_compaction_v2(item: &ResponseItem) -> bool {
+    let ResponseItem::Message { role, .. } = item else {
         return false;
     };
 
     match role.as_str() {
         "user" | "developer" | "system" => true,
-        "assistant" => {
-            model_retains_final_assistant_messages_for_remote_compaction_v2(model_info)
-                && *phase == Some(MessagePhase::FinalAnswer)
-        }
         _ => false,
     }
-}
-
-fn model_retains_final_assistant_messages_for_remote_compaction_v2(model_info: &ModelInfo) -> bool {
-    model_info.slug.starts_with("gpt-5.4")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::config_types::ReasoningSummary;
     use codex_protocol::models::ContentItem;
-    use codex_protocol::openai_models::ConfigShellToolType;
-    use codex_protocol::openai_models::ModelVisibility;
-    use codex_protocol::openai_models::TruncationPolicyConfig;
-    use codex_protocol::openai_models::WebSearchToolType;
-    use codex_protocol::openai_models::default_input_modalities;
+    use codex_protocol::models::MessagePhase;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
@@ -387,42 +370,6 @@ mod tests {
                 text: text.to_string(),
             }],
             phase,
-        }
-    }
-
-    fn model(slug: &str) -> ModelInfo {
-        ModelInfo {
-            slug: slug.to_string(),
-            display_name: slug.to_string(),
-            description: None,
-            default_reasoning_level: None,
-            supported_reasoning_levels: Vec::new(),
-            shell_type: ConfigShellToolType::ShellCommand,
-            visibility: ModelVisibility::List,
-            supported_in_api: true,
-            priority: 1,
-            additional_speed_tiers: Vec::new(),
-            availability_nux: None,
-            upgrade: None,
-            base_instructions: String::new(),
-            model_messages: None,
-            supports_reasoning_summaries: false,
-            default_reasoning_summary: ReasoningSummary::Auto,
-            support_verbosity: false,
-            default_verbosity: None,
-            apply_patch_tool_type: None,
-            web_search_tool_type: WebSearchToolType::Text,
-            truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
-            supports_parallel_tool_calls: false,
-            supports_image_detail_original: false,
-            context_window: None,
-            max_context_window: None,
-            auto_compact_token_limit: None,
-            effective_context_window_percent: 95,
-            experimental_supported_tools: Vec::new(),
-            input_modalities: default_input_modalities(),
-            used_fallback_model_metadata: false,
-            supports_search_tool: false,
         }
     }
 
@@ -463,7 +410,7 @@ mod tests {
             encrypted_content: Some("new".to_string()),
         };
 
-        let history = build_v2_compacted_history(&input, output.clone(), &model("gpt-5.4"));
+        let history = build_v2_compacted_history(&input, output.clone());
 
         assert_eq!(
             history,
@@ -471,7 +418,6 @@ mod tests {
                 message("developer", "dev", /*phase*/ None),
                 message("system", "sys", /*phase*/ None),
                 message("user", "user", /*phase*/ None),
-                message("assistant", "final", Some(MessagePhase::FinalAnswer)),
                 output,
             ]
         );
