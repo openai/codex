@@ -522,6 +522,48 @@ impl PluginsManager {
         *featured_plugin_ids_cache = None;
     }
 
+    pub fn cleanup_inactive_plugin_versions_for_config(&self, config: &PluginsConfigInput) {
+        if !config.plugins_enabled {
+            return;
+        }
+
+        let mut plugin_ids = configured_plugins_from_stack(&config.config_layer_stack)
+            .into_keys()
+            .filter_map(|plugin_key| match PluginId::parse(&plugin_key) {
+                Ok(plugin_id) => Some(plugin_id),
+                Err(err) => {
+                    warn!(
+                        plugin_key,
+                        error = %err,
+                        "ignoring invalid plugin key during inactive plugin cache cleanup"
+                    );
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        plugin_ids.extend(
+            self.remote_installed_plugin_configs(config)
+                .into_keys()
+                .filter_map(|plugin_key| match PluginId::parse(&plugin_key) {
+                    Ok(plugin_id) => Some(plugin_id),
+                    Err(err) => {
+                        warn!(
+                            plugin_key,
+                            error = %err,
+                            "ignoring invalid remote plugin key during inactive plugin cache cleanup"
+                        );
+                        None
+                    }
+                }),
+        );
+        plugin_ids.sort_unstable_by_key(PluginId::as_key);
+        plugin_ids.dedup();
+
+        for plugin_id in plugin_ids {
+            self.store.cleanup_inactive_versions(&plugin_id);
+        }
+    }
+
     fn clear_enabled_outcome_cache(&self) {
         let mut cached_enabled_outcome = match self.cached_enabled_outcome.write() {
             Ok(cache) => cache,

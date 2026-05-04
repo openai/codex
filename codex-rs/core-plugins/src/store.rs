@@ -7,13 +7,21 @@ use codex_utils_plugins::find_plugin_manifest_path;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::fs;
+use std::fs::File;
 use std::io;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
+use tracing::warn;
 
 pub const DEFAULT_PLUGIN_VERSION: &str = "local";
 pub const PLUGINS_CACHE_DIR: &str = "plugins/cache";
 pub const PLUGINS_DATA_DIR: &str = "plugins/data";
+const ACTIVE_PLUGIN_VERSION_FILE: &str = ".active-version";
+const ACTIVE_PLUGIN_VERSION_LOCK_FILE: &str = ".active-version.lock";
+const ACTIVE_PLUGIN_VERSION_LOCK_RETRIES: usize = 20;
+const ACTIVE_PLUGIN_VERSION_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallResult {
@@ -66,26 +74,21 @@ impl PluginStore {
     }
 
     pub fn active_plugin_version(&self, plugin_id: &PluginId) -> Option<String> {
-        let mut discovered_versions = fs::read_dir(self.plugin_base_root(plugin_id).as_path())
-            .ok()?
-            .filter_map(Result::ok)
-            .filter_map(|entry| {
-                entry.file_type().ok().filter(std::fs::FileType::is_dir)?;
-                entry.file_name().into_string().ok()
-            })
-            .filter(|version| validate_plugin_version_segment(version).is_ok())
-            .collect::<Vec<_>>();
-        discovered_versions.sort_unstable();
-        if discovered_versions.is_empty() {
-            None
-        } else if discovered_versions
-            .iter()
-            .any(|version| version == DEFAULT_PLUGIN_VERSION)
-        {
-            Some(DEFAULT_PLUGIN_VERSION.to_string())
-        } else {
-            discovered_versions.pop()
+        let plugin_base_root = self.plugin_base_root(plugin_id);
+        match active_plugin_version_marker(plugin_base_root.as_path()) {
+            Ok(Some(active_version)) => return Some(active_version),
+            Ok(None) => {}
+            Err(err) => {
+                warn!(
+                    plugin = %plugin_id.as_key(),
+                    path = %plugin_base_root.display(),
+                    error = %err,
+                    "failed to read active plugin version marker"
+                );
+            }
         }
+
+        legacy_active_plugin_version(plugin_base_root.as_path())
     }
 
     pub fn active_plugin_root(&self, plugin_id: &PluginId) -> Option<AbsolutePathBuf> {
@@ -95,6 +98,14 @@ impl PluginStore {
 
     pub fn is_installed(&self, plugin_id: &PluginId) -> bool {
         self.active_plugin_version(plugin_id).is_some()
+    }
+
+    pub fn cleanup_inactive_versions(&self, plugin_id: &PluginId) {
+        cleanup_inactive_versions_with_remover(
+            plugin_id,
+            self.plugin_base_root(plugin_id).as_path(),
+            |path| fs::remove_dir_all(path),
+        );
     }
 
     pub fn install(
@@ -127,12 +138,26 @@ impl PluginStore {
             )));
         }
         validate_plugin_version_segment(&plugin_version).map_err(PluginStoreError::Invalid)?;
-        let installed_path = self.plugin_root(&plugin_id, &plugin_version);
-        replace_plugin_root_atomically(
-            source_path.as_path(),
-            self.plugin_base_root(&plugin_id).as_path(),
-            &plugin_version,
-        )?;
+        let plugin_base_root = self.plugin_base_root(&plugin_id);
+        let installed_path = plugin_base_root.join(&plugin_version);
+
+        if plugin_version == DEFAULT_PLUGIN_VERSION {
+            replace_plugin_root_atomically(
+                source_path.as_path(),
+                plugin_base_root.as_path(),
+                &plugin_version,
+            )?;
+        } else {
+            self.cleanup_inactive_versions(&plugin_id);
+            if !installed_path.as_path().is_dir() {
+                install_plugin_version_into_existing_base(
+                    source_path.as_path(),
+                    plugin_base_root.as_path(),
+                    &plugin_version,
+                )?;
+            }
+            write_active_plugin_version_marker(plugin_base_root.as_path(), &plugin_version)?;
+        }
 
         Ok(PluginInstallResult {
             plugin_id,
@@ -170,6 +195,63 @@ pub fn plugin_version_for_source(source_path: &Path) -> Result<String, PluginSto
         .unwrap_or_else(|| DEFAULT_PLUGIN_VERSION.to_string());
     validate_plugin_version_segment(&plugin_version).map_err(PluginStoreError::Invalid)?;
     Ok(plugin_version)
+}
+
+fn active_plugin_version_marker(plugin_base_root: &Path) -> io::Result<Option<String>> {
+    if !plugin_base_root.is_dir() {
+        return Ok(None);
+    }
+
+    let _lock_file =
+        lock_active_plugin_version_marker(plugin_base_root, ActivePluginVersionLockKind::Shared)?;
+    let marker_path = plugin_base_root.join(ACTIVE_PLUGIN_VERSION_FILE);
+    let version = match fs::read_to_string(&marker_path) {
+        Ok(version) => version,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    let version = version.trim();
+    if validate_plugin_version_segment(version).is_err() {
+        warn!(
+            marker_path = %marker_path.display(),
+            "ignoring invalid active plugin version marker"
+        );
+        return Ok(None);
+    }
+
+    if plugin_base_root.join(version).is_dir() {
+        Ok(Some(version.to_string()))
+    } else {
+        warn!(
+            marker_path = %marker_path.display(),
+            plugin_version = version,
+            "ignoring active plugin version marker for missing version directory"
+        );
+        Ok(None)
+    }
+}
+
+fn legacy_active_plugin_version(plugin_base_root: &Path) -> Option<String> {
+    let mut discovered_versions = fs::read_dir(plugin_base_root)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            entry.file_type().ok().filter(std::fs::FileType::is_dir)?;
+            entry.file_name().into_string().ok()
+        })
+        .filter(|version| validate_plugin_version_segment(version).is_ok())
+        .collect::<Vec<_>>();
+    discovered_versions.sort_unstable();
+    if discovered_versions.is_empty() {
+        None
+    } else if discovered_versions
+        .iter()
+        .any(|version| version == DEFAULT_PLUGIN_VERSION)
+    {
+        Some(DEFAULT_PLUGIN_VERSION.to_string())
+    } else {
+        discovered_versions.pop()
+    }
 }
 
 pub fn validate_plugin_version_segment(plugin_version: &str) -> Result<(), String> {
@@ -252,6 +334,181 @@ fn remove_existing_target(path: &Path) -> Result<(), PluginStoreError> {
         fs::remove_file(path).map_err(|err| {
             PluginStoreError::io("failed to remove existing plugin cache entry", err)
         })
+    }
+}
+
+fn write_active_plugin_version_marker(
+    plugin_base_root: &Path,
+    plugin_version: &str,
+) -> Result<(), PluginStoreError> {
+    fs::create_dir_all(plugin_base_root)
+        .map_err(|err| PluginStoreError::io("failed to create plugin cache directory", err))?;
+    let _lock_file =
+        lock_active_plugin_version_marker(plugin_base_root, ActivePluginVersionLockKind::Exclusive)
+            .map_err(|err| {
+                PluginStoreError::io("failed to lock active plugin version marker", err)
+            })?;
+
+    let marker_path = plugin_base_root.join(ACTIVE_PLUGIN_VERSION_FILE);
+    let mut marker_file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(marker_path)
+        .map_err(|err| PluginStoreError::io("failed to open active plugin version marker", err))?;
+    marker_file
+        .write_all(format!("{plugin_version}\n").as_bytes())
+        .map_err(|err| PluginStoreError::io("failed to write active plugin version marker", err))?;
+    marker_file
+        .flush()
+        .map_err(|err| PluginStoreError::io("failed to flush active plugin version marker", err))
+}
+
+#[derive(Clone, Copy)]
+enum ActivePluginVersionLockKind {
+    Shared,
+    Exclusive,
+}
+
+fn lock_active_plugin_version_marker(
+    plugin_base_root: &Path,
+    lock_kind: ActivePluginVersionLockKind,
+) -> io::Result<File> {
+    let lock_path = plugin_base_root.join(ACTIVE_PLUGIN_VERSION_LOCK_FILE);
+    let lock_file = fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)?;
+
+    for _ in 0..ACTIVE_PLUGIN_VERSION_LOCK_RETRIES {
+        let lock_result = match lock_kind {
+            ActivePluginVersionLockKind::Shared => lock_file.try_lock_shared(),
+            ActivePluginVersionLockKind::Exclusive => lock_file.try_lock(),
+        };
+        match lock_result {
+            Ok(()) => return Ok(lock_file),
+            Err(fs::TryLockError::WouldBlock) => {
+                std::thread::sleep(ACTIVE_PLUGIN_VERSION_LOCK_RETRY_SLEEP);
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::WouldBlock,
+        format!(
+            "could not acquire active plugin version marker lock: {}",
+            lock_path.display()
+        ),
+    ))
+}
+
+fn install_plugin_version_into_existing_base(
+    source: &Path,
+    plugin_base_root: &Path,
+    plugin_version: &str,
+) -> Result<(), PluginStoreError> {
+    let Some(parent) = plugin_base_root.parent() else {
+        return Err(PluginStoreError::Invalid(format!(
+            "plugin cache path has no parent: {}",
+            plugin_base_root.display()
+        )));
+    };
+
+    fs::create_dir_all(plugin_base_root)
+        .map_err(|err| PluginStoreError::io("failed to create plugin cache directory", err))?;
+
+    let staged_dir = tempfile::Builder::new()
+        .prefix("plugin-install-")
+        .tempdir_in(parent)
+        .map_err(|err| {
+            PluginStoreError::io("failed to create temporary plugin cache directory", err)
+        })?;
+    let staged_version_root = staged_dir.path().join(plugin_version);
+    copy_dir_recursive(source, &staged_version_root)?;
+
+    fs::rename(&staged_version_root, plugin_base_root.join(plugin_version)).map_err(|err| {
+        PluginStoreError::io("failed to activate plugin cache version entry", err)
+    })?;
+
+    Ok(())
+}
+
+fn cleanup_inactive_versions_with_remover<F>(
+    plugin_id: &PluginId,
+    plugin_base_root: &Path,
+    mut remove_dir_all: F,
+) where
+    F: FnMut(&Path) -> io::Result<()>,
+{
+    let active_version = match active_plugin_version_marker(plugin_base_root) {
+        Ok(Some(active_version)) => Some(active_version),
+        Ok(None) => legacy_active_plugin_version(plugin_base_root),
+        Err(err) => {
+            warn!(
+                plugin = %plugin_id.as_key(),
+                path = %plugin_base_root.display(),
+                error = %err,
+                "failed to read active plugin version marker while cleaning inactive versions"
+            );
+            None
+        }
+    };
+    let Some(active_version) = active_version else {
+        return;
+    };
+
+    let entries = match fs::read_dir(plugin_base_root) {
+        Ok(entries) => entries,
+        Err(err) => {
+            warn!(
+                plugin = %plugin_id.as_key(),
+                path = %plugin_base_root.display(),
+                error = %err,
+                "failed to read plugin cache while cleaning inactive versions"
+            );
+            return;
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                warn!(
+                    plugin = %plugin_id.as_key(),
+                    path = %plugin_base_root.display(),
+                    error = %err,
+                    "failed to enumerate plugin cache while cleaning inactive versions"
+                );
+                continue;
+            }
+        };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let Ok(version) = entry.file_name().into_string() else {
+            continue;
+        };
+        if version == active_version || validate_plugin_version_segment(&version).is_err() {
+            continue;
+        }
+
+        let path = entry.path();
+        if let Err(err) = remove_dir_all(&path) {
+            warn!(
+                plugin = %plugin_id.as_key(),
+                plugin_version = %version,
+                path = %path.display(),
+                error = %err,
+                "failed to remove inactive plugin cache version"
+            );
+        }
     }
 }
 

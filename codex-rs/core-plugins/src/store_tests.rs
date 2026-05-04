@@ -144,11 +144,112 @@ fn install_with_version_uses_requested_cache_version() {
         result,
         PluginInstallResult {
             plugin_id,
-            plugin_version,
+            plugin_version: plugin_version.clone(),
             installed_path: AbsolutePathBuf::try_from(installed_path.clone()).unwrap(),
         }
     );
     assert!(installed_path.join(".codex-plugin/plugin.json").is_file());
+    assert_eq!(
+        std::fs::read_to_string(
+            tmp.path()
+                .join("plugins/cache/openai-curated/sample-plugin/.active-version"),
+        )
+        .unwrap(),
+        format!("{plugin_version}\n")
+    );
+    assert!(
+        tmp.path()
+            .join("plugins/cache/openai-curated/sample-plugin/.active-version.lock")
+            .is_file()
+    );
+}
+
+#[test]
+fn install_with_existing_version_reuses_cache_directory() {
+    let tmp = tempdir().unwrap();
+    write_plugin(tmp.path(), "source-one", "sample-plugin");
+    write_plugin(tmp.path(), "source-two", "sample-plugin");
+    fs::write(tmp.path().join("source-two/new-file"), "new").unwrap();
+    let plugin_id =
+        PluginId::new("sample-plugin".to_string(), "openai-curated".to_string()).unwrap();
+    let plugin_version = "0123456789abcdef".to_string();
+    let store = PluginStore::new(tmp.path().to_path_buf());
+
+    let result = store
+        .install_with_version(
+            AbsolutePathBuf::try_from(tmp.path().join("source-one")).unwrap(),
+            plugin_id.clone(),
+            plugin_version.clone(),
+        )
+        .unwrap();
+    fs::write(result.installed_path.as_path().join("sentinel"), "old").unwrap();
+
+    let reinstall_result = store
+        .install_with_version(
+            AbsolutePathBuf::try_from(tmp.path().join("source-two")).unwrap(),
+            plugin_id.clone(),
+            plugin_version.clone(),
+        )
+        .unwrap();
+
+    assert_eq!(reinstall_result, result);
+    assert_eq!(
+        fs::read_to_string(result.installed_path.as_path().join("sentinel")).unwrap(),
+        "old"
+    );
+    assert!(!result.installed_path.as_path().join("new-file").exists());
+    assert_eq!(
+        store.active_plugin_version(&plugin_id),
+        Some(plugin_version)
+    );
+}
+
+#[test]
+fn install_with_version_adds_new_version_without_deleting_old_version() {
+    let tmp = tempdir().unwrap();
+    write_plugin(tmp.path(), "source-one", "sample-plugin");
+    write_plugin(tmp.path(), "source-two", "sample-plugin");
+    let plugin_id =
+        PluginId::new("sample-plugin".to_string(), "openai-curated".to_string()).unwrap();
+    let store = PluginStore::new(tmp.path().to_path_buf());
+
+    store
+        .install_with_version(
+            AbsolutePathBuf::try_from(tmp.path().join("source-one")).unwrap(),
+            plugin_id.clone(),
+            "1.0.0".to_string(),
+        )
+        .unwrap();
+    store
+        .install_with_version(
+            AbsolutePathBuf::try_from(tmp.path().join("source-two")).unwrap(),
+            plugin_id.clone(),
+            "2.0.0".to_string(),
+        )
+        .unwrap();
+
+    assert!(
+        tmp.path()
+            .join("plugins/cache/openai-curated/sample-plugin/1.0.0")
+            .is_dir()
+    );
+    assert!(
+        tmp.path()
+            .join("plugins/cache/openai-curated/sample-plugin/2.0.0")
+            .is_dir()
+    );
+    assert_eq!(
+        std::fs::read_to_string(
+            tmp.path()
+                .join("plugins/cache/openai-curated/sample-plugin/.active-version"),
+        )
+        .unwrap(),
+        "2.0.0\n"
+    );
+    assert_eq!(
+        store.active_plugin_version(&plugin_id),
+        Some("2.0.0".to_string())
+    );
 }
 
 #[test]
@@ -204,6 +305,34 @@ fn install_rejects_blank_manifest_version() {
 }
 
 #[test]
+fn active_plugin_version_prefers_active_marker_over_sorted_versions() {
+    let tmp = tempdir().unwrap();
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/1.0.0",
+        "sample-plugin",
+    );
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/9.0.0",
+        "sample-plugin",
+    );
+    fs::write(
+        tmp.path()
+            .join("plugins/cache/debug/sample-plugin/.active-version"),
+        "1.0.0\n",
+    )
+    .unwrap();
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
+
+    assert_eq!(
+        store.active_plugin_version(&plugin_id),
+        Some("1.0.0".to_string())
+    );
+}
+
+#[test]
 fn active_plugin_version_reads_version_directory_name() {
     let tmp = tempdir().unwrap();
     write_plugin(
@@ -222,6 +351,77 @@ fn active_plugin_version_reads_version_directory_name() {
         store.active_plugin_root(&plugin_id).unwrap().as_path(),
         tmp.path().join("plugins/cache/debug/sample-plugin/local")
     );
+}
+
+#[test]
+fn cleanup_inactive_versions_removes_versions_except_active_marker_version() {
+    let tmp = tempdir().unwrap();
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/1.0.0",
+        "sample-plugin",
+    );
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/2.0.0",
+        "sample-plugin",
+    );
+    fs::write(
+        tmp.path()
+            .join("plugins/cache/debug/sample-plugin/.active-version"),
+        "2.0.0\n",
+    )
+    .unwrap();
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
+
+    store.cleanup_inactive_versions(&plugin_id);
+
+    assert!(
+        !tmp.path()
+            .join("plugins/cache/debug/sample-plugin/1.0.0")
+            .exists()
+    );
+    assert!(
+        tmp.path()
+            .join("plugins/cache/debug/sample-plugin/2.0.0")
+            .is_dir()
+    );
+}
+
+#[test]
+fn cleanup_inactive_versions_logs_and_continues_after_remove_failures() {
+    let tmp = tempdir().unwrap();
+    let plugin_base_root = tmp.path().join("plugins/cache/debug/sample-plugin");
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/1.0.0",
+        "sample-plugin",
+    );
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/2.0.0",
+        "sample-plugin",
+    );
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/3.0.0",
+        "sample-plugin",
+    );
+    fs::write(plugin_base_root.join(".active-version"), "3.0.0\n").unwrap();
+    let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
+
+    cleanup_inactive_versions_with_remover(&plugin_id, &plugin_base_root, |path| {
+        if path.ends_with("1.0.0") {
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "held open"))
+        } else {
+            fs::remove_dir_all(path)
+        }
+    });
+
+    assert!(plugin_base_root.join("1.0.0").is_dir());
+    assert!(!plugin_base_root.join("2.0.0").exists());
+    assert!(plugin_base_root.join("3.0.0").is_dir());
 }
 
 #[test]
