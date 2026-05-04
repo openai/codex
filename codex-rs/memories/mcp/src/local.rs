@@ -91,6 +91,10 @@ impl MemoriesBackend for LocalMemoriesBackend {
         &self,
         request: ReadMemoryRequest,
     ) -> Result<ReadMemoryResponse, MemoriesBackendError> {
+        if request.line_offset == 0 {
+            return Err(MemoriesBackendError::InvalidLineOffset);
+        }
+
         let path = self.resolve_scoped_path(Some(request.path.as_str()))?;
         let Some(metadata) = Self::metadata_or_none(&path).await? else {
             return Err(MemoriesBackendError::NotFile { path: request.path });
@@ -101,15 +105,18 @@ impl MemoriesBackend for LocalMemoriesBackend {
         }
 
         let original_content = tokio::fs::read_to_string(&path).await?;
+        let start_byte = line_start_byte_offset(&original_content, request.line_offset)?;
+        let content_from_offset = &original_content[start_byte..];
         let max_tokens = if request.max_tokens == 0 {
             DEFAULT_READ_MAX_TOKENS
         } else {
             request.max_tokens
         };
-        let content = truncate_text(&original_content, TruncationPolicy::Tokens(max_tokens));
-        let truncated = content != original_content;
+        let content = truncate_text(content_from_offset, TruncationPolicy::Tokens(max_tokens));
+        let truncated = content != content_from_offset;
         Ok(ReadMemoryResponse {
             path: request.path,
+            start_line_number: request.line_offset,
             content,
             truncated,
         })
@@ -304,6 +311,27 @@ fn display_relative_path(root: &Path, path: &Path) -> String {
         .filter(|component| !component.is_empty())
         .collect::<Vec<_>>()
         .join("/")
+}
+
+fn line_start_byte_offset(
+    content: &str,
+    line_offset: usize,
+) -> Result<usize, MemoriesBackendError> {
+    if line_offset == 1 {
+        return Ok(0);
+    }
+
+    let mut current_line = 1;
+    for (idx, ch) in content.char_indices() {
+        if ch == '\n' {
+            current_line += 1;
+            if current_line == line_offset {
+                return Ok(idx + 1);
+            }
+        }
+    }
+
+    Err(MemoriesBackendError::LineOffsetExceedsFileLength)
 }
 
 #[cfg(test)]

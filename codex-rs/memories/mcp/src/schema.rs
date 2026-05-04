@@ -42,7 +42,8 @@ pub(crate) fn read_input_schema() -> JsonObject {
     json_schema(json!({
         "type": "object",
         "properties": {
-            "path": { "type": "string" }
+            "path": { "type": "string" },
+            "line_offset": { "type": "integer", "minimum": 1 }
         },
         "required": ["path"],
         "additionalProperties": false
@@ -54,10 +55,11 @@ pub(crate) fn read_output_schema() -> JsonObject {
         "type": "object",
         "properties": {
             "path": { "type": "string" },
+            "start_line_number": { "type": "integer" },
             "content": { "type": "string" },
             "truncated": { "type": "boolean" }
         },
-        "required": ["path", "content", "truncated"],
+        "required": ["path", "start_line_number", "content", "truncated"],
         "additionalProperties": false
     }))
 }

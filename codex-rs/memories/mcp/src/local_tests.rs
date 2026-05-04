@@ -63,6 +63,7 @@ async fn read_rejects_directory_and_returns_file_content() {
     let response = backend(&tempdir)
         .read(ReadMemoryRequest {
             path: "MEMORY.md".to_string(),
+            line_offset: 1,
             max_tokens: DEFAULT_READ_MAX_TOKENS,
         })
         .await
@@ -72,6 +73,7 @@ async fn read_rejects_directory_and_returns_file_content() {
         response,
         ReadMemoryResponse {
             path: "MEMORY.md".to_string(),
+            start_line_number: 1,
             content: "remember this".to_string(),
             truncated: false,
         }
@@ -80,11 +82,73 @@ async fn read_rejects_directory_and_returns_file_content() {
     let err = backend(&tempdir)
         .read(ReadMemoryRequest {
             path: ".".to_string(),
+            line_offset: 1,
             max_tokens: DEFAULT_READ_MAX_TOKENS,
         })
         .await
         .expect_err("directory should not be readable as file");
     assert!(matches!(err, MemoriesBackendError::NotFile { .. }));
+}
+
+#[tokio::test]
+async fn read_supports_line_offset() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::write(tempdir.path().join("MEMORY.md"), "alpha\nbeta\ngamma\n")
+        .await
+        .expect("write memory file");
+
+    let response = backend(&tempdir)
+        .read(ReadMemoryRequest {
+            path: "MEMORY.md".to_string(),
+            line_offset: 2,
+            max_tokens: DEFAULT_READ_MAX_TOKENS,
+        })
+        .await
+        .expect("read memory from line offset");
+
+    assert_eq!(
+        response,
+        ReadMemoryResponse {
+            path: "MEMORY.md".to_string(),
+            start_line_number: 2,
+            content: "beta\ngamma\n".to_string(),
+            truncated: false,
+        }
+    );
+}
+
+#[tokio::test]
+async fn read_rejects_invalid_line_offsets() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::write(tempdir.path().join("MEMORY.md"), "only\n")
+        .await
+        .expect("write memory file");
+
+    let zero_offset_err = backend(&tempdir)
+        .read(ReadMemoryRequest {
+            path: "MEMORY.md".to_string(),
+            line_offset: 0,
+            max_tokens: DEFAULT_READ_MAX_TOKENS,
+        })
+        .await
+        .expect_err("zero line offset should fail");
+    assert!(matches!(
+        zero_offset_err,
+        MemoriesBackendError::InvalidLineOffset
+    ));
+
+    let past_end_err = backend(&tempdir)
+        .read(ReadMemoryRequest {
+            path: "MEMORY.md".to_string(),
+            line_offset: 3,
+            max_tokens: DEFAULT_READ_MAX_TOKENS,
+        })
+        .await
+        .expect_err("line offset past end should fail");
+    assert!(matches!(
+        past_end_err,
+        MemoriesBackendError::LineOffsetExceedsFileLength
+    ));
 }
 
 #[tokio::test]
@@ -138,6 +202,7 @@ async fn scoped_paths_reject_parent_segments() {
     let err = backend(&tempdir)
         .read(ReadMemoryRequest {
             path: "../secret".to_string(),
+            line_offset: 1,
             max_tokens: DEFAULT_READ_MAX_TOKENS,
         })
         .await
@@ -160,6 +225,7 @@ async fn read_rejects_symlinked_files() {
     let err = backend(&tempdir)
         .read(ReadMemoryRequest {
             path: "inside-link".to_string(),
+            line_offset: 1,
             max_tokens: DEFAULT_READ_MAX_TOKENS,
         })
         .await

@@ -46,12 +46,14 @@ pub struct ListMemoriesResponse {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadMemoryRequest {
     pub path: String,
+    pub line_offset: usize,
     pub max_tokens: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReadMemoryResponse {
     pub path: String,
+    pub start_line_number: usize,
     pub content: String,
     pub truncated: bool,
 }
@@ -95,6 +97,10 @@ pub struct MemorySearchMatch {
 pub enum MemoriesBackendError {
     #[error("path '{path}' {reason}")]
     InvalidPath { path: String, reason: String },
+    #[error("line_offset must be a 1-indexed line number")]
+    InvalidLineOffset,
+    #[error("line_offset exceeds file length")]
+    LineOffsetExceedsFileLength,
     #[error("path '{path}' is not a file")]
     NotFile { path: String },
     #[error("query must not be empty")]
