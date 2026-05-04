@@ -9,9 +9,10 @@ use codex_app_server_protocol::RequestId;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::Duration;
-use tokio::time::Instant;
+use tokio::time::sleep;
 use tokio::time::timeout;
 
 use super::connection_handling_websocket::DEFAULT_READ_TIMEOUT;
@@ -27,6 +28,7 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
 
     let process_handle = "one-shot-1".to_string();
     let probe_file = codex_home.path().join("process-created");
+    let release_file = codex_home.path().join("process-release");
     let command = if cfg!(windows) {
         vec![
             "powershell.exe".to_string(),
@@ -35,7 +37,9 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
             "-Command".to_string(),
             concat!(
                 "[IO.File]::WriteAllText($env:CODEX_PROCESS_EXEC_PROBE_FILE, 'process'); ",
-                "Start-Sleep -Seconds 1; ",
+                "while (!(Test-Path -LiteralPath $env:CODEX_PROCESS_EXEC_RELEASE_FILE)) { ",
+                "Start-Sleep -Milliseconds 20 ",
+                "}; ",
                 "[Console]::Out.Write('process-out'); ",
                 "[Console]::Error.Write('process-err')",
             )
@@ -47,17 +51,23 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
             "-c".to_string(),
             concat!(
                 "printf process > \"$CODEX_PROCESS_EXEC_PROBE_FILE\"; ",
-                "sleep 1; ",
+                "while [ ! -e \"$CODEX_PROCESS_EXEC_RELEASE_FILE\" ]; do sleep 0.05; done; ",
                 "printf process-out; ",
                 "printf process-err >&2",
             )
             .to_string(),
         ]
     };
-    let env = HashMap::from([(
-        "CODEX_PROCESS_EXEC_PROBE_FILE".to_string(),
-        Some(probe_file.display().to_string()),
-    )]);
+    let env = HashMap::from([
+        (
+            "CODEX_PROCESS_EXEC_PROBE_FILE".to_string(),
+            Some(probe_file.display().to_string()),
+        ),
+        (
+            "CODEX_PROCESS_EXEC_RELEASE_FILE".to_string(),
+            Some(release_file.display().to_string()),
+        ),
+    ]);
     let spawn_request_id = mcp
         .send_process_spawn_request(ProcessSpawnParams {
             command,
@@ -73,15 +83,14 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
         })
         .await?;
 
-    let started_at = Instant::now();
     let response = mcp
         .read_stream_until_response_message(RequestId::Integer(spawn_request_id))
         .await?;
-    assert!(
-        started_at.elapsed() < Duration::from_millis(900),
-        "process/spawn should return before the process exits"
-    );
     assert_eq!(response.result, serde_json::json!({}));
+
+    wait_for_file(&probe_file).await?;
+    assert_eq!(std::fs::read_to_string(&probe_file)?, "process");
+    std::fs::write(&release_file, "release")?;
 
     let exited = read_process_exited(&mut mcp).await?;
     assert_eq!(
@@ -95,8 +104,6 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
             stderr_cap_reached: false,
         }
     );
-    assert_eq!(std::fs::read_to_string(probe_file)?, "process");
-
     Ok(())
 }
 
@@ -229,4 +236,14 @@ async fn read_process_exited(mcp: &mut McpProcess) -> Result<ProcessExitedNotifi
         .params
         .context("process/exited notification should include params")?;
     serde_json::from_value(params).context("deserialize process/exited notification")
+}
+
+async fn wait_for_file(path: &Path) -> Result<()> {
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        while !path.exists() {
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .context("timed out waiting for process probe file")
 }
