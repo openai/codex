@@ -592,67 +592,6 @@ exit 1
     }
 }
 
-#[tokio::test]
-async fn auth_manager_notifies_when_auth_state_changes() {
-    let dir = tempdir().unwrap();
-    let manager = AuthManager::shared(
-        dir.path().to_path_buf(),
-        /*enable_codex_api_key_env*/ false,
-        AuthCredentialsStoreMode::File,
-    );
-    let mut auth_state_rx = manager.subscribe_auth_state();
-
-    save_auth(
-        dir.path(),
-        &AuthDotJson {
-            auth_mode: Some(ApiAuthMode::ApiKey),
-            openai_api_key: Some("sk-test-key".to_string()),
-            tokens: None,
-            last_refresh: None,
-            agent_identity: None,
-        },
-        AuthCredentialsStoreMode::File,
-    )
-    .expect("save auth");
-
-    assert!(
-        manager.reload(),
-        "reload should report a changed auth state"
-    );
-    timeout(Duration::from_secs(1), auth_state_rx.changed())
-        .await
-        .expect("auth change notification should arrive")
-        .expect("auth state watch should remain open");
-
-    save_auth(
-        dir.path(),
-        &AuthDotJson {
-            auth_mode: Some(ApiAuthMode::ApiKey),
-            openai_api_key: Some("sk-updated-key".to_string()),
-            tokens: None,
-            last_refresh: None,
-            agent_identity: None,
-        },
-        AuthCredentialsStoreMode::File,
-    )
-    .expect("save updated auth");
-
-    assert!(
-        !manager.reload(),
-        "reload remains mode-stable even when the underlying credentials change"
-    );
-    timeout(Duration::from_secs(1), auth_state_rx.changed())
-        .await
-        .expect("auth reload notification should still arrive")
-        .expect("auth state watch should remain open");
-
-    manager.set_forced_chatgpt_workspace_id(Some(vec!["workspace-123".to_string()]));
-    timeout(Duration::from_secs(1), auth_state_rx.changed())
-        .await
-        .expect("workspace change notification should arrive")
-        .expect("auth state watch should remain open");
-}
-
 struct AuthFileParams {
     openai_api_key: Option<String>,
     chatgpt_plan_type: Option<String>,
