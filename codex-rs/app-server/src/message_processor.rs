@@ -333,8 +333,7 @@ impl MessageProcessor {
             Arc::clone(&config),
             outgoing.clone(),
         );
-        let process_exec_processor =
-            ProcessExecRequestProcessor::new(Arc::clone(&config), outgoing.clone());
+        let process_exec_processor = ProcessExecRequestProcessor::new(outgoing.clone());
         let feedback_processor = FeedbackRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
@@ -1244,11 +1243,11 @@ impl MessageProcessor {
                     .command_exec_terminate(request_id.clone(), params)
                     .await
             }
-            ClientRequest::ProcessSpawn { params, .. } => {
-                self.process_exec_processor
-                    .process_spawn(request_id.clone(), params)
-                    .await
-            }
+            ClientRequest::ProcessSpawn { params, .. } => self
+                .process_exec_processor
+                .process_spawn(request_id.clone(), params)
+                .await
+                .map(|()| None),
             ClientRequest::ProcessWriteStdin { params, .. } => {
                 self.process_exec_processor
                     .process_write_stdin(request_id.clone(), params)

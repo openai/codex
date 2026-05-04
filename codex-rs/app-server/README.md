@@ -181,7 +181,7 @@ Example with notification opt-out:
 - `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
 - `command/exec/terminate` — terminate a running `command/exec` session by `processId`; returns `{}`.
 - `command/exec/outputDelta` — notification emitted for base64-encoded stdout/stderr chunks from a streaming `command/exec` session.
-- `process/spawn` — experimental; spawn a standalone process without the Codex sandbox; returns after the process starts and emits `process/outputDelta` and `process/exited` notifications.
+- `process/spawn` — experimental; spawn a standalone process without the Codex sandbox on the host where the app server is running; returns after the process starts and emits `process/outputDelta` and `process/exited` notifications.
 - `process/writeStdin` — experimental; write base64-decoded stdin bytes to a running `process/spawn` session or close stdin; returns `{}`.
 - `process/resizePty` — experimental; resize a running PTY-backed `process/spawn` session by `processHandle`; returns `{}`.
 - `process/kill` — experimental; terminate a running `process/spawn` session by `processHandle`; returns `{}`.
@@ -1012,20 +1012,18 @@ Streaming stdin/stdout uses base64 so PTY sessions can carry arbitrary bytes:
 
 ### Example: Process lifecycle execution
 
-Use `process/spawn` to start a standalone argv-based process without the Codex sandbox. The `process/*` API is experimental and requires `initialize.params.capabilities.experimentalApi: true`. The spawn response means the process has started and the `processHandle` is registered; completion is reported later through `process/exited`.
+Use `process/spawn` to start a standalone argv-based process without the Codex sandbox on the host where the app server is running. The `process/*` API is experimental and requires `initialize.params.capabilities.experimentalApi: true`. The spawn response means the process has started and the `processHandle` is registered; completion is reported later through `process/exited`.
 
 ```json
 { "method": "process/spawn", "id": 40, "params": {
     "command": ["cargo", "check"],
     "processHandle": "cargo-check-1",
     "cwd": "/Users/me/project",                    // required absolute path
-    "env": { "RUST_LOG": null },                    // optional; override or unset inherited env vars
+    "env": { "RUST_LOG": null },                    // optional; override or unset app-server env vars
     "outputBytesCap": 1048576,                     // optional; omit for default, null disables
     "timeoutMs": 10000                             // optional; omit for default, null disables
 } }
-{ "id": 40, "result": {
-    "processHandle": "cargo-check-1"
-} }
+{ "id": 40, "result": {} }
 { "method": "process/exited", "params": {
     "processHandle": "cargo-check-1",
     "exitCode": 0,
@@ -1048,7 +1046,7 @@ For interactive or streaming processes, set `tty: true` or `streamStdoutStderr: 
     "outputBytesCap": null,
     "timeoutMs": null
 } }
-{ "id": 41, "result": { "processHandle": "bash-1" } }
+{ "id": 41, "result": {} }
 { "method": "process/outputDelta", "params": {
     "processHandle": "bash-1",
     "stream": "stdout",
@@ -1082,6 +1080,7 @@ For interactive or streaming processes, set `tty: true` or `streamStdoutStderr: 
 - Empty `command` arrays and empty `processHandle` strings are rejected.
 - `cwd` is required and must be absolute.
 - `process/spawn` is intentionally unsandboxed and does not define sandbox-selection fields such as `sandboxPolicy` or `permissionProfile`.
+- Duplicate active `processHandle` values are rejected on the same connection; the same handle can be reused after the prior process exits.
 - `tty: true` implies PTY mode plus `streamStdin: true` and `streamStdoutStderr: true`.
 - `process/writeStdin` accepts either `deltaBase64`, `closeStdin`, or both.
 - When omitted, `timeoutMs` and `outputBytesCap` fall back to server defaults. Set either field to `null` to disable that limit for terminal-style sessions.

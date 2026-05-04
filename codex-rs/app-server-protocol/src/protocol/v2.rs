@@ -3569,7 +3569,8 @@ pub struct ProcessTerminalSize {
     pub cols: u16,
 }
 
-/// Spawn a standalone process (argv vector) without a Codex sandbox.
+/// Spawn a standalone process (argv vector) without a Codex sandbox on the host
+/// where the app server is running.
 ///
 /// `process/spawn` returns after the process has started and the connection-scoped
 /// `processHandle` has been registered. Process output and exit are reported via
@@ -3581,6 +3582,9 @@ pub struct ProcessSpawnParams {
     /// Command argv vector. Empty arrays are rejected.
     pub command: Vec<String>,
     /// Client-supplied, connection-scoped process handle.
+    ///
+    /// Duplicate active handles are rejected on the same connection. The same
+    /// handle can be reused after the prior process exits.
     pub process_handle: String,
     /// Absolute working directory for the process.
     pub cwd: AbsolutePathBuf,
@@ -3623,7 +3627,7 @@ pub struct ProcessSpawnParams {
     #[ts(type = "number | null")]
     #[ts(optional = nullable)]
     pub timeout_ms: Option<Option<i64>>,
-    /// Optional environment overrides merged into the server-computed
+    /// Optional environment overrides merged into the app-server process
     /// environment.
     ///
     /// Matching names override inherited values. Set a key to `null` to unset
@@ -3640,10 +3644,7 @@ pub struct ProcessSpawnParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ProcessSpawnResponse {
-    /// Client-supplied, connection-scoped process handle.
-    pub process_handle: String,
-}
+pub struct ProcessSpawnResponse {}
 
 /// Write stdin bytes to a running `process/spawn` session, close stdin, or
 /// both.

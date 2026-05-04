@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,11 +20,9 @@ use codex_app_server_protocol::ProcessTerminalSize;
 use codex_app_server_protocol::ProcessWriteStdinParams;
 use codex_app_server_protocol::ProcessWriteStdinResponse;
 use codex_app_server_protocol::ServerNotification;
-use codex_core::config::Config;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecExpirationOutcome;
 use codex_core::exec::IO_DRAIN_TIMEOUT_MS;
-use codex_core::exec_env::create_env;
 use codex_protocol::exec_output::bytes_to_string_smart;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
@@ -48,31 +47,19 @@ const OUTPUT_CHUNK_SIZE_HINT: usize = 64 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct ProcessExecRequestProcessor {
-    config: Arc<Config>,
     outgoing: Arc<OutgoingMessageSender>,
     process_exec_manager: ProcessExecManager,
 }
 
 impl ProcessExecRequestProcessor {
-    pub(crate) fn new(config: Arc<Config>, outgoing: Arc<OutgoingMessageSender>) -> Self {
+    pub(crate) fn new(outgoing: Arc<OutgoingMessageSender>) -> Self {
         Self {
-            config,
             outgoing,
             process_exec_manager: ProcessExecManager::default(),
         }
     }
 
     pub(crate) async fn process_spawn(
-        &self,
-        request_id: ConnectionRequestId,
-        params: ProcessSpawnParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.process_spawn_inner(request_id, params)
-            .await
-            .map(|()| None)
-    }
-
-    async fn process_spawn_inner(
         &self,
         request_id: ConnectionRequestId,
         params: ProcessSpawnParams,
@@ -100,10 +87,7 @@ impl ProcessExecRequestProcessor {
         if size.is_some() && !tty {
             return Err(invalid_params("process/spawn size requires tty: true"));
         }
-        let mut env = create_env(
-            &self.config.permissions.shell_environment_policy,
-            /*thread_id*/ None,
-        );
+        let mut env = std::env::vars().collect::<HashMap<_, _>>();
         if let Some(env_overrides) = env_overrides {
             for (key, value) in env_overrides {
                 match value {
@@ -309,17 +293,18 @@ impl ProcessExecManager {
             process_handle: process_handle.clone(),
         };
 
-        {
-            let mut sessions = self.sessions.lock().await;
-            if sessions.contains_key(&process_key) {
+        let mut sessions = self.sessions.lock().await;
+        match sessions.entry(process_key.clone()) {
+            Entry::Occupied(_) => {
                 return Err(invalid_request(format!(
-                    "duplicate active process handle: {}",
-                    serde_json::to_string(&process_handle)
-                        .unwrap_or_else(|_| format!("{process_handle:?}")),
+                    "duplicate active process handle: {process_handle:?}",
                 )));
             }
-            sessions.insert(process_key.clone(), ProcessSession { control_tx });
+            Entry::Vacant(entry) => {
+                entry.insert(ProcessSession { control_tx });
+            }
         }
+        drop(sessions);
 
         let spawned = if tty {
             codex_utils_pty::spawn_pty_process(
@@ -346,12 +331,7 @@ impl ProcessExecManager {
         };
 
         outgoing
-            .send_response(
-                request_id.clone(),
-                ProcessSpawnResponse {
-                    process_handle: process_handle.clone(),
-                },
-            )
+            .send_response(request_id.clone(), ProcessSpawnResponse {})
             .await;
 
         let sessions = Arc::clone(&self.sessions);
@@ -473,14 +453,13 @@ impl ProcessExecManager {
             connection_id,
             process_handle,
         };
-        let session = {
-            self.sessions
-                .lock()
-                .await
-                .get(&process_key)
-                .cloned()
-                .ok_or_else(|| no_active_process_error(&process_key.process_handle))?
-        };
+        let session = self
+            .sessions
+            .lock()
+            .await
+            .get(&process_key)
+            .cloned()
+            .ok_or_else(|| no_active_process_error(&process_key.process_handle))?;
         let (response_tx, response_rx) = oneshot::channel();
         session
             .control_tx
@@ -522,7 +501,7 @@ async fn run_process(params: RunProcessParams) {
     let mut expiration_outcome = None;
     let (stdio_timeout_tx, stdio_timeout_rx) = watch::channel(false);
 
-    let stdout_handle = spawn_process_output(SpawnProcessOutputParams {
+    let stdout_handle = collect_spawn_process_output(SpawnProcessOutputParams {
         connection_id: request_id.connection_id,
         process_handle: process_handle.clone(),
         output_rx: stdout_rx,
@@ -532,7 +511,7 @@ async fn run_process(params: RunProcessParams) {
         stream_output: stream_stdout_stderr,
         output_bytes_cap,
     });
-    let stderr_handle = spawn_process_output(SpawnProcessOutputParams {
+    let stderr_handle = collect_spawn_process_output(SpawnProcessOutputParams {
         connection_id: request_id.connection_id,
         process_handle: process_handle.clone(),
         output_rx: stderr_rx,
@@ -566,7 +545,12 @@ async fn run_process(params: RunProcessParams) {
                             }
                         };
                         if let Some(response_tx) = response_tx {
-                            let _ = response_tx.send(result);
+                            if response_tx.send(result).is_err() {
+                                tracing::debug!(
+                                    process_handle = %process_handle,
+                                    "process control response receiver dropped"
+                                );
+                            }
                         }
                     },
                     None => {
@@ -589,6 +573,7 @@ async fn run_process(params: RunProcessParams) {
         }
     };
 
+    // Give stdout/stderr readers a bounded grace period to drain after process exit.
     let timeout_handle = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(IO_DRAIN_TIMEOUT_MS)).await;
         let _ = stdio_timeout_tx.send(true);
@@ -613,7 +598,7 @@ async fn run_process(params: RunProcessParams) {
         .await;
 }
 
-fn spawn_process_output(
+fn collect_spawn_process_output(
     params: SpawnProcessOutputParams,
 ) -> tokio::task::JoinHandle<ProcessOutputCapture> {
     let SpawnProcessOutputParams {

@@ -2,11 +2,9 @@ use anyhow::Context;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
-use app_test_support::to_response;
 use codex_app_server_protocol::ProcessExitedNotification;
 use codex_app_server_protocol::ProcessKillParams;
 use codex_app_server_protocol::ProcessSpawnParams;
-use codex_app_server_protocol::ProcessSpawnResponse;
 use codex_app_server_protocol::RequestId;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -58,13 +56,7 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
         started_at.elapsed() < Duration::from_millis(900),
         "process/spawn should return before the process exits"
     );
-    let response: ProcessSpawnResponse = to_response(response)?;
-    assert_eq!(
-        response,
-        ProcessSpawnResponse {
-            process_handle: process_handle.clone(),
-        }
-    );
+    assert_eq!(response.result, serde_json::json!({}));
 
     let exited = read_process_exited(&mut mcp).await?;
     assert_eq!(
@@ -114,13 +106,7 @@ async fn process_spawn_reports_buffered_output_cap_reached() -> Result<()> {
     let response = mcp
         .read_stream_until_response_message(RequestId::Integer(spawn_request_id))
         .await?;
-    let response: ProcessSpawnResponse = to_response(response)?;
-    assert_eq!(
-        response,
-        ProcessSpawnResponse {
-            process_handle: process_handle.clone(),
-        }
-    );
+    assert_eq!(response.result, serde_json::json!({}));
 
     let exited = read_process_exited(&mut mcp).await?;
     assert_eq!(
@@ -165,13 +151,7 @@ async fn process_kill_terminates_running_process() -> Result<()> {
     let response = mcp
         .read_stream_until_response_message(RequestId::Integer(spawn_request_id))
         .await?;
-    let response: ProcessSpawnResponse = to_response(response)?;
-    assert_eq!(
-        response,
-        ProcessSpawnResponse {
-            process_handle: process_handle.clone(),
-        }
-    );
+    assert_eq!(response.result, serde_json::json!({}));
 
     let kill_request_id = mcp
         .send_process_kill_request(ProcessKillParams {
