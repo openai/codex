@@ -73,6 +73,7 @@ const FOOTER_COMPACT_BREAKPOINT: u16 = 120;
 const FOOTER_HINT_LEFT_PADDING: usize = 1;
 const FOOTER_HINT_GAP: usize = 3;
 const PICKER_CHROME_HEIGHT: u16 = 8;
+const PICKER_LIST_HORIZONTAL_INSET: u16 = 4;
 
 #[derive(Debug, Clone)]
 pub struct SessionTarget {
@@ -408,7 +409,7 @@ async fn run_session_picker_with_loader(
                         if let Ok(size) = alt.tui.terminal.size() {
                             let list_height =
                                 size.height.saturating_sub(PICKER_CHROME_HEIGHT) as usize;
-                            state.update_viewport(list_height, size.width);
+                            state.update_viewport(list_height, list_viewport_width(size.width));
                             state.ensure_minimum_rows_for_view(list_height);
                         }
                         draw_picker(alt.tui, &state)?;
@@ -1441,10 +1442,15 @@ impl PickerState {
         if minimum_rows == 0 {
             return;
         }
-        if self.filtered_rows.len() >= minimum_rows {
+        if self.pagination.loading.is_pending() || self.pagination.next_cursor.is_none() {
             return;
         }
-        if self.pagination.loading.is_pending() || self.pagination.next_cursor.is_none() {
+        let rendered_rows = if self.filtered_rows.is_empty() {
+            0
+        } else {
+            self.rendered_height_between(/*start*/ 0, self.filtered_rows.len() - 1)
+        };
+        if rendered_rows >= self.available_content_rows(minimum_rows) {
             return;
         }
         if let Some(token) = self.search_state.active_token() {
@@ -1796,7 +1802,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         let list = Rect::new(
             list.x.saturating_add(2),
             list.y,
-            list.width.saturating_sub(4),
+            list_viewport_width(list.width),
             list.height,
         );
         render_list(frame, list, state);
@@ -1806,6 +1812,10 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
 
         render_picker_footer(frame, footer, state, list.height);
     })
+}
+
+fn list_viewport_width(width: u16) -> u16 {
+    width.saturating_sub(PICKER_LIST_HORIZONTAL_INSET)
 }
 
 fn search_line(state: &PickerState, width: u16) -> Line<'_> {
@@ -4957,6 +4967,83 @@ session_picker_view = "dense"
         let guard = recorded_requests.lock().unwrap();
         assert_eq!(guard.len(), 1);
         assert!(guard[0].search_token.is_none());
+    }
+
+    #[test]
+    fn ensure_minimum_rows_does_not_prefetch_when_comfortable_cards_fill_view() {
+        let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader = page_only_loader(move |req: PageLoadRequest| {
+            request_sink.lock().unwrap().push(req);
+        });
+
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.reset_pagination();
+        state.ingest_page(page(
+            vec![
+                make_row("/tmp/a.jsonl", "2025-01-01T00:00:00Z", "one"),
+                make_row("/tmp/b.jsonl", "2025-01-02T00:00:00Z", "two"),
+                make_row("/tmp/c.jsonl", "2025-01-03T00:00:00Z", "three"),
+                make_row("/tmp/d.jsonl", "2025-01-04T00:00:00Z", "four"),
+            ],
+            Some("2025-01-05T00:00:00Z"),
+            /*num_scanned_files*/ 4,
+            /*reached_scan_cap*/ false,
+        ));
+        state.update_viewport(/*rows*/ 6, /*width*/ 80);
+
+        state.ensure_minimum_rows_for_view(/*minimum_rows*/ 6);
+
+        assert!(recorded_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn ensure_minimum_rows_still_prefetches_when_dense_rows_underfill_view() {
+        let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader = page_only_loader(move |req: PageLoadRequest| {
+            request_sink.lock().unwrap().push(req);
+        });
+
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.density = SessionListDensity::Dense;
+        state.reset_pagination();
+        state.ingest_page(page(
+            vec![
+                make_row("/tmp/a.jsonl", "2025-01-01T00:00:00Z", "one"),
+                make_row("/tmp/b.jsonl", "2025-01-02T00:00:00Z", "two"),
+            ],
+            Some("2025-01-03T00:00:00Z"),
+            /*num_scanned_files*/ 2,
+            /*reached_scan_cap*/ false,
+        ));
+        state.update_viewport(/*rows*/ 10, /*width*/ 80);
+
+        state.ensure_minimum_rows_for_view(/*minimum_rows*/ 10);
+
+        let guard = recorded_requests.lock().unwrap();
+        assert_eq!(guard.len(), 1);
+        assert!(guard[0].search_token.is_none());
+    }
+
+    #[test]
+    fn list_viewport_width_matches_rendered_list_inset() {
+        assert_eq!(list_viewport_width(/*width*/ 80), 76);
+        assert_eq!(list_viewport_width(/*width*/ 3), 0);
     }
 
     #[tokio::test]
