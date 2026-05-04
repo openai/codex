@@ -116,6 +116,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::error;
@@ -816,6 +818,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: turn_id.clone(),
+                started_at_ms: request.started_at_ms,
                 item,
             };
             outgoing
@@ -968,6 +971,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: now_unix_timestamp_ms(),
                 item: item.clone(),
             };
             outgoing
@@ -976,6 +980,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let completed = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                completed_at_ms: now_unix_timestamp_ms(),
                 item,
             };
             outgoing
@@ -1025,6 +1030,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: now_unix_timestamp_ms(),
                 item: item.clone(),
             };
             outgoing
@@ -1033,6 +1039,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let completed = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                completed_at_ms: now_unix_timestamp_ms(),
                 item,
             };
             outgoing
@@ -1368,6 +1375,7 @@ async fn start_command_execution_item(
         let notification = ItemStartedNotification {
             thread_id: conversation_id.to_string(),
             turn_id,
+            started_at_ms: now_unix_timestamp_ms(),
             item: ThreadItem::CommandExecution {
                 id: item_id,
                 command,
@@ -1427,6 +1435,7 @@ async fn complete_command_execution_item(
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
         turn_id,
+        completed_at_ms: now_unix_timestamp_ms(),
         item,
     };
     outgoing
@@ -1474,6 +1483,7 @@ pub(crate) async fn maybe_emit_hook_prompt_item_completed(
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
         turn_id: turn_id.to_string(),
+        completed_at_ms: now_unix_timestamp_ms(),
         item: ThreadItem::HookPrompt {
             id: hook_prompt.id,
             fragments: hook_prompt
@@ -2075,6 +2085,13 @@ async fn on_command_execution_request_approval_response(
     {
         error!("failed to submit ExecApproval: {err}");
     }
+}
+
+fn now_unix_timestamp_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

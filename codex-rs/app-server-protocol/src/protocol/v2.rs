@@ -6928,6 +6928,9 @@ pub struct ItemStartedNotification {
     pub item: ThreadItem,
     pub thread_id: String,
     pub turn_id: String,
+    /// Unix timestamp (in milliseconds) when this item lifecycle started.
+    #[ts(type = "number")]
+    pub started_at_ms: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -6990,6 +6993,9 @@ pub struct ItemCompletedNotification {
     pub item: ThreadItem,
     pub thread_id: String,
     pub turn_id: String,
+    /// Unix timestamp (in milliseconds) when this item lifecycle completed.
+    #[ts(type = "number")]
+    pub completed_at_ms: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

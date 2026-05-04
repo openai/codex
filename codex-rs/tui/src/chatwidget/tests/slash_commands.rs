@@ -1149,6 +1149,7 @@ async fn slash_copy_state_tracks_plan_item_completion() {
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: String::new(),
             turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
             item: AppServerThreadItem::Plan {
                 id: "plan-1".to_string(),
                 text: plan_text.clone(),
