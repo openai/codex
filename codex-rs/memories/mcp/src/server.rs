@@ -54,10 +54,10 @@ struct ReadArgs {
     max_lines: Option<usize>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SearchArgs {
-    query: Option<String>,
-    queries: Option<Vec<String>>,
+    queries: Vec<String>,
     match_mode: Option<SearchMatchMode>,
     path: Option<String>,
     cursor: Option<String>,
@@ -147,7 +147,7 @@ impl<B: MemoriesBackend> ServerHandler for MemoriesMcpServer<B> {
             }
             SEARCH_TOOL_NAME => {
                 let args: SearchArgs = parse_args(value)?;
-                let request = args.into_request()?;
+                let request = args.into_request();
                 json!(
                     self.backend
                         .search(request)
@@ -229,21 +229,9 @@ fn parse_args<T: for<'de> Deserialize<'de>>(value: serde_json::Value) -> Result<
 }
 
 impl SearchArgs {
-    fn into_request(self) -> Result<SearchMemoriesRequest, McpError> {
-        let queries = match (self.query, self.queries) {
-            (Some(query), None) => Ok(vec![query]),
-            (None, Some(queries)) => Ok(queries),
-            (Some(_), Some(_)) => Err(McpError::invalid_params(
-                "provide either 'query' or 'queries', but not both".to_string(),
-                None,
-            )),
-            (None, None) => Err(McpError::invalid_params(
-                "missing required field: 'query' or 'queries'".to_string(),
-                None,
-            )),
-        }?;
-        Ok(SearchMemoriesRequest {
-            queries,
+    fn into_request(self) -> SearchMemoriesRequest {
+        SearchMemoriesRequest {
+            queries: self.queries,
             match_mode: self.match_mode.unwrap_or(SearchMatchMode::Any),
             path: self.path,
             cursor: self.cursor,
@@ -254,7 +242,7 @@ impl SearchArgs {
                 DEFAULT_SEARCH_MAX_RESULTS,
                 MAX_SEARCH_RESULTS,
             ),
-        })
+        }
     }
 }
 
@@ -282,30 +270,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn search_args_accept_legacy_single_query() {
-        let args: SearchArgs = parse_args(json!({
-            "query": "needle",
-            "match_mode": "all"
-        }))
-        .expect("legacy query args should parse");
-
-        let request = args.into_request().expect("query should convert");
-
-        assert_eq!(
-            request,
-            SearchMemoriesRequest {
-                queries: vec!["needle".to_string()],
-                match_mode: SearchMatchMode::All,
-                path: None,
-                cursor: None,
-                context_lines: 0,
-                case_sensitive: true,
-                max_results: DEFAULT_SEARCH_MAX_RESULTS,
-            }
-        );
-    }
-
-    #[test]
     fn search_args_accept_multiple_queries() {
         let args: SearchArgs = parse_args(json!({
             "queries": ["alpha", "needle"],
@@ -313,7 +277,7 @@ mod tests {
         }))
         .expect("multi-query args should parse");
 
-        let request = args.into_request().expect("queries should convert");
+        let request = args.into_request();
 
         assert_eq!(
             request,
@@ -330,17 +294,25 @@ mod tests {
     }
 
     #[test]
-    fn search_args_reject_both_query_forms() {
-        let args: SearchArgs = parse_args(json!({
+    fn search_args_reject_legacy_single_query() {
+        let err = parse_args::<SearchArgs>(json!({
             "query": "needle",
-            "queries": ["needle"]
         }))
-        .expect("args should parse before conversion");
+        .expect_err("legacy query field should be rejected");
 
-        let err = args
-            .into_request()
-            .expect_err("query and queries should be mutually exclusive");
+        assert!(err.message.contains("unknown field"));
+        assert!(err.message.contains("query"));
+    }
 
-        assert!(err.message.contains("either 'query' or 'queries'"));
+    #[test]
+    fn search_args_reject_unknown_fields() {
+        let err = parse_args::<SearchArgs>(json!({
+            "queries": ["needle"],
+            "query": "needle"
+        }))
+        .expect_err("unknown fields should be rejected");
+
+        assert!(err.message.contains("unknown field"));
+        assert!(err.message.contains("query"));
     }
 }

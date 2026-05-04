@@ -71,40 +71,22 @@ pub(crate) fn read_output_schema() -> JsonObject {
 
 pub(crate) fn search_input_schema() -> JsonObject {
     json_schema(json!({
-        "anyOf": [
-            {
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string" },
-                    "match_mode": { "type": "string", "enum": ["any", "all"] },
-                    "path": { "type": "string" },
-                    "cursor": { "type": "string" },
-                    "context_lines": { "type": "integer", "minimum": 0 },
-                    "case_sensitive": { "type": "boolean" },
-                    "max_results": { "type": "integer", "minimum": 1 }
-                },
-                "required": ["query"],
-                "additionalProperties": false
+        "type": "object",
+        "properties": {
+            "queries": {
+                "type": "array",
+                "items": { "type": "string" },
+                "minItems": 1
             },
-            {
-                "type": "object",
-                "properties": {
-                    "queries": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "minItems": 1
-                    },
-                    "match_mode": { "type": "string", "enum": ["any", "all"] },
-                    "path": { "type": "string" },
-                    "cursor": { "type": "string" },
-                    "context_lines": { "type": "integer", "minimum": 0 },
-                    "case_sensitive": { "type": "boolean" },
-                    "max_results": { "type": "integer", "minimum": 1 }
-                },
-                "required": ["queries"],
-                "additionalProperties": false
-            }
-        ]
+            "match_mode": { "type": "string", "enum": ["any", "all"] },
+            "path": { "type": "string" },
+            "cursor": { "type": "string" },
+            "context_lines": { "type": "integer", "minimum": 0 },
+            "case_sensitive": { "type": "boolean" },
+            "max_results": { "type": "integer", "minimum": 1 }
+        },
+        "required": ["queries"],
+        "additionalProperties": false
     }))
 }
 
