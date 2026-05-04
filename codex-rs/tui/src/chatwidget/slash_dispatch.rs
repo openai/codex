@@ -328,16 +328,25 @@ impl ChatWidget {
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
                 let tx = self.app_event_tx.clone();
+                let runner = self.workspace_command_runner.clone();
+                let cwd = self
+                    .current_cwd
+                    .clone()
+                    .unwrap_or_else(|| self.config.cwd.to_path_buf());
                 tokio::spawn(async move {
-                    let text = match get_git_diff().await {
-                        Ok((is_git_repo, diff_text)) => {
-                            if is_git_repo {
-                                diff_text
-                            } else {
-                                "`/diff` — _not inside a git repository_".to_string()
+                    let text = match runner {
+                        Some(runner) => match get_git_diff(runner.as_ref(), &cwd).await {
+                            Ok((is_git_repo, diff_text)) => {
+                                if is_git_repo {
+                                    diff_text
+                                } else {
+                                    "`/diff` — _not inside a git repository_".to_string()
+                                }
                             }
-                        }
-                        Err(e) => format!("Failed to compute diff: {e}"),
+                            Err(e) => format!("Failed to compute diff: {e}"),
+                        },
+                        None => "Failed to compute diff: workspace command runner unavailable"
+                            .to_string(),
                     };
                     tx.send(AppEvent::DiffResult(text));
                 });
