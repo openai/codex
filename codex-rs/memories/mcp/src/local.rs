@@ -223,7 +223,7 @@ impl MemoriesBackend for LocalMemoriesBackend {
         matches.sort_by(|left, right| {
             left.path
                 .cmp(&right.path)
-                .then(left.line_number.cmp(&right.line_number))
+                .then(left.match_line_number.cmp(&right.match_line_number))
         });
         if start_index > matches.len() {
             return Err(MemoriesBackendError::invalid_cursor(
@@ -309,8 +309,8 @@ async fn search_file(
                 .min(lines.len());
             matches.push(MemorySearchMatch {
                 path: display_relative_path(root, path),
-                line_number: idx + 1,
-                start_line_number: start_index + 1,
+                match_line_number: idx + 1,
+                content_start_line_number: start_index + 1,
                 content: lines[start_index..end_index].join("\n"),
             });
         }

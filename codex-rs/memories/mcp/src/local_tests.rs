@@ -396,14 +396,14 @@ async fn search_supports_directory_and_file_scopes() {
         vec![
             MemorySearchMatch {
                 path: "MEMORY.md".to_string(),
-                line_number: 2,
-                start_line_number: 2,
+                match_line_number: 2,
+                content_start_line_number: 2,
                 content: "needle".to_string(),
             },
             MemorySearchMatch {
                 path: "rollout_summaries/a.jsonl".to_string(),
-                line_number: 1,
-                start_line_number: 1,
+                match_line_number: 1,
+                content_start_line_number: 1,
                 content: "needle again".to_string(),
             },
         ]
@@ -426,8 +426,8 @@ async fn search_supports_directory_and_file_scopes() {
         file_response.matches,
         vec![MemorySearchMatch {
             path: "MEMORY.md".to_string(),
-            line_number: 2,
-            start_line_number: 2,
+            match_line_number: 2,
+            content_start_line_number: 2,
             content: "needle".to_string(),
         }]
     );
@@ -467,14 +467,14 @@ async fn search_supports_pagination() {
         vec![
             MemorySearchMatch {
                 path: "MEMORY.md".to_string(),
-                line_number: 1,
-                start_line_number: 1,
+                match_line_number: 1,
+                content_start_line_number: 1,
                 content: "needle one".to_string(),
             },
             MemorySearchMatch {
                 path: "MEMORY.md".to_string(),
-                line_number: 2,
-                start_line_number: 2,
+                match_line_number: 2,
+                content_start_line_number: 2,
                 content: "needle two".to_string(),
             },
         ]
@@ -497,8 +497,8 @@ async fn search_supports_pagination() {
         page2.matches,
         vec![MemorySearchMatch {
             path: "rollout_summaries/a.jsonl".to_string(),
-            line_number: 1,
-            start_line_number: 1,
+            match_line_number: 1,
+            content_start_line_number: 1,
             content: "needle three".to_string(),
         }]
     );
@@ -533,14 +533,14 @@ async fn search_supports_context_lines() {
         vec![
             MemorySearchMatch {
                 path: "MEMORY.md".to_string(),
-                line_number: 2,
-                start_line_number: 1,
+                match_line_number: 2,
+                content_start_line_number: 1,
                 content: "alpha\nneedle\nomega".to_string(),
             },
             MemorySearchMatch {
                 path: "MEMORY.md".to_string(),
-                line_number: 4,
-                start_line_number: 3,
+                match_line_number: 4,
+                content_start_line_number: 3,
                 content: "omega\nneedle again".to_string(),
             },
         ]
@@ -569,8 +569,8 @@ async fn search_supports_case_insensitive_matching() {
         sensitive_response.matches,
         vec![MemorySearchMatch {
             path: "MEMORY.md".to_string(),
-            line_number: 2,
-            start_line_number: 2,
+            match_line_number: 2,
+            content_start_line_number: 2,
             content: "needle".to_string(),
         }]
     );
@@ -591,20 +591,20 @@ async fn search_supports_case_insensitive_matching() {
         vec![
             MemorySearchMatch {
                 path: "MEMORY.md".to_string(),
-                line_number: 1,
-                start_line_number: 1,
+                match_line_number: 1,
+                content_start_line_number: 1,
                 content: "Needle".to_string(),
             },
             MemorySearchMatch {
                 path: "MEMORY.md".to_string(),
-                line_number: 2,
-                start_line_number: 2,
+                match_line_number: 2,
+                content_start_line_number: 2,
                 content: "needle".to_string(),
             },
             MemorySearchMatch {
                 path: "MEMORY.md".to_string(),
-                line_number: 3,
-                start_line_number: 3,
+                match_line_number: 3,
+                content_start_line_number: 3,
                 content: "NEEDLE".to_string(),
             },
         ]
