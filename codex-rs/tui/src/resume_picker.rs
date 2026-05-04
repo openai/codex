@@ -268,6 +268,7 @@ struct SessionPickerViewPersistence {
 struct SessionPickerRunOptions {
     show_all: bool,
     filter_cwd: Option<PathBuf>,
+    local_filter_cwd: Option<PathBuf>,
     action: SessionPickerAction,
     provider_filter: ProviderFilter,
     initial_density: SessionListDensity,
@@ -306,11 +307,13 @@ pub async fn run_resume_picker_with_app_server(
         is_remote,
         app_server.remote_cwd_override(),
     );
+    let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, is_remote);
     let provider_filter = picker_provider_filter(config, is_remote);
     let pager_keymap = picker_pager_keymap(config)?;
     let options = SessionPickerRunOptions {
         show_all,
         filter_cwd: cwd_filter,
+        local_filter_cwd,
         action: SessionPickerAction::Resume,
         provider_filter,
         initial_density: SessionListDensity::from(config.tui_session_picker_view),
@@ -348,11 +351,13 @@ pub async fn run_fork_picker_with_app_server(
         is_remote,
         app_server.remote_cwd_override(),
     );
+    let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, is_remote);
     let provider_filter = picker_provider_filter(config, is_remote);
     let pager_keymap = picker_pager_keymap(config)?;
     let options = SessionPickerRunOptions {
         show_all,
         filter_cwd: cwd_filter,
+        local_filter_cwd,
         action: SessionPickerAction::Fork,
         provider_filter,
         initial_density: SessionListDensity::from(config.tui_session_picker_view),
@@ -391,6 +396,7 @@ async fn run_session_picker_with_loader(
         options.filter_cwd,
         options.action,
     );
+    state.local_filter_cwd = options.local_filter_cwd;
     state.density = options.initial_density;
     state.view_persistence = options.view_persistence;
     state.pager_keymap = options.pager_keymap;
@@ -448,6 +454,10 @@ fn raw_reasoning_visibility(config: &Config) -> RawReasoningVisibility {
     } else {
         RawReasoningVisibility::Hidden
     }
+}
+
+fn local_picker_cwd_filter(cwd_filter: &Option<PathBuf>, is_remote: bool) -> Option<PathBuf> {
+    if is_remote { None } else { cwd_filter.clone() }
 }
 
 fn picker_provider_filter(config: &Config, is_remote: bool) -> ProviderFilter {
@@ -583,6 +593,7 @@ struct PickerState {
     provider_filter: ProviderFilter,
     filter_mode: SessionFilterMode,
     filter_cwd: Option<PathBuf>,
+    local_filter_cwd: Option<PathBuf>,
     toolbar_focus: ToolbarControl,
     density: SessionListDensity,
     view_persistence: Option<SessionPickerViewPersistence>,
@@ -852,6 +863,7 @@ impl PickerState {
             view_width: None,
             provider_filter,
             filter_mode: SessionFilterMode::from_show_all(show_all, filter_cwd.as_deref()),
+            local_filter_cwd: filter_cwd.clone(),
             filter_cwd,
             toolbar_focus: ToolbarControl::Filter,
             density: SessionListDensity::Comfortable,
@@ -1366,7 +1378,7 @@ impl PickerState {
         if self.filter_mode == SessionFilterMode::All {
             return true;
         }
-        let Some(filter_cwd) = self.filter_cwd.as_ref() else {
+        let Some(filter_cwd) = self.local_filter_cwd.as_ref() else {
             return true;
         };
         let Some(row_cwd) = row.cwd.as_ref() else {
@@ -3504,6 +3516,46 @@ mod tests {
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
         assert_eq!(params.model_providers, None);
         assert_eq!(params.source_kinds, None);
+    }
+
+    #[test]
+    fn remote_picker_sends_cwd_filter_without_local_post_filtering() {
+        let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader = page_only_loader(move |req: PageLoadRequest| {
+            request_sink.lock().unwrap().push(req);
+        });
+        let remote_cwd = Some(PathBuf::from("/srv/link-project"));
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::Any,
+            /*show_all*/ false,
+            remote_cwd.clone(),
+            SessionPickerAction::Resume,
+        );
+        state.local_filter_cwd = local_picker_cwd_filter(&remote_cwd, /*is_remote*/ true);
+
+        state.start_initial_load();
+
+        {
+            let guard = recorded_requests.lock().unwrap();
+            assert_eq!(guard.len(), 1);
+            assert_eq!(guard[0].cwd_filter, remote_cwd);
+        }
+
+        let row = Row {
+            path: None,
+            preview: String::from("remote session"),
+            thread_id: Some(ThreadId::new()),
+            thread_name: None,
+            created_at: None,
+            updated_at: None,
+            cwd: Some(PathBuf::from("/srv/real-project")),
+            git_branch: None,
+        };
+
+        assert!(state.row_matches_filter(&row));
     }
 
     #[test]

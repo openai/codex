@@ -18,6 +18,7 @@ pub use codex_config::types::ModelAvailabilityNuxConfig;
 pub use codex_config::types::Notice;
 pub use codex_config::types::OAuthCredentialsStoreMode;
 pub use codex_config::types::OtelConfig;
+pub use codex_config::types::SessionPickerViewMode;
 pub use codex_config::types::ToolSuggestConfig;
 pub use codex_config::types::TuiKeymap;
 pub use codex_config::types::TuiNotificationSettings;
