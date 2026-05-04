@@ -9,7 +9,7 @@ fn backend(tempdir: &TempDir) -> LocalMemoriesBackend {
 }
 
 #[tokio::test]
-async fn list_returns_recursive_memory_paths() {
+async fn list_returns_shallow_memory_paths() {
     let tempdir = TempDir::new().expect("tempdir");
     tokio::fs::create_dir_all(tempdir.path().join("skills/example"))
         .await
@@ -41,14 +41,6 @@ async fn list_returns_recursive_memory_paths() {
                 path: "skills".to_string(),
                 entry_type: MemoryEntryType::Directory,
             },
-            MemoryEntry {
-                path: "skills/example".to_string(),
-                entry_type: MemoryEntryType::Directory,
-            },
-            MemoryEntry {
-                path: "skills/example/SKILL.md".to_string(),
-                entry_type: MemoryEntryType::File,
-            },
         ]
     );
     assert_eq!(response.next_cursor, None);
@@ -58,15 +50,18 @@ async fn list_returns_recursive_memory_paths() {
 #[tokio::test]
 async fn list_supports_pagination() {
     let tempdir = TempDir::new().expect("tempdir");
-    tokio::fs::create_dir_all(tempdir.path().join("skills/example"))
+    tokio::fs::create_dir_all(tempdir.path().join("skills"))
         .await
         .expect("create skills dir");
+    tokio::fs::create_dir_all(tempdir.path().join("rollout_summaries"))
+        .await
+        .expect("create rollout dir");
     tokio::fs::write(tempdir.path().join("MEMORY.md"), "summary")
         .await
         .expect("write memory file");
-    tokio::fs::write(tempdir.path().join("skills/example/SKILL.md"), "skill")
+    tokio::fs::write(tempdir.path().join("memory_summary.md"), "summary")
         .await
-        .expect("write skill file");
+        .expect("write memory summary");
 
     let page1 = backend(&tempdir)
         .list(ListMemoriesRequest {
@@ -84,8 +79,8 @@ async fn list_supports_pagination() {
                 entry_type: MemoryEntryType::File,
             },
             MemoryEntry {
-                path: "skills".to_string(),
-                entry_type: MemoryEntryType::Directory,
+                path: "memory_summary.md".to_string(),
+                entry_type: MemoryEntryType::File,
             },
         ]
     );
@@ -104,12 +99,12 @@ async fn list_supports_pagination() {
         page2.entries,
         vec![
             MemoryEntry {
-                path: "skills/example".to_string(),
+                path: "rollout_summaries".to_string(),
                 entry_type: MemoryEntryType::Directory,
             },
             MemoryEntry {
-                path: "skills/example/SKILL.md".to_string(),
-                entry_type: MemoryEntryType::File,
+                path: "skills".to_string(),
+                entry_type: MemoryEntryType::Directory,
             },
         ]
     );
@@ -118,21 +113,15 @@ async fn list_supports_pagination() {
 }
 
 #[tokio::test]
-async fn list_preserves_lexicographic_order_across_directories() {
+async fn list_preserves_lexicographic_order_for_siblings() {
     let tempdir = TempDir::new().expect("tempdir");
-    tokio::fs::create_dir_all(tempdir.path().join("a/nested"))
+    tokio::fs::create_dir_all(tempdir.path().join("a"))
         .await
         .expect("create a dir");
-    tokio::fs::create_dir_all(tempdir.path().join("b"))
+    tokio::fs::write(tempdir.path().join("a.txt"), "a")
         .await
-        .expect("create b dir");
-    tokio::fs::write(tempdir.path().join("a/file.txt"), "a")
-        .await
-        .expect("write a file");
-    tokio::fs::write(tempdir.path().join("a/nested/inner.txt"), "inner")
-        .await
-        .expect("write nested file");
-    tokio::fs::write(tempdir.path().join("b/file.txt"), "b")
+        .expect("write a.txt file");
+    tokio::fs::write(tempdir.path().join("b.txt"), "b")
         .await
         .expect("write b file");
 
@@ -151,13 +140,43 @@ async fn list_preserves_lexicographic_order_across_directories() {
             .iter()
             .map(|entry| entry.path.as_str())
             .collect::<Vec<_>>(),
+        vec!["a", "a.txt", "b.txt"]
+    );
+}
+
+#[tokio::test]
+async fn list_scoped_directory_is_shallow() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::create_dir_all(tempdir.path().join("skills/example"))
+        .await
+        .expect("create nested skills dir");
+    tokio::fs::write(tempdir.path().join("skills/README.md"), "readme")
+        .await
+        .expect("write skills readme");
+    tokio::fs::write(tempdir.path().join("skills/example/SKILL.md"), "skill")
+        .await
+        .expect("write nested skill file");
+
+    let response = backend(&tempdir)
+        .list(ListMemoriesRequest {
+            path: Some("skills".to_string()),
+            cursor: None,
+            max_results: DEFAULT_LIST_MAX_RESULTS,
+        })
+        .await
+        .expect("list scoped directory");
+
+    assert_eq!(
+        response.entries,
         vec![
-            "a",
-            "a/file.txt",
-            "a/nested",
-            "a/nested/inner.txt",
-            "b",
-            "b/file.txt",
+            MemoryEntry {
+                path: "skills/README.md".to_string(),
+                entry_type: MemoryEntryType::File,
+            },
+            MemoryEntry {
+                path: "skills/example".to_string(),
+                entry_type: MemoryEntryType::Directory,
+            },
         ]
     );
 }

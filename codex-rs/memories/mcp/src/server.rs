@@ -189,7 +189,9 @@ pub async fn run_stdio_server(codex_home: &AbsolutePathBuf) -> anyhow::Result<()
 fn list_tool() -> Tool {
     let mut tool = Tool::new(
         Cow::Borrowed(LIST_TOOL_NAME),
-        Cow::Borrowed("List files and directories under the Codex memories store."),
+        Cow::Borrowed(
+            "List immediate files and directories under a path in the Codex memories store.",
+        ),
         Arc::new(schema::list_input_schema()),
     );
     tool.output_schema = Some(Arc::new(schema::list_output_schema()));
