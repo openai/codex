@@ -14,17 +14,15 @@ use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::sleep;
 use tokio::time::timeout;
+use wiremock::MockServer;
 
 use super::connection_handling_websocket::DEFAULT_READ_TIMEOUT;
 use super::connection_handling_websocket::create_config_toml;
 
 #[tokio::test]
 async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Result<()> {
-    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let (_server, mut mcp) = initialized_mcp(codex_home.path()).await?;
 
     let process_handle = "one-shot-1".to_string();
     let probe_file = codex_home.path().join("process-created");
@@ -73,16 +71,10 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
     ]);
     let spawn_request_id = mcp
         .send_process_spawn_request(ProcessSpawnParams {
-            command,
-            process_handle: process_handle.clone(),
-            cwd: AbsolutePathBuf::try_from(codex_home.path())?,
-            tty: false,
-            stream_stdin: false,
-            stream_stdout_stderr: false,
+            env: Some(env),
             output_bytes_cap: Some(None),
             timeout_ms: Some(None),
-            env: Some(env),
-            size: None,
+            ..process_spawn_params(process_handle.clone(), codex_home.path(), command)?
         })
         .await?;
 
@@ -112,11 +104,8 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
 
 #[tokio::test]
 async fn process_spawn_reports_buffered_output_cap_reached() -> Result<()> {
-    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let (_server, mut mcp) = initialized_mcp(codex_home.path()).await?;
 
     let process_handle = "capped-one-shot-1".to_string();
     let command = if cfg!(windows) {
@@ -136,16 +125,8 @@ async fn process_spawn_reports_buffered_output_cap_reached() -> Result<()> {
     };
     let spawn_request_id = mcp
         .send_process_spawn_request(ProcessSpawnParams {
-            command,
-            process_handle: process_handle.clone(),
-            cwd: AbsolutePathBuf::try_from(codex_home.path())?,
-            tty: false,
-            stream_stdin: false,
-            stream_stdout_stderr: false,
             output_bytes_cap: Some(Some(3)),
-            timeout_ms: None,
-            env: None,
-            size: None,
+            ..process_spawn_params(process_handle.clone(), codex_home.path(), command)?
         })
         .await?;
 
@@ -172,11 +153,8 @@ async fn process_spawn_reports_buffered_output_cap_reached() -> Result<()> {
 
 #[tokio::test]
 async fn process_kill_terminates_running_process() -> Result<()> {
-    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let (_server, mut mcp) = initialized_mcp(codex_home.path()).await?;
 
     let process_handle = "sleep-process-1".to_string();
     let command = if cfg!(windows) {
@@ -191,18 +169,11 @@ async fn process_kill_terminates_running_process() -> Result<()> {
         vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()]
     };
     let spawn_request_id = mcp
-        .send_process_spawn_request(ProcessSpawnParams {
+        .send_process_spawn_request(process_spawn_params(
+            process_handle.clone(),
+            codex_home.path(),
             command,
-            process_handle: process_handle.clone(),
-            cwd: AbsolutePathBuf::try_from(codex_home.path())?,
-            tty: false,
-            stream_stdin: false,
-            stream_stdout_stderr: false,
-            output_bytes_cap: None,
-            timeout_ms: None,
-            env: None,
-            size: None,
-        })
+        )?)
         .await?;
 
     let response = mcp
@@ -229,6 +200,33 @@ async fn process_kill_terminates_running_process() -> Result<()> {
     assert!(!exited.stderr_cap_reached);
 
     Ok(())
+}
+
+async fn initialized_mcp(codex_home: &Path) -> Result<(MockServer, McpProcess)> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    create_config_toml(codex_home, &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    Ok((server, mcp))
+}
+
+fn process_spawn_params(
+    process_handle: String,
+    cwd: &Path,
+    command: Vec<String>,
+) -> Result<ProcessSpawnParams> {
+    Ok(ProcessSpawnParams {
+        command,
+        process_handle,
+        cwd: AbsolutePathBuf::try_from(cwd)?,
+        tty: false,
+        stream_stdin: false,
+        stream_stdout_stderr: false,
+        output_bytes_cap: None,
+        timeout_ms: None,
+        env: None,
+        size: None,
+    })
 }
 
 async fn read_process_exited(mcp: &mut McpProcess) -> Result<ProcessExitedNotification> {
