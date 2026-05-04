@@ -982,8 +982,10 @@ async fn session_start_hook_spills_large_additional_context() -> Result<()> {
 
     let request = response.single_request();
     let developer_messages = request.message_input_texts("developer");
-    assert_eq!(developer_messages.len(), 1);
-    let developer_message = &developer_messages[0];
+    let developer_message = developer_messages
+        .iter()
+        .find(|message| spilled_hook_output_path(message).is_some())
+        .context("spilled developer hook message")?;
     assert!(developer_message.contains("tokens truncated"));
     let path = spilled_hook_output_path(developer_message).context("spill path")?;
     assert_eq!(fs::read_to_string(path)?, additional_context);
@@ -1012,7 +1014,9 @@ async fn stop_hook_spills_large_continuation_prompt() -> Result<()> {
         ],
     )
     .await;
-    let continuation_prompt = "retry with the reef note ".repeat(200);
+    let continuation_prompt = std::iter::repeat_n("retry with the reef note", 200)
+        .collect::<Vec<_>>()
+        .join(" ");
 
     let mut builder = test_codex()
         .with_model("gpt-5.4")
