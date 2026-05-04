@@ -956,10 +956,9 @@ async fn session_start_hook_spills_large_additional_context() -> Result<()> {
         ]),
     )
     .await;
-    let additional_context = "remember the reef ".repeat(200);
+    let additional_context = "remember the reef ".repeat(800);
 
     let mut builder = test_codex()
-        .with_model("gpt-5.4")
         .with_pre_build_hook({
             let additional_context = additional_context.clone();
             move |home| {
@@ -974,7 +973,6 @@ async fn session_start_hook_spills_large_additional_context() -> Result<()> {
                 .features
                 .enable(Feature::CodexHooks)
                 .expect("test config should allow feature update");
-            config.tool_output_token_limit = Some(50);
         });
     let test = builder.build(&server).await?;
 
@@ -1014,12 +1012,11 @@ async fn stop_hook_spills_large_continuation_prompt() -> Result<()> {
         ],
     )
     .await;
-    let continuation_prompt = std::iter::repeat_n("retry with the reef note", 200)
+    let continuation_prompt = std::iter::repeat_n("retry with the reef note", 800)
         .collect::<Vec<_>>()
         .join(" ");
 
     let mut builder = test_codex()
-        .with_model("gpt-5.4")
         .with_pre_build_hook({
             let continuation_prompt = continuation_prompt.clone();
             move |home| {
@@ -1033,7 +1030,6 @@ async fn stop_hook_spills_large_continuation_prompt() -> Result<()> {
                 .features
                 .enable(Feature::CodexHooks)
                 .expect("test config should allow feature update");
-            config.tool_output_token_limit = Some(50);
         });
     let test = builder.build(&server).await?;
 

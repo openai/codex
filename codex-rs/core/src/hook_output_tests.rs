@@ -26,7 +26,6 @@ async fn small_hook_output_remains_inline() -> Result<()> {
         &codex_home,
         thread_id,
         "short".to_string(),
-        TruncationPolicy::Tokens(10),
         /*state_db*/ None,
     )
     .await;
@@ -41,16 +40,10 @@ async fn large_hook_output_spills_to_file() -> Result<()> {
     let dir = tempdir()?;
     let codex_home = AbsolutePathBuf::from_absolute_path(dir.path())?;
     let thread_id = ThreadId::new();
-    let text = "hook output ".repeat(200);
+    let text = "hook output ".repeat(1_000);
 
-    let output = cap_model_visible_hook_text(
-        &codex_home,
-        thread_id,
-        text.clone(),
-        TruncationPolicy::Tokens(20),
-        /*state_db*/ None,
-    )
-    .await;
+    let output =
+        cap_model_visible_hook_text(&codex_home, thread_id, text.clone(), /*state_db*/ None).await;
 
     assert!(output.contains("tokens truncated"));
     let path = output

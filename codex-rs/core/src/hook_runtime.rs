@@ -373,7 +373,6 @@ pub(crate) async fn record_additional_contexts(
                 &turn_context.config.codex_home,
                 sess.conversation_id,
                 additional_context,
-                turn_context.truncation_policy,
                 sess.state_db(),
             )
             .await,

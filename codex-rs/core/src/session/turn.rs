@@ -550,7 +550,6 @@ pub(crate) async fn run_turn(
                                         &turn_context.config.codex_home,
                                         sess.conversation_id,
                                         fragment.text,
-                                        turn_context.truncation_policy,
                                         sess.state_db(),
                                     )
                                     .await,

@@ -15,9 +15,10 @@ use tracing::warn;
 use uuid::Uuid;
 
 const HOOK_OUTPUTS_DIR: &str = "hook_outputs";
+const HOOK_OUTPUT_TOKEN_LIMIT: usize = 2_500;
 const HOOK_OUTPUT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 3);
 
-/// Keeps hook text within the active turn's model-visible output budget.
+/// Keeps hook text within the model-visible hook-output budget.
 ///
 /// Oversized text is written in full under `$CODEX_HOME/hook_outputs/<thread_id>/`
 /// and replaced with the same head/tail preview style used for other truncated
@@ -26,10 +27,9 @@ pub(crate) async fn cap_model_visible_hook_text(
     codex_home: &AbsolutePathBuf,
     thread_id: ThreadId,
     text: String,
-    truncation_policy: TruncationPolicy,
     state_db: Option<StateDbHandle>,
 ) -> String {
-    if text.len() <= truncation_policy.byte_budget() {
+    if approx_token_count(&text) <= HOOK_OUTPUT_TOKEN_LIMIT {
         return text;
     }
 
@@ -41,12 +41,12 @@ pub(crate) async fn cap_model_visible_hook_text(
             "failed to create hook output directory {}: {err}",
             parent.display()
         );
-        return formatted_truncate_text(&text, truncation_policy);
+        return formatted_truncate_text(&text, TruncationPolicy::Tokens(HOOK_OUTPUT_TOKEN_LIMIT));
     }
 
     if let Err(err) = fs::write(path.as_ref(), &text).await {
         warn!("failed to write hook output {}: {err}", path.display());
-        return formatted_truncate_text(&text, truncation_policy);
+        return formatted_truncate_text(&text, TruncationPolicy::Tokens(HOOK_OUTPUT_TOKEN_LIMIT));
     }
 
     let cleanup_codex_home = codex_home.clone();
@@ -56,7 +56,7 @@ pub(crate) async fn cap_model_visible_hook_text(
             warn!("failed to clean up hook outputs: {err:?}");
         }
     });
-    spilled_hook_output_preview(&text, &path, truncation_policy)
+    spilled_hook_output_preview(&text, &path)
 }
 
 fn hook_output_path(codex_home: &AbsolutePathBuf, thread_id: ThreadId) -> AbsolutePathBuf {
@@ -69,27 +69,13 @@ fn hook_output_path(codex_home: &AbsolutePathBuf, thread_id: ThreadId) -> Absolu
 /// Builds the model-visible replacement for a spilled hook output.
 ///
 /// The path footer is budgeted before truncation so adding the recovery path
-/// does not let the preview grow past the turn's configured limit.
-fn spilled_hook_output_preview(
-    text: &str,
-    path: &AbsolutePathBuf,
-    truncation_policy: TruncationPolicy,
-) -> String {
+/// does not let the preview grow past the hook-output limit.
+fn spilled_hook_output_preview(text: &str, path: &AbsolutePathBuf) -> String {
     let footer = format!("\n\nFull hook output saved to: {}", path.display());
-    let preview_policy = policy_with_footer_reserve(truncation_policy, &footer);
+    let preview_policy = TruncationPolicy::Tokens(
+        HOOK_OUTPUT_TOKEN_LIMIT.saturating_sub(approx_token_count(&footer)),
+    );
     format!("{}{footer}", formatted_truncate_text(text, preview_policy))
-}
-
-/// Reserves enough of the configured budget for the spill footer itself.
-fn policy_with_footer_reserve(policy: TruncationPolicy, footer: &str) -> TruncationPolicy {
-    match policy {
-        TruncationPolicy::Bytes(bytes) => {
-            TruncationPolicy::Bytes(bytes.saturating_sub(footer.len()))
-        }
-        TruncationPolicy::Tokens(tokens) => {
-            TruncationPolicy::Tokens(tokens.saturating_sub(approx_token_count(footer)))
-        }
-    }
 }
 
 /// Removes hook-output directories whose threads are no longer live enough to retain.
