@@ -10,6 +10,7 @@ use crate::client::http_client::ReqwestHttpClient;
 use crate::client_api::ExecServerTransportParams;
 use crate::environment_provider::DefaultEnvironmentProvider;
 use crate::environment_provider::EnvironmentProvider;
+use crate::environment_provider::EnvironmentProviderSnapshot;
 use crate::environment_provider::normalize_exec_server_url;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
@@ -72,11 +73,11 @@ impl EnvironmentManager {
 
     /// Builds a test-only manager with environment access disabled.
     pub fn disabled_for_tests(local_runtime_paths: ExecServerRuntimePaths) -> Self {
-        match Self::from_environments(
-            HashMap::new(),
-            local_runtime_paths,
-            /*default_environment*/ None,
-        ) {
+        let snapshot = EnvironmentProviderSnapshot {
+            environments: HashMap::new(),
+            default_environment_id: None,
+        };
+        match Self::from_provider_snapshot(snapshot, local_runtime_paths) {
             Ok(manager) => manager,
             Err(err) => panic!("disabled test environment manager: {err}"),
         }
@@ -105,13 +106,8 @@ impl EnvironmentManager {
         local_runtime_paths: ExecServerRuntimePaths,
     ) -> Self {
         let provider = DefaultEnvironmentProvider::new(exec_server_url);
-        let provider_environments = provider.environments(&local_runtime_paths);
-        let default_environment = provider.default_environment_id(&provider_environments);
-        match Self::from_environments(
-            provider_environments,
-            local_runtime_paths,
-            default_environment,
-        ) {
+        let snapshot = provider.snapshot(&local_runtime_paths);
+        match Self::from_provider_snapshot(snapshot, local_runtime_paths) {
             Ok(manager) => manager,
             Err(err) => panic!("default provider should create valid environments: {err}"),
         }
@@ -125,16 +121,20 @@ impl EnvironmentManager {
     where
         P: EnvironmentProvider + ?Sized,
     {
-        let environments = provider.get_environments(&local_runtime_paths).await?;
-        let default_environment = provider.default_environment_id(&environments);
-        Self::from_provider_environments(environments, local_runtime_paths, default_environment)
+        let snapshot = provider
+            .get_environment_snapshot(&local_runtime_paths)
+            .await?;
+        Self::from_provider_snapshot(snapshot, local_runtime_paths)
     }
 
-    fn from_provider_environments(
-        environments: HashMap<String, Environment>,
+    fn from_provider_snapshot(
+        snapshot: EnvironmentProviderSnapshot,
         local_runtime_paths: ExecServerRuntimePaths,
-        default_environment: Option<String>,
     ) -> Result<Self, ExecServerError> {
+        let EnvironmentProviderSnapshot {
+            environments,
+            default_environment_id,
+        } = snapshot;
         for id in environments.keys() {
             if id.is_empty() {
                 return Err(ExecServerError::Protocol(
@@ -143,15 +143,7 @@ impl EnvironmentManager {
             }
         }
 
-        Self::from_environments(environments, local_runtime_paths, default_environment)
-    }
-
-    fn from_environments(
-        environments: HashMap<String, Environment>,
-        local_runtime_paths: ExecServerRuntimePaths,
-        default_environment: Option<String>,
-    ) -> Result<Self, ExecServerError> {
-        if let Some(environment_id) = default_environment.as_ref()
+        if let Some(environment_id) = default_environment_id.as_ref()
             && !environments.contains_key(environment_id)
         {
             return Err(ExecServerError::Protocol(format!(
@@ -165,7 +157,7 @@ impl EnvironmentManager {
             .collect();
 
         Ok(Self {
-            default_environment,
+            default_environment: default_environment_id,
             environments,
             local_environment,
         })
@@ -441,15 +433,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn environment_manager_builds_from_provider_environments() {
-        let manager = EnvironmentManager::from_environments(
-            HashMap::from([(
-                REMOTE_ENVIRONMENT_ID.to_string(),
-                Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
-                    .expect("remote environment"),
-            )]),
+    async fn environment_manager_builds_from_provider_snapshot() {
+        let manager = EnvironmentManager::from_provider_snapshot(
+            EnvironmentProviderSnapshot {
+                environments: HashMap::from([(
+                    REMOTE_ENVIRONMENT_ID.to_string(),
+                    Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
+                        .expect("remote environment"),
+                )]),
+                default_environment_id: Some(REMOTE_ENVIRONMENT_ID.to_string()),
+            },
             test_runtime_paths(),
-            Some(REMOTE_ENVIRONMENT_ID.to_string()),
         )
         .expect("environment manager");
 
@@ -469,10 +463,12 @@ mod tests {
 
     #[tokio::test]
     async fn environment_manager_rejects_empty_environment_id() {
-        let err = EnvironmentManager::from_provider_environments(
-            HashMap::from([("".to_string(), Environment::default_for_tests())]),
+        let err = EnvironmentManager::from_provider_snapshot(
+            EnvironmentProviderSnapshot {
+                environments: HashMap::from([("".to_string(), Environment::default_for_tests())]),
+                default_environment_id: None,
+            },
             test_runtime_paths(),
-            /*default_environment*/ None,
         )
         .expect_err("empty id should fail");
 
@@ -484,20 +480,22 @@ mod tests {
 
     #[tokio::test]
     async fn environment_manager_uses_explicit_provider_default() {
-        let manager = EnvironmentManager::from_provider_environments(
-            HashMap::from([
-                (
-                    LOCAL_ENVIRONMENT_ID.to_string(),
-                    Environment::default_for_tests(),
-                ),
-                (
-                    "devbox".to_string(),
-                    Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
-                        .expect("remote environment"),
-                ),
-            ]),
+        let manager = EnvironmentManager::from_provider_snapshot(
+            EnvironmentProviderSnapshot {
+                environments: HashMap::from([
+                    (
+                        LOCAL_ENVIRONMENT_ID.to_string(),
+                        Environment::default_for_tests(),
+                    ),
+                    (
+                        "devbox".to_string(),
+                        Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
+                            .expect("remote environment"),
+                    ),
+                ]),
+                default_environment_id: Some("devbox".to_string()),
+            },
             test_runtime_paths(),
-            Some("devbox".to_string()),
         )
         .expect("manager");
 
@@ -507,13 +505,15 @@ mod tests {
 
     #[tokio::test]
     async fn environment_manager_disables_provider_default() {
-        let manager = EnvironmentManager::from_provider_environments(
-            HashMap::from([(
-                LOCAL_ENVIRONMENT_ID.to_string(),
-                Environment::default_for_tests(),
-            )]),
+        let manager = EnvironmentManager::from_provider_snapshot(
+            EnvironmentProviderSnapshot {
+                environments: HashMap::from([(
+                    LOCAL_ENVIRONMENT_ID.to_string(),
+                    Environment::default_for_tests(),
+                )]),
+                default_environment_id: None,
+            },
             test_runtime_paths(),
-            /*default_environment*/ None,
         )
         .expect("manager");
 
@@ -524,13 +524,15 @@ mod tests {
 
     #[tokio::test]
     async fn environment_manager_rejects_unknown_provider_default() {
-        let err = EnvironmentManager::from_provider_environments(
-            HashMap::from([(
-                LOCAL_ENVIRONMENT_ID.to_string(),
-                Environment::default_for_tests(),
-            )]),
+        let err = EnvironmentManager::from_provider_snapshot(
+            EnvironmentProviderSnapshot {
+                environments: HashMap::from([(
+                    LOCAL_ENVIRONMENT_ID.to_string(),
+                    Environment::default_for_tests(),
+                )]),
+                default_environment_id: Some("missing".to_string()),
+            },
             test_runtime_paths(),
-            Some("missing".to_string()),
         )
         .expect_err("unknown default should fail");
 
