@@ -22,16 +22,12 @@ pub trait EnvironmentProvider: Send + Sync {
         local_runtime_paths: &ExecServerRuntimePaths,
     ) -> Result<HashMap<String, Environment>, ExecServerError>;
 
-    fn default_environment_selection(&self) -> DefaultEnvironmentSelection {
-        DefaultEnvironmentSelection::Derived
+    fn default_environment_id(
+        &self,
+        environments: &HashMap<String, Environment>,
+    ) -> Option<String> {
+        derived_default_environment_id(environments)
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DefaultEnvironmentSelection {
-    Derived,
-    Environment(String),
-    Disabled,
 }
 
 /// Default provider backed by `CODEX_EXEC_SERVER_URL`.
@@ -81,12 +77,25 @@ impl EnvironmentProvider for DefaultEnvironmentProvider {
         Ok(self.environments(local_runtime_paths))
     }
 
-    fn default_environment_selection(&self) -> DefaultEnvironmentSelection {
+    fn default_environment_id(
+        &self,
+        environments: &HashMap<String, Environment>,
+    ) -> Option<String> {
         if normalize_exec_server_url(self.exec_server_url.clone()).1 {
-            DefaultEnvironmentSelection::Disabled
+            None
         } else {
-            DefaultEnvironmentSelection::Derived
+            derived_default_environment_id(environments)
         }
+    }
+}
+
+fn derived_default_environment_id(environments: &HashMap<String, Environment>) -> Option<String> {
+    if environments.contains_key(REMOTE_ENVIRONMENT_ID) {
+        Some(REMOTE_ENVIRONMENT_ID.to_string())
+    } else if environments.contains_key(LOCAL_ENVIRONMENT_ID) {
+        Some(LOCAL_ENVIRONMENT_ID.to_string())
+    } else {
+        None
     }
 }
 
@@ -154,10 +163,7 @@ mod tests {
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
         assert!(!environments.contains_key(REMOTE_ENVIRONMENT_ID));
-        assert_eq!(
-            provider.default_environment_selection(),
-            DefaultEnvironmentSelection::Disabled
-        );
+        assert_eq!(provider.default_environment_id(&environments), None);
     }
 
     #[tokio::test]

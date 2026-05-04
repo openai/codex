@@ -9,7 +9,6 @@ use crate::client::LazyRemoteExecServerClient;
 use crate::client::http_client::ReqwestHttpClient;
 use crate::client_api::ExecServerTransportParams;
 use crate::environment_provider::DefaultEnvironmentProvider;
-use crate::environment_provider::DefaultEnvironmentSelection;
 use crate::environment_provider::EnvironmentProvider;
 use crate::environment_provider::normalize_exec_server_url;
 use crate::local_file_system::LocalFileSystem;
@@ -76,7 +75,7 @@ impl EnvironmentManager {
         match Self::from_environments(
             HashMap::new(),
             local_runtime_paths,
-            DefaultEnvironmentSelection::Disabled,
+            /*default_environment*/ None,
         ) {
             Ok(manager) => manager,
             Err(err) => panic!("disabled test environment manager: {err}"),
@@ -107,10 +106,11 @@ impl EnvironmentManager {
     ) -> Self {
         let provider = DefaultEnvironmentProvider::new(exec_server_url);
         let provider_environments = provider.environments(&local_runtime_paths);
+        let default_environment = provider.default_environment_id(&provider_environments);
         match Self::from_environments(
             provider_environments,
             local_runtime_paths,
-            provider.default_environment_selection(),
+            default_environment,
         ) {
             Ok(manager) => manager,
             Err(err) => panic!("default provider should create valid environments: {err}"),
@@ -125,17 +125,15 @@ impl EnvironmentManager {
     where
         P: EnvironmentProvider + ?Sized,
     {
-        Self::from_provider_environments(
-            provider.get_environments(&local_runtime_paths).await?,
-            local_runtime_paths,
-            provider.default_environment_selection(),
-        )
+        let environments = provider.get_environments(&local_runtime_paths).await?;
+        let default_environment = provider.default_environment_id(&environments);
+        Self::from_provider_environments(environments, local_runtime_paths, default_environment)
     }
 
     fn from_provider_environments(
         environments: HashMap<String, Environment>,
         local_runtime_paths: ExecServerRuntimePaths,
-        default_selection: DefaultEnvironmentSelection,
+        default_environment: Option<String>,
     ) -> Result<Self, ExecServerError> {
         for id in environments.keys() {
             if id.is_empty() {
@@ -145,36 +143,21 @@ impl EnvironmentManager {
             }
         }
 
-        Self::from_environments(environments, local_runtime_paths, default_selection)
+        Self::from_environments(environments, local_runtime_paths, default_environment)
     }
 
     fn from_environments(
         environments: HashMap<String, Environment>,
         local_runtime_paths: ExecServerRuntimePaths,
-        default_selection: DefaultEnvironmentSelection,
+        default_environment: Option<String>,
     ) -> Result<Self, ExecServerError> {
-        // TODO: Stop deriving a default environment here once omitted
-        // environment attachment is owned by thread/session setup.
-        let default_environment = match default_selection {
-            DefaultEnvironmentSelection::Derived => {
-                if environments.contains_key(REMOTE_ENVIRONMENT_ID) {
-                    Some(REMOTE_ENVIRONMENT_ID.to_string())
-                } else if environments.contains_key(LOCAL_ENVIRONMENT_ID) {
-                    Some(LOCAL_ENVIRONMENT_ID.to_string())
-                } else {
-                    None
-                }
-            }
-            DefaultEnvironmentSelection::Environment(environment_id) => {
-                if !environments.contains_key(&environment_id) {
-                    return Err(ExecServerError::Protocol(format!(
-                        "default environment `{environment_id}` is not configured"
-                    )));
-                }
-                Some(environment_id)
-            }
-            DefaultEnvironmentSelection::Disabled => None,
-        };
+        if let Some(environment_id) = default_environment.as_ref()
+            && !environments.contains_key(environment_id)
+        {
+            return Err(ExecServerError::Protocol(format!(
+                "default environment `{environment_id}` is not configured"
+            )));
+        }
         let local_environment = Arc::new(Environment::local(local_runtime_paths));
         let environments = environments
             .into_iter()
@@ -360,7 +343,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use super::DefaultEnvironmentSelection;
     use super::Environment;
     use super::EnvironmentManager;
     use super::LOCAL_ENVIRONMENT_ID;
@@ -467,7 +449,7 @@ mod tests {
                     .expect("remote environment"),
             )]),
             test_runtime_paths(),
-            DefaultEnvironmentSelection::Derived,
+            Some(REMOTE_ENVIRONMENT_ID.to_string()),
         )
         .expect("environment manager");
 
@@ -490,7 +472,7 @@ mod tests {
         let err = EnvironmentManager::from_provider_environments(
             HashMap::from([("".to_string(), Environment::default_for_tests())]),
             test_runtime_paths(),
-            DefaultEnvironmentSelection::Derived,
+            /*default_environment*/ None,
         )
         .expect_err("empty id should fail");
 
@@ -515,7 +497,7 @@ mod tests {
                 ),
             ]),
             test_runtime_paths(),
-            DefaultEnvironmentSelection::Environment("devbox".to_string()),
+            Some("devbox".to_string()),
         )
         .expect("manager");
 
@@ -531,7 +513,7 @@ mod tests {
                 Environment::default_for_tests(),
             )]),
             test_runtime_paths(),
-            DefaultEnvironmentSelection::Disabled,
+            /*default_environment*/ None,
         )
         .expect("manager");
 
@@ -548,7 +530,7 @@ mod tests {
                 Environment::default_for_tests(),
             )]),
             test_runtime_paths(),
-            DefaultEnvironmentSelection::Environment("missing".to_string()),
+            Some("missing".to_string()),
         )
         .expect_err("unknown default should fail");
 
