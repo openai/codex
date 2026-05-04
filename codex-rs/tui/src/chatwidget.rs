@@ -182,7 +182,10 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Text;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
@@ -204,6 +207,7 @@ const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 const PET_SELECTION_LOADING_VIEW_ID: &str = "pet-selection-loading";
+const AMBIENT_PET_WRAP_GAP_COLUMNS: u16 = 2;
 const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
 
 /// Choose the keybinding used to edit the most-recently queued message.
@@ -6369,6 +6373,23 @@ impl ChatWidget {
         })?
     }
 
+    fn ambient_pet_wrap_reserved_cols(&self) -> u16 {
+        self.ambient_pet
+            .as_ref()
+            .filter(|pet| pet.image_enabled())
+            .map(|pet| {
+                pet.image_columns()
+                    .saturating_add(AMBIENT_PET_WRAP_GAP_COLUMNS)
+            })
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn history_wrap_width(&self, width: u16) -> u16 {
+        width
+            .saturating_sub(self.ambient_pet_wrap_reserved_cols())
+            .max(1)
+    }
+
     pub(crate) fn pet_picker_preview_draw(
         &self,
         _terminal_area: Rect,
@@ -10058,6 +10079,8 @@ impl ChatWidget {
             if width == 0 {
                 None
             } else {
+                let width = u16::try_from(width).unwrap_or(u16::MAX);
+                let width = usize::from(self.history_wrap_width(width));
                 Some(crate::width::usable_content_width(width, reserved_cols).unwrap_or(1))
             }
         })
@@ -10688,17 +10711,22 @@ impl ChatWidget {
     }
 
     fn as_renderable(&self) -> RenderableItem<'_> {
+        let active_cell_right_reserve = self.ambient_pet_wrap_reserved_cols();
         let active_cell_renderable = match &self.transcript.active_cell {
-            Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(
-                /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
-            )),
+            Some(cell) => RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
+                child: cell.as_ref(),
+                top: 1,
+                right: active_cell_right_reserve,
+            })),
             None => RenderableItem::Owned(Box::new(())),
         };
         let active_hook_cell_renderable = match &self.active_hook_cell {
             Some(cell) if cell.should_render() => {
-                RenderableItem::Borrowed(cell).inset(Insets::tlbr(
-                    /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
-                ))
+                RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
+                    child: cell,
+                    top: 1,
+                    right: active_cell_right_reserve,
+                }))
             }
             _ => RenderableItem::Owned(Box::new(())),
         };
@@ -10712,6 +10740,48 @@ impl ChatWidget {
             )),
         );
         RenderableItem::Owned(Box::new(flex))
+    }
+}
+
+struct TranscriptAreaRenderable<'a> {
+    child: &'a dyn HistoryCell,
+    top: u16,
+    right: u16,
+}
+
+impl Renderable for TranscriptAreaRenderable<'_> {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let area = self.child_area(area);
+        let lines = self.child.display_lines(area.width);
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+        let y = if area.height == 0 {
+            0
+        } else {
+            let overflow = paragraph
+                .line_count(area.width)
+                .saturating_sub(usize::from(area.height));
+            u16::try_from(overflow).unwrap_or(u16::MAX)
+        };
+        Clear.render(area, buf);
+        paragraph.scroll((y, 0)).render(area, buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        let child_width = width.saturating_sub(self.right).max(1);
+        HistoryCell::desired_height(self.child, child_width) + self.top
+    }
+}
+
+impl TranscriptAreaRenderable<'_> {
+    fn child_area(&self, area: Rect) -> Rect {
+        let y = area.y.saturating_add(self.top);
+        let height = area.height.saturating_sub(self.top);
+        Rect::new(
+            area.x,
+            y,
+            area.width.saturating_sub(self.right).max(1),
+            height,
+        )
     }
 }
 

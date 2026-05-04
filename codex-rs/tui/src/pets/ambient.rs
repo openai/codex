@@ -197,6 +197,10 @@ impl AmbientPet {
         self.support.protocol().is_some()
     }
 
+    pub(crate) fn image_columns(&self) -> u16 {
+        self.image_size().columns
+    }
+
     #[cfg(test)]
     pub(crate) fn set_image_support_for_tests(&mut self, support: PetImageSupport) {
         self.support = support;

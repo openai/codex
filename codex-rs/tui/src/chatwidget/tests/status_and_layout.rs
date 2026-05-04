@@ -1,6 +1,7 @@
 use super::*;
 use crate::bottom_pane::goal_status_indicator_line;
 use pretty_assertions::assert_eq;
+use ratatui::backend::TestBackend;
 use serial_test::serial;
 
 fn force_pet_image_support(chat: &mut ChatWidget) {
@@ -1433,6 +1434,74 @@ async fn ambient_pet_can_be_disabled() {
     chat.set_tui_pet(Some(crate::pets::DISABLED_PET_ID.to_string()));
 
     assert!(chat.ambient_pet.is_none());
+}
+
+#[tokio::test]
+#[serial]
+async fn ambient_pet_reserves_history_wrap_width() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    force_pet_image_support(&mut chat);
+
+    assert_eq!(chat.history_wrap_width(/*width*/ 80), 69);
+
+    chat.set_tui_pet(Some(crate::pets::DISABLED_PET_ID.to_string()));
+
+    assert_eq!(chat.history_wrap_width(/*width*/ 80), 80);
+}
+
+#[tokio::test]
+#[serial]
+async fn ambient_pet_reduces_stream_width_without_changing_composer_rendering() {
+    use ratatui::Terminal;
+
+    let (mut with_pet, _with_pet_rx, _with_pet_op_rx) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    force_pet_image_support(&mut with_pet);
+    with_pet.last_rendered_width.set(Some(80));
+    let stream_width_with_pet = with_pet.current_stream_width(/*reserved_cols*/ 2);
+
+    let (mut disabled, _disabled_rx, _disabled_op_rx) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    disabled.set_tui_pet(Some(crate::pets::DISABLED_PET_ID.to_string()));
+    disabled.last_rendered_width.set(Some(80));
+    let stream_width_without_pet = disabled.current_stream_width(/*reserved_cols*/ 2);
+
+    assert_eq!(
+        stream_width_with_pet,
+        crate::width::usable_content_width(/*total_width*/ 69, /*reserved_cols*/ 2)
+    );
+    assert_eq!(
+        stream_width_without_pet,
+        crate::width::usable_content_width(/*total_width*/ 80, /*reserved_cols*/ 2)
+    );
+    assert!(stream_width_with_pet < stream_width_without_pet);
+
+    with_pet.bottom_pane.set_composer_text(
+        "same composer draft".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    disabled.bottom_pane.set_composer_text(
+        "same composer draft".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+
+    let mut with_pet_terminal =
+        Terminal::new(TestBackend::new(/*width*/ 80, /*height*/ 5)).expect("create terminal");
+    with_pet_terminal
+        .draw(|f| with_pet.render(f.area(), f.buffer_mut()))
+        .expect("draw pet-enabled chat");
+    let mut disabled_terminal =
+        Terminal::new(TestBackend::new(/*width*/ 80, /*height*/ 5)).expect("create terminal");
+    disabled_terminal
+        .draw(|f| disabled.render(f.area(), f.buffer_mut()))
+        .expect("draw disabled-pet chat");
+
+    assert_eq!(
+        normalized_backend_snapshot(with_pet_terminal.backend()),
+        normalized_backend_snapshot(disabled_terminal.backend())
+    );
 }
 
 #[tokio::test]
