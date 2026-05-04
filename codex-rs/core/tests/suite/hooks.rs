@@ -3090,6 +3090,77 @@ async fn post_tool_use_exit_two_replaces_one_shot_exec_command_output_with_feedb
 }
 
 #[tokio::test]
+async fn post_tool_use_spills_large_feedback_message() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "posttooluse-large-feedback";
+    let command = "printf post-hook-output".to_string();
+    let args = serde_json::json!({ "cmd": command, "tty": false });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "exec_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "post hook blocked the exec result"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let feedback = "blocked by post hook ".repeat(800);
+
+    let mut builder = test_codex()
+        .with_pre_build_hook({
+            let feedback = feedback.clone();
+            move |home| {
+                if let Err(error) =
+                    write_post_tool_use_hook(home, Some("^Bash$"), "exit_2", &feedback)
+                {
+                    panic!("failed to write post tool use hook test fixture: {error}");
+                }
+            }
+        })
+        .with_config(|config| {
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run the exec command with long post-hook feedback")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("exec command output string");
+    assert!(output.contains("tokens truncated"));
+    let path = spilled_hook_output_path(output).context("spill path")?;
+    assert_eq!(fs::read_to_string(path)?, feedback.trim());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_windows!(Ok(()));

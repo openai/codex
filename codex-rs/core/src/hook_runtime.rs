@@ -33,7 +33,6 @@ use serde_json::Value;
 use crate::context::ContextualUserFragment;
 use crate::context::HookAdditionalContext;
 use crate::event_mapping::parse_turn_item;
-use crate::hook_output::cap_model_visible_hook_text;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
@@ -366,20 +365,7 @@ pub(crate) async fn record_additional_contexts(
     turn_context: &Arc<TurnContext>,
     additional_contexts: Vec<String>,
 ) {
-    let mut capped_additional_contexts = Vec::with_capacity(additional_contexts.len());
-    for additional_context in additional_contexts {
-        capped_additional_contexts.push(
-            cap_model_visible_hook_text(
-                &turn_context.config.codex_home,
-                sess.conversation_id,
-                additional_context,
-                sess.state_db(),
-            )
-            .await,
-        );
-    }
-
-    let developer_messages = additional_context_messages(capped_additional_contexts);
+    let developer_messages = additional_context_messages(additional_contexts);
     if developer_messages.is_empty() {
         return;
     }
