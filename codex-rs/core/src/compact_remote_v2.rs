@@ -347,10 +347,7 @@ fn is_retained_for_remote_compaction_v2(item: &ResponseItem) -> bool {
         return false;
     };
 
-    match role.as_str() {
-        "user" | "developer" | "system" => true,
-        _ => false,
-    }
+    matches!(role.as_str(), "user" | "developer" | "system")
 }
 
 #[cfg(test)]
