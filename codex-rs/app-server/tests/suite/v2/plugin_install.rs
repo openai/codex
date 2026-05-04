@@ -8,6 +8,7 @@ use anyhow::bail;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::McpProcess;
+use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::start_analytics_events_server;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
@@ -27,6 +28,7 @@ use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadStartParams;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use flate2::Compression;
@@ -1085,6 +1087,89 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
     Ok(())
 }
 
+#[tokio::test]
+async fn plugin_install_upgrades_while_plugin_mcp_server_holds_old_version_cwd() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    write_plugins_enabled_config_with_base_url_and_enabled_plugin(
+        codex_home.path(),
+        &server.uri(),
+        "sample-plugin@debug",
+    )?;
+    write_installed_plugin_with_stdio_mcp(codex_home.path(), "debug", "sample-plugin", "1.0.0")?;
+
+    let repo_root = TempDir::new()?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "debug",
+        "sample-plugin",
+        "./sample-plugin",
+        /*install_policy*/ None,
+        /*auth_policy*/ None,
+    )?;
+    write_plugin_source_with_version(repo_root.path(), "sample-plugin", "2.0.0")?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: serde_json::Value = to_response(response)?;
+
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_matching_notification("sample-mcp ready", |notification| {
+            notification.method == "mcpServer/startupStatus/updated"
+                && notification
+                    .params
+                    .as_ref()
+                    .and_then(|params| params.get("name"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("sample-mcp")
+                && notification
+                    .params
+                    .as_ref()
+                    .and_then(|params| params.get("status"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("ready")
+        }),
+    )
+    .await??;
+
+    let request_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            marketplace_path: Some(marketplace_path),
+            remote_marketplace_name: None,
+            plugin_name: "sample-plugin".to_string(),
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginInstallResponse = to_response(response)?;
+    assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
+
+    let plugin_base = codex_home.path().join("plugins/cache/debug/sample-plugin");
+    assert!(plugin_base.join("1.0.0").is_dir());
+    assert!(plugin_base.join("2.0.0").is_dir());
+    assert_eq!(
+        std::fs::read_to_string(plugin_base.join(".active-version"))?,
+        "2.0.0\n"
+    );
+
+    Ok(())
+}
+
 #[derive(Clone)]
 struct AppsServerState {
     response: Arc<StdMutex<serde_json::Value>>,
@@ -1243,6 +1328,36 @@ fn write_plugins_enabled_config_with_base_url(
 
 [features]
 plugins = true
+"#,
+        ),
+    )
+}
+
+fn write_plugins_enabled_config_with_base_url_and_enabled_plugin(
+    codex_home: &std::path::Path,
+    base_url: &str,
+    plugin_key: &str,
+) -> std::io::Result<()> {
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"model = "mock-model"
+sandbox_mode = "read-only"
+chatgpt_base_url = "{base_url}"
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{base_url}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+
+[features]
+plugins = true
+
+[plugins."{plugin_key}"]
+enabled = true
 "#,
         ),
     )
@@ -1570,6 +1685,107 @@ fn write_plugin_source(
     std::fs::write(
         plugin_root.join(".app.json"),
         serde_json::to_vec_pretty(&json!({ "apps": apps }))?,
+    )?;
+    Ok(())
+}
+
+fn write_plugin_source_with_version(
+    repo_root: &std::path::Path,
+    plugin_name: &str,
+    plugin_version: &str,
+) -> Result<()> {
+    write_plugin_source(repo_root, plugin_name, &[])?;
+    std::fs::write(
+        repo_root
+            .join(plugin_name)
+            .join(".codex-plugin/plugin.json"),
+        format!(r#"{{"name":"{plugin_name}","version":"{plugin_version}"}}"#),
+    )?;
+    Ok(())
+}
+
+fn write_installed_plugin_with_stdio_mcp(
+    codex_home: &std::path::Path,
+    marketplace_name: &str,
+    plugin_name: &str,
+    plugin_version: &str,
+) -> Result<()> {
+    let plugin_root = codex_home
+        .join("plugins/cache")
+        .join(marketplace_name)
+        .join(plugin_name)
+        .join(plugin_version);
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        format!(r#"{{"name":"{plugin_name}","version":"{plugin_version}"}}"#),
+    )?;
+
+    std::fs::write(
+        plugin_root.join("mcp_server.py"),
+        r#"
+import json
+import sys
+
+
+def read_message():
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            return None
+        line = line.strip()
+        if not line:
+            continue
+        return json.loads(line)
+
+
+def write_message(payload):
+    print(json.dumps(payload, separators=(",", ":")), flush=True)
+
+
+while True:
+    message = read_message()
+    if message is None:
+        break
+    if "id" not in message:
+        continue
+
+    method = message.get("method")
+    if method == "initialize":
+        params = message.get("params") or {}
+        result = {
+            "protocolVersion": params.get("protocolVersion", "2024-11-05"),
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "sample-python-mcp", "version": "1.0.0"},
+        }
+    elif method == "tools/list":
+        result = {"tools": []}
+    elif method == "resources/list":
+        result = {"resources": []}
+    elif method == "resources/templates/list":
+        result = {"resourceTemplates": []}
+    elif method == "prompts/list":
+        result = {"prompts": []}
+    else:
+        result = {}
+
+    write_message({"jsonrpc": "2.0", "id": message["id"], "result": result})
+"#,
+    )?;
+
+    let default_python = if cfg!(windows) { "python" } else { "python3" };
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| default_python.to_string());
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        serde_json::to_vec_pretty(&json!({
+            "mcpServers": {
+                "sample-mcp": {
+                    "command": python,
+                    "args": ["mcp_server.py"],
+                    "cwd": "."
+                }
+            }
+        }))?,
     )?;
     Ok(())
 }
