@@ -481,10 +481,6 @@ pub fn read_codex_access_token_from_env() -> Option<String> {
     read_non_empty_env_var(CODEX_ACCESS_TOKEN_ENV_VAR)
 }
 
-pub fn read_codex_agent_identity_from_env() -> Option<String> {
-    read_codex_access_token_from_env()
-}
-
 fn read_non_empty_env_var(key: &str) -> Option<String> {
     env::var(key)
         .ok()
@@ -565,21 +561,6 @@ pub async fn login_with_access_token(
         agent_identity: Some(access_token.to_string()),
     };
     save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
-}
-
-pub async fn login_with_agent_identity(
-    codex_home: &Path,
-    agent_identity: &str,
-    auth_credentials_store_mode: AuthCredentialsStoreMode,
-    chatgpt_base_url: Option<&str>,
-) -> std::io::Result<()> {
-    login_with_access_token(
-        codex_home,
-        agent_identity,
-        auth_credentials_store_mode,
-        chatgpt_base_url,
-    )
-    .await
 }
 
 /// Writes an in-memory auth payload for externally managed ChatGPT tokens.
