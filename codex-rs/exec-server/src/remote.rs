@@ -53,7 +53,11 @@ impl ExecutorRegistryClient {
         &self,
         request: &ExecutorRegistryRegisterExecutorRequest,
     ) -> Result<ExecutorRegistryExecutorRegistrationResponse, ExecServerError> {
-        self.post_json("/api/remote/executor", request).await
+        self.post_json(
+            &format!("/cloud/executor/{}/register", request.executor_id),
+            request,
+        )
+        .await
     }
 
     async fn post_json<T, R>(&self, path: &str, request: &T) -> Result<R, ExecServerError>
@@ -343,7 +347,7 @@ mod tests {
         let request = config.registration_request(registration_id);
         let expected_request = serde_json::to_value(&request).expect("serialize request");
         Mock::given(method("POST"))
-            .and(path("/api/remote/executor"))
+            .and(path("/cloud/executor/exec-requested/register"))
             .and(header("authorization", "Bearer registry-token"))
             .and(body_json(expected_request))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
