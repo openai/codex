@@ -241,6 +241,61 @@ fn unix_socket_policy(proxy: &ProxyPolicyInputs) -> String {
     policy
 }
 
+fn seatbelt_string_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn extra_mach_lookup_policy(extra_mach_services: &[String]) -> String {
+    let services = extra_mach_services
+        .iter()
+        .map(|service| service.trim())
+        .filter(|service| !service.is_empty())
+        .collect::<BTreeSet<_>>();
+    if services.is_empty() {
+        return String::new();
+    }
+
+    let services = services
+        .into_iter()
+        .map(|service| format!("  (global-name \"{}\")", seatbelt_string_literal(service)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("(allow mach-lookup\n{services}\n)")
+}
+
+fn extra_appleevent_policy(extra_appleevent_bundle_ids: &[String]) -> String {
+    let bundle_ids = extra_appleevent_bundle_ids
+        .iter()
+        .map(|bundle_id| bundle_id.trim())
+        .filter(|bundle_id| !bundle_id.is_empty())
+        .collect::<BTreeSet<_>>();
+    if bundle_ids.is_empty() {
+        return String::new();
+    }
+
+    let destinations = bundle_ids
+        .into_iter()
+        .map(|bundle_id| {
+            format!(
+                "  (appleevent-destination \"{}\")",
+                seatbelt_string_literal(bundle_id)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "(allow mach-lookup\n  (global-name \"com.apple.coreservices.appleevents\"))\n(allow appleevent-send\n{destinations}\n)"
+    )
+}
+
+fn lsopen_policy(allow_lsopen: bool) -> String {
+    if allow_lsopen {
+        "(allow lsopen)".to_string()
+    } else {
+        String::new()
+    }
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 fn dynamic_network_policy(
     sandbox_policy: &SandboxPolicy,
@@ -584,6 +639,9 @@ fn create_seatbelt_command_args_for_legacy_policy(
         sandbox_policy_cwd,
         enforce_managed_network,
         network,
+        extra_mach_services: &[],
+        extra_appleevent_bundle_ids: &[],
+        allow_lsopen: false,
         extra_allow_unix_sockets: &[],
     })
 }
@@ -596,6 +654,9 @@ pub struct CreateSeatbeltCommandArgsParams<'a> {
     pub sandbox_policy_cwd: &'a Path,
     pub enforce_managed_network: bool,
     pub network: Option<&'a NetworkProxy>,
+    pub extra_mach_services: &'a [String],
+    pub extra_appleevent_bundle_ids: &'a [String],
+    pub allow_lsopen: bool,
     pub extra_allow_unix_sockets: &'a [AbsolutePathBuf],
 }
 
@@ -607,6 +668,9 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
         sandbox_policy_cwd,
         enforce_managed_network,
         network,
+        extra_mach_services,
+        extra_appleevent_bundle_ids,
+        allow_lsopen,
         extra_allow_unix_sockets,
     } = args;
 
@@ -704,6 +768,9 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
     let proxy = proxy_policy_inputs(network, extra_allow_unix_sockets);
     let network_policy =
         dynamic_network_policy_for_network(network_sandbox_policy, enforce_managed_network, &proxy);
+    let mach_lookup_policy = extra_mach_lookup_policy(extra_mach_services);
+    let appleevent_policy = extra_appleevent_policy(extra_appleevent_bundle_ids);
+    let lsopen_policy = lsopen_policy(allow_lsopen);
 
     let include_platform_defaults = file_system_sandbox_policy.include_platform_defaults();
     let deny_read_policy =
@@ -715,6 +782,15 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
         deny_read_policy,
         network_policy,
     ];
+    if !mach_lookup_policy.is_empty() {
+        policy_sections.push(mach_lookup_policy);
+    }
+    if !appleevent_policy.is_empty() {
+        policy_sections.push(appleevent_policy);
+    }
+    if !lsopen_policy.is_empty() {
+        policy_sections.push(lsopen_policy);
+    }
     if include_platform_defaults {
         policy_sections.push(MACOS_RESTRICTED_READ_ONLY_PLATFORM_DEFAULTS.to_string());
     }
