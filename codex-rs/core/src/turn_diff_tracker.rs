@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use sha1::digest::Output;
 
 use codex_apply_patch::ApplyPatchAction;
+use codex_apply_patch::ApplyPatchChange;
 use codex_apply_patch::ApplyPatchFileChange;
 
 const ZERO_OID: &str = "0000000000000000000000000000000000000000";
@@ -34,8 +35,8 @@ impl TurnDiffTracker {
     }
 
     pub fn track_successful_patch(&mut self, action: &ApplyPatchAction) {
-        for (source_path, change) in action.iter_changes() {
-            self.apply_change(source_path, change);
+        for change in action.ordered_changes() {
+            self.apply_change(change);
         }
     }
 
@@ -80,26 +81,29 @@ impl TurnDiffTracker {
         (!aggregated.is_empty()).then_some(aggregated)
     }
 
-    fn apply_change(&mut self, source_path: &Path, change: &ApplyPatchFileChange) {
-        match change {
-            ApplyPatchFileChange::Add {
-                content,
-                overwritten_content,
-            } => self.apply_add(source_path, content, overwritten_content.as_deref()),
+    fn apply_change(&mut self, change: &ApplyPatchChange) {
+        let source_path = change.path();
+        match change.change() {
+            ApplyPatchFileChange::Add { content } => {
+                self.apply_add(source_path, content, change.pre_change_content())
+            }
             ApplyPatchFileChange::Delete { content } => self.apply_delete(source_path, content),
             ApplyPatchFileChange::Update {
                 move_path,
-                old_content,
-                overwritten_move_content,
                 new_content,
                 ..
-            } => self.apply_update(
-                source_path,
-                move_path.as_deref(),
-                old_content,
-                overwritten_move_content.as_deref(),
-                new_content,
-            ),
+            } => {
+                let Some(old_content) = change.pre_change_content() else {
+                    return;
+                };
+                self.apply_update(
+                    source_path,
+                    move_path.as_deref(),
+                    old_content,
+                    change.overwritten_move_content(),
+                    new_content,
+                )
+            }
         }
     }
 

@@ -1106,6 +1106,70 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nested() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_harness_with(|builder| {
+        builder
+            .with_model("gpt-5.4")
+            .with_config(|config| {
+                config.cwd = config.cwd.join("subdir");
+            })
+            .with_workspace_setup(|cwd, _fs| async move {
+                std::fs::create_dir_all(cwd.as_path())?;
+                let repo_root = cwd.parent().expect("nested cwd should have parent");
+                std::fs::write(repo_root.join(".git"), "gitdir: /tmp/fake-worktree\n")?;
+                std::fs::write(repo_root.join("repo.txt"), "before\n")?;
+                Ok(())
+            })
+    })
+    .await?;
+    let test = harness.test();
+    let codex = test.codex.clone();
+    let repo_root = harness
+        .test()
+        .config
+        .cwd
+        .parent()
+        .expect("nested cwd should have parent");
+
+    let call_id = "apply-nested-cwd-repo-relative";
+    let patch = "*** Begin Patch\n*** Update File: ../repo.txt\n@@\n-before\n+after\n*** End Patch";
+    mount_apply_patch(
+        &harness,
+        call_id,
+        patch,
+        "updated repo-relative path",
+        ApplyPatchModelOutput::Function,
+    )
+    .await;
+
+    submit_without_wait(&harness, "update file outside nested cwd but inside repo").await?;
+
+    let mut last_diff: Option<String> = None;
+    wait_for_event(&codex, |event| match event {
+        EventMsg::TurnDiff(ev) => {
+            last_diff = Some(ev.unified_diff.clone());
+            false
+        }
+        EventMsg::TurnComplete(_) => true,
+        _ => false,
+    })
+    .await;
+
+    let diff = last_diff.expect("expected TurnDiff event after update");
+    assert!(
+        diff.contains("diff --git a/repo.txt b/repo.txt"),
+        "diff should stay repo-relative: {diff:?}"
+    );
+    assert!(
+        !diff.contains(repo_root.as_path().to_string_lossy().as_ref()),
+        "diff should not leak absolute repo paths: {diff:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
