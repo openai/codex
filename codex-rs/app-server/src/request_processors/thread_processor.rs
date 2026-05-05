@@ -2,6 +2,10 @@ use super::*;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
+const PERSIST_EXTENDED_HISTORY_DEPRECATION_SUMMARY: &str =
+    "persistExtendedHistory is deprecated and ignored";
+const PERSIST_EXTENDED_HISTORY_DEPRECATION_DETAILS: &str =
+    "Remove this parameter. App-server always uses limited history persistence.";
 
 struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
@@ -737,12 +741,16 @@ impl ThreadRequestProcessor {
             ephemeral,
             session_start_source,
             environments,
-            persist_extended_history: _persist_extended_history,
+            persist_extended_history,
         } = params;
         if sandbox.is_some() && permissions.is_some() {
             return Err(invalid_request(
                 "`permissions` cannot be combined with `sandbox`",
             ));
+        }
+        if persist_extended_history {
+            self.send_persist_extended_history_deprecation_notice(request_id.connection_id)
+                .await;
         }
         let environment_selections = self.parse_environment_selections(environments)?;
         let mut typesafe_overrides = self.build_thread_config_overrides(
@@ -832,6 +840,18 @@ impl ThreadRequestProcessor {
         request_id: &ConnectionRequestId,
     ) -> Option<codex_protocol::protocol::W3cTraceContext> {
         self.outgoing.request_trace_context(request_id).await
+    }
+
+    async fn send_persist_extended_history_deprecation_notice(&self, connection_id: ConnectionId) {
+        self.outgoing
+            .send_server_notification_to_connections(
+                &[connection_id],
+                ServerNotification::DeprecationNotice(DeprecationNoticeNotification {
+                    summary: PERSIST_EXTENDED_HISTORY_DEPRECATION_SUMMARY.to_string(),
+                    details: Some(PERSIST_EXTENDED_HISTORY_DEPRECATION_DETAILS.to_string()),
+                }),
+            )
+            .await;
     }
 
     async fn submit_core_op(
@@ -2194,6 +2214,10 @@ impl ThreadRequestProcessor {
                 .await;
             return Ok(());
         }
+        if params.persist_extended_history {
+            self.send_persist_extended_history_deprecation_notice(request_id.connection_id)
+                .await;
+        }
 
         let _thread_list_state_permit = match self.acquire_thread_list_state_permit().await {
             Ok(permit) => permit,
@@ -2820,13 +2844,17 @@ impl ThreadRequestProcessor {
             developer_instructions,
             ephemeral,
             exclude_turns,
-            persist_extended_history: _persist_extended_history,
+            persist_extended_history,
         } = params;
         let include_turns = !exclude_turns;
         if sandbox.is_some() && permissions.is_some() {
             return Err(invalid_request(
                 "`permissions` cannot be combined with `sandbox`",
             ));
+        }
+        if persist_extended_history {
+            self.send_persist_extended_history_deprecation_notice(request_id.connection_id)
+                .await;
         }
 
         let source_thread = self
