@@ -256,10 +256,16 @@ fn stored_thread_from_state(
         items: history_items.clone(),
     });
     let name = state.names.get(&thread_id).cloned().flatten();
+    let rollout_path = state
+        .rollout_paths
+        .iter()
+        .find_map(|(path, mapped_thread_id)| {
+            (*mapped_thread_id == thread_id).then(|| path.clone())
+        });
 
     Ok(StoredThread {
         thread_id,
-        rollout_path: None,
+        rollout_path,
         forked_from_id: created.forked_from_id,
         preview: String::new(),
         name,
