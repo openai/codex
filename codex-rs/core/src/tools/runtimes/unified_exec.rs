@@ -521,7 +521,10 @@ mod tests {
     #[test]
     fn unified_exec_options_combines_default_timeout_with_network_denial_cancellation() {
         let cancellation = CancellationToken::new();
-        let options = unified_exec_options(Some(cancellation.clone()), None);
+        let options = unified_exec_options(
+            Some(cancellation.clone()),
+            /*sandbox_violation_context*/ None,
+        );
 
         assert_eq!(options.capture_policy, ExecCapturePolicy::ShellTool);
         match options.expiration {
