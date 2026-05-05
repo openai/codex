@@ -7,6 +7,6 @@ expression: normalize_snapshot_paths(rendered)
     • rm -rf '/tmp/guardian target 2'
 
 
-› Ask Codex to do anything
-
+› Ask Codex to do anything                                      Running
+                                                                Thinking
   gpt-5.5 default · /tmp/project

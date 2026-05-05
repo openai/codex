@@ -9,10 +9,6 @@ fn force_pet_image_support(chat: &mut ChatWidget) {
     ));
 }
 
-fn enable_default_pet_for_test(chat: &mut ChatWidget) {
-    chat.set_tui_pet(/*pet*/ None);
-}
-
 fn force_tmux_pet_image_unsupported(chat: &mut ChatWidget) {
     chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Unsupported(
         crate::pets::PetImageUnsupportedReason::Tmux,
@@ -1840,7 +1836,6 @@ async fn slash_resume_with_arg_requests_named_session() {
 #[serial]
 async fn slash_pets_opens_picker() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    enable_default_pet_for_test(&mut chat);
     force_pet_image_support(&mut chat);
 
     chat.dispatch_command(SlashCommand::Pets);
@@ -1856,7 +1851,6 @@ async fn slash_pets_opens_picker() {
 #[serial]
 async fn slash_pets_with_arg_selects_named_pet() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    enable_default_pet_for_test(&mut chat);
     force_pet_image_support(&mut chat);
 
     chat.bottom_pane
