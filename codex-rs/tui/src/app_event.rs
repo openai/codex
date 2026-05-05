@@ -753,10 +753,21 @@ pub(crate) enum AppEvent {
         enabled: bool,
     },
 
+    /// Trust the current definition for a hook by stable hook key.
+    TrustHook {
+        key: String,
+        current_hash: String,
+    },
+
     /// Result of persisting hook enabled state.
     HookEnabledSet {
         key: String,
         enabled: bool,
+        result: Result<(), String>,
+    },
+
+    /// Result of persisting hook trust state.
+    HookTrusted {
         result: Result<(), String>,
     },
 
