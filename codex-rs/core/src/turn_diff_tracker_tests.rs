@@ -276,3 +276,40 @@ index {left_oid_b}..{right_oid_b}
     );
     assert_eq!(tracker.get_unified_diff(), Some(expected));
 }
+
+#[tokio::test]
+async fn preserves_verified_change_order_with_delete_then_move_overwrite() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join("a.txt"), "from\n").expect("seed source");
+    fs::write(dir.path().join("b.txt"), "existing\n").expect("seed destination");
+
+    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let ordered_patch = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Delete File: b.txt\n*** Update File: a.txt\n*** Move to: b.txt\n@@\n-from\n+new\n*** End Patch",
+    )
+    .await;
+    tracker.track_successful_patch(&ordered_patch);
+
+    let left_oid_a = git_blob_sha1_hex("from\n");
+    let left_oid_b = git_blob_sha1_hex("existing\n");
+    let right_oid_b = git_blob_sha1_hex("new\n");
+    let expected = format!(
+        r#"diff --git a/a.txt b/a.txt
+deleted file mode {REGULAR_FILE_MODE}
+index {left_oid_a}..{ZERO_OID}
+--- a/a.txt
++++ {DEV_NULL}
+@@ -1 +0,0 @@
+-from
+diff --git a/b.txt b/b.txt
+index {left_oid_b}..{right_oid_b}
+--- a/b.txt
++++ b/b.txt
+@@ -1 +1 @@
+-existing
++new
+"#,
+    );
+    assert_eq!(tracker.get_unified_diff(), Some(expected));
+}

@@ -188,7 +188,7 @@ fn file_paths_for_action(action: &ApplyPatchAction) -> Vec<AbsolutePathBuf> {
     let mut keys = Vec::new();
     let cwd = &action.cwd;
 
-    for (path, change) in action.changes() {
+    for (path, change) in action.iter_changes() {
         if let Some(key) = to_abs_path(cwd, path) {
             keys.push(key);
         }

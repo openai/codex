@@ -34,10 +34,7 @@ impl TurnDiffTracker {
     }
 
     pub fn track_successful_patch(&mut self, action: &ApplyPatchAction) {
-        let mut changes: Vec<_> = action.changes().iter().collect();
-        changes.sort_by(|(left_path, _), (right_path, _)| left_path.cmp(right_path));
-
-        for (source_path, change) in changes {
+        for (source_path, change) in action.iter_changes() {
             self.apply_change(source_path, change);
         }
     }

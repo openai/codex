@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -12,6 +11,7 @@ use tree_sitter_bash::LANGUAGE as BASH;
 
 use crate::ApplyPatchAction;
 use crate::ApplyPatchArgs;
+use crate::ApplyPatchChange;
 use crate::ApplyPatchError;
 use crate::ApplyPatchFileChange;
 use crate::ApplyPatchFileUpdate;
@@ -160,19 +160,19 @@ pub async fn maybe_parse_apply_patch_verified(
                 .as_ref()
                 .map(|dir| cwd.join(Path::new(dir)))
                 .unwrap_or_else(|| cwd.clone());
-            let mut changes = HashMap::new();
+            let mut changes = Vec::new();
             for hunk in hunks {
                 let path = hunk.resolve_path(&effective_cwd);
                 match hunk {
                     Hunk::AddFile { contents, .. } => {
                         let overwritten_content = fs.read_file_text(&path, sandbox).await.ok();
-                        changes.insert(
-                            path.into_path_buf(),
-                            ApplyPatchFileChange::Add {
+                        changes.push(ApplyPatchChange {
+                            path: path.into_path_buf(),
+                            change: ApplyPatchFileChange::Add {
                                 content: contents,
                                 overwritten_content,
                             },
-                        );
+                        });
                     }
                     Hunk::DeleteFile { .. } => {
                         let content = match fs.read_file_text(&path, sandbox).await {
@@ -186,10 +186,10 @@ pub async fn maybe_parse_apply_patch_verified(
                                 );
                             }
                         };
-                        changes.insert(
-                            path.into_path_buf(),
-                            ApplyPatchFileChange::Delete { content },
-                        );
+                        changes.push(ApplyPatchChange {
+                            path: path.into_path_buf(),
+                            change: ApplyPatchFileChange::Delete { content },
+                        });
                     }
                     Hunk::UpdateFile {
                         move_path, chunks, ..
@@ -209,9 +209,9 @@ pub async fn maybe_parse_apply_patch_verified(
                             Some(move_path) => fs.read_file_text(move_path, sandbox).await.ok(),
                             None => None,
                         };
-                        changes.insert(
-                            path.into_path_buf(),
-                            ApplyPatchFileChange::Update {
+                        changes.push(ApplyPatchChange {
+                            path: path.into_path_buf(),
+                            change: ApplyPatchFileChange::Update {
                                 unified_diff,
                                 move_path: resolved_move_path
                                     .map(codex_utils_absolute_path::AbsolutePathBuf::into_path_buf),
@@ -219,7 +219,7 @@ pub async fn maybe_parse_apply_patch_verified(
                                 overwritten_move_content,
                                 new_content: contents,
                             },
-                        );
+                        });
                     }
                 }
             }
@@ -799,9 +799,9 @@ PATCH"#,
         assert_eq!(
             result,
             MaybeApplyPatchVerified::Body(ApplyPatchAction {
-                changes: HashMap::from([(
-                    session_dir.path().join(relative_path),
-                    ApplyPatchFileChange::Update {
+                changes: vec![ApplyPatchChange {
+                    path: session_dir.path().join(relative_path),
+                    change: ApplyPatchFileChange::Update {
                         unified_diff: r#"@@ -1 +1 @@
 -session directory content
 +updated session directory content
@@ -812,7 +812,7 @@ PATCH"#,
                         overwritten_move_content: None,
                         new_content: "updated session directory content\n".to_string(),
                     },
-                )]),
+                }],
                 patch: argv[1].clone(),
                 cwd: AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
             })
@@ -856,9 +856,10 @@ PATCH"#,
 
         assert_eq!(action.cwd.as_path(), worktree_dir.as_path());
 
+        let source_path = worktree_dir.join(source_name);
         let change = action
-            .changes()
-            .get(&worktree_dir.join(source_name))
+            .iter_changes()
+            .find_map(|(path, change)| (path == source_path.as_path()).then_some(change))
             .expect("source file change present");
 
         match change {

@@ -4,7 +4,6 @@ mod seek_sequence;
 mod standalone_executable;
 mod streaming_parser;
 
-use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -118,6 +117,13 @@ pub enum ApplyPatchFileChange {
     },
 }
 
+/// A verified file change in an `apply_patch` action, preserved in patch order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ApplyPatchChange {
+    pub path: PathBuf,
+    pub change: ApplyPatchFileChange,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum MaybeApplyPatchVerified {
     /// `argv` corresponded to an `apply_patch` invocation, and these are the
@@ -134,10 +140,11 @@ pub enum MaybeApplyPatchVerified {
 }
 
 /// ApplyPatchAction is the result of parsing an `apply_patch` command. By
-/// construction, all paths should be absolute paths.
+/// construction, all paths should be absolute paths and preserved in patch
+/// order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ApplyPatchAction {
-    changes: HashMap<PathBuf, ApplyPatchFileChange>,
+    changes: Vec<ApplyPatchChange>,
 
     /// The raw patch argument that can be used to apply the patch. i.e., if the
     /// original arg was parsed in "lenient" mode with a
@@ -154,8 +161,16 @@ impl ApplyPatchAction {
     }
 
     /// Returns the changes that would be made by applying the patch.
-    pub fn changes(&self) -> &HashMap<PathBuf, ApplyPatchFileChange> {
+    pub fn changes(&self) -> &[ApplyPatchChange] {
         &self.changes
+    }
+
+    /// Returns the changes that would be made by applying the patch in patch
+    /// order.
+    pub fn iter_changes(&self) -> impl Iterator<Item = (&Path, &ApplyPatchFileChange)> {
+        self.changes
+            .iter()
+            .map(|change| (change.path.as_path(), &change.change))
     }
 
     /// Should be used exclusively for testing. (Not worth the overhead of
@@ -173,13 +188,13 @@ impl ApplyPatchAction {
 + {content}
 *** End Patch"#,
         );
-        let changes = HashMap::from([(
-            path.to_path_buf(),
-            ApplyPatchFileChange::Add {
+        let changes = vec![ApplyPatchChange {
+            path: path.to_path_buf(),
+            change: ApplyPatchFileChange::Add {
                 content,
                 overwritten_content: None,
             },
-        )]);
+        }];
         #[expect(clippy::expect_used)]
         Self {
             changes,
