@@ -603,7 +603,14 @@ async fn assert_remote_manual_compact_request_parity(
     let expected_compact_object = expected_compact_body_without_input
         .as_object_mut()
         .expect("responses request body should be an object");
-    for field in ["input", "client_metadata", "include", "store", "stream"] {
+    for field in [
+        "input",
+        "client_metadata",
+        "include",
+        "store",
+        "stream",
+        "tool_choice",
+    ] {
         expected_compact_object.remove(field);
     }
     if expected_service_tier.is_none() {
@@ -621,13 +628,13 @@ async fn assert_remote_manual_compact_request_parity(
     assert_eq!(
         json!({
             "compact_body_without_input": canonical_compact_body_without_input,
-            "expected_compact_body_without_input": canonical_expected_compact_body_without_input.clone(),
+            "expected_compact_body_without_input": canonical_expected_compact_body_without_input,
             "prompt_cache_key_matches_responses": compact_body["prompt_cache_key"] == normal_body["prompt_cache_key"],
             "prompt_cache_key_present": compact_body["prompt_cache_key"].is_string(),
             "service_tier": compact_body.get("service_tier").and_then(Value::as_str),
         }),
         json!({
-            "compact_body_without_input": canonical_expected_compact_body_without_input.clone(),
+            "compact_body_without_input": canonical_expected_compact_body_without_input,
             "expected_compact_body_without_input": canonical_expected_compact_body_without_input,
             "prompt_cache_key_matches_responses": true,
             "prompt_cache_key_present": true,
