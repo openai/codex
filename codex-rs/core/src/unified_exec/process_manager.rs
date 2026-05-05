@@ -50,7 +50,6 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
-use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::protocol::ExecCommandSource;
@@ -98,37 +97,6 @@ fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, S
     env
 }
 
-fn exec_env_policy_from_shell_policy(
-    policy: &ShellEnvironmentPolicy,
-) -> codex_exec_server::ExecEnvPolicy {
-    codex_exec_server::ExecEnvPolicy {
-        inherit: policy.inherit.clone(),
-        ignore_default_excludes: policy.ignore_default_excludes,
-        exclude: policy
-            .exclude
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect(),
-        r#set: policy.r#set.clone(),
-        include_only: policy
-            .include_only
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect(),
-    }
-}
-
-fn env_overlay_for_exec_server(
-    request_env: &HashMap<String, String>,
-    local_policy_env: &HashMap<String, String>,
-) -> HashMap<String, String> {
-    request_env
-        .iter()
-        .filter(|(key, value)| local_policy_env.get(*key) != Some(*value))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
-}
-
 fn exec_server_env_for_request(
     request: &ExecRequest,
 ) -> (
@@ -138,7 +106,7 @@ fn exec_server_env_for_request(
     if let Some(exec_server_env_config) = &request.exec_server_env_config {
         (
             Some(exec_server_env_config.policy.clone()),
-            env_overlay_for_exec_server(&request.env, &exec_server_env_config.local_policy_env),
+            exec_server_env_config.env_overlay(&request.env),
         )
     } else {
         (None, request.env.clone())
@@ -990,10 +958,10 @@ impl UnifiedExecProcessManager {
             context.session.conversation_id.to_string(),
         );
         let env = apply_unified_exec_env(env);
-        let exec_server_env_config = ExecServerEnvConfig {
-            policy: exec_env_policy_from_shell_policy(&context.turn.shell_environment_policy),
+        let exec_server_env_config = ExecServerEnvConfig::from_shell_policy(
+            &context.turn.shell_environment_policy,
             local_policy_env,
-        };
+        );
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(
             self,

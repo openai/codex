@@ -52,8 +52,19 @@ fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
         ),
     ]);
 
+    let config = ExecServerEnvConfig {
+        policy: codex_exec_server::ExecEnvPolicy {
+            inherit: codex_protocol::config_types::ShellEnvironmentPolicyInherit::Core,
+            ignore_default_excludes: false,
+            exclude: Vec::new(),
+            r#set: HashMap::new(),
+            include_only: Vec::new(),
+        },
+        local_policy_env,
+    };
+
     assert_eq!(
-        env_overlay_for_exec_server(&request_env, &local_policy_env),
+        config.env_overlay(&request_env),
         HashMap::from([
             ("PATH".to_string(), "/sandbox-path".to_string()),
             ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),

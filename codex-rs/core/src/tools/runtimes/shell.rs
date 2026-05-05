@@ -69,7 +69,6 @@ pub struct ShellRequest {
     pub hook_command: String,
     pub cwd: AbsolutePathBuf,
     pub environment: Arc<Environment>,
-    pub remote_execution_enabled: bool,
     pub timeout_ms: Option<u64>,
     pub env: HashMap<String, String>,
     pub exec_server_env_config: Option<crate::sandboxing::ExecServerEnvConfig>,
@@ -270,12 +269,6 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        if req.environment.is_remote() && !req.remote_execution_enabled {
-            return Err(ToolError::Rejected(
-                "shell execution is unavailable for remote environments".to_string(),
-            ));
-        }
-
         let session_shell = ctx.session.user_shell();
         let managed_network =
             managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions);
@@ -341,14 +334,7 @@ fn exec_server_env_for_request(
     HashMap<String, String>,
 ) {
     if let Some(exec_server_env_config) = &request.exec_server_env_config {
-        let env = request
-            .env
-            .iter()
-            .filter(|(key, value)| {
-                exec_server_env_config.local_policy_env.get(*key) != Some(*value)
-            })
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect();
+        let env = exec_server_env_config.env_overlay(&request.env);
         (Some(exec_server_env_config.policy.clone()), env)
     } else {
         (None, request.env.clone())

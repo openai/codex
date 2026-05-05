@@ -26,7 +26,7 @@ use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
-use crate::tools::handlers::resolve_tool_environment;
+use crate::tools::handlers::resolve_environment_workdir_target;
 use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
@@ -39,7 +39,6 @@ use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
 use codex_features::Feature;
-use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_shell_command::is_safe_command::is_known_safe_command;
@@ -83,9 +82,7 @@ struct RunExecLikeArgs {
     tool_name: String,
     exec_params: ExecParams,
     hook_command: String,
-    target_environment: Arc<codex_exec_server::Environment>,
-    remote_execution_enabled: bool,
-    exec_server_env_config: Option<crate::sandboxing::ExecServerEnvConfig>,
+    environment: Arc<codex_exec_server::Environment>,
     additional_permissions: Option<AdditionalPermissionProfile>,
     prefix_rule: Option<Vec<String>>,
     session: Arc<crate::session::session::Session>,
@@ -94,16 +91,6 @@ struct RunExecLikeArgs {
     call_id: String,
     freeform: bool,
     shell_runtime_backend: ShellRuntimeBackend,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct ShellCommandEnvironmentArgs {
-    #[serde(default)]
-    environment_id: Option<String>,
-    // Keep this raw until after environment selection; relative paths must be
-    // resolved against the selected environment cwd, not the process cwd.
-    #[serde(default)]
-    workdir: Option<String>,
 }
 
 impl ShellHandler {
@@ -183,36 +170,6 @@ impl ShellCommandHandler {
             justification: params.justification.clone(),
             arg0: None,
         })
-    }
-}
-
-fn exec_server_env_policy_from_shell_policy(
-    policy: &ShellEnvironmentPolicy,
-) -> codex_exec_server::ExecEnvPolicy {
-    codex_exec_server::ExecEnvPolicy {
-        inherit: policy.inherit.clone(),
-        ignore_default_excludes: policy.ignore_default_excludes,
-        exclude: policy
-            .exclude
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect(),
-        r#set: policy.r#set.clone(),
-        include_only: policy
-            .include_only
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect(),
-    }
-}
-
-fn exec_server_env_config(
-    policy: &ShellEnvironmentPolicy,
-    local_policy_env: &std::collections::HashMap<String, String>,
-) -> crate::sandboxing::ExecServerEnvConfig {
-    crate::sandboxing::ExecServerEnvConfig {
-        policy: exec_server_env_policy_from_shell_policy(policy),
-        local_policy_env: local_policy_env.clone(),
     }
 }
 
@@ -297,7 +254,7 @@ impl ToolHandler for ShellHandler {
                     tool_name: tool_name.display(),
                     exec_params,
                     hook_command: codex_shell_command::parse_command::shlex_join(&params.command),
-                    target_environment: turn
+                    environment: turn
                         .environments
                         .primary()
                         .map(|environment| Arc::clone(&environment.environment))
@@ -306,8 +263,6 @@ impl ToolHandler for ShellHandler {
                                 "shell is unavailable in this session".to_string(),
                             )
                         })?,
-                    remote_execution_enabled: false,
-                    exec_server_env_config: None,
                     additional_permissions: params.additional_permissions.clone(),
                     prefix_rule,
                     session,
@@ -326,7 +281,7 @@ impl ToolHandler for ShellHandler {
                     tool_name: tool_name.display(),
                     exec_params,
                     hook_command: codex_shell_command::parse_command::shlex_join(&params.command),
-                    target_environment: turn
+                    environment: turn
                         .environments
                         .primary()
                         .map(|environment| Arc::clone(&environment.environment))
@@ -335,8 +290,6 @@ impl ToolHandler for ShellHandler {
                                 "shell is unavailable in this session".to_string(),
                             )
                         })?,
-                    remote_execution_enabled: false,
-                    exec_server_env_config: None,
                     additional_permissions: None,
                     prefix_rule: None,
                     session,
@@ -429,22 +382,13 @@ impl ToolHandler for ShellCommandHandler {
             )));
         };
 
-        let environment_args: ShellCommandEnvironmentArgs = parse_arguments(&arguments)?;
-        let Some(turn_environment) =
-            resolve_tool_environment(turn.as_ref(), environment_args.environment_id.as_deref())?
+        let Some((turn_environment, cwd)) =
+            resolve_environment_workdir_target(&arguments, &turn.environments)?
         else {
             return Err(FunctionCallError::RespondToModel(
                 "shell is unavailable in this session".to_string(),
             ));
         };
-        let cwd = environment_args
-            .workdir
-            .as_deref()
-            .filter(|workdir| !workdir.is_empty())
-            .map_or_else(
-                || turn_environment.cwd.clone(),
-                |workdir| turn_environment.cwd.join(workdir),
-            );
         let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
@@ -463,17 +407,11 @@ impl ToolHandler for ShellCommandHandler {
             cwd,
             turn.tools_config.allow_login_shell,
         )?;
-        let exec_server_env_config = turn_environment
-            .environment
-            .is_remote()
-            .then(|| exec_server_env_config(&turn.shell_environment_policy, &exec_params.env));
         ShellHandler::run_exec_like(RunExecLikeArgs {
             tool_name: tool_name.display(),
             exec_params,
             hook_command: params.command,
-            target_environment: Arc::clone(&turn_environment.environment),
-            remote_execution_enabled: true,
-            exec_server_env_config,
+            environment: Arc::clone(&turn_environment.environment),
             additional_permissions: params.additional_permissions.clone(),
             prefix_rule,
             session,
@@ -493,9 +431,7 @@ impl ShellHandler {
             tool_name,
             exec_params,
             hook_command,
-            target_environment,
-            remote_execution_enabled,
-            exec_server_env_config,
+            environment,
             additional_permissions,
             prefix_rule,
             session,
@@ -507,7 +443,8 @@ impl ShellHandler {
         } = args;
 
         let mut exec_params = exec_params;
-        let fs = target_environment.get_filesystem();
+        let fs = environment.get_filesystem();
+        let local_policy_env = exec_params.env.clone();
 
         let dependency_env = session.dependency_env().await;
         if !dependency_env.is_empty() {
@@ -626,11 +563,15 @@ impl ShellHandler {
             command: exec_params.command.clone(),
             hook_command,
             cwd: exec_params.cwd.clone(),
-            environment: target_environment,
-            remote_execution_enabled,
+            exec_server_env_config: environment.is_remote().then(|| {
+                crate::sandboxing::ExecServerEnvConfig::from_shell_policy(
+                    &turn.shell_environment_policy,
+                    local_policy_env,
+                )
+            }),
+            environment,
             timeout_ms: exec_params.expiration.timeout_ms(),
             env: exec_params.env.clone(),
-            exec_server_env_config,
             explicit_env_overrides,
             network: exec_params.network.clone(),
             sandbox_permissions: effective_additional_permissions.sandbox_permissions,

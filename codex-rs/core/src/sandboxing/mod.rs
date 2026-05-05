@@ -16,6 +16,7 @@ use crate::exec::execute_exec_request;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_network_proxy::NetworkProxy;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::PermissionProfile;
@@ -39,6 +40,43 @@ pub(crate) struct ExecOptions {
 pub(crate) struct ExecServerEnvConfig {
     pub(crate) policy: codex_exec_server::ExecEnvPolicy,
     pub(crate) local_policy_env: HashMap<String, String>,
+}
+
+impl ExecServerEnvConfig {
+    pub(crate) fn from_shell_policy(
+        policy: &ShellEnvironmentPolicy,
+        local_policy_env: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            policy: codex_exec_server::ExecEnvPolicy {
+                inherit: policy.inherit.clone(),
+                ignore_default_excludes: policy.ignore_default_excludes,
+                exclude: policy
+                    .exclude
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect(),
+                r#set: policy.r#set.clone(),
+                include_only: policy
+                    .include_only
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect(),
+            },
+            local_policy_env,
+        }
+    }
+
+    pub(crate) fn env_overlay(
+        &self,
+        request_env: &HashMap<String, String>,
+    ) -> HashMap<String, String> {
+        request_env
+            .iter()
+            .filter(|(key, value)| self.local_policy_env.get(*key) != Some(*value))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    }
 }
 
 #[derive(Debug)]
@@ -174,4 +212,75 @@ pub async fn execute_exec_request_with_after_spawn(
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> codex_protocol::error::Result<ExecToolCallOutput> {
     execute_exec_request(exec_request, stdout_stream, after_spawn).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::config_types::EnvironmentVariablePattern;
+    use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn exec_server_env_config_from_shell_policy_preserves_policy_fields() {
+        let policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::Core,
+            ignore_default_excludes: false,
+            exclude: vec![EnvironmentVariablePattern::new_case_insensitive("SECRET_*")],
+            r#set: HashMap::from([("FROM_POLICY".to_string(), "set-value".to_string())]),
+            include_only: vec![EnvironmentVariablePattern::new_case_insensitive("*PATH")],
+            use_profile: true,
+        };
+        let local_policy_env = HashMap::from([
+            ("PATH".to_string(), "/usr/bin".to_string()),
+            ("FROM_POLICY".to_string(), "set-value".to_string()),
+        ]);
+
+        let config = ExecServerEnvConfig::from_shell_policy(&policy, local_policy_env.clone());
+
+        assert_eq!(config.policy.inherit, ShellEnvironmentPolicyInherit::Core);
+        assert!(!config.policy.ignore_default_excludes);
+        assert_eq!(
+            config.policy.exclude,
+            vec![EnvironmentVariablePattern::new_case_insensitive("SECRET_*")]
+        );
+        assert_eq!(config.policy.r#set, policy.r#set);
+        assert_eq!(
+            config.policy.include_only,
+            vec![EnvironmentVariablePattern::new_case_insensitive("*PATH")]
+        );
+        assert_eq!(config.local_policy_env, local_policy_env);
+    }
+
+    #[test]
+    fn exec_server_env_config_env_overlay_keeps_only_runtime_changes() {
+        let config = ExecServerEnvConfig {
+            policy: codex_exec_server::ExecEnvPolicy {
+                inherit: ShellEnvironmentPolicyInherit::Core,
+                ignore_default_excludes: false,
+                exclude: Vec::new(),
+                r#set: HashMap::new(),
+                include_only: Vec::new(),
+            },
+            local_policy_env: HashMap::from([
+                ("HOME".to_string(), "/client-home".to_string()),
+                ("PATH".to_string(), "/client-path".to_string()),
+                ("SHELL_SET".to_string(), "policy".to_string()),
+            ]),
+        };
+        let request_env = HashMap::from([
+            ("HOME".to_string(), "/client-home".to_string()),
+            ("PATH".to_string(), "/sandbox-path".to_string()),
+            ("SHELL_SET".to_string(), "policy".to_string()),
+            ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),
+        ]);
+
+        assert_eq!(
+            config.env_overlay(&request_env),
+            HashMap::from([
+                ("PATH".to_string(), "/sandbox-path".to_string()),
+                ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),
+            ])
+        );
+    }
 }

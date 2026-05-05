@@ -28,10 +28,10 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
 
+use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
 pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
@@ -88,25 +88,39 @@ fn resolve_workdir_base_path(
         .map_or_else(|| default_cwd.clone(), |workdir| default_cwd.join(workdir)))
 }
 
-fn resolve_tool_environment<'a>(
-    turn: &'a TurnContext,
-    environment_id: Option<&str>,
-) -> Result<Option<&'a TurnEnvironment>, FunctionCallError> {
-    environment_id.map_or_else(
-        || Ok(turn.environments.primary()),
-        |environment_id| {
-            turn.environments
-                .turn_environments
-                .iter()
-                .find(|environment| environment.environment_id == environment_id)
-                .map(Some)
-                .ok_or_else(|| {
-                    FunctionCallError::RespondToModel(format!(
-                        "unknown turn environment id `{environment_id}`"
-                    ))
-                })
-        },
-    )
+#[derive(Debug, Deserialize)]
+struct EnvironmentWorkdirArgs {
+    #[serde(default)]
+    environment_id: Option<String>,
+    // Keep this raw until after environment selection; relative paths must be
+    // resolved against the selected environment cwd, not the process cwd.
+    #[serde(default)]
+    workdir: Option<String>,
+}
+
+/// Parses optional `environment_id` and `workdir` fields from tool arguments.
+///
+/// Returns the selected turn environment plus the effective execution cwd. The
+/// returned cwd is `turn_environment.cwd.join(workdir)` when `workdir` is
+/// provided and non-empty, otherwise it is the selected `turn_environment.cwd`.
+fn resolve_environment_workdir_target(
+    arguments: &str,
+    environments: &ResolvedTurnEnvironments,
+) -> Result<Option<(TurnEnvironment, AbsolutePathBuf)>, FunctionCallError> {
+    let target_args: EnvironmentWorkdirArgs = parse_arguments(arguments)?;
+    let Some(turn_environment) = environments.select(target_args.environment_id.as_deref()) else {
+        return Ok(None);
+    };
+    let cwd = target_args
+        .workdir
+        .as_deref()
+        .filter(|workdir| !workdir.is_empty())
+        .map_or_else(
+            || turn_environment.cwd.clone(),
+            |workdir| turn_environment.cwd.join(workdir),
+        );
+
+    Ok(Some((turn_environment.clone(), cwd)))
 }
 
 /// Validates feature/policy constraints for `with_additional_permissions` and

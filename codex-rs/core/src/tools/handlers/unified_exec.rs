@@ -13,7 +13,7 @@ use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
-use crate::tools::handlers::resolve_tool_environment;
+use crate::tools::handlers::resolve_environment_workdir_target;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
@@ -65,16 +65,6 @@ pub(crate) struct ExecCommandArgs {
     justification: Option<String>,
     #[serde(default)]
     prefix_rule: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ExecCommandEnvironmentArgs {
-    #[serde(default)]
-    environment_id: Option<String>,
-    // Keep this raw until after environment selection; relative paths must be
-    // resolved against the selected environment cwd, not the process cwd.
-    #[serde(default)]
-    workdir: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -211,24 +201,13 @@ impl ToolHandler for UnifiedExecHandler {
 
         let response = match tool_name.name.as_str() {
             "exec_command" => {
-                let environment_args: ExecCommandEnvironmentArgs = parse_arguments(&arguments)?;
-                let Some(turn_environment) = resolve_tool_environment(
-                    turn.as_ref(),
-                    environment_args.environment_id.as_deref(),
-                )?
+                let Some((turn_environment, cwd)) =
+                    resolve_environment_workdir_target(&arguments, &turn.environments)?
                 else {
                     return Err(FunctionCallError::RespondToModel(
                         "unified exec is unavailable in this session".to_string(),
                     ));
                 };
-                let cwd = environment_args
-                    .workdir
-                    .as_deref()
-                    .filter(|workdir| !workdir.is_empty())
-                    .map_or_else(
-                        || turn_environment.cwd.clone(),
-                        |workdir| turn_environment.cwd.join(workdir),
-                    );
                 let environment = Arc::clone(&turn_environment.environment);
                 let fs = environment.get_filesystem();
                 let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
