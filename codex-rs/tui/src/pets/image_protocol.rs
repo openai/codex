@@ -151,21 +151,20 @@ fn pet_image_support_for_terminal(info: &TerminalInfo) -> PetImageSupport {
 fn supports_kitty_graphics(info: &TerminalInfo) -> bool {
     matches!(
         info.name,
-        TerminalName::Ghostty | TerminalName::Kitty | TerminalName::WezTerm
+        TerminalName::Ghostty | TerminalName::Iterm2 | TerminalName::Kitty | TerminalName::WezTerm
     ) || terminal_field_contains(info.term.as_deref(), "kitty")
         || terminal_field_contains(info.term.as_deref(), "ghostty")
         || terminal_field_contains(info.term.as_deref(), "wezterm")
         || terminal_field_contains(info.term_program.as_deref(), "kitty")
         || terminal_field_contains(info.term_program.as_deref(), "ghostty")
+        || terminal_field_contains(info.term_program.as_deref(), "iterm")
         || terminal_field_contains(info.term_program.as_deref(), "wezterm")
 }
 
 fn supports_sixel(info: &TerminalInfo) -> bool {
-    matches!(info.name, TerminalName::Iterm2)
-        || terminal_field_contains(info.term.as_deref(), "sixel")
+    terminal_field_contains(info.term.as_deref(), "sixel")
         || terminal_field_contains(info.term.as_deref(), "mlterm")
         || terminal_field_contains(info.term.as_deref(), "foot")
-        || terminal_field_contains(info.term_program.as_deref(), "iterm")
 }
 
 fn terminal_field_contains(value: Option<&str>, needle: &str) -> bool {
@@ -388,6 +387,12 @@ mod tests {
                 /*term*/ None,
             ),
             terminal_info_for_test(
+                TerminalName::Iterm2,
+                /*multiplexer*/ None,
+                Some("iTerm.app"),
+                /*term*/ None,
+            ),
+            terminal_info_for_test(
                 TerminalName::Kitty,
                 /*multiplexer*/ None,
                 Some("kitty"),
@@ -414,6 +419,12 @@ mod tests {
             terminal_info_for_test(
                 TerminalName::Unknown,
                 /*multiplexer*/ None,
+                Some("iTerm.app"),
+                Some("xterm-256color"),
+            ),
+            terminal_info_for_test(
+                TerminalName::Unknown,
+                /*multiplexer*/ None,
                 Some("WezTerm"),
                 Some("xterm-256color"),
             ),
@@ -428,12 +439,6 @@ mod tests {
     #[test]
     fn pet_image_support_detects_sixel_terminals() {
         for info in [
-            terminal_info_for_test(
-                TerminalName::Iterm2,
-                /*multiplexer*/ None,
-                Some("iTerm.app"),
-                /*term*/ None,
-            ),
             terminal_info_for_test(
                 TerminalName::Unknown,
                 /*multiplexer*/ None,
