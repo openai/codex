@@ -63,7 +63,7 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
         rollout_path.display()
     );
     assert!(
-        find_thread_path_by_id_str(codex_home.path(), &thread.id)
+        find_thread_path_by_id_str(codex_home.path(), &thread.id, /*state_db_ctx*/ None)
             .await?
             .is_none(),
         "thread id should not be discoverable before rollout materialization"
@@ -118,9 +118,10 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
         rollout_path.display()
     );
 
-    let discovered_path = find_thread_path_by_id_str(codex_home.path(), &thread.id)
-        .await?
-        .expect("expected rollout path for thread id to exist after materialization");
+    let discovered_path =
+        find_thread_path_by_id_str(codex_home.path(), &thread.id, /*state_db_ctx*/ None)
+            .await?
+            .expect("expected rollout path for thread id to exist after materialization");
     assert_paths_match_on_disk(&discovered_path, &rollout_path)?;
 
     let archive_id = mcp
@@ -252,15 +253,23 @@ async fn thread_archive_archives_spawned_descendants() -> Result<()> {
 
     for thread_id in [parent_thread_id, child_thread_id, grandchild_thread_id] {
         assert!(
-            find_thread_path_by_id_str(codex_home.path(), &thread_id.to_string())
-                .await?
-                .is_none(),
+            find_thread_path_by_id_str(
+                codex_home.path(),
+                &thread_id.to_string(),
+                /*state_db_ctx*/ None,
+            )
+            .await?
+            .is_none(),
             "expected active rollout for {thread_id} to be archived"
         );
         assert!(
-            find_archived_thread_path_by_id_str(codex_home.path(), &thread_id.to_string())
-                .await?
-                .is_some(),
+            find_archived_thread_path_by_id_str(
+                codex_home.path(),
+                &thread_id.to_string(),
+                /*state_db_ctx*/ None,
+            )
+            .await?
+            .is_some(),
             "expected archived rollout for {thread_id} to exist"
         );
     }
@@ -322,9 +331,10 @@ async fn thread_archive_succeeds_when_descendant_archive_fails() -> Result<()> {
         )
         .await?;
 
-    let child_rollout_path = find_thread_path_by_id_str(codex_home.path(), &child_id)
-        .await?
-        .expect("child rollout path");
+    let child_rollout_path =
+        find_thread_path_by_id_str(codex_home.path(), &child_id, /*state_db_ctx*/ None)
+            .await?
+            .expect("child rollout path");
     let archived_child_path = codex_home
         .path()
         .join(ARCHIVED_SESSIONS_SUBDIR)
@@ -381,15 +391,23 @@ async fn thread_archive_succeeds_when_descendant_archive_fails() -> Result<()> {
     );
     for thread_id in [parent_thread_id, grandchild_thread_id] {
         assert!(
-            find_thread_path_by_id_str(codex_home.path(), &thread_id.to_string())
-                .await?
-                .is_none(),
+            find_thread_path_by_id_str(
+                codex_home.path(),
+                &thread_id.to_string(),
+                /*state_db_ctx*/ None,
+            )
+            .await?
+            .is_none(),
             "expected active rollout for {thread_id} to be archived"
         );
         assert!(
-            find_archived_thread_path_by_id_str(codex_home.path(), &thread_id.to_string())
-                .await?
-                .is_some(),
+            find_archived_thread_path_by_id_str(
+                codex_home.path(),
+                &thread_id.to_string(),
+                /*state_db_ctx*/ None,
+            )
+            .await?
+            .is_some(),
             "expected archived rollout for {thread_id} to exist"
         );
     }
@@ -455,15 +473,19 @@ async fn thread_archive_succeeds_when_spawned_descendant_is_missing() -> Result<
     assert_eq!(archived_notification.thread_id, parent_id);
 
     assert!(
-        find_thread_path_by_id_str(codex_home.path(), &parent_id)
+        find_thread_path_by_id_str(codex_home.path(), &parent_id, /*state_db_ctx*/ None)
             .await?
             .is_none(),
         "parent should be archived even when a descendant is missing"
     );
     assert!(
-        find_archived_thread_path_by_id_str(codex_home.path(), &parent_id)
-            .await?
-            .is_some(),
+        find_archived_thread_path_by_id_str(
+            codex_home.path(),
+            &parent_id,
+            /*state_db_ctx*/ None,
+        )
+        .await?
+        .is_some(),
         "parent should be moved into archived sessions"
     );
 

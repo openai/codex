@@ -550,6 +550,7 @@ fn config_toml_deserializes_model_availability_nux() {
             animations: true,
             show_tooltips: true,
             vim_mode_default: false,
+            raw_output_mode: false,
             alternate_screen: AltScreenMode::default(),
             status_line: None,
             status_line_use_colors: true,
@@ -658,6 +659,53 @@ fn test_tui_vim_mode_default_true() {
             .expect("config should include tui section")
             .vim_mode_default
     );
+}
+
+#[test]
+fn test_tui_raw_output_mode_defaults_to_false() {
+    let toml = r#"
+        [tui]
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize empty [tui] table");
+    assert!(
+        !parsed
+            .tui
+            .expect("config should include tui section")
+            .raw_output_mode
+    );
+}
+
+#[test]
+fn test_tui_raw_output_mode_true() {
+    let toml = r#"
+        [tui]
+        raw_output_mode = true
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize raw_output_mode=true");
+    assert!(
+        parsed
+            .tui
+            .expect("config should include tui section")
+            .raw_output_mode
+    );
+}
+
+#[tokio::test]
+async fn runtime_config_uses_tui_raw_output_mode() {
+    let toml = r#"
+        [tui]
+        raw_output_mode = true
+    "#;
+    let cfg_toml: ConfigToml = toml::from_str(toml).expect("deserialize raw_output_mode=true");
+    let cfg = Config::load_from_base_config_with_overrides(
+        cfg_toml,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert!(cfg.tui_raw_output_mode);
 }
 
 #[test]
@@ -2125,6 +2173,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             animations: true,
             show_tooltips: true,
             vim_mode_default: false,
+            raw_output_mode: false,
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
             status_line_use_colors: true,
@@ -6450,6 +6499,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             animations: true,
             show_tooltips: true,
             tui_vim_mode_default: false,
+            tui_raw_output_mode: false,
             tui_keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow: TerminalResizeReflowConfig::default(),
@@ -6652,6 +6702,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
         tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
@@ -6808,6 +6859,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
         tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
@@ -6949,6 +7001,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
         tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),

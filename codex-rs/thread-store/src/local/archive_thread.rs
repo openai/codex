@@ -13,15 +13,19 @@ pub(super) async fn archive_thread(
     params: ArchiveThreadParams,
 ) -> ThreadStoreResult<()> {
     let thread_id = params.thread_id;
-    let rollout_path =
-        find_thread_path_by_id_str(store.config.codex_home.as_path(), &thread_id.to_string())
-            .await
-            .map_err(|err| ThreadStoreError::InvalidRequest {
-                message: format!("failed to locate thread id {thread_id}: {err}"),
-            })?
-            .ok_or_else(|| ThreadStoreError::InvalidRequest {
-                message: format!("no rollout found for thread id {thread_id}"),
-            })?;
+    let state_db_ctx = store.state_db().await;
+    let rollout_path = find_thread_path_by_id_str(
+        store.config.codex_home.as_path(),
+        &thread_id.to_string(),
+        state_db_ctx.as_deref(),
+    )
+    .await
+    .map_err(|err| ThreadStoreError::InvalidRequest {
+        message: format!("failed to locate thread id {thread_id}: {err}"),
+    })?
+    .ok_or_else(|| ThreadStoreError::InvalidRequest {
+        message: format!("no rollout found for thread id {thread_id}"),
+    })?;
 
     let canonical_rollout_path = scoped_rollout_path(
         store.config.codex_home.join(codex_rollout::SESSIONS_SUBDIR),
@@ -48,7 +52,7 @@ pub(super) async fn archive_thread(
         }
     })?;
 
-    if let Some(ctx) = store.state_db().await {
+    if let Some(ctx) = state_db_ctx {
         let _ = ctx
             .mark_archived(thread_id, archived_path.as_path(), Utc::now())
             .await;
@@ -77,7 +81,7 @@ mod tests {
     #[tokio::test]
     async fn archive_thread_moves_rollout_to_archived_collection() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = Uuid::from_u128(201);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let active_path =
@@ -123,7 +127,6 @@ mod tests {
     async fn archive_thread_updates_sqlite_metadata_when_present() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
-        let store = LocalThreadStore::new(config.clone());
         let uuid = Uuid::from_u128(202);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let active_path =
@@ -134,6 +137,7 @@ mod tests {
         )
         .await
         .expect("state db should initialize");
+        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
         runtime
             .mark_backfill_complete(/*last_watermark*/ None)
             .await

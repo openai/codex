@@ -237,6 +237,22 @@ if mode == "json_deny":
             "permissionDecisionReason": reason
         }}
     }}))
+elif mode == "context":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PreToolUse",
+            "additionalContext": reason
+        }}
+    }}))
+elif mode == "json_deny_with_context":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+            "additionalContext": reason
+        }}
+    }}))
 elif mode == "exit_2":
     sys.stderr.write(reason + "\n")
     raise SystemExit(2)
@@ -585,6 +601,38 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     Ok(())
 }
 
+fn write_session_start_hook_with_context(home: &Path, additional_context: &str) -> Result<()> {
+    let script_path = home.join("session_start_hook.py");
+    let additional_context_json = serde_json::to_string(additional_context)
+        .context("serialize session start additional context for test")?;
+    let script = format!(
+        r#"import json
+
+print(json.dumps({{
+    "hookSpecificOutput": {{
+        "hookEventName": "SessionStart",
+        "additionalContext": {additional_context_json}
+    }}
+}}))
+"#,
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "statusMessage": "running session start hook",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&script_path, script).context("write session start hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn rollout_hook_prompt_texts(text: &str) -> Result<Vec<String>> {
     let mut texts = Vec::new();
     for line in text.lines() {
@@ -616,6 +664,11 @@ fn request_hook_prompt_texts(
         .into_iter()
         .filter_map(|text| parse_hook_prompt_fragment(&text).map(|fragment| fragment.text))
         .collect()
+}
+
+fn spilled_hook_output_path(text: &str) -> Option<&str> {
+    text.lines()
+        .find_map(|line| line.strip_prefix("Full hook output saved to: "))
 }
 
 fn read_stop_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
@@ -901,6 +954,111 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
         Some(false)
     );
     assert_eq!(hook_inputs[0].get("exists"), Some(&Value::Bool(true)));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_start_hook_spills_large_additional_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hello from the reef"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let additional_context = "remember the reef ".repeat(800);
+
+    let mut builder = test_codex()
+        .with_pre_build_hook({
+            let additional_context = additional_context.clone();
+            move |home| {
+                if let Err(error) = write_session_start_hook_with_context(home, &additional_context)
+                {
+                    panic!("failed to write session start hook test fixture: {error}");
+                }
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello").await?;
+
+    let request = response.single_request();
+    let developer_messages = request.message_input_texts("developer");
+    let developer_message = developer_messages
+        .iter()
+        .find(|message| spilled_hook_output_path(message).is_some())
+        .context("spilled developer hook message")?;
+    assert!(developer_message.contains("tokens truncated"));
+    let path = spilled_hook_output_path(developer_message).context("spill path")?;
+    assert_eq!(fs::read_to_string(path)?, additional_context);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn stop_hook_spills_large_continuation_prompt() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "draft one"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "draft two"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let continuation_prompt = std::iter::repeat_n("retry with the reef note", 800)
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let mut builder = test_codex()
+        .with_pre_build_hook({
+            let continuation_prompt = continuation_prompt.clone();
+            move |home| {
+                if let Err(error) = write_stop_hook(home, &[&continuation_prompt]) {
+                    panic!("failed to write stop hook test fixture: {error}");
+                }
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello from the sea").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let hook_prompt_texts = request_hook_prompt_texts(&requests[1]);
+    assert_eq!(hook_prompt_texts.len(), 1);
+    let hook_prompt_text = &hook_prompt_texts[0];
+    assert!(hook_prompt_text.contains("tokens truncated"));
+    let path = spilled_hook_output_path(hook_prompt_text).context("spill path")?;
+    assert_eq!(fs::read_to_string(path)?, continuation_prompt);
 
     Ok(())
 }
@@ -1826,6 +1984,158 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
         hook_inputs[0]["turn_id"]
             .as_str()
             .is_some_and(|turn_id| !turn_id.is_empty())
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn pre_tool_use_records_additional_context_for_shell_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "pretooluse-shell-command-context";
+    let command = "printf pre-tool-output".to_string();
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "pre hook context observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let pre_context = "Remember the bash pre-tool note.";
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_pre_tool_use_hook(home, Some("^Bash$"), "context", pre_context)
+            {
+                panic!("failed to write pre tool use hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run the shell command with pre hook")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .message_input_texts("developer")
+            .contains(&pre_context.to_string()),
+        "follow-up request should include pre tool use additional context",
+    );
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(
+        output.contains("pre-tool-output"),
+        "shell command output should still reach the model",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn blocked_pre_tool_use_records_additional_context_for_shell_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "pretooluse-shell-command-blocked-context";
+    let marker = std::env::temp_dir().join("pretooluse-shell-command-blocked-context-marker");
+    let command = format!("printf blocked > {}", marker.display());
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "blocked pre hook context observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let pre_context = "blocked by pre hook with context";
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_pre_tool_use_hook(home, Some("^Bash$"), "json_deny_with_context", pre_context)
+            {
+                panic!("failed to write pre tool use hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    if marker.exists() {
+        fs::remove_file(&marker).context("remove leftover pre tool use marker")?;
+    }
+
+    test.submit_turn_with_permission_profile(
+        "run the blocked shell command with pre hook context",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .message_input_texts("developer")
+            .contains(&pre_context.to_string()),
+        "follow-up request should include blocked pre tool use additional context",
+    );
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(
+        output.contains("Command blocked by PreToolUse hook: blocked by pre hook with context"),
+        "blocked tool output should still surface the hook reason",
+    );
+    assert!(
+        !marker.exists(),
+        "blocked command should not create marker file"
     );
 
     Ok(())
@@ -2943,6 +3253,77 @@ async fn post_tool_use_exit_two_replaces_one_shot_exec_command_output_with_feedb
         hook_inputs[0]["tool_response"],
         Value::String("post-hook-output".to_string())
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn post_tool_use_spills_large_feedback_message() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "posttooluse-large-feedback";
+    let command = "printf post-hook-output".to_string();
+    let args = serde_json::json!({ "cmd": command, "tty": false });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "exec_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "post hook blocked the exec result"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let feedback = "blocked by post hook ".repeat(800);
+
+    let mut builder = test_codex()
+        .with_pre_build_hook({
+            let feedback = feedback.clone();
+            move |home| {
+                if let Err(error) =
+                    write_post_tool_use_hook(home, Some("^Bash$"), "exit_2", &feedback)
+                {
+                    panic!("failed to write post tool use hook test fixture: {error}");
+                }
+            }
+        })
+        .with_config(|config| {
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run the exec command with long post-hook feedback")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("exec command output string");
+    assert!(output.contains("tokens truncated"));
+    let path = spilled_hook_output_path(output).context("spill path")?;
+    assert_eq!(fs::read_to_string(path)?, feedback.trim());
 
     Ok(())
 }

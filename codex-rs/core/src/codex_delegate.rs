@@ -30,7 +30,6 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
-use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian;
@@ -94,9 +93,7 @@ pub(crate) async fn run_codex_thread_interactive(
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         parent_trace: None,
-        environment_selections: ResolvedTurnEnvironments {
-            turn_environments: parent_ctx.environments.clone(),
-        },
+        environment_selections: parent_ctx.environments.clone(),
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         thread_store: Arc::clone(&parent_session.services.thread_store),
     }))

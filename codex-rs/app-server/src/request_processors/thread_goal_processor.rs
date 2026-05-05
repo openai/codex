@@ -7,6 +7,7 @@ pub(crate) struct ThreadGoalRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     config: Arc<Config>,
     thread_state_manager: ThreadStateManager,
+    state_db: Option<StateDbHandle>,
 }
 
 impl ThreadGoalRequestProcessor {
@@ -15,12 +16,14 @@ impl ThreadGoalRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         config: Arc<Config>,
         thread_state_manager: ThreadStateManager,
+        state_db: Option<StateDbHandle>,
     ) -> Self {
         Self {
             thread_manager,
             outgoing,
             config,
             thread_state_manager,
+            state_db,
         }
     }
 
@@ -78,7 +81,7 @@ impl ThreadGoalRequestProcessor {
             if let Some(state_db) = thread.state_db() {
                 Some(state_db)
             } else {
-                open_state_db_for_direct_thread_lookup(&self.config).await
+                self.state_db.clone()
             }
         } else {
             None
@@ -104,12 +107,16 @@ impl ThreadGoalRequestProcessor {
                     "ephemeral thread does not support goals: {thread_id}"
                 ))
             })?,
-            None => find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
-                .await
-                .map_err(|err| {
-                    internal_error(format!("failed to locate thread id {thread_id}: {err}"))
-                })?
-                .ok_or_else(|| invalid_request(format!("thread not found: {thread_id}")))?,
+            None => find_thread_path_by_id_str(
+                &self.config.codex_home,
+                &thread_id.to_string(),
+                self.state_db.as_deref(),
+            )
+            .await
+            .map_err(|err| {
+                internal_error(format!("failed to locate thread id {thread_id}: {err}"))
+            })?
+            .ok_or_else(|| invalid_request(format!("thread not found: {thread_id}")))?,
         };
         reconcile_rollout(
             Some(&state_db),
@@ -141,7 +148,7 @@ impl ThreadGoalRequestProcessor {
             thread.prepare_external_goal_mutation().await;
         }
 
-        let goal = (if let Some(objective) = objective {
+        let (goal, previous_status) = (if let Some(objective) = objective {
             let existing_goal = state_db
                 .get_thread_goal(thread_id)
                 .await
@@ -150,6 +157,7 @@ impl ThreadGoalRequestProcessor {
                 goal.objective == objective
                     && goal.status != codex_state::ThreadGoalStatus::Complete
             }) {
+                let previous_status = ExternalGoalPreviousStatus::Existing(goal.status);
                 state_db
                     .update_thread_goal(
                         thread_id,
@@ -167,7 +175,9 @@ impl ThreadGoalRequestProcessor {
                             )
                         })
                     })
+                    .map(|goal| (goal, previous_status))
             } else {
+                let previous_status = ExternalGoalPreviousStatus::NewGoal;
                 state_db
                     .replace_thread_goal(
                         thread_id,
@@ -176,8 +186,19 @@ impl ThreadGoalRequestProcessor {
                         params.token_budget.flatten(),
                     )
                     .await
+                    .map(|goal| (goal, previous_status))
             }
         } else {
+            let existing_goal = state_db
+                .get_thread_goal(thread_id)
+                .await
+                .map_err(|err| invalid_request(err.to_string()))?;
+            let Some(existing_goal) = existing_goal else {
+                return Err(invalid_request(format!(
+                    "cannot update goal for thread {thread_id}: no goal exists"
+                )));
+            };
+            let previous_status = ExternalGoalPreviousStatus::Existing(existing_goal.status);
             state_db
                 .update_thread_goal(
                     thread_id,
@@ -193,9 +214,13 @@ impl ThreadGoalRequestProcessor {
                         anyhow::anyhow!("cannot update goal for thread {thread_id}: no goal exists")
                     })
                 })
+                .map(|goal| (goal, previous_status))
         })
         .map_err(|err| invalid_request(err.to_string()))?;
-        let goal_status = goal.status;
+        let external_goal_set = ExternalGoalSet {
+            goal: goal.clone(),
+            previous_status,
+        };
         let goal = api_thread_goal_from_state(goal);
         self.outgoing
             .send_response(
@@ -206,7 +231,7 @@ impl ThreadGoalRequestProcessor {
         self.emit_thread_goal_updated_ordered(thread_id, goal, listener_command_tx)
             .await;
         if let Some(thread) = running_thread.as_ref() {
-            thread.apply_external_goal_set(goal_status).await;
+            thread.apply_external_goal_set(external_goal_set).await;
         }
         Ok(())
     }
@@ -247,12 +272,16 @@ impl ThreadGoalRequestProcessor {
                     "ephemeral thread does not support goals: {thread_id}"
                 ))
             })?,
-            None => find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
-                .await
-                .map_err(|err| {
-                    internal_error(format!("failed to locate thread id {thread_id}: {err}"))
-                })?
-                .ok_or_else(|| invalid_request(format!("thread not found: {thread_id}")))?,
+            None => find_thread_path_by_id_str(
+                &self.config.codex_home,
+                &thread_id.to_string(),
+                self.state_db.as_deref(),
+            )
+            .await
+            .map_err(|err| {
+                internal_error(format!("failed to locate thread id {thread_id}: {err}"))
+            })?
+            .ok_or_else(|| invalid_request(format!("thread not found: {thread_id}")))?,
         };
         reconcile_rollout(
             Some(&state_db),
@@ -307,16 +336,20 @@ impl ThreadGoalRequestProcessor {
                 return Ok(state_db);
             }
         } else {
-            find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
-                .await
-                .map_err(|err| {
-                    internal_error(format!("failed to locate thread id {thread_id}: {err}"))
-                })?
-                .ok_or_else(|| invalid_request(format!("thread not found: {thread_id}")))?;
+            find_thread_path_by_id_str(
+                &self.config.codex_home,
+                &thread_id.to_string(),
+                self.state_db.as_deref(),
+            )
+            .await
+            .map_err(|err| {
+                internal_error(format!("failed to locate thread id {thread_id}: {err}"))
+            })?
+            .ok_or_else(|| invalid_request(format!("thread not found: {thread_id}")))?;
         }
 
-        open_state_db_for_direct_thread_lookup(&self.config)
-            .await
+        self.state_db
+            .clone()
             .ok_or_else(|| internal_error("sqlite state db unavailable for thread goals"))
     }
 

@@ -7,6 +7,7 @@ pub(crate) struct FeedbackRequestProcessor {
     config: Arc<Config>,
     feedback: CodexFeedback,
     log_db: Option<LogDbLayer>,
+    state_db: Option<StateDbHandle>,
 }
 
 impl FeedbackRequestProcessor {
@@ -16,6 +17,7 @@ impl FeedbackRequestProcessor {
         config: Arc<Config>,
         feedback: CodexFeedback,
         log_db: Option<LogDbLayer>,
+        state_db: Option<StateDbHandle>,
     ) -> Self {
         Self {
             auth_manager,
@@ -23,6 +25,7 @@ impl FeedbackRequestProcessor {
             config,
             feedback,
             log_db,
+            state_db,
         }
     }
 
@@ -75,7 +78,7 @@ impl FeedbackRequestProcessor {
             if let Some(log_db) = self.log_db.as_ref() {
                 log_db.flush().await;
             }
-            let state_db_ctx = get_state_db(&self.config).await;
+            let state_db_ctx = self.state_db.clone();
             let feedback_thread_ids = match conversation_id {
                 Some(conversation_id) => match self
                     .thread_manager

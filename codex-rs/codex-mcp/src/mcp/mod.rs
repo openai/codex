@@ -71,12 +71,7 @@ pub fn mcp_permission_prompt_is_auto_approved(
     permission_profile: &PermissionProfile,
     context: McpPermissionPromptAutoApproveContext,
 ) -> bool {
-    if matches!(
-        approval_policy,
-        AskForApproval::OnRequest | AskForApproval::Granular(_)
-    ) && context.approvals_reviewer == Some(ApprovalsReviewer::AutoReview)
-        && context.tool_approval_mode == Some(AppToolApproval::Approve)
-    {
+    if context.tool_approval_mode == Some(AppToolApproval::Approve) {
         return true;
     }
 

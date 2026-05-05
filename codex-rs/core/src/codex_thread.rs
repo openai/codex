@@ -1,6 +1,7 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
+use crate::goals::ExternalGoalSet;
 use crate::goals::GoalRuntimeEvent;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
@@ -32,7 +33,9 @@ use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
+use codex_thread_store::StoredThread;
 use codex_thread_store::StoredThreadHistory;
+use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -158,11 +161,11 @@ impl CodexThread {
         }
     }
 
-    pub async fn apply_external_goal_set(&self, status: codex_state::ThreadGoalStatus) {
+    pub async fn apply_external_goal_set(&self, external_set: ExternalGoalSet) {
         if let Err(err) = self
             .codex
             .session
-            .goal_runtime_apply(GoalRuntimeEvent::ExternalSet { status })
+            .goal_runtime_apply(GoalRuntimeEvent::ExternalSet { external_set })
             .await
         {
             tracing::warn!("failed to apply external goal status runtime effects: {err}");
@@ -409,6 +412,38 @@ impl CodexThread {
                 message: err.to_string(),
             })?;
         live_thread.load_history(include_archived).await
+    }
+
+    pub async fn read_thread(
+        &self,
+        include_archived: bool,
+        include_history: bool,
+    ) -> ThreadStoreResult<StoredThread> {
+        let live_thread = self
+            .codex
+            .session
+            .live_thread_for_persistence("read thread")
+            .map_err(|err| ThreadStoreError::Internal {
+                message: err.to_string(),
+            })?;
+        live_thread
+            .read_thread(include_archived, include_history)
+            .await
+    }
+
+    pub async fn update_thread_metadata(
+        &self,
+        patch: ThreadMetadataPatch,
+        include_archived: bool,
+    ) -> ThreadStoreResult<StoredThread> {
+        let live_thread = self
+            .codex
+            .session
+            .live_thread_for_persistence("update thread metadata")
+            .map_err(|err| ThreadStoreError::Internal {
+                message: err.to_string(),
+            })?;
+        live_thread.update_metadata(patch, include_archived).await
     }
 
     pub fn state_db(&self) -> Option<StateDbHandle> {

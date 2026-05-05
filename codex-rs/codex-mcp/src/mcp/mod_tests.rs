@@ -74,16 +74,11 @@ fn mcp_prompt_auto_approval_honors_unrestricted_managed_profiles() {
 }
 
 #[test]
-fn mcp_prompt_auto_approval_honors_auto_review_approved_tools() {
-    assert!(mcp_permission_prompt_is_auto_approved(
+fn mcp_prompt_auto_approval_honors_approved_tools_in_all_permission_modes() {
+    for approval_policy in [
+        AskForApproval::UnlessTrusted,
+        AskForApproval::OnFailure,
         AskForApproval::OnRequest,
-        &PermissionProfile::read_only(),
-        McpPermissionPromptAutoApproveContext {
-            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-            tool_approval_mode: Some(AppToolApproval::Approve),
-        },
-    ));
-    assert!(mcp_permission_prompt_is_auto_approved(
         AskForApproval::Granular(GranularApprovalConfig {
             sandbox_approval: true,
             rules: true,
@@ -91,34 +86,36 @@ fn mcp_prompt_auto_approval_honors_auto_review_approved_tools() {
             request_permissions: true,
             mcp_elicitations: true,
         }),
+        AskForApproval::Never,
+    ] {
+        assert!(mcp_permission_prompt_is_auto_approved(
+            approval_policy,
+            &PermissionProfile::read_only(),
+            McpPermissionPromptAutoApproveContext {
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                tool_approval_mode: Some(AppToolApproval::Approve),
+            },
+        ));
+    }
+
+    assert!(!mcp_permission_prompt_is_auto_approved(
+        AskForApproval::OnRequest,
         &PermissionProfile::read_only(),
         McpPermissionPromptAutoApproveContext {
             approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-            tool_approval_mode: Some(AppToolApproval::Approve),
+            tool_approval_mode: Some(AppToolApproval::Auto),
         },
     ));
+}
+
+#[test]
+fn mcp_prompt_auto_approval_rejects_auto_mode_in_default_permission_mode() {
     assert!(!mcp_permission_prompt_is_auto_approved(
         AskForApproval::OnRequest,
         &PermissionProfile::read_only(),
         McpPermissionPromptAutoApproveContext {
             approvals_reviewer: Some(ApprovalsReviewer::User),
-            tool_approval_mode: Some(AppToolApproval::Approve),
-        },
-    ));
-    assert!(!mcp_permission_prompt_is_auto_approved(
-        AskForApproval::OnFailure,
-        &PermissionProfile::read_only(),
-        McpPermissionPromptAutoApproveContext {
-            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-            tool_approval_mode: Some(AppToolApproval::Approve),
-        },
-    ));
-    assert!(!mcp_permission_prompt_is_auto_approved(
-        AskForApproval::UnlessTrusted,
-        &PermissionProfile::read_only(),
-        McpPermissionPromptAutoApproveContext {
-            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-            tool_approval_mode: Some(AppToolApproval::Approve),
+            tool_approval_mode: Some(AppToolApproval::Auto),
         },
     ));
 }

@@ -20,6 +20,7 @@ fn model_preset(id: &str, show_in_picker: bool) -> ModelPreset {
         }],
         supports_personality: false,
         additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
         is_default: false,
         upgrade: None,
         show_in_picker,

@@ -97,6 +97,8 @@ pub use cap::load_or_create_cap_sids;
 #[cfg(target_os = "windows")]
 pub use cap::workspace_cap_sid_for_cwd;
 #[cfg(target_os = "windows")]
+pub use conpty::ConptyInstance;
+#[cfg(target_os = "windows")]
 pub use conpty::spawn_conpty_process_as_user;
 #[cfg(target_os = "windows")]
 pub use desktop::LaunchDesktop;

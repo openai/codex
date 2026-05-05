@@ -57,10 +57,7 @@ fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanI
                     tool.callable_namespace.clone(),
                     ToolNamespace {
                         name: tool.callable_namespace.clone(),
-                        description: tool
-                            .connector_description
-                            .clone()
-                            .or_else(|| tool.server_instructions.clone()),
+                        description: tool.namespace_description.clone(),
                     },
                 )
             })
@@ -81,7 +78,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::CodeModeWaitHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GoalHandler;
-    use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
@@ -118,7 +114,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 name: tool.canonical_tool_name(),
                 server_name: tool.server_name.as_str(),
                 connector_name: tool.connector_name.as_deref(),
-                connector_description: tool.connector_description.as_deref(),
+                description: tool.namespace_description.as_deref(),
             })
             .collect::<Vec<_>>()
     });
@@ -225,9 +221,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::ListAgentsV2 => {
                 builder.register_handler(handler.name, Arc::new(ListAgentsHandlerV2));
-            }
-            ToolHandlerKind::ListDir => {
-                builder.register_handler(handler.name, Arc::new(ListDirHandler));
             }
             ToolHandlerKind::Mcp => {
                 builder.register_handler(handler.name, mcp_handler.clone());

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use codex_app_server_protocol::Model;
+use codex_app_server_protocol::ModelServiceTier;
 use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_core::ThreadManager;
@@ -43,6 +44,15 @@ fn model_from_preset(preset: ModelPreset) -> Model {
         input_modalities: preset.input_modalities,
         supports_personality: preset.supports_personality,
         additional_speed_tiers: preset.additional_speed_tiers,
+        service_tiers: preset
+            .service_tiers
+            .into_iter()
+            .map(|service_tier| ModelServiceTier {
+                id: service_tier.id,
+                name: service_tier.name,
+                description: service_tier.description,
+            })
+            .collect(),
         is_default: preset.is_default,
     }
 }

@@ -191,7 +191,7 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let turn_environment = ctx.turn.primary_environment().ok_or_else(|| {
+        let turn_environment = ctx.turn.environments.primary().ok_or_else(|| {
             ToolError::Rejected("apply_patch is unavailable in this session".to_string())
         })?;
         let started_at = Instant::now();

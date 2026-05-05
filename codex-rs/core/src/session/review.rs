@@ -52,7 +52,7 @@ pub(super) async fn spawn_review_thread(
     )
     .with_web_search_config(/*web_search_config*/ None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
-    .with_has_environment(parent_turn_context.tools_config.has_environment)
+    .with_environment_mode(parent_turn_context.tools_config.environment_mode)
     .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
     .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
     .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
