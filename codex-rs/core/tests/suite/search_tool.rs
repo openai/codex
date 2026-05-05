@@ -12,11 +12,11 @@ use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI;
@@ -157,10 +157,10 @@ async fn search_tool_enabled_by_default_adds_tool_search() -> Result<()> {
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "list tools",
         AskForApproval::Never,
-        SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 
@@ -221,10 +221,10 @@ async fn always_defer_feature_hides_small_app_tool_sets() -> Result<()> {
         });
     let test = builder.build(&server).await?;
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "list tools",
         AskForApproval::Never,
-        SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 
@@ -265,10 +265,10 @@ async fn tool_search_disabled_exposes_apps_tools_directly() -> Result<()> {
         });
     let test = builder.build(&server).await?;
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "list tools",
         AskForApproval::Never,
-        SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 
@@ -311,10 +311,10 @@ async fn search_tool_is_hidden_for_api_key_auth() -> Result<()> {
         .with_config(move |config| configure_apps(config, apps_server.chatgpt_base_url.as_str()));
     let test = builder.build(&server).await?;
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "list tools",
         AskForApproval::Never,
-        SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 
@@ -347,10 +347,10 @@ async fn search_tool_adds_discovery_instructions_to_tool_description() -> Result
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "list tools",
         AskForApproval::Never,
-        SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 
@@ -389,10 +389,10 @@ async fn search_tool_hides_apps_tools_without_search() -> Result<()> {
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "hello tools",
         AskForApproval::Never,
-        SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 
@@ -425,10 +425,10 @@ async fn explicit_app_mentions_expose_apps_tools_without_search() -> Result<()> 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "Use [$calendar](app://calendar) and then call tools.",
         AskForApproval::Never,
-        SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 
@@ -603,6 +603,27 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
             .and_then(Value::as_str)
             .is_some_and(|turn_id| !turn_id.is_empty()),
         "apps tools/call should include turn metadata turn_id: {apps_tool_call:?}"
+    );
+    let mcp_turn_started_at_unix_ms = apps_tool_call
+        .pointer("/params/_meta/x-codex-turn-metadata/turn_started_at_unix_ms")
+        .and_then(Value::as_i64)
+        .expect("apps tools/call should include turn_started_at_unix_ms");
+    assert!(
+        mcp_turn_started_at_unix_ms > 0,
+        "apps tools/call should include a positive turn_started_at_unix_ms: {apps_tool_call:?}"
+    );
+
+    let first_request_turn_metadata: Value = serde_json::from_str(
+        &requests[0]
+            .header("x-codex-turn-metadata")
+            .expect("first response request should include turn metadata"),
+    )
+    .expect("first response request turn metadata should be valid JSON");
+    assert_eq!(
+        first_request_turn_metadata
+            .get("turn_started_at_unix_ms")
+            .and_then(Value::as_i64),
+        Some(mcp_turn_started_at_unix_ms)
     );
 
     let first_request_body = requests[0].body_json();
@@ -957,10 +978,10 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
         });
     let test = builder.build(&server).await?;
 
-    test.submit_turn_with_policies(
+    test.submit_turn_with_approval_and_permission_profile(
         "Find the rmcp echo and image tools.",
         AskForApproval::Never,
-        SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
     )
     .await?;
 
@@ -1004,6 +1025,95 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
     assert!(
         !found_rmcp_image_tool,
         "disabled non-app MCP tools should not be searchable: {image_tools:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_description() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    let search_call_id = "tool-search-echo";
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_tool_search_call(
+                    search_call_id,
+                    &json!({
+                        "query": "Echo back the provided message and include environment data.",
+                        "limit": 8,
+                    }),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let mut builder =
+        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(move |config| {
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                "rmcp".to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: None,
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    experimental_environment: None,
+                    enabled: true,
+                    required: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
+                    enabled_tools: Some(vec!["echo".to_string()]),
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth_resource: None,
+                    supports_parallel_tool_calls: false,
+                    tools: HashMap::new(),
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_approval_and_permission_profile(
+        "Find the rmcp echo tool.",
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+
+    let tools = tool_search_output_tools(&requests[1], search_call_id);
+    let rmcp_namespace = tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("mcp__rmcp__"))
+        .expect("tool_search should return the rmcp namespace");
+    assert_eq!(
+        rmcp_namespace.get("description").and_then(Value::as_str),
+        Some("Use these tools to exercise the rmcp test server.")
     );
 
     Ok(())

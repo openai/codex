@@ -5,7 +5,6 @@
 //! any other backing store.
 
 mod error;
-#[cfg(debug_assertions)]
 mod in_memory;
 mod live_thread;
 mod local;
@@ -15,13 +14,12 @@ mod types;
 
 pub use error::ThreadStoreError;
 pub use error::ThreadStoreResult;
-#[cfg(debug_assertions)]
 pub use in_memory::InMemoryThreadStore;
-#[cfg(debug_assertions)]
 pub use in_memory::InMemoryThreadStoreCalls;
 pub use live_thread::LiveThread;
 pub use live_thread::LiveThreadInitGuard;
 pub use local::LocalThreadStore;
+pub use local::LocalThreadStoreConfig;
 pub use remote::RemoteThreadStore;
 pub use store::ThreadStore;
 pub use types::AppendThreadItemsParams;
@@ -40,5 +38,6 @@ pub use types::StoredThreadHistory;
 pub use types::ThreadEventPersistenceMode;
 pub use types::ThreadMetadataPatch;
 pub use types::ThreadPage;
+pub use types::ThreadPersistenceMetadata;
 pub use types::ThreadSortKey;
 pub use types::UpdateThreadMetadataParams;

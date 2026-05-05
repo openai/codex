@@ -1,139 +1,148 @@
 use std::path::PathBuf;
 
+use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::FileChangeApprovalDecision;
+use codex_app_server_protocol::McpServerElicitationAction;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
+use codex_app_server_protocol::ReviewTarget;
+use codex_app_server_protocol::ThreadRealtimeAudioChunk;
+use codex_app_server_protocol::ThreadRealtimeStartTransport;
+use codex_app_server_protocol::ToolRequestUserInputResponse;
+use codex_app_server_protocol::UserInput;
 use codex_config::types::ApprovalsReviewer;
-use codex_protocol::approvals::ElicitationAction;
+use codex_protocol::approvals::GuardianAssessmentEvent;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::mcp::RequestId as McpRequestId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::ConversationAudioParams;
-use codex_protocol::protocol::ConversationStartParams;
-use codex_protocol::protocol::ConversationTextParams;
-use codex_protocol::protocol::Op;
-use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::ReviewRequest;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
-use codex_protocol::request_user_input::RequestUserInputResponse;
-use codex_protocol::user_input::UserInput;
 use serde::Serialize;
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct AppCommand(Op);
-
 #[allow(clippy::large_enum_variant)]
-#[allow(dead_code)]
-pub(crate) enum AppCommandView<'a> {
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) enum AppCommand {
     Interrupt,
     CleanBackgroundTerminals,
-    RealtimeConversationStart(&'a ConversationStartParams),
-    RealtimeConversationAudio(&'a ConversationAudioParams),
-    RealtimeConversationText(&'a ConversationTextParams),
+    RealtimeConversationStart {
+        transport: Option<ThreadRealtimeStartTransport>,
+        voice: Option<Value>,
+    },
+    RealtimeConversationAudio(ThreadRealtimeAudioChunk),
     RealtimeConversationClose,
     RunUserShellCommand {
-        command: &'a str,
+        command: String,
     },
     UserTurn {
-        items: &'a [UserInput],
-        cwd: &'a PathBuf,
+        items: Vec<UserInput>,
+        cwd: PathBuf,
         approval_policy: AskForApproval,
-        approvals_reviewer: &'a Option<ApprovalsReviewer>,
-        sandbox_policy: &'a SandboxPolicy,
-        permission_profile: &'a Option<PermissionProfile>,
-        model: &'a str,
+        approvals_reviewer: Option<ApprovalsReviewer>,
+        permission_profile: PermissionProfile,
+        model: String,
         effort: Option<ReasoningEffortConfig>,
-        summary: &'a Option<ReasoningSummaryConfig>,
-        service_tier: &'a Option<Option<ServiceTier>>,
-        final_output_json_schema: &'a Option<Value>,
-        collaboration_mode: &'a Option<CollaborationMode>,
-        personality: &'a Option<Personality>,
+        summary: Option<ReasoningSummaryConfig>,
+        service_tier: Option<Option<ServiceTier>>,
+        final_output_json_schema: Option<Value>,
+        collaboration_mode: Option<CollaborationMode>,
+        personality: Option<Personality>,
     },
     OverrideTurnContext {
-        cwd: &'a Option<PathBuf>,
-        approval_policy: &'a Option<AskForApproval>,
-        approvals_reviewer: &'a Option<ApprovalsReviewer>,
-        sandbox_policy: &'a Option<SandboxPolicy>,
-        windows_sandbox_level: &'a Option<WindowsSandboxLevel>,
-        model: &'a Option<String>,
-        effort: &'a Option<Option<ReasoningEffortConfig>>,
-        summary: &'a Option<ReasoningSummaryConfig>,
-        service_tier: &'a Option<Option<ServiceTier>>,
-        collaboration_mode: &'a Option<CollaborationMode>,
-        personality: &'a Option<Personality>,
+        cwd: Option<PathBuf>,
+        approval_policy: Option<AskForApproval>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
+        permission_profile: Option<PermissionProfile>,
+        windows_sandbox_level: Option<WindowsSandboxLevel>,
+        model: Option<String>,
+        effort: Option<Option<ReasoningEffortConfig>>,
+        summary: Option<ReasoningSummaryConfig>,
+        service_tier: Option<Option<ServiceTier>>,
+        collaboration_mode: Option<CollaborationMode>,
+        personality: Option<Personality>,
     },
     ExecApproval {
-        id: &'a str,
-        turn_id: &'a Option<String>,
-        decision: &'a ReviewDecision,
+        id: String,
+        turn_id: Option<String>,
+        decision: CommandExecutionApprovalDecision,
     },
     PatchApproval {
-        id: &'a str,
-        decision: &'a ReviewDecision,
+        id: String,
+        decision: FileChangeApprovalDecision,
     },
     ResolveElicitation {
-        server_name: &'a str,
-        request_id: &'a McpRequestId,
-        decision: &'a ElicitationAction,
-        content: &'a Option<Value>,
-        meta: &'a Option<Value>,
+        server_name: String,
+        request_id: AppServerRequestId,
+        decision: McpServerElicitationAction,
+        content: Option<Value>,
+        meta: Option<Value>,
     },
     UserInputAnswer {
-        id: &'a str,
-        response: &'a RequestUserInputResponse,
+        id: String,
+        response: ToolRequestUserInputResponse,
     },
     RequestPermissionsResponse {
-        id: &'a str,
-        response: &'a RequestPermissionsResponse,
+        id: String,
+        response: RequestPermissionsResponse,
     },
     ReloadUserConfig,
     ListSkills {
-        cwds: &'a [PathBuf],
+        cwds: Vec<PathBuf>,
         force_reload: bool,
     },
     Compact,
     SetThreadName {
-        name: &'a str,
+        name: String,
     },
     Shutdown,
     ThreadRollback {
         num_turns: u32,
     },
     Review {
-        review_request: &'a ReviewRequest,
+        target: ReviewTarget,
     },
-    Other(&'a Op),
+    AddToHistory {
+        text: String,
+    },
+    GetHistoryEntryRequest {
+        offset: usize,
+        log_id: u64,
+    },
+    ApproveGuardianDeniedAction {
+        event: GuardianAssessmentEvent,
+    },
 }
 
 impl AppCommand {
     pub(crate) fn interrupt() -> Self {
-        Self(Op::Interrupt)
+        Self::Interrupt
     }
 
     pub(crate) fn clean_background_terminals() -> Self {
-        Self(Op::CleanBackgroundTerminals)
+        Self::CleanBackgroundTerminals
     }
 
-    pub(crate) fn realtime_conversation_start(params: ConversationStartParams) -> Self {
-        Self(Op::RealtimeConversationStart(params))
+    pub(crate) fn realtime_conversation_start(
+        transport: Option<ThreadRealtimeStartTransport>,
+        voice: Option<Value>,
+    ) -> Self {
+        Self::RealtimeConversationStart { transport, voice }
     }
 
     #[cfg_attr(target_os = "linux", allow(dead_code))]
-    pub(crate) fn realtime_conversation_audio(params: ConversationAudioParams) -> Self {
-        Self(Op::RealtimeConversationAudio(params))
+    pub(crate) fn realtime_conversation_audio(frame: ThreadRealtimeAudioChunk) -> Self {
+        Self::RealtimeConversationAudio(frame)
     }
 
     pub(crate) fn realtime_conversation_close() -> Self {
-        Self(Op::RealtimeConversationClose)
+        Self::RealtimeConversationClose
     }
 
     pub(crate) fn run_user_shell_command(command: String) -> Self {
-        Self(Op::RunUserShellCommand { command })
+        Self::RunUserShellCommand { command }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -141,8 +150,7 @@ impl AppCommand {
         items: Vec<UserInput>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
-        permission_profile: Option<PermissionProfile>,
+        permission_profile: PermissionProfile,
         model: String,
         effort: Option<ReasoningEffortConfig>,
         summary: Option<ReasoningSummaryConfig>,
@@ -151,13 +159,11 @@ impl AppCommand {
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
     ) -> Self {
-        Self(Op::UserTurn {
+        Self::UserTurn {
             items,
-            environments: None,
             cwd,
             approval_policy,
             approvals_reviewer: None,
-            sandbox_policy,
             permission_profile,
             model,
             effort,
@@ -166,7 +172,7 @@ impl AppCommand {
             final_output_json_schema,
             collaboration_mode,
             personality,
-        })
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -174,7 +180,7 @@ impl AppCommand {
         cwd: Option<PathBuf>,
         approval_policy: Option<AskForApproval>,
         approvals_reviewer: Option<ApprovalsReviewer>,
-        sandbox_policy: Option<SandboxPolicy>,
+        permission_profile: Option<PermissionProfile>,
         windows_sandbox_level: Option<WindowsSandboxLevel>,
         model: Option<String>,
         effort: Option<Option<ReasoningEffortConfig>>,
@@ -183,12 +189,11 @@ impl AppCommand {
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
     ) -> Self {
-        Self(Op::OverrideTurnContext {
+        Self::OverrideTurnContext {
             cwd,
             approval_policy,
             approvals_reviewer,
-            sandbox_policy,
-            permission_profile: None,
+            permission_profile,
             windows_sandbox_level,
             model,
             effort,
@@ -196,221 +201,100 @@ impl AppCommand {
             service_tier,
             collaboration_mode,
             personality,
-        })
+        }
     }
 
     pub(crate) fn exec_approval(
         id: String,
         turn_id: Option<String>,
-        decision: ReviewDecision,
+        decision: CommandExecutionApprovalDecision,
     ) -> Self {
-        Self(Op::ExecApproval {
+        Self::ExecApproval {
             id,
             turn_id,
             decision,
-        })
+        }
     }
 
-    pub(crate) fn patch_approval(id: String, decision: ReviewDecision) -> Self {
-        Self(Op::PatchApproval { id, decision })
+    pub(crate) fn patch_approval(id: String, decision: FileChangeApprovalDecision) -> Self {
+        Self::PatchApproval { id, decision }
     }
 
     pub(crate) fn resolve_elicitation(
         server_name: String,
-        request_id: McpRequestId,
-        decision: ElicitationAction,
+        request_id: AppServerRequestId,
+        decision: McpServerElicitationAction,
         content: Option<Value>,
         meta: Option<Value>,
     ) -> Self {
-        Self(Op::ResolveElicitation {
+        Self::ResolveElicitation {
             server_name,
             request_id,
             decision,
             content,
             meta,
-        })
+        }
     }
 
-    pub(crate) fn user_input_answer(id: String, response: RequestUserInputResponse) -> Self {
-        Self(Op::UserInputAnswer { id, response })
+    pub(crate) fn user_input_answer(id: String, response: ToolRequestUserInputResponse) -> Self {
+        Self::UserInputAnswer { id, response }
     }
 
     pub(crate) fn request_permissions_response(
         id: String,
         response: RequestPermissionsResponse,
     ) -> Self {
-        Self(Op::RequestPermissionsResponse { id, response })
+        Self::RequestPermissionsResponse { id, response }
     }
 
     pub(crate) fn reload_user_config() -> Self {
-        Self(Op::ReloadUserConfig)
+        Self::ReloadUserConfig
     }
 
     pub(crate) fn list_skills(cwds: Vec<PathBuf>, force_reload: bool) -> Self {
-        Self(Op::ListSkills { cwds, force_reload })
+        Self::ListSkills { cwds, force_reload }
     }
 
     pub(crate) fn compact() -> Self {
-        Self(Op::Compact)
+        Self::Compact
     }
 
     pub(crate) fn set_thread_name(name: String) -> Self {
-        Self(Op::SetThreadName { name })
+        Self::SetThreadName { name }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn shutdown() -> Self {
+        Self::Shutdown
     }
 
     pub(crate) fn thread_rollback(num_turns: u32) -> Self {
-        Self(Op::ThreadRollback { num_turns })
+        Self::ThreadRollback { num_turns }
     }
 
-    pub(crate) fn review(review_request: ReviewRequest) -> Self {
-        Self(Op::Review { review_request })
+    pub(crate) fn review(target: ReviewTarget) -> Self {
+        Self::Review { target }
     }
 
-    pub(crate) fn into_core(self) -> Op {
-        self.0
+    pub(crate) fn add_to_history(text: String) -> Self {
+        Self::AddToHistory { text }
+    }
+
+    pub(crate) fn history_lookup(offset: usize, log_id: u64) -> Self {
+        Self::GetHistoryEntryRequest { offset, log_id }
+    }
+
+    pub(crate) fn approve_guardian_denied_action(event: GuardianAssessmentEvent) -> Self {
+        Self::ApproveGuardianDeniedAction { event }
     }
 
     pub(crate) fn is_review(&self) -> bool {
-        matches!(self.view(), AppCommandView::Review { .. })
-    }
-
-    pub(crate) fn view(&self) -> AppCommandView<'_> {
-        match &self.0 {
-            Op::Interrupt => AppCommandView::Interrupt,
-            Op::CleanBackgroundTerminals => AppCommandView::CleanBackgroundTerminals,
-            Op::RealtimeConversationStart(params) => {
-                AppCommandView::RealtimeConversationStart(params)
-            }
-            Op::RealtimeConversationAudio(params) => {
-                AppCommandView::RealtimeConversationAudio(params)
-            }
-            Op::RealtimeConversationText(params) => {
-                AppCommandView::RealtimeConversationText(params)
-            }
-            Op::RealtimeConversationClose => AppCommandView::RealtimeConversationClose,
-            Op::RunUserShellCommand { command } => AppCommandView::RunUserShellCommand { command },
-            Op::UserTurn {
-                items,
-                cwd,
-                approval_policy,
-                approvals_reviewer,
-                sandbox_policy,
-                permission_profile,
-                model,
-                effort,
-                summary,
-                service_tier,
-                final_output_json_schema,
-                collaboration_mode,
-                personality,
-                environments: _,
-            } => AppCommandView::UserTurn {
-                items,
-                cwd,
-                approval_policy: *approval_policy,
-                approvals_reviewer,
-                sandbox_policy,
-                permission_profile,
-                model,
-                effort: *effort,
-                summary,
-                service_tier,
-                final_output_json_schema,
-                collaboration_mode,
-                personality,
-            },
-            Op::OverrideTurnContext {
-                cwd,
-                approval_policy,
-                approvals_reviewer,
-                sandbox_policy,
-                permission_profile: _,
-                windows_sandbox_level,
-                model,
-                effort,
-                summary,
-                service_tier,
-                collaboration_mode,
-                personality,
-            } => AppCommandView::OverrideTurnContext {
-                cwd,
-                approval_policy,
-                approvals_reviewer,
-                sandbox_policy,
-                windows_sandbox_level,
-                model,
-                effort,
-                summary,
-                service_tier,
-                collaboration_mode,
-                personality,
-            },
-            Op::ExecApproval {
-                id,
-                turn_id,
-                decision,
-            } => AppCommandView::ExecApproval {
-                id,
-                turn_id,
-                decision,
-            },
-            Op::PatchApproval { id, decision } => AppCommandView::PatchApproval { id, decision },
-            Op::ResolveElicitation {
-                server_name,
-                request_id,
-                decision,
-                content,
-                meta,
-            } => AppCommandView::ResolveElicitation {
-                server_name,
-                request_id,
-                decision,
-                content,
-                meta,
-            },
-            Op::UserInputAnswer { id, response } => {
-                AppCommandView::UserInputAnswer { id, response }
-            }
-            Op::RequestPermissionsResponse { id, response } => {
-                AppCommandView::RequestPermissionsResponse { id, response }
-            }
-            Op::ReloadUserConfig => AppCommandView::ReloadUserConfig,
-            Op::ListSkills { cwds, force_reload } => AppCommandView::ListSkills {
-                cwds,
-                force_reload: *force_reload,
-            },
-            Op::Compact => AppCommandView::Compact,
-            Op::SetThreadName { name } => AppCommandView::SetThreadName { name },
-            Op::Shutdown => AppCommandView::Shutdown,
-            Op::ThreadRollback { num_turns } => AppCommandView::ThreadRollback {
-                num_turns: *num_turns,
-            },
-            Op::Review { review_request } => AppCommandView::Review { review_request },
-            op => AppCommandView::Other(op),
-        }
-    }
-}
-
-impl From<Op> for AppCommand {
-    fn from(value: Op) -> Self {
-        Self(value)
-    }
-}
-
-impl From<&Op> for AppCommand {
-    fn from(value: &Op) -> Self {
-        Self(value.clone())
+        matches!(self, Self::Review { .. })
     }
 }
 
 impl From<&AppCommand> for AppCommand {
     fn from(value: &AppCommand) -> Self {
         value.clone()
-    }
-}
-
-impl From<AppCommand> for Op {
-    fn from(value: AppCommand) -> Self {
-        value.0
     }
 }

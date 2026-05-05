@@ -233,7 +233,6 @@ async fn review_op_with_plain_text_emits_review_fallback() {
 
 /// Ensure review flow suppresses assistant-specific streaming/completion events:
 /// - AgentMessageContentDelta
-/// - AgentMessageDelta (legacy)
 /// - ItemCompleted for TurnItem::AgentMessage
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
@@ -289,9 +288,6 @@ async fn review_filters_agent_message_related_events() {
         // The following must be filtered by review flow
         EventMsg::AgentMessageContentDelta(_) => {
             panic!("unexpected AgentMessageContentDelta surfaced during review")
-        }
-        EventMsg::AgentMessageDelta(_) => {
-            panic!("unexpected AgentMessageDelta surfaced during review")
         }
         _ => false,
     })

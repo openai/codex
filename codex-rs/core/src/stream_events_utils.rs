@@ -138,8 +138,11 @@ pub(crate) async fn record_completed_response_item(
             .await;
     }
     mark_thread_memory_mode_polluted_if_external_context(sess, turn_context, item).await;
-    let has_memory_citation =
-        record_stage1_output_usage_and_detect_memory_citation(turn_context, item).await;
+    let has_memory_citation = record_stage1_output_usage_and_detect_memory_citation(
+        sess.services.state_db.as_ref(),
+        item,
+    )
+    .await;
     if has_memory_citation {
         sess.record_memory_citation_for_turn(&turn_context.sub_id)
             .await;
@@ -174,7 +177,7 @@ pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
 }
 
 async fn record_stage1_output_usage_and_detect_memory_citation(
-    turn_context: &TurnContext,
+    state_db_ctx: Option<&state_db::StateDbHandle>,
     item: &ResponseItem,
 ) -> bool {
     let Some(raw_text) = raw_assistant_output_text_from_item(item) else {
@@ -190,7 +193,7 @@ async fn record_stage1_output_usage_and_detect_memory_citation(
         return true;
     }
 
-    if let Some(db) = state_db::get_state_db(turn_context.config.as_ref()).await {
+    if let Some(db) = state_db_ctx {
         let _ = db.record_stage1_output_usage(&thread_ids).await;
     }
     true
@@ -255,14 +258,14 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
-            if let Some(turn_item) = handle_non_tool_response_item(
+            let turn_item = handle_non_tool_response_item(
                 ctx.sess.as_ref(),
                 ctx.turn_context.as_ref(),
                 &item,
                 plan_mode,
             )
-            .await
-            {
+            .await;
+            if let Some(turn_item) = turn_item {
                 if previously_active_item.is_none() {
                     let mut started_item = turn_item.clone();
                     if let TurnItem::ImageGeneration(item) = &mut started_item {

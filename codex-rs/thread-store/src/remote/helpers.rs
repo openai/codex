@@ -25,6 +25,7 @@ use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadEventPersistenceMode;
 use crate::ThreadMetadataPatch;
+use crate::ThreadPersistenceMetadata;
 use crate::ThreadSortKey;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
@@ -184,6 +185,12 @@ pub(super) fn dynamic_tools_json(
     dynamic_tools: &[DynamicToolSpec],
 ) -> ThreadStoreResult<Vec<String>> {
     serialize_json_vec(dynamic_tools, "dynamic_tool")
+}
+
+pub(super) fn thread_persistence_metadata_json(
+    metadata: &ThreadPersistenceMetadata,
+) -> ThreadStoreResult<String> {
+    serialize_json(metadata, "thread_persistence_metadata")
 }
 
 pub(super) fn rollout_items_json(items: &[RolloutItem]) -> ThreadStoreResult<Vec<String>> {

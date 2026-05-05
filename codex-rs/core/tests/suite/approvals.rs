@@ -2,12 +2,6 @@
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_config::ConfigLayerStack;
-use codex_config::ConfigLayerStackOrdering;
-use codex_config::NetworkConstraints;
-use codex_config::NetworkRequirementsToml;
-use codex_config::RequirementSource;
-use codex_config::Sourced;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::CodexThread;
 use codex_core::config::Constrained;
@@ -25,6 +19,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
+use core_test_support::managed_network_requirements_loader;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -37,10 +32,11 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use core_test_support::zsh_fork::build_zsh_fork_test;
-use core_test_support::zsh_fork::restrictive_workspace_write_policy;
+use core_test_support::zsh_fork::restrictive_workspace_write_profile;
 use core_test_support::zsh_fork::zsh_fork_runtime;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
@@ -100,6 +96,14 @@ enum ActionKind {
     RunCommand {
         command: &'static str,
     },
+    RunCommandWithPolicy {
+        command: &'static str,
+        policy_src: &'static str,
+    },
+    RunCommandWithPrefixRule {
+        command: &'static str,
+        prefix_rule: &'static [&'static str],
+    },
     RunUnifiedExecCommand {
         command: &'static str,
         justification: Option<&'static str>,
@@ -118,6 +122,20 @@ const DEFAULT_UNIFIED_EXEC_JUSTIFICATION: &str =
     "Requires escalated permissions to bypass the sandbox in tests.";
 
 impl ActionKind {
+    fn policy_src(&self) -> Option<&'static str> {
+        match self {
+            ActionKind::RunCommandWithPolicy { policy_src, .. } => Some(*policy_src),
+            ActionKind::WriteFile { .. }
+            | ActionKind::FetchUrlNoProxy { .. }
+            | ActionKind::FetchUrl { .. }
+            | ActionKind::RunCommand { .. }
+            | ActionKind::RunCommandWithPrefixRule { .. }
+            | ActionKind::RunUnifiedExecCommand { .. }
+            | ActionKind::ApplyPatchFunction { .. }
+            | ActionKind::ApplyPatchShell { .. } => None,
+        }
+    }
+
     async fn prepare(
         &self,
         test: &TestCodex,
@@ -205,6 +223,31 @@ impl ActionKind {
                     command,
                     /*timeout_ms*/ 30_000,
                     sandbox_permissions,
+                )?;
+                Ok((event, Some(command.to_string())))
+            }
+            ActionKind::RunCommandWithPolicy { command, .. } => {
+                // Bazel Linux runners can be heavily oversubscribed while this
+                // matrix runs, so avoid making scheduling latency look like an
+                // approval behavior failure.
+                let event = shell_event(
+                    call_id,
+                    command,
+                    /*timeout_ms*/ 30_000,
+                    sandbox_permissions,
+                )?;
+                Ok((event, Some(command.to_string())))
+            }
+            ActionKind::RunCommandWithPrefixRule {
+                command,
+                prefix_rule,
+            } => {
+                let event = shell_event_with_prefix_rule(
+                    call_id,
+                    command,
+                    /*timeout_ms*/ 30_000,
+                    sandbox_permissions,
+                    Some(prefix_rule.iter().map(|part| (*part).to_string()).collect()),
                 )?;
                 Ok((event, Some(command.to_string())))
             }
@@ -552,6 +595,11 @@ enum Outcome {
     ExecApproval {
         decision: ReviewDecision,
         expected_reason: Option<&'static str>,
+    },
+    ExecApprovalWithAmendment {
+        decision: ReviewDecision,
+        expected_reason: Option<&'static str>,
+        expected_execpolicy_amendment: Option<&'static [&'static str]>,
     },
     PatchApproval {
         decision: ReviewDecision,
@@ -912,6 +960,70 @@ fn scenarios() -> Vec<ScenarioSpec> {
             outcome: Outcome::ExecApproval {
                 decision: ReviewDecision::Denied,
                 expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
+            },
+        },
+        ScenarioSpec {
+            name: "cat_heredoc_file_redirect_prefix_rule_requires_escalation_approval",
+            approval_policy: OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommandWithPrefixRule {
+                command: r#"cat <<'EOF' > /tmp/out.txt
+                hello
+                EOF"#,
+                prefix_rule: &["cat"],
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::Denied,
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
+            },
+        },
+        ScenarioSpec {
+            name: "cat_heredoc_variable_assignment_policy_requires_escalation_approval",
+            approval_policy: OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommandWithPolicy {
+                command: r#"PATH=/tmp/evil:$PATH cat <<'EOF'
+                hello
+                EOF"#,
+                policy_src: r#"prefix_rule(pattern=["cat"], decision="allow")"#,
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::Denied,
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
+            },
+        },
+        ScenarioSpec {
+            name: "python_heredoc_requested_prefix_rule_omits_amendment",
+            approval_policy: OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommandWithPrefixRule {
+                command: r#"python3 <<'PY'
+                print('hello')
+                PY"#,
+                prefix_rule: &["python3"],
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApprovalWithAmendment {
+                decision: ReviewDecision::Denied,
+                expected_reason: None,
+                expected_execpolicy_amendment: None,
             },
             expectation: Expectation::CommandFailure {
                 output_contains: "rejected by user",
@@ -1707,7 +1819,9 @@ fn scenario_group(scenario: &ScenarioSpec) -> ScenarioGroup {
         ActionKind::WriteFile { .. }
         | ActionKind::FetchUrlNoProxy { .. }
         | ActionKind::FetchUrl { .. }
-        | ActionKind::RunCommand { .. } => match &scenario.sandbox_policy {
+        | ActionKind::RunCommand { .. }
+        | ActionKind::RunCommandWithPolicy { .. }
+        | ActionKind::RunCommandWithPrefixRule { .. } => match &scenario.sandbox_policy {
             SandboxPolicy::DangerFullAccess => ScenarioGroup::DangerFullAccess,
             SandboxPolicy::ReadOnly { .. } => ScenarioGroup::ReadOnly,
             SandboxPolicy::WorkspaceWrite { .. } => ScenarioGroup::WorkspaceWrite,
@@ -1724,6 +1838,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     let features = scenario.features.clone();
     let model_override = scenario.model_override;
     let model = model_override.unwrap_or("gpt-5.4");
+    let policy_src = scenario.action.policy_src();
 
     let mut builder = test_codex().with_model(model).with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
@@ -1737,6 +1852,13 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
                 .expect("test config should allow feature update");
         }
     });
+    if let Some(policy_src) = policy_src {
+        builder = builder.with_pre_build_hook(move |home| {
+            let rules_dir = home.join("rules");
+            fs::create_dir_all(&rules_dir).expect("create rules dir");
+            fs::write(rules_dir.join("default.rules"), policy_src).expect("write policy");
+        });
+    }
     let test = builder.build(&server).await?;
 
     let call_id = scenario.name;
@@ -1794,6 +1916,40 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
                     scenario.name
                 );
             }
+            test.codex
+                .submit(Op::ExecApproval {
+                    id: approval.effective_approval_id(),
+                    turn_id: None,
+                    decision: decision.clone(),
+                })
+                .await?;
+            wait_for_completion(&test).await;
+        }
+        Outcome::ExecApprovalWithAmendment {
+            decision,
+            expected_reason,
+            expected_execpolicy_amendment,
+        } => {
+            let command = expected_command
+                .as_deref()
+                .expect("exec approval requires shell command");
+            let approval = expect_exec_approval(&test, command).await;
+            if let Some(expected_reason) = expected_reason {
+                assert_eq!(
+                    approval.reason.as_deref(),
+                    Some(*expected_reason),
+                    "unexpected approval reason for {}",
+                    scenario.name
+                );
+            }
+            let expected_execpolicy_amendment = expected_execpolicy_amendment.map(|command| {
+                ExecPolicyAmendment::new(command.iter().map(|part| (*part).to_string()).collect())
+            });
+            assert_eq!(
+                approval.proposed_execpolicy_amendment, expected_execpolicy_amendment,
+                "unexpected execpolicy amendment for {}",
+                scenario.name
+            );
             test.codex
                 .submit(Op::ExecApproval {
                     id: approval.effective_approval_id(),
@@ -2323,7 +2479,7 @@ async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
     };
 
     let approval_policy = AskForApproval::Never;
-    let sandbox_policy = restrictive_workspace_write_policy();
+    let permission_profile = restrictive_workspace_write_profile();
     let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
     let outside_path = outside_dir
         .path()
@@ -2337,7 +2493,7 @@ async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
         &server,
         runtime,
         approval_policy,
-        sandbox_policy.clone(),
+        permission_profile.clone(),
         move |home| {
             let _ = fs::remove_file(&outside_path_for_hook);
             let rules_dir = home.join("rules");
@@ -2372,13 +2528,30 @@ async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
     )
     .await;
 
-    submit_turn(
-        &test,
-        "run allowed touch under zsh fork",
-        approval_policy,
-        sandbox_policy,
-    )
-    .await?;
+    let session_model = test.session_configured.model.clone();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(permission_profile, test.cwd.path());
+    test.codex
+        .submit(Op::UserTurn {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "run allowed touch under zsh fork".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy,
+            approvals_reviewer: Some(ApprovalsReviewer::User),
+            sandbox_policy,
+            permission_profile,
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
 
     wait_for_completion_without_approval(&test).await;
 
@@ -2590,38 +2763,15 @@ allow_local_binding = true
         exclude_slash_tmp: false,
     };
     let sandbox_policy_for_config = sandbox_policy.clone();
-    let mut builder = test_codex().with_home(home).with_config(move |config| {
-        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config
-            .set_legacy_sandbox_policy(sandbox_policy_for_config)
-            .expect("set sandbox policy");
-        let layers = config
-            .config_layer_stack
-            .get_layers(
-                ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                /*include_disabled*/ true,
-            )
-            .into_iter()
-            .cloned()
-            .collect();
-        let mut requirements = config.config_layer_stack.requirements().clone();
-        requirements.network = Some(Sourced::new(
-            NetworkConstraints {
-                enabled: Some(true),
-                allow_local_binding: Some(true),
-                ..Default::default()
-            },
-            RequirementSource::CloudRequirements,
-        ));
-        let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
-        requirements_toml.network = Some(NetworkRequirementsToml {
-            enabled: Some(true),
-            allow_local_binding: Some(true),
-            ..Default::default()
+    let mut builder = test_codex()
+        .with_home(home)
+        .with_cloud_requirements(managed_network_requirements_loader())
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config
+                .set_legacy_sandbox_policy(sandbox_policy_for_config)
+                .expect("set sandbox policy");
         });
-        config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
-            .expect("rebuild config layer stack with network requirements");
-    });
     let test = builder.build(&server).await?;
     assert!(
         test.config.managed_network_requirements_enabled(),
@@ -2892,40 +3042,17 @@ allow_local_binding = true
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };
-    let mut builder = test_codex().with_home(home).with_config(move |config| {
-        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        let cwd = config.cwd.clone();
-        config
-            .permissions
-            .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess, cwd.as_path())
-            .expect("test setup should allow sandbox policy");
-        let layers = config
-            .config_layer_stack
-            .get_layers(
-                ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                /*include_disabled*/ true,
-            )
-            .into_iter()
-            .cloned()
-            .collect();
-        let mut requirements = config.config_layer_stack.requirements().clone();
-        requirements.network = Some(Sourced::new(
-            NetworkConstraints {
-                enabled: Some(true),
-                allow_local_binding: Some(true),
-                ..Default::default()
-            },
-            RequirementSource::CloudRequirements,
-        ));
-        let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
-        requirements_toml.network = Some(NetworkRequirementsToml {
-            enabled: Some(true),
-            allow_local_binding: Some(true),
-            ..Default::default()
+    let mut builder = test_codex()
+        .with_home(home)
+        .with_cloud_requirements(managed_network_requirements_loader())
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            let cwd = config.cwd.clone();
+            config
+                .permissions
+                .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess, cwd.as_path())
+                .expect("test setup should allow sandbox policy");
         });
-        config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
-            .expect("rebuild config layer stack with network requirements");
-    });
     let test = builder.build(&server).await?;
     assert!(
         !test.config.managed_network_requirements_enabled(),

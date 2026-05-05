@@ -32,6 +32,8 @@ pub const CURATED_PLUGINS_STARTUP_SYNC_METRIC: &str = "codex.plugins.startup_syn
 pub const CURATED_PLUGINS_STARTUP_SYNC_FINAL_METRIC: &str = "codex.plugins.startup_sync.final";
 pub const HOOK_RUN_METRIC: &str = "codex.hooks.run";
 pub const HOOK_RUN_DURATION_METRIC: &str = "codex.hooks.run.duration_ms";
+pub const LEGACY_NOTIFY_CONFIGURED_METRIC: &str = "codex.notify.configured";
+pub const LEGACY_NOTIFY_RUN_METRIC: &str = "codex.notify.run";
 /// Total runtime of a startup prewarm attempt until it completes, tagged by final status.
 pub const STARTUP_PREWARM_DURATION_METRIC: &str = "codex.startup_prewarm.duration_ms";
 /// Age of the startup prewarm attempt when the first real turn resolves it, tagged by outcome.

@@ -1,0 +1,24 @@
+---
+source: tui/src/bottom_pane/hooks_browser_view.rs
+expression: "render_lines(&view, 112)"
+---
+                                                                                                                
+  PreToolUse hooks                                                                                              
+  Turn hooks on or off. Your changes are saved automatically.                                                   
+                                                                                                                
+  [x] Hook 2                                                                                                    
+  [x] Hook 3                                                                                                    
+  [x] Hook 4                                                                                                    
+  [x] Hook 5                                                                                                    
+  [x] Hook 6                                                                                                    
+  [x] Hook 7                                                                                                    
+  [x] Hook 8                                                                                                    
+  [x] Hook 9                                                                                                    
+                                                                                                                
+  Event     PreToolUse                                                                                          
+  Matcher   Bash                                                                                                
+  Source    User config - /tmp/hooks.json                                                                       
+  Command   /tmp/hook-8.sh                                                                                      
+  Timeout   30s                                                                                                 
+                                                                                                                
+  Press space or enter to toggle; esc to go back

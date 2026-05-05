@@ -58,9 +58,10 @@ pub(crate) fn parse_marketplace_source(
         });
     }
 
-    Err(MarketplaceAddError::InvalidRequest(format!(
-        "invalid marketplace source format: {source}"
-    )))
+    Err(MarketplaceAddError::InvalidRequest(
+        "invalid marketplace source format; expected owner/repo, a git URL, or a local marketplace path"
+            .to_string(),
+    ))
 }
 
 pub(super) fn stage_marketplace_source<F>(
@@ -160,8 +161,7 @@ fn resolve_local_source_path(source: &str) -> Result<PathBuf, MarketplaceAddErro
 
     path.canonicalize().map_err(|err| {
         MarketplaceAddError::InvalidRequest(format!(
-            "failed to resolve local marketplace source {}: {err}",
-            path.display()
+            "failed to resolve local marketplace source path: {err}"
         ))
     })
 }

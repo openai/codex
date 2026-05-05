@@ -8,6 +8,7 @@ use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -21,7 +22,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
@@ -37,6 +37,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
@@ -532,6 +533,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         supports_search_tool: false,
         priority: 1,
         additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
@@ -627,6 +629,9 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
+    let cwd_path = cwd.path().to_path_buf();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
@@ -634,11 +639,11 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: cwd_path,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
+            sandbox_policy,
+            permission_profile,
             model: REMOTE_MODEL_SLUG.to_string(),
             effort: None,
             summary: Some(ReasoningSummary::Auto),
@@ -785,6 +790,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         supports_search_tool: false,
         priority: 1,
         additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
         upgrade: None,
         base_instructions: remote_base.to_string(),
         model_messages: None,
@@ -855,6 +861,9 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         })
         .await?;
 
+    let cwd_path = cwd.path().to_path_buf();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
@@ -862,11 +871,11 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: cwd_path,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
+            sandbox_policy,
+            permission_profile,
             model: model.to_string(),
             effort: None,
             summary: Some(ReasoningSummary::Auto),
@@ -1272,6 +1281,7 @@ fn test_remote_model_with_policy(
         supports_search_tool: false,
         priority,
         additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,

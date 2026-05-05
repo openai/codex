@@ -3,6 +3,7 @@ use crate::path_utils::write_atomically;
 use anyhow::Context;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
+use codex_config::types::ToolSuggestDisabledTool;
 use codex_features::FEATURES;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
@@ -10,6 +11,7 @@ use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::task;
@@ -57,6 +59,8 @@ pub enum ConfigEdit {
     RecordModelMigrationSeen { from: String, to: String },
     /// Replace the entire `[mcp_servers]` table.
     ReplaceMcpServers(BTreeMap<String, McpServerConfig>),
+    /// Add a disabled tool suggestion under `[tool_suggest].disabled_tools`.
+    AddToolSuggestDisabledTool(ToolSuggestDisabledTool),
     /// Set or clear a skill config entry under `[[skills.config]]` by path.
     SetSkillConfig { path: PathBuf, enabled: bool },
     /// Set or clear a skill config entry under `[[skills.config]]` by name.
@@ -100,6 +104,14 @@ pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
     }
 }
 
+/// Produces a config edit that sets `[tui].status_line_use_colors`.
+pub fn status_line_use_colors_edit(enabled: bool) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["tui".to_string(), "status_line_use_colors".to_string()],
+        value: value(enabled),
+    }
+}
+
 /// Produces a config edit that sets `[tui].terminal_title` to an explicit ordered list.
 ///
 /// The array is written even when it is empty so "disabled title updates" stays
@@ -110,6 +122,45 @@ pub fn terminal_title_items_edit(items: &[String]) -> ConfigEdit {
     ConfigEdit::SetPath {
         segments: vec!["tui".to_string(), "terminal_title".to_string()],
         value: TomlItem::Value(array.into()),
+    }
+}
+
+fn keymap_binding_value(keys: &[String]) -> TomlItem {
+    if let [key] = keys {
+        value(key.to_string())
+    } else {
+        let array = keys.iter().cloned().collect::<toml_edit::Array>();
+        TomlItem::Value(array.into())
+    }
+}
+
+/// Produces a config edit that replaces one root-level TUI keymap binding list.
+pub fn keymap_bindings_edit(context: &str, action: &str, keys: &[String]) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec![
+            "tui".to_string(),
+            "keymap".to_string(),
+            context.to_string(),
+            action.to_string(),
+        ],
+        value: keymap_binding_value(keys),
+    }
+}
+
+/// Produces a config edit that replaces one root-level TUI keymap binding.
+pub fn keymap_binding_edit(context: &str, action: &str, key: &str) -> ConfigEdit {
+    keymap_bindings_edit(context, action, &[key.to_string()])
+}
+
+/// Produces a config edit that removes one root-level TUI keymap binding.
+pub fn keymap_binding_clear_edit(context: &str, action: &str) -> ConfigEdit {
+    ConfigEdit::ClearPath {
+        segments: vec![
+            "tui".to_string(),
+            "keymap".to_string(),
+            context.to_string(),
+            action.to_string(),
+        ],
     }
 }
 
@@ -141,10 +192,13 @@ mod document_helpers {
     use codex_config::types::McpServerEnvVar;
     use codex_config::types::McpServerToolConfig;
     use codex_config::types::McpServerTransportConfig;
+    use codex_config::types::ToolSuggestDisabledTool;
+    use codex_config::types::ToolSuggestDiscoverableType;
     use toml_edit::Array as TomlArray;
     use toml_edit::InlineTable;
     use toml_edit::Item as TomlItem;
     use toml_edit::Table as TomlTable;
+    use toml_edit::Value as TomlValue;
     use toml_edit::value;
 
     pub(super) fn ensure_table_for_write(item: &mut TomlItem) -> Option<&mut TomlTable> {
@@ -340,6 +394,57 @@ mod document_helpers {
         table
     }
 
+    pub(super) fn parse_tool_suggest_disabled_tool(
+        value: &TomlValue,
+    ) -> Option<ToolSuggestDisabledTool> {
+        let table = value.as_inline_table()?;
+        let kind = match table.get("type").and_then(TomlValue::as_str) {
+            Some("connector") => ToolSuggestDiscoverableType::Connector,
+            Some("plugin") => ToolSuggestDiscoverableType::Plugin,
+            _ => return None,
+        };
+        let id = table.get("id").and_then(TomlValue::as_str)?;
+        Some(ToolSuggestDisabledTool {
+            kind,
+            id: id.to_string(),
+        })
+    }
+
+    pub(super) fn parse_tool_suggest_disabled_tool_table(
+        table: &TomlTable,
+    ) -> Option<ToolSuggestDisabledTool> {
+        let kind = match table.get("type").and_then(TomlItem::as_str) {
+            Some("connector") => ToolSuggestDiscoverableType::Connector,
+            Some("plugin") => ToolSuggestDiscoverableType::Plugin,
+            _ => return None,
+        };
+        let id = table.get("id").and_then(TomlItem::as_str)?;
+        Some(ToolSuggestDisabledTool {
+            kind,
+            id: id.to_string(),
+        })
+    }
+
+    pub(super) fn tool_suggest_disabled_tools_value(
+        disabled_tools: &[ToolSuggestDisabledTool],
+    ) -> TomlItem {
+        let mut array = TomlArray::new();
+        for disabled_tool in disabled_tools {
+            let mut table = InlineTable::new();
+            table.insert(
+                "type",
+                match disabled_tool.kind {
+                    ToolSuggestDiscoverableType::Connector => "connector",
+                    ToolSuggestDiscoverableType::Plugin => "plugin",
+                }
+                .into(),
+            );
+            table.insert("id", disabled_tool.id.clone().into());
+            array.push(table);
+        }
+        TomlItem::Value(array.into())
+    }
+
     fn array_from_iter<I>(iter: I) -> TomlItem
     where
         I: Iterator<Item = String>,
@@ -513,6 +618,9 @@ impl ConfigDocument {
                 value(*acknowledged),
             )),
             ConfigEdit::ReplaceMcpServers(servers) => Ok(self.replace_mcp_servers(servers)),
+            ConfigEdit::AddToolSuggestDisabledTool(disabled_tool) => {
+                Ok(self.add_tool_suggest_disabled_tool(disabled_tool))
+            }
             ConfigEdit::SetSkillConfig { path, enabled } => {
                 Ok(self.set_skill_config(SkillConfigSelector::Path(path.clone()), *enabled))
             }
@@ -549,6 +657,41 @@ impl ConfigDocument {
     fn clear(&mut self, scope: Scope, segments: &[&str]) -> bool {
         let resolved = self.scoped_segments(scope, segments);
         self.remove(&resolved)
+    }
+
+    fn add_tool_suggest_disabled_tool(&mut self, disabled_tool: &ToolSuggestDisabledTool) -> bool {
+        let disabled_tools_item = self
+            .doc
+            .get("tool_suggest")
+            .and_then(|item| item.as_table_like())
+            .and_then(|table| table.get("disabled_tools"));
+        let existing_from_array = disabled_tools_item
+            .and_then(|item| item.as_value())
+            .and_then(|value| value.as_array())
+            .into_iter()
+            .flat_map(|array| array.iter())
+            .filter_map(document_helpers::parse_tool_suggest_disabled_tool);
+        let existing_from_tables = disabled_tools_item
+            .and_then(|item| match item {
+                TomlItem::ArrayOfTables(array) => Some(array),
+                _ => None,
+            })
+            .into_iter()
+            .flat_map(|array| array.iter())
+            .filter_map(document_helpers::parse_tool_suggest_disabled_tool_table);
+
+        let mut seen = HashSet::new();
+        let disabled_tools = existing_from_array
+            .chain(existing_from_tables)
+            .chain(std::iter::once(disabled_tool.clone()))
+            .filter_map(|disabled_tool| disabled_tool.normalized())
+            .filter(|disabled_tool| seen.insert(disabled_tool.clone()))
+            .collect::<Vec<_>>();
+        self.write_value(
+            Scope::Global,
+            &["tool_suggest", "disabled_tools"],
+            document_helpers::tool_suggest_disabled_tools_value(&disabled_tools),
+        )
     }
 
     fn clear_owned(&mut self, segments: &[String]) -> bool {

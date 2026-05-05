@@ -6,7 +6,9 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
@@ -33,11 +35,41 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::path::PathBuf;
+
+fn disabled_plan_turn(
+    text: &str,
+    model: String,
+    collaboration_mode: CollaborationMode,
+) -> anyhow::Result<Op> {
+    let cwd = std::env::current_dir()?;
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
+    Ok(Op::UserTurn {
+        environments: None,
+        items: vec![UserInput::Text {
+            text: text.into(),
+            text_elements: Vec::new(),
+        }],
+        final_output_json_schema: None,
+        cwd,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: None,
+        sandbox_policy,
+        permission_profile,
+        model,
+        effort: None,
+        summary: None,
+        service_tier: None,
+        collaboration_mode: Some(collaboration_mode),
+        personality: None,
+    })
+}
 
 fn image_generation_artifact_path(codex_home: &Path, session_id: &str, call_id: &str) -> PathBuf {
     fn sanitize(value: &str) -> String {
@@ -271,6 +303,15 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
         })
         .await?;
 
+    let started = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::WebSearch(item),
+            started_at_ms,
+            ..
+        }) => Some((item.clone(), *started_at_ms)),
+        _ => None,
+    })
+    .await;
     let begin = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::WebSearchBegin(event) => Some(event.clone()),
         _ => None,
@@ -279,16 +320,20 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
     let completed = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ItemCompleted(ItemCompletedEvent {
             item: TurnItem::WebSearch(item),
+            completed_at_ms,
             ..
-        }) => Some(item.clone()),
+        }) => Some((item.clone(), *completed_at_ms)),
         _ => None,
     })
     .await;
 
     assert_eq!(begin.call_id, "web-search-1");
-    assert_eq!(completed.id, begin.call_id);
+    assert_eq!(started.0.id, begin.call_id);
+    assert!(started.1 > 0);
+    assert_eq!(completed.0.id, begin.call_id);
+    assert!(completed.1 > 0);
     assert_eq!(
-        completed.action,
+        completed.0.action,
         WebSearchAction::Search {
             query: Some("weather seattle".to_string()),
             queries: None,
@@ -337,8 +382,26 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
         })
         .await?;
 
+    let started = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::ImageGeneration(item),
+            started_at_ms,
+            ..
+        }) => Some((item.clone(), *started_at_ms)),
+        _ => None,
+    })
+    .await;
     let begin = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ImageGenerationBegin(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    let completed = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::ImageGeneration(item),
+            completed_at_ms,
+            ..
+        }) => Some((item.clone(), *completed_at_ms)),
         _ => None,
     })
     .await;
@@ -349,6 +412,10 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
     .await;
 
     assert_eq!(begin.call_id, call_id);
+    assert_eq!(started.0.id, call_id);
+    assert!(started.1 > 0);
+    assert_eq!(completed.0.id, call_id);
+    assert!(completed.1 > 0);
     assert_eq!(end.call_id, call_id);
     assert_eq!(end.status, "completed");
     assert_eq!(end.revised_prompt, Some("A tiny blue square".to_string()));
@@ -471,11 +538,6 @@ async fn agent_message_content_delta_has_item_metadata() -> anyhow::Result<()> {
         _ => None,
     })
     .await;
-    let legacy_delta = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::AgentMessageDelta(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
     let completed_item = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ItemCompleted(ItemCompletedEvent {
             item: TurnItem::AgentMessage(item),
@@ -490,7 +552,6 @@ async fn agent_message_content_delta_has_item_metadata() -> anyhow::Result<()> {
     assert_eq!(delta_event.turn_id, started_turn_id);
     assert_eq!(delta_event.item_id, started_item.id);
     assert_eq!(delta_event.delta, "streamed response");
-    assert_eq!(legacy_delta.delta, "streamed response");
     assert_eq!(completed_item.id, started_item.id);
 
     Ok(())
@@ -529,25 +590,11 @@ async fn plan_mode_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<
     };
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::Text {
-                text: "please plan".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            cwd: std::env::current_dir()?,
-            approval_policy: codex_protocol::protocol::AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_configured.model.clone(),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: Some(collaboration_mode),
-            personality: None,
-        })
+        .submit(disabled_plan_turn(
+            "please plan",
+            session_configured.model.clone(),
+            collaboration_mode,
+        )?)
         .await?;
 
     let plan_delta = wait_for_event_match(&codex, |ev| match ev {
@@ -608,25 +655,11 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
     };
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::Text {
-                text: "please plan".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            cwd: std::env::current_dir()?,
-            approval_policy: codex_protocol::protocol::AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_configured.model.clone(),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: Some(collaboration_mode),
-            personality: None,
-        })
+        .submit(disabled_plan_turn(
+            "please plan",
+            session_configured.model.clone(),
+            collaboration_mode,
+        )?)
         .await?;
 
     let mut agent_deltas = Vec::new();
@@ -719,25 +752,11 @@ async fn plan_mode_streaming_citations_are_stripped_across_added_deltas_and_done
     };
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::Text {
-                text: "please plan with citations".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            cwd: std::env::current_dir()?,
-            approval_policy: codex_protocol::protocol::AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_configured.model.clone(),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: Some(collaboration_mode),
-            personality: None,
-        })
+        .submit(disabled_plan_turn(
+            "please plan with citations",
+            session_configured.model.clone(),
+            collaboration_mode,
+        )?)
         .await?;
 
     let mut agent_started = None;
@@ -908,25 +927,11 @@ async fn plan_mode_streaming_proposed_plan_tag_split_across_added_and_delta_is_p
     };
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::Text {
-                text: "please plan".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            cwd: std::env::current_dir()?,
-            approval_policy: codex_protocol::protocol::AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_configured.model.clone(),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: Some(collaboration_mode),
-            personality: None,
-        })
+        .submit(disabled_plan_turn(
+            "please plan",
+            session_configured.model.clone(),
+            collaboration_mode,
+        )?)
         .await?;
 
     let mut agent_started = None;
@@ -1024,25 +1029,11 @@ async fn plan_mode_handles_missing_plan_close_tag() -> anyhow::Result<()> {
     };
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
-            items: vec![UserInput::Text {
-                text: "please plan".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            cwd: std::env::current_dir()?,
-            approval_policy: codex_protocol::protocol::AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_configured.model.clone(),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: Some(collaboration_mode),
-            personality: None,
-        })
+        .submit(disabled_plan_turn(
+            "please plan",
+            session_configured.model.clone(),
+            collaboration_mode,
+        )?)
         .await?;
 
     let mut plan_delta = None;
@@ -1129,15 +1120,8 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
         _ => None,
     })
     .await;
-    let legacy_delta = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::AgentReasoningDelta(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
-
     assert_eq!(delta_event.item_id, reasoning_item.id);
     assert_eq!(delta_event.delta, "step one");
-    assert_eq!(legacy_delta.delta, "step one");
 
     Ok(())
 }
@@ -1190,15 +1174,8 @@ async fn reasoning_raw_content_delta_respects_flag() -> anyhow::Result<()> {
         _ => None,
     })
     .await;
-    let legacy_delta = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::AgentReasoningRawContentDelta(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
-
     assert_eq!(delta_event.item_id, reasoning_item.id);
     assert_eq!(delta_event.delta, "raw detail");
-    assert_eq!(legacy_delta.delta, "raw detail");
 
     Ok(())
 }

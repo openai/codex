@@ -1,4 +1,5 @@
 use super::*;
+use codex_app_server_protocol::PluginAvailability;
 use pretty_assertions::assert_eq;
 
 pub(super) async fn test_config() -> Config {
@@ -35,12 +36,18 @@ pub(super) fn truncated_path_variants(path: &str) -> Vec<String> {
 
 pub(super) fn normalize_snapshot_paths(text: impl Into<String>) -> String {
     let mut text = text.into();
+
+    for unix_path in ["/tmp/project", "/tmp/hooks.json"] {
+        let platform_path = test_path_display(unix_path);
+        if platform_path != unix_path {
+            text = text.replace(&platform_path, unix_path);
+        }
+    }
+
     let platform_test_cwd = test_path_display("/tmp/project");
     if platform_test_cwd == "/tmp/project" {
         text
     } else {
-        text = text.replace(&platform_test_cwd, "/tmp/project");
-
         for platform_prefix in truncated_path_variants(&platform_test_cwd)
             .into_iter()
             .rev()
@@ -99,8 +106,8 @@ pub(super) fn snapshot(percent: f64) -> RateLimitSnapshot {
         limit_id: None,
         limit_name: None,
         primary: Some(RateLimitWindow {
-            used_percent: percent,
-            window_minutes: Some(60),
+            used_percent: percent.round() as i32,
+            window_duration_mins: Some(60),
             resets_at: None,
         }),
         secondary: None,
@@ -122,19 +129,13 @@ pub(super) fn test_session_telemetry(config: &Config, model: &str) -> SessionTel
         "test_originator".to_string(),
         /*log_user_prompts*/ false,
         "test".to_string(),
-        SessionSource::Cli,
+        crate::test_support::session_source_cli(),
     )
 }
 
-pub(super) fn test_model_catalog(config: &Config) -> Arc<ModelCatalog> {
-    let collaboration_modes_config = CollaborationModesConfig {
-        default_mode_request_user_input: config
-            .features
-            .enabled(Feature::DefaultModeRequestUserInput),
-    };
+pub(super) fn test_model_catalog(_config: &Config) -> Arc<ModelCatalog> {
     Arc::new(ModelCatalog::new(
         crate::legacy_core::test_support::all_model_presets().clone(),
-        collaboration_modes_config,
     ))
 }
 
@@ -198,6 +199,7 @@ pub(super) async fn make_chatwidget_manual(
         session_header: SessionHeader::new(resolved_model.clone()),
         initial_user_message: None,
         status_account_display: None,
+        runtime_model_provider_base_url: None,
         token_info: None,
         rate_limit_snapshots_by_limit_id: BTreeMap::new(),
         refreshing_status_outputs: Vec::new(),
@@ -211,6 +213,7 @@ pub(super) async fn make_chatwidget_manual(
         stream_controller: None,
         plan_stream_controller: None,
         clipboard_lease: None,
+        copy_last_response_binding: crate::keymap::RuntimeKeymap::defaults().app.copy,
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         recent_auto_review_denials: RecentAutoReviewDenials::default(),
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
@@ -243,8 +246,10 @@ pub(super) async fn make_chatwidget_manual(
         plugin_install_apps_needing_auth: Vec::new(),
         plugin_install_auth_flow: None,
         plugins_active_tab_id: None,
+        newly_installed_marketplace_tab_id: None,
         connectors_prefetch_in_flight: false,
         connectors_force_refetch_pending: false,
+        ide_context: super::super::ide_context::IdeContextState::default(),
         plugins_cache: PluginsCacheState::default(),
         plugins_fetch_state: PluginListFetchState::default(),
         interrupts: InterruptManager::new(),
@@ -256,6 +261,7 @@ pub(super) async fn make_chatwidget_manual(
         pending_status_indicator_restore: false,
         suppress_queue_autosend: false,
         thread_id: None,
+        dismissed_plan_mode_nudge_scopes: HashSet::new(),
         last_turn_id: None,
         budget_limited_turn_ids: HashSet::new(),
         thread_name: None,
@@ -275,7 +281,8 @@ pub(super) async fn make_chatwidget_manual(
         rejected_steer_history_records: VecDeque::new(),
         pending_steers: VecDeque::new(),
         submit_pending_steers_after_interrupt: false,
-        queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
+        chat_keymap: crate::keymap::RuntimeKeymap::defaults().chat,
+        queued_message_edit_hint_binding: Some(crate::key_hint::alt(KeyCode::Up)),
         suppress_session_configured_redraw: false,
         suppress_initial_user_message_submit: false,
         pending_notification: None,
@@ -290,12 +297,12 @@ pub(super) async fn make_chatwidget_manual(
         last_plan_progress: None,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
-        last_separator_elapsed_secs: None,
         turn_runtime_metrics: RuntimeMetricsSummary::default(),
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         current_cwd: None,
+        workspace_command_runner: None,
         instruction_source_paths: Vec::new(),
         session_network_proxy: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -309,12 +316,16 @@ pub(super) async fn make_chatwidget_manual(
         status_line_branch_cwd: None,
         status_line_branch_pending: false,
         status_line_branch_lookup_complete: false,
+        status_line_git_summary: None,
+        status_line_git_summary_cwd: None,
+        status_line_git_summary_pending: false,
+        status_line_git_summary_lookup_complete: false,
         current_goal_status_indicator: None,
         current_goal_status: None,
         goal_status_active_turn_started_at: None,
         external_editor_state: ExternalEditorState::Closed,
         realtime_conversation: RealtimeConversationUiState::default(),
-        last_rendered_user_message_event: None,
+        last_rendered_user_message_display: None,
         last_non_retry_error: None,
     };
     widget.set_model(&resolved_model);
@@ -426,15 +437,7 @@ pub(crate) fn set_fast_mode_test_catalog(chat: &mut ChatWidget) {
     .map(Into::into)
     .collect();
 
-    chat.model_catalog = Arc::new(ModelCatalog::new(
-        models,
-        CollaborationModesConfig {
-            default_mode_request_user_input: chat
-                .config
-                .features
-                .enabled(Feature::DefaultModeRequestUserInput),
-        },
-    ));
+    chat.model_catalog = Arc::new(ModelCatalog::new(models));
 }
 
 pub(crate) async fn make_chatwidget_manual_with_sender() -> (
@@ -494,35 +497,460 @@ pub(super) fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUs
     }
 }
 
+fn thread_id(chat: &ChatWidget) -> String {
+    chat.thread_id.map(|id| id.to_string()).unwrap_or_default()
+}
+
+fn token_usage_breakdown(usage: TokenUsage) -> codex_app_server_protocol::TokenUsageBreakdown {
+    codex_app_server_protocol::TokenUsageBreakdown {
+        total_tokens: usage.total_tokens,
+        input_tokens: usage.input_tokens,
+        cached_input_tokens: usage.cached_input_tokens,
+        output_tokens: usage.output_tokens,
+        reasoning_output_tokens: usage.reasoning_output_tokens,
+    }
+}
+
+pub(super) fn handle_token_count(chat: &mut ChatWidget, info: Option<TokenUsageInfo>) {
+    match info {
+        Some(info) => {
+            chat.handle_server_notification(
+                ServerNotification::ThreadTokenUsageUpdated(
+                    codex_app_server_protocol::ThreadTokenUsageUpdatedNotification {
+                        thread_id: thread_id(chat),
+                        turn_id: chat
+                            .last_turn_id
+                            .clone()
+                            .unwrap_or_else(|| "turn-1".to_string()),
+                        token_usage: codex_app_server_protocol::ThreadTokenUsage {
+                            total: token_usage_breakdown(info.total_token_usage),
+                            last: token_usage_breakdown(info.last_token_usage),
+                            model_context_window: info.model_context_window,
+                        },
+                    },
+                ),
+                /*replay_kind*/ None,
+            );
+        }
+        None => chat.set_token_info(/*info*/ None),
+    }
+}
+
+pub(super) fn handle_error(
+    chat: &mut ChatWidget,
+    message: impl Into<String>,
+    codex_error_info: Option<CodexErrorInfo>,
+) {
+    chat.handle_server_notification(
+        ServerNotification::Error(ErrorNotification {
+            error: AppServerTurnError {
+                message: message.into(),
+                codex_error_info,
+                additional_details: None,
+            },
+            will_retry: false,
+            thread_id: thread_id(chat),
+            turn_id: chat
+                .last_turn_id
+                .clone()
+                .unwrap_or_else(|| "turn-1".to_string()),
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn handle_stream_error(
+    chat: &mut ChatWidget,
+    message: impl Into<String>,
+    additional_details: Option<String>,
+) {
+    handle_stream_error_with_replay(chat, message, additional_details, /*replay_kind*/ None);
+}
+
+pub(super) fn handle_stream_error_with_replay(
+    chat: &mut ChatWidget,
+    message: impl Into<String>,
+    additional_details: Option<String>,
+    replay_kind: Option<ReplayKind>,
+) {
+    chat.handle_server_notification(
+        ServerNotification::Error(ErrorNotification {
+            error: AppServerTurnError {
+                message: message.into(),
+                codex_error_info: None,
+                additional_details,
+            },
+            will_retry: true,
+            thread_id: thread_id(chat),
+            turn_id: chat
+                .last_turn_id
+                .clone()
+                .unwrap_or_else(|| "turn-1".to_string()),
+        }),
+        replay_kind,
+    );
+}
+
+pub(super) fn handle_warning(chat: &mut ChatWidget, message: impl Into<String>) {
+    chat.handle_server_notification(
+        ServerNotification::Warning(WarningNotification {
+            thread_id: Some(thread_id(chat)),
+            message: message.into(),
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn handle_model_verification(
+    chat: &mut ChatWidget,
+    verifications: Vec<AppServerModelVerification>,
+) {
+    chat.handle_server_notification(
+        ServerNotification::ModelVerification(ModelVerificationNotification {
+            thread_id: thread_id(chat),
+            turn_id: chat
+                .last_turn_id
+                .clone()
+                .unwrap_or_else(|| "turn-1".to_string()),
+            verifications,
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn handle_agent_message_delta(chat: &mut ChatWidget, delta: impl Into<String>) {
+    chat.handle_server_notification(
+        ServerNotification::AgentMessageDelta(
+            codex_app_server_protocol::AgentMessageDeltaNotification {
+                thread_id: thread_id(chat),
+                turn_id: chat
+                    .last_turn_id
+                    .clone()
+                    .unwrap_or_else(|| "turn-1".to_string()),
+                item_id: "msg-1".to_string(),
+                delta: delta.into(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn handle_agent_reasoning_delta(chat: &mut ChatWidget, delta: impl Into<String>) {
+    chat.handle_server_notification(
+        ServerNotification::ReasoningSummaryTextDelta(ReasoningSummaryTextDeltaNotification {
+            thread_id: thread_id(chat),
+            turn_id: chat
+                .last_turn_id
+                .clone()
+                .unwrap_or_else(|| "turn-1".to_string()),
+            item_id: "reasoning-1".to_string(),
+            delta: delta.into(),
+            summary_index: 0,
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn handle_agent_reasoning_final(chat: &mut ChatWidget) {
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: thread_id(chat),
+            turn_id: chat
+                .last_turn_id
+                .clone()
+                .unwrap_or_else(|| "turn-1".to_string()),
+            completed_at_ms: 0,
+            item: AppServerThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: Vec::new(),
+                content: Vec::new(),
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn handle_entered_review_mode(chat: &mut ChatWidget, review: impl Into<String>) {
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: thread_id(chat),
+            turn_id: chat
+                .last_turn_id
+                .clone()
+                .unwrap_or_else(|| "turn-1".to_string()),
+            started_at_ms: 0,
+            item: AppServerThreadItem::EnteredReviewMode {
+                id: "review-start".to_string(),
+                review: review.into(),
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn replay_entered_review_mode(chat: &mut ChatWidget, review: impl Into<String>) {
+    chat.replay_thread_item(
+        AppServerThreadItem::EnteredReviewMode {
+            id: "review-start".to_string(),
+            review: review.into(),
+        },
+        "turn-1".to_string(),
+        ReplayKind::ThreadSnapshot,
+    );
+}
+
+pub(super) fn handle_exited_review_mode(chat: &mut ChatWidget) {
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: thread_id(chat),
+            turn_id: chat
+                .last_turn_id
+                .clone()
+                .unwrap_or_else(|| "turn-1".to_string()),
+            completed_at_ms: 0,
+            item: AppServerThreadItem::ExitedReviewMode {
+                id: "review-end".to_string(),
+                review: String::new(),
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn handle_exec_approval_request(
+    chat: &mut ChatWidget,
+    id: impl Into<String>,
+    event: ExecApprovalRequestEvent,
+) {
+    chat.on_exec_approval_request(id.into(), event);
+}
+
+pub(super) fn handle_apply_patch_approval_request(
+    chat: &mut ChatWidget,
+    id: impl Into<String>,
+    event: ApplyPatchApprovalRequestEvent,
+) {
+    chat.on_apply_patch_approval_request(id.into(), event);
+}
+
+fn file_update_changes_from_tui(changes: HashMap<PathBuf, FileChange>) -> Vec<FileUpdateChange> {
+    changes
+        .into_iter()
+        .map(|(path, change)| {
+            let (kind, diff) = match change {
+                FileChange::Add { content } => (PatchChangeKind::Add, content),
+                FileChange::Delete { content } => (PatchChangeKind::Delete, content),
+                FileChange::Update {
+                    unified_diff,
+                    move_path,
+                } => (PatchChangeKind::Update { move_path }, unified_diff),
+            };
+            FileUpdateChange {
+                path: path.display().to_string(),
+                kind,
+                diff,
+            }
+        })
+        .collect()
+}
+
+pub(super) fn handle_patch_apply_begin(
+    chat: &mut ChatWidget,
+    call_id: impl Into<String>,
+    turn_id: impl Into<String>,
+    changes: HashMap<PathBuf, FileChange>,
+) {
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: thread_id(chat),
+            turn_id: turn_id.into(),
+            started_at_ms: 0,
+            item: AppServerThreadItem::FileChange {
+                id: call_id.into(),
+                changes: file_update_changes_from_tui(changes),
+                status: AppServerPatchApplyStatus::InProgress,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn handle_patch_apply_end(
+    chat: &mut ChatWidget,
+    call_id: impl Into<String>,
+    turn_id: impl Into<String>,
+    changes: HashMap<PathBuf, FileChange>,
+    status: AppServerPatchApplyStatus,
+) {
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: thread_id(chat),
+            turn_id: turn_id.into(),
+            completed_at_ms: 0,
+            item: AppServerThreadItem::FileChange {
+                id: call_id.into(),
+                changes: file_update_changes_from_tui(changes),
+                status,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn handle_view_image_tool_call(
+    chat: &mut ChatWidget,
+    call_id: impl Into<String>,
+    path: AbsolutePathBuf,
+) {
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: thread_id(chat),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: AppServerThreadItem::ImageView {
+                id: call_id.into(),
+                path,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn handle_image_generation_end(
+    chat: &mut ChatWidget,
+    call_id: impl Into<String>,
+    revised_prompt: Option<String>,
+    saved_path: Option<AbsolutePathBuf>,
+) {
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: thread_id(chat),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: AppServerThreadItem::ImageGeneration {
+                id: call_id.into(),
+                status: "completed".to_string(),
+                revised_prompt,
+                result: String::new(),
+                saved_path,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn replay_user_message_inputs(
+    chat: &mut ChatWidget,
+    item_id: &str,
+    content: Vec<AppServerUserInput>,
+    replay_kind: ReplayKind,
+) {
+    chat.replay_thread_item(
+        AppServerThreadItem::UserMessage {
+            id: item_id.to_string(),
+            content,
+        },
+        "turn-1".to_string(),
+        replay_kind,
+    );
+}
+
+pub(super) fn replay_user_message_text(
+    chat: &mut ChatWidget,
+    item_id: &str,
+    text: impl Into<String>,
+    replay_kind: ReplayKind,
+) {
+    replay_user_message_inputs(
+        chat,
+        item_id,
+        vec![AppServerUserInput::Text {
+            text: text.into(),
+            text_elements: Vec::new(),
+        }],
+        replay_kind,
+    );
+}
+
+pub(super) fn replay_agent_message(
+    chat: &mut ChatWidget,
+    item_id: &str,
+    text: impl Into<String>,
+    replay_kind: ReplayKind,
+) {
+    chat.replay_thread_item(
+        AppServerThreadItem::AgentMessage {
+            id: item_id.to_string(),
+            text: text.into(),
+            phase: Some(MessagePhase::FinalAnswer),
+            memory_citation: None,
+        },
+        "turn-1".to_string(),
+        replay_kind,
+    );
+}
+
+pub(super) fn replay_turn_started(chat: &mut ChatWidget, replay_kind: ReplayKind) {
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: thread_id(chat),
+            turn: app_server_turn(
+                "turn-1",
+                AppServerTurnStatus::InProgress,
+                /*duration_ms*/ None,
+                /*error*/ None,
+            ),
+        }),
+        Some(replay_kind),
+    );
+}
+
+pub(super) fn replay_agent_message_delta(
+    chat: &mut ChatWidget,
+    delta: impl Into<String>,
+    replay_kind: ReplayKind,
+) {
+    chat.handle_server_notification(
+        ServerNotification::AgentMessageDelta(
+            codex_app_server_protocol::AgentMessageDeltaNotification {
+                thread_id: thread_id(chat),
+                turn_id: "turn-1".to_string(),
+                item_id: "msg-1".to_string(),
+                delta: delta.into(),
+            },
+        ),
+        Some(replay_kind),
+    );
+}
+
 // --- Small helpers to tersely drive exec begin/end and snapshot active cell ---
 pub(super) fn begin_exec_with_source(
     chat: &mut ChatWidget,
     call_id: &str,
     raw_cmd: &str,
     source: ExecCommandSource,
-) -> ExecCommandBeginEvent {
+) -> AppServerThreadItem {
     // Build the full command vec and parse it using core's parser,
     // then convert to protocol variants for the event payload.
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
-    let parsed_cmd: Vec<ParsedCommand> =
-        codex_shell_command::parse_command::parse_command(&command);
-    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
-    let interaction_input = None;
-    let event = ExecCommandBeginEvent {
-        call_id: call_id.to_string(),
-        process_id: None,
-        turn_id: "turn-1".to_string(),
-        command,
-        cwd,
-        parsed_cmd,
-        source,
-        interaction_input,
-    };
-    chat.handle_codex_event(Event {
+    let command_actions = codex_shell_command::parse_command::parse_command(&command)
+        .into_iter()
+        .map(|parsed| AppServerCommandAction::from_core_with_cwd(parsed, &chat.config.cwd))
+        .collect();
+    let item = AppServerThreadItem::CommandExecution {
         id: call_id.to_string(),
-        msg: EventMsg::ExecCommandBegin(event.clone()),
-    });
-    event
+        command: codex_shell_command::parse_command::shlex_join(&command),
+        cwd: chat.config.cwd.clone(),
+        process_id: None,
+        source,
+        status: AppServerCommandExecutionStatus::InProgress,
+        command_actions,
+        aggregated_output: None,
+        exit_code: None,
+        duration_ms: None,
+    };
+    handle_exec_begin(chat, item.clone());
+    item
 }
 
 pub(super) fn begin_unified_exec_startup(
@@ -530,24 +958,37 @@ pub(super) fn begin_unified_exec_startup(
     call_id: &str,
     process_id: &str,
     raw_cmd: &str,
-) -> ExecCommandBeginEvent {
+) -> AppServerThreadItem {
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
-    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
-    let event = ExecCommandBeginEvent {
-        call_id: call_id.to_string(),
-        process_id: Some(process_id.to_string()),
-        turn_id: "turn-1".to_string(),
-        command,
-        cwd,
-        parsed_cmd: Vec::new(),
-        source: ExecCommandSource::UnifiedExecStartup,
-        interaction_input: None,
-    };
-    chat.handle_codex_event(Event {
+    let item = AppServerThreadItem::CommandExecution {
         id: call_id.to_string(),
-        msg: EventMsg::ExecCommandBegin(event.clone()),
-    });
-    event
+        command: codex_shell_command::parse_command::shlex_join(&command),
+        cwd: chat.config.cwd.clone(),
+        process_id: Some(process_id.to_string()),
+        source: ExecCommandSource::UnifiedExecStartup,
+        status: AppServerCommandExecutionStatus::InProgress,
+        command_actions: Vec::new(),
+        aggregated_output: None,
+        exit_code: None,
+        duration_ms: None,
+    };
+    handle_exec_begin(chat, item.clone());
+    item
+}
+
+pub(super) fn handle_exec_begin(chat: &mut ChatWidget, item: AppServerThreadItem) {
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: thread_id(chat),
+            turn_id: chat
+                .last_turn_id
+                .clone()
+                .unwrap_or_else(|| "turn-1".to_string()),
+            started_at_ms: 0,
+            item,
+        }),
+        /*replay_kind*/ None,
+    );
 }
 
 pub(super) fn terminal_interaction(
@@ -556,14 +997,21 @@ pub(super) fn terminal_interaction(
     process_id: &str,
     stdin: &str,
 ) {
-    chat.handle_codex_event(Event {
-        id: call_id.to_string(),
-        msg: EventMsg::TerminalInteraction(TerminalInteractionEvent {
-            call_id: call_id.to_string(),
-            process_id: process_id.to_string(),
-            stdin: stdin.to_string(),
-        }),
-    });
+    chat.handle_server_notification(
+        ServerNotification::TerminalInteraction(
+            codex_app_server_protocol::TerminalInteractionNotification {
+                thread_id: thread_id(chat),
+                turn_id: chat
+                    .last_turn_id
+                    .clone()
+                    .unwrap_or_else(|| "turn-1".to_string()),
+                item_id: call_id.to_string(),
+                process_id: process_id.to_string(),
+                stdin: stdin.to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
 }
 
 pub(super) fn complete_assistant_message(
@@ -572,21 +1020,20 @@ pub(super) fn complete_assistant_message(
     text: &str,
     phase: Option<MessagePhase>,
 ) {
-    chat.handle_codex_event(Event {
-        id: format!("raw-{item_id}"),
-        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
-            thread_id: ThreadId::new(),
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: chat.thread_id.map(|id| id.to_string()).unwrap_or_default(),
             turn_id: "turn-1".to_string(),
-            item: TurnItem::AgentMessage(AgentMessageItem {
+            completed_at_ms: 0,
+            item: AppServerThreadItem::AgentMessage {
                 id: item_id.to_string(),
-                content: vec![AgentMessageContent::Text {
-                    text: text.to_string(),
-                }],
+                text: text.to_string(),
                 phase,
                 memory_citation: None,
-            }),
+            },
         }),
-    });
+        /*replay_kind*/ None,
+    );
 }
 
 pub(super) fn pending_steer(text: &str) -> PendingSteer {
@@ -616,30 +1063,102 @@ pub(super) fn complete_user_message_for_inputs(
     item_id: &str,
     content: Vec<UserInput>,
 ) {
-    chat.handle_codex_event(Event {
-        id: format!("raw-{item_id}"),
-        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
-            thread_id: ThreadId::new(),
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: chat.thread_id.map(|id| id.to_string()).unwrap_or_default(),
             turn_id: "turn-1".to_string(),
-            item: TurnItem::UserMessage(UserMessageItem {
+            completed_at_ms: 0,
+            item: AppServerThreadItem::UserMessage {
                 id: item_id.to_string(),
                 content,
-            }),
+            },
         }),
-    });
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn app_server_turn(
+    turn_id: &str,
+    status: AppServerTurnStatus,
+    duration_ms: Option<i64>,
+    error: Option<AppServerTurnError>,
+) -> AppServerTurn {
+    AppServerTurn {
+        id: turn_id.to_string(),
+        items: Vec::new(),
+        status,
+        error,
+        started_at: None,
+        completed_at: None,
+        duration_ms,
+    }
+}
+
+pub(super) fn handle_turn_started(chat: &mut ChatWidget, turn_id: &str) {
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: chat.thread_id.map(|id| id.to_string()).unwrap_or_default(),
+            turn: app_server_turn(
+                turn_id,
+                AppServerTurnStatus::InProgress,
+                /*duration_ms*/ None,
+                /*error*/ None,
+            ),
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn handle_turn_completed(
+    chat: &mut ChatWidget,
+    turn_id: &str,
+    duration_ms: Option<i64>,
+) {
+    chat.handle_server_notification(
+        ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: chat.thread_id.map(|id| id.to_string()).unwrap_or_default(),
+            turn: app_server_turn(
+                turn_id,
+                AppServerTurnStatus::Completed,
+                duration_ms,
+                /*error*/ None,
+            ),
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn handle_turn_interrupted(chat: &mut ChatWidget, turn_id: &str) {
+    chat.handle_server_notification(
+        ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: chat.thread_id.map(|id| id.to_string()).unwrap_or_default(),
+            turn: app_server_turn(
+                turn_id,
+                AppServerTurnStatus::Interrupted,
+                /*duration_ms*/ None,
+                /*error*/ None,
+            ),
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn handle_budget_limited_turn(chat: &mut ChatWidget, turn_id: &str) {
+    chat.budget_limited_turn_ids.insert(turn_id.to_string());
+    handle_turn_interrupted(chat, turn_id);
 }
 
 pub(super) fn begin_exec(
     chat: &mut ChatWidget,
     call_id: &str,
     raw_cmd: &str,
-) -> ExecCommandBeginEvent {
+) -> AppServerThreadItem {
     begin_exec_with_source(chat, call_id, raw_cmd, ExecCommandSource::Agent)
 }
 
 pub(super) fn end_exec(
     chat: &mut ChatWidget,
-    begin_event: ExecCommandBeginEvent,
+    begin_item: AppServerThreadItem,
     stdout: &str,
     stderr: &str,
     exit_code: i32,
@@ -649,40 +1168,52 @@ pub(super) fn end_exec(
     } else {
         format!("{stdout}{stderr}")
     };
-    let ExecCommandBeginEvent {
-        call_id,
-        turn_id,
+    let AppServerThreadItem::CommandExecution {
+        id,
         command,
         cwd,
-        parsed_cmd,
-        source,
-        interaction_input,
         process_id,
-    } = begin_event;
-    chat.handle_codex_event(Event {
-        id: call_id.clone(),
-        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-            call_id,
-            process_id,
-            turn_id,
+        source,
+        command_actions,
+        ..
+    } = begin_item
+    else {
+        panic!("expected command execution item");
+    };
+    handle_exec_end(
+        chat,
+        AppServerThreadItem::CommandExecution {
+            id,
             command,
             cwd,
-            parsed_cmd,
+            process_id,
             source,
-            interaction_input,
-            stdout: stdout.to_string(),
-            stderr: stderr.to_string(),
-            aggregated_output: aggregated.clone(),
-            exit_code,
-            duration: std::time::Duration::from_millis(5),
-            formatted_output: aggregated,
             status: if exit_code == 0 {
-                CoreExecCommandStatus::Completed
+                AppServerCommandExecutionStatus::Completed
             } else {
-                CoreExecCommandStatus::Failed
+                AppServerCommandExecutionStatus::Failed
             },
+            command_actions,
+            aggregated_output: (!aggregated.is_empty()).then_some(aggregated),
+            exit_code: Some(exit_code),
+            duration_ms: Some(5),
+        },
+    );
+}
+
+pub(super) fn handle_exec_end(chat: &mut ChatWidget, item: AppServerThreadItem) {
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: thread_id(chat),
+            turn_id: chat
+                .last_turn_id
+                .clone()
+                .unwrap_or_else(|| "turn-1".to_string()),
+            completed_at_ms: 0,
+            item,
         }),
-    });
+        /*replay_kind*/ None,
+    );
 }
 
 pub(super) fn active_blob(chat: &ChatWidget) -> String {
@@ -739,9 +1270,10 @@ pub(super) async fn assert_shift_left_edits_most_recent_queued_message_for_termi
     terminal_info: TerminalInfo,
 ) {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_info);
+    chat.queued_message_edit_hint_binding =
+        Some(queued_message_edit_binding_for_terminal(terminal_info));
     chat.bottom_pane
-        .set_queued_message_edit_binding(chat.queued_message_edit_binding);
+        .set_queued_message_edit_binding(chat.queued_message_edit_hint_binding);
 
     // Simulate a running task so messages would normally be queued.
     chat.bottom_pane.set_task_running(/*running*/ true);
@@ -908,6 +1440,7 @@ pub(super) fn plugins_test_summary(
         enabled,
         install_policy,
         auth_policy: PluginAuthPolicy::OnInstall,
+        availability: PluginAvailability::Available,
         interface: Some(plugins_test_interface(
             display_name,
             description,
@@ -1011,36 +1544,85 @@ pub(super) fn type_plugins_search_query(chat: &mut ChatWidget, query: &str) {
     }
 }
 
+pub(super) fn handle_hook_started(chat: &mut ChatWidget, run: AppServerHookRunSummary) {
+    chat.handle_server_notification(
+        ServerNotification::HookStarted(AppServerHookStartedNotification {
+            thread_id: thread_id(chat),
+            turn_id: None,
+            run,
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn handle_hook_completed(chat: &mut ChatWidget, run: AppServerHookRunSummary) {
+    chat.handle_server_notification(
+        ServerNotification::HookCompleted(AppServerHookCompletedNotification {
+            thread_id: thread_id(chat),
+            turn_id: None,
+            run,
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
+pub(super) fn hook_run(
+    run_id: &str,
+    event_name: codex_app_server_protocol::HookEventName,
+    status: codex_app_server_protocol::HookRunStatus,
+    status_message: &str,
+    entries: Vec<codex_app_server_protocol::HookOutputEntry>,
+) -> codex_app_server_protocol::HookRunSummary {
+    codex_app_server_protocol::HookRunSummary {
+        id: run_id.to_string(),
+        event_name,
+        handler_type: codex_app_server_protocol::HookHandlerType::Command,
+        execution_mode: codex_app_server_protocol::HookExecutionMode::Sync,
+        scope: codex_app_server_protocol::HookScope::Turn,
+        source_path: PathBuf::from(test_path_display("/tmp/hooks.json")).abs(),
+        source: codex_app_server_protocol::HookSource::User,
+        display_order: 0,
+        status,
+        status_message: Some(status_message.to_string()),
+        started_at: 1,
+        completed_at: matches!(
+            status,
+            codex_app_server_protocol::HookRunStatus::Completed
+                | codex_app_server_protocol::HookRunStatus::Failed
+                | codex_app_server_protocol::HookRunStatus::Blocked
+                | codex_app_server_protocol::HookRunStatus::Stopped
+        )
+        .then_some(11),
+        duration_ms: matches!(
+            status,
+            codex_app_server_protocol::HookRunStatus::Completed
+                | codex_app_server_protocol::HookRunStatus::Failed
+                | codex_app_server_protocol::HookRunStatus::Blocked
+                | codex_app_server_protocol::HookRunStatus::Stopped
+        )
+        .then_some(10),
+        entries,
+    }
+}
+
 pub(super) async fn assert_hook_events_snapshot(
-    event_name: codex_protocol::protocol::HookEventName,
+    event_name: codex_app_server_protocol::HookEventName,
     run_id: &str,
     status_message: &str,
     snapshot_name: &str,
 ) {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.handle_codex_event(Event {
-        id: "hook-1".into(),
-        msg: EventMsg::HookStarted(codex_protocol::protocol::HookStartedEvent {
-            turn_id: None,
-            run: codex_protocol::protocol::HookRunSummary {
-                id: run_id.to_string(),
-                event_name,
-                handler_type: codex_protocol::protocol::HookHandlerType::Command,
-                execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
-                scope: codex_protocol::protocol::HookScope::Turn,
-                source_path: PathBuf::from(test_path_display("/tmp/hooks.json")).abs(),
-                source: codex_protocol::protocol::HookSource::User,
-                display_order: 0,
-                status: codex_protocol::protocol::HookRunStatus::Running,
-                status_message: Some(status_message.to_string()),
-                started_at: 1,
-                completed_at: None,
-                duration_ms: None,
-                entries: vec![],
-            },
-        }),
-    });
+    handle_hook_started(
+        &mut chat,
+        hook_run(
+            run_id,
+            event_name,
+            codex_app_server_protocol::HookRunStatus::Running,
+            status_message,
+            Vec::new(),
+        ),
+    );
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "hook start should update the live hook cell instead of writing history"
@@ -1054,37 +1636,25 @@ pub(super) async fn assert_hook_events_snapshot(
         "hook start should render in the live hook cell"
     );
 
-    chat.handle_codex_event(Event {
-        id: "hook-1".into(),
-        msg: EventMsg::HookCompleted(codex_protocol::protocol::HookCompletedEvent {
-            turn_id: None,
-            run: codex_protocol::protocol::HookRunSummary {
-                id: run_id.to_string(),
-                event_name,
-                handler_type: codex_protocol::protocol::HookHandlerType::Command,
-                execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
-                scope: codex_protocol::protocol::HookScope::Turn,
-                source_path: PathBuf::from(test_path_display("/tmp/hooks.json")).abs(),
-                source: codex_protocol::protocol::HookSource::User,
-                display_order: 0,
-                status: codex_protocol::protocol::HookRunStatus::Completed,
-                status_message: Some(status_message.to_string()),
-                started_at: 1,
-                completed_at: Some(11),
-                duration_ms: Some(10),
-                entries: vec![
-                    codex_protocol::protocol::HookOutputEntry {
-                        kind: codex_protocol::protocol::HookOutputEntryKind::Warning,
-                        text: "Heads up from the hook".to_string(),
-                    },
-                    codex_protocol::protocol::HookOutputEntry {
-                        kind: codex_protocol::protocol::HookOutputEntryKind::Context,
-                        text: "Remember the startup checklist.".to_string(),
-                    },
-                ],
-            },
-        }),
-    });
+    handle_hook_completed(
+        &mut chat,
+        hook_run(
+            run_id,
+            event_name,
+            codex_app_server_protocol::HookRunStatus::Completed,
+            status_message,
+            vec![
+                codex_app_server_protocol::HookOutputEntry {
+                    kind: codex_app_server_protocol::HookOutputEntryKind::Warning,
+                    text: "Heads up from the hook".to_string(),
+                },
+                codex_app_server_protocol::HookOutputEntry {
+                    kind: codex_app_server_protocol::HookOutputEntryKind::Context,
+                    text: "Remember the startup checklist.".to_string(),
+                },
+            ],
+        ),
+    );
 
     let cells = drain_insert_history(&mut rx);
     let combined = cells
@@ -1094,13 +1664,13 @@ pub(super) async fn assert_hook_events_snapshot(
     assert_chatwidget_snapshot!(snapshot_name, combined);
 }
 
-fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
+fn hook_event_label(event_name: codex_app_server_protocol::HookEventName) -> &'static str {
     match event_name {
-        codex_protocol::protocol::HookEventName::PreToolUse => "PreToolUse",
-        codex_protocol::protocol::HookEventName::PermissionRequest => "PermissionRequest",
-        codex_protocol::protocol::HookEventName::PostToolUse => "PostToolUse",
-        codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
-        codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
-        codex_protocol::protocol::HookEventName::Stop => "Stop",
+        codex_app_server_protocol::HookEventName::PreToolUse => "PreToolUse",
+        codex_app_server_protocol::HookEventName::PermissionRequest => "PermissionRequest",
+        codex_app_server_protocol::HookEventName::PostToolUse => "PostToolUse",
+        codex_app_server_protocol::HookEventName::SessionStart => "SessionStart",
+        codex_app_server_protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        codex_app_server_protocol::HookEventName::Stop => "Stop",
     }
 }

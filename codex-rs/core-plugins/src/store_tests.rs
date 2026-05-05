@@ -110,6 +110,18 @@ fn plugin_root_derives_path_from_key_and_version() {
 }
 
 #[test]
+fn plugin_data_root_derives_path_from_key() {
+    let tmp = tempdir().unwrap();
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    let plugin_id = PluginId::new("sample".to_string(), "debug".to_string()).unwrap();
+
+    assert_eq!(
+        store.plugin_data_root(&plugin_id).as_path(),
+        tmp.path().join("plugins/data/sample-debug")
+    );
+}
+
+#[test]
 fn install_with_version_uses_requested_cache_version() {
     let tmp = tempdir().unwrap();
     write_plugin(tmp.path(), "sample-plugin", "sample-plugin");

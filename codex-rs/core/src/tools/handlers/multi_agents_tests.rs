@@ -1,15 +1,12 @@
 use super::*;
-use crate::CodexThread;
 use crate::ThreadManager;
 use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
-use crate::context::TurnAborted;
 use crate::function_tool::FunctionCallError;
+use crate::init_state_db;
 use crate::session::tests::make_session_and_context;
 use crate::session_prefix::format_subagent_notification_message;
-use crate::state::TaskKind;
-use crate::tasks::SessionTask;
-use crate::tasks::SessionTaskContext;
+use crate::thread_manager::thread_store_from_config;
 use crate::tools::context::ToolOutput;
 use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
@@ -132,121 +129,6 @@ model_reasoning_effort = "minimal"
     turn.config = Arc::new(config);
 
     role_name
-}
-
-fn history_contains_inter_agent_communication(
-    history_items: &[ResponseItem],
-    expected: &InterAgentCommunication,
-) -> bool {
-    history_items.iter().any(|item| {
-        let ResponseItem::Message { role, content, .. } = item else {
-            return false;
-        };
-        if role != "assistant" {
-            return false;
-        }
-        content.iter().any(|content_item| match content_item {
-            ContentItem::OutputText { text } => {
-                serde_json::from_str::<InterAgentCommunication>(text)
-                    .ok()
-                    .as_ref()
-                    == Some(expected)
-            }
-            ContentItem::InputText { .. } | ContentItem::InputImage { .. } => false,
-        })
-    })
-}
-
-async fn wait_for_turn_aborted(
-    thread: &Arc<CodexThread>,
-    expected_turn_id: &str,
-    expected_reason: TurnAbortReason,
-) {
-    timeout(Duration::from_secs(5), async {
-        loop {
-            let event = thread
-                .next_event()
-                .await
-                .expect("child thread should emit events");
-            if matches!(
-                event.msg,
-                EventMsg::TurnAborted(TurnAbortedEvent {
-                    turn_id: Some(ref turn_id),
-                    ref reason,
-                    ..
-                }) if turn_id == expected_turn_id && *reason == expected_reason
-            ) {
-                break;
-            }
-        }
-    })
-    .await
-    .expect("expected child turn to be interrupted");
-}
-
-async fn wait_for_redirected_envelope_in_history(
-    thread: &Arc<CodexThread>,
-    expected: &InterAgentCommunication,
-) {
-    timeout(Duration::from_secs(5), async {
-        loop {
-            let history_items = thread
-                .codex
-                .session
-                .clone_history()
-                .await
-                .raw_items()
-                .to_vec();
-            let saw_envelope =
-                history_contains_inter_agent_communication(&history_items, expected);
-            let saw_user_message = history_items.iter().any(|item| {
-                matches!(
-                    item,
-                    ResponseItem::Message { role, content, .. }
-                        if role == "user"
-                            && content.iter().any(|content_item| matches!(
-                                content_item,
-                                ContentItem::InputText { text }
-                                    if text == &expected.content
-                            ))
-                )
-            });
-            if saw_envelope {
-                assert!(
-                    !saw_user_message,
-                    "redirected followup should be stored as an assistant envelope, not a plain user message"
-                );
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("redirected followup envelope should appear in history");
-}
-
-#[derive(Clone, Copy)]
-struct NeverEndingTask;
-
-impl SessionTask for NeverEndingTask {
-    fn kind(&self) -> TaskKind {
-        TaskKind::Regular
-    }
-
-    fn span_name(&self) -> &'static str {
-        "session_task.multi_agent_never_ending"
-    }
-
-    async fn run(
-        self: Arc<Self>,
-        _session: Arc<SessionTaskContext>,
-        _ctx: Arc<TurnContext>,
-        _input: Vec<UserInput>,
-        cancellation_token: CancellationToken,
-    ) -> Option<String> {
-        cancellation_token.cancelled().await;
-        None
-    }
 }
 
 fn expect_text_output<T>(output: T) -> (String, Option<bool>)
@@ -1086,7 +968,6 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
             function_payload(json!({
                 "target": "/root",
                 "message": "run this",
-                "interrupt": true
             })),
         ))
         .await
@@ -1483,255 +1364,6 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
                 && communication.content == "continue"
                 && !communication.trigger_turn
     )));
-}
-
-#[tokio::test]
-async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_message() {
-    let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager();
-    let root = manager
-        .start_thread((*turn.config).clone())
-        .await
-        .expect("root thread should start");
-    session.services.agent_control = manager.agent_control();
-    session.conversation_id = root.thread_id;
-    let mut config = turn.config.as_ref().clone();
-    let _ = config.features.enable(Feature::MultiAgentV2);
-    turn.config = Arc::new(config);
-    let session = Arc::new(session);
-    let turn = Arc::new(turn);
-
-    let worker_path = AgentPath::try_from("/root/worker").expect("worker path");
-    let agent_id = session
-        .services
-        .agent_control
-        .spawn_agent_with_metadata(
-            (*turn.config).clone(),
-            Op::CleanBackgroundTerminals,
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: root.thread_id,
-                depth: 1,
-                agent_path: Some(worker_path.clone()),
-                agent_nickname: None,
-                agent_role: None,
-            })),
-            crate::agent::control::SpawnAgentOptions::default(),
-        )
-        .await
-        .expect("worker spawn should succeed")
-        .thread_id;
-    let thread = manager
-        .get_thread(agent_id)
-        .await
-        .expect("worker thread should exist");
-
-    let active_turn = thread.codex.session.new_default_turn().await;
-    let interrupted_turn_id = active_turn.sub_id.clone();
-    thread
-        .codex
-        .session
-        .spawn_task(
-            Arc::clone(&active_turn),
-            vec![UserInput::Text {
-                text: "working".to_string(),
-                text_elements: Vec::new(),
-            }],
-            NeverEndingTask,
-        )
-        .await;
-
-    FollowupTaskHandlerV2
-        .handle(invocation(
-            session,
-            turn,
-            "followup_task",
-            function_payload(json!({
-                "target": agent_id.to_string(),
-                "message": "continue",
-                "interrupt": true
-            })),
-        ))
-        .await
-        .expect("interrupting v2 followup_task should succeed");
-
-    let ops = manager.captured_ops();
-    let ops_for_agent: Vec<&Op> = ops
-        .iter()
-        .filter_map(|(id, op)| (*id == agent_id).then_some(op))
-        .collect();
-    assert!(ops_for_agent.iter().any(|op| matches!(op, Op::Interrupt)));
-    assert!(ops_for_agent.iter().any(|op| {
-        matches!(
-            op,
-            Op::InterAgentCommunication { communication }
-                if communication.author == AgentPath::root()
-                    && communication.recipient.as_str() == "/root/worker"
-                    && communication.other_recipients.is_empty()
-                    && communication.content == "continue"
-        )
-    }));
-
-    wait_for_turn_aborted(&thread, &interrupted_turn_id, TurnAbortReason::Interrupted).await;
-    let history_items = thread
-        .codex
-        .session
-        .clone_history()
-        .await
-        .raw_items()
-        .to_vec();
-    assert!(
-        history_items.iter().any(|item| matches!(
-            item,
-            ResponseItem::Message { role, content, .. }
-                if role == "developer"
-                    && content.iter().any(|content_item| matches!(
-                        content_item,
-                        ContentItem::InputText { text }
-                            if text.contains(TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE)
-                    ))
-        )),
-        "v2 interrupted-turn marker should be recorded as a developer input message"
-    );
-    assert!(
-        !history_items.iter().any(|item| matches!(
-            item,
-            ResponseItem::Message { role, content, .. }
-                if role == "user"
-                    && content.iter().any(|content_item| matches!(
-                        content_item,
-                        ContentItem::InputText { text } | ContentItem::OutputText { text }
-                            if text.contains(TurnAborted::INTERRUPTED_GUIDANCE)
-                    ))
-        )),
-        "v2 interrupted-turn marker should not be recorded as a user message"
-    );
-    assert!(
-        !history_items.iter().any(|item| matches!(
-            item,
-            ResponseItem::Message { role, content, .. }
-                if role == "assistant"
-                    && content.iter().any(|content_item| matches!(
-                        content_item,
-                        ContentItem::InputText { text } | ContentItem::OutputText { text }
-                            if text.contains(TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE)
-                    ))
-        )),
-        "v2 interrupted-turn marker should not be recorded as an assistant message"
-    );
-    wait_for_redirected_envelope_in_history(
-        &thread,
-        &InterAgentCommunication::new(
-            AgentPath::root(),
-            worker_path,
-            Vec::new(),
-            "continue".to_string(),
-            /*trigger_turn*/ true,
-        ),
-    )
-    .await;
-
-    let _ = thread
-        .submit(Op::Shutdown {})
-        .await
-        .expect("shutdown should submit");
-}
-
-#[tokio::test]
-async fn multi_agent_v2_followup_task_can_disable_interrupted_marker() {
-    let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager();
-    let root = manager
-        .start_thread((*turn.config).clone())
-        .await
-        .expect("root thread should start");
-    session.services.agent_control = manager.agent_control();
-    session.conversation_id = root.thread_id;
-    let mut config = turn.config.as_ref().clone();
-    let _ = config.features.enable(Feature::MultiAgentV2);
-    config.agent_interrupt_message_enabled = false;
-    turn.config = Arc::new(config);
-    let session = Arc::new(session);
-    let turn = Arc::new(turn);
-
-    let worker_path = AgentPath::try_from("/root/worker").expect("worker path");
-    let agent_id = session
-        .services
-        .agent_control
-        .spawn_agent_with_metadata(
-            (*turn.config).clone(),
-            Op::CleanBackgroundTerminals,
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: root.thread_id,
-                depth: 1,
-                agent_path: Some(worker_path),
-                agent_nickname: None,
-                agent_role: None,
-            })),
-            crate::agent::control::SpawnAgentOptions::default(),
-        )
-        .await
-        .expect("worker spawn should succeed")
-        .thread_id;
-    let thread = manager
-        .get_thread(agent_id)
-        .await
-        .expect("worker thread should exist");
-
-    let active_turn = thread.codex.session.new_default_turn().await;
-    let interrupted_turn_id = active_turn.sub_id.clone();
-    thread
-        .codex
-        .session
-        .spawn_task(
-            Arc::clone(&active_turn),
-            vec![UserInput::Text {
-                text: "working".to_string(),
-                text_elements: Vec::new(),
-            }],
-            NeverEndingTask,
-        )
-        .await;
-
-    FollowupTaskHandlerV2
-        .handle(invocation(
-            session,
-            turn,
-            "followup_task",
-            function_payload(json!({
-                "target": agent_id.to_string(),
-                "message": "continue",
-                "interrupt": true
-            })),
-        ))
-        .await
-        .expect("interrupting v2 followup_task should succeed");
-
-    wait_for_turn_aborted(&thread, &interrupted_turn_id, TurnAbortReason::Interrupted).await;
-    let history_items = thread
-        .codex
-        .session
-        .clone_history()
-        .await
-        .raw_items()
-        .to_vec();
-    assert!(
-        !history_items.iter().any(|item| matches!(
-            item,
-            ResponseItem::Message { content, .. }
-                if content.iter().any(|content_item| matches!(
-                    content_item,
-                    ContentItem::InputText { text } | ContentItem::OutputText { text }
-                        if text.contains(TurnAborted::INTERRUPTED_GUIDANCE)
-                            || text.contains(TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE)
-                ))
-        )),
-        "disabled interrupted-turn marker should not be recorded in history"
-    );
-
-    let _ = thread
-        .submit(Op::Shutdown {})
-        .await
-        .expect("shutdown should submit");
 }
 
 #[tokio::test]
@@ -2241,6 +1873,60 @@ async fn spawn_agent_allows_depth_up_to_configured_max_depth() {
 }
 
 #[tokio::test]
+async fn multi_agent_v2_spawn_agent_ignores_configured_max_depth() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        task_name: String,
+        nickname: Option<String>,
+    }
+
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let mut config = (*turn.config).clone();
+    config.agent_max_depth = 1;
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    let root = manager
+        .start_thread(config.clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    turn.config = Arc::new(config);
+    let parent_path = AgentPath::try_from("/root/parent").expect("agent path");
+    turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: root.thread_id,
+        depth: 1,
+        agent_path: Some(parent_path),
+        agent_nickname: None,
+        agent_role: None,
+    });
+
+    let invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "spawn_agent",
+        function_payload(json!({
+            "message": "hello",
+            "task_name": "child",
+            "fork_turns": "none"
+        })),
+    );
+    let output = SpawnAgentHandlerV2
+        .handle(invocation)
+        .await
+        .expect("multi-agent v2 spawn should ignore max depth");
+    let (content, success) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    assert_eq!(result.task_name, "/root/parent/child");
+    assert!(result.nickname.is_some());
+    assert_eq!(success, Some(true));
+}
+
+#[tokio::test]
 async fn send_input_rejects_empty_message() {
     let (session, turn) = make_session_and_context().await;
     let invocation = invocation(
@@ -2327,7 +2013,10 @@ async fn send_input_interrupts_before_prompt() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
-    let thread = manager.start_thread(config).await.expect("start thread");
+    let thread = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start thread");
     let agent_id = thread.thread_id;
     let invocation = invocation(
         Arc::new(session),
@@ -2366,7 +2055,10 @@ async fn send_input_accepts_structured_items() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
-    let thread = manager.start_thread(config).await.expect("start thread");
+    let thread = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start thread");
     let agent_id = thread.thread_id;
     let invocation = invocation(
         Arc::new(session),
@@ -2458,7 +2150,10 @@ async fn resume_agent_noops_for_active_agent() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
-    let thread = manager.start_thread(config).await.expect("start thread");
+    let thread = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start thread");
     let agent_id = thread.thread_id;
     let status_before = manager.agent_control().get_status(agent_id).await;
     let invocation = invocation(
@@ -2496,7 +2191,7 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
     let config = turn.config.as_ref().clone();
     let thread = manager
         .resume_thread_with_history(
-            config,
+            config.clone(),
             InitialHistory::Forked(vec![RolloutItem::ResponseItem(ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
@@ -2743,6 +2438,59 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
 }
 
 #[tokio::test]
+async fn multi_agent_v2_wait_agent_uses_configured_min_timeout() {
+    let (session, mut turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config.multi_agent_v2.min_wait_timeout_ms = 50;
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let early = timeout(
+        Duration::from_millis(/*millis*/ 20),
+        WaitAgentHandlerV2.handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "wait_agent",
+            function_payload(json!({"timeout_ms": 1})),
+        )),
+    )
+    .await;
+    assert!(
+        early.is_err(),
+        "wait_agent should not return before the configured minimum timeout"
+    );
+
+    let output = timeout(
+        Duration::from_secs(/*secs*/ 1),
+        WaitAgentHandlerV2.handle(invocation(
+            session,
+            turn,
+            "wait_agent",
+            function_payload(json!({"timeout_ms": 1})),
+        )),
+    )
+    .await
+    .expect("configured minimum should be shorter than the test timeout")
+    .expect("wait_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
+    assert_eq!(
+        result,
+        crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
+            message: "Wait timed out.".to_string(),
+            timed_out: true,
+        }
+    );
+    assert_eq!(success, None);
+}
+
+#[tokio::test]
 async fn wait_agent_returns_not_found_for_missing_agents() {
     let (mut session, turn) = make_session_and_context().await;
     let manager = thread_manager();
@@ -2784,7 +2532,10 @@ async fn wait_agent_times_out_when_status_is_not_final() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
-    let thread = manager.start_thread(config).await.expect("start thread");
+    let thread = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start thread");
     let agent_id = thread.thread_id;
     let invocation = invocation(
         Arc::new(session),
@@ -2824,7 +2575,10 @@ async fn wait_agent_clamps_short_timeouts_to_minimum() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
-    let thread = manager.start_thread(config).await.expect("start thread");
+    let thread = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start thread");
     let agent_id = thread.thread_id;
     let invocation = invocation(
         Arc::new(session),
@@ -2859,7 +2613,10 @@ async fn wait_agent_returns_final_status_without_timeout() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
-    let thread = manager.start_thread(config).await.expect("start thread");
+    let thread = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start thread");
     let agent_id = thread.thread_id;
     let mut status_rx = manager
         .agent_control()
@@ -3358,7 +3115,10 @@ async fn close_agent_submits_shutdown_and_returns_previous_status() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
-    let thread = manager.start_thread(config).await.expect("start thread");
+    let thread = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start thread");
     let agent_id = thread.thread_id;
     let status_before = manager.agent_control().get_status(agent_id).await;
 
@@ -3391,13 +3151,22 @@ async fn close_agent_submits_shutdown_and_returns_previous_status() {
 #[tokio::test]
 async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtrees_closed() {
     let (_session, turn) = make_session_and_context().await;
-    let manager = thread_manager();
     let mut config = turn.config.as_ref().clone();
     config.agent_max_depth = 3;
     config
         .features
         .enable(Feature::Sqlite)
         .expect("test config should allow sqlite");
+    let state_db = init_state_db(&config).await;
+    let manager = ThreadManager::new(
+        &config,
+        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, state_db.clone()),
+        state_db.clone(),
+    );
 
     let parent = manager
         .start_thread(config.clone())
@@ -3531,7 +3300,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     );
 
     let operator = manager
-        .start_thread(config)
+        .start_thread(config.clone())
         .await
         .expect("operator thread should start");
     let operator_session = operator.thread.codex.session.clone();

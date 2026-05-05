@@ -24,7 +24,9 @@ jobs:
   build-windows-binaries:
     name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on }}
-    timeout-minutes: 60
+    # Windows release builds can exceed an hour on fat-LTO mainline releases,
+    # so keep the timeout aligned with the top-level release build headroom.
+    timeout-minutes: 90
     permissions:
       contents: read
     defaults:
@@ -137,7 +139,7 @@ jobs:
       - build-windows-binaries
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
       id-token: write

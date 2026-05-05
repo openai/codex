@@ -116,6 +116,38 @@ async fn emits_deprecation_notice_for_experimental_instructions_file() -> anyhow
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn emits_deprecation_notice_for_notify() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.notify = Some(vec!["notify-send".to_string(), "Codex".to_string()]);
+    });
+
+    let TestCodex { codex, .. } = builder.build(&server).await?;
+
+    let notice = wait_for_event_match(&codex, |event| match event {
+        EventMsg::DeprecationNotice(ev) if ev.summary.contains("`notify`") => Some(ev.clone()),
+        _ => None,
+    })
+    .await;
+
+    let DeprecationNoticeEvent { summary, details } = notice;
+    assert_eq!(
+        summary,
+        "`notify` is deprecated and will be removed in a future release.".to_string(),
+    );
+    assert_eq!(
+        details.as_deref(),
+        Some(
+            "Switch to a `Stop` hook for end-of-turn automation. See https://developers.openai.com/codex/hooks."
+        ),
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn emits_deprecation_notice_for_web_search_feature_flag_values() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 

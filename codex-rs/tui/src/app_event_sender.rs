@@ -1,14 +1,20 @@
+//! Convenience sender for app events and common outbound TUI commands.
+//!
+//! This wraps the raw channel so call sites can submit typed `AppCommand`s
+//! without duplicating event construction or session logging behavior.
+
 use std::path::PathBuf;
 
 use crate::app_command::AppCommand;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::FileChangeApprovalDecision;
+use codex_app_server_protocol::McpServerElicitationAction;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
+use codex_app_server_protocol::ReviewTarget;
+use codex_app_server_protocol::ThreadRealtimeAudioChunk;
+use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_protocol::ThreadId;
-use codex_protocol::approvals::ElicitationAction;
-use codex_protocol::mcp::RequestId as McpRequestId;
-use codex_protocol::protocol::ConversationAudioParams;
-use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
-use codex_protocol::request_user_input::RequestUserInputResponse;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::app_event::AppEvent;
@@ -38,48 +44,50 @@ impl AppEventSender {
     }
 
     pub(crate) fn interrupt(&self) {
-        self.send(AppEvent::CodexOp(AppCommand::interrupt().into_core()));
+        self.send(AppEvent::CodexOp(AppCommand::interrupt()));
     }
 
     pub(crate) fn compact(&self) {
-        self.send(AppEvent::CodexOp(AppCommand::compact().into_core()));
+        self.send(AppEvent::CodexOp(AppCommand::compact()));
     }
 
     pub(crate) fn set_thread_name(&self, name: String) {
-        self.send(AppEvent::CodexOp(
-            AppCommand::set_thread_name(name).into_core(),
-        ));
+        self.send(AppEvent::CodexOp(AppCommand::set_thread_name(name)));
     }
 
-    pub(crate) fn review(&self, review_request: ReviewRequest) {
-        self.send(AppEvent::CodexOp(
-            AppCommand::review(review_request).into_core(),
-        ));
+    pub(crate) fn review(&self, target: ReviewTarget) {
+        self.send(AppEvent::CodexOp(AppCommand::review(target)));
     }
 
     pub(crate) fn list_skills(&self, cwds: Vec<PathBuf>, force_reload: bool) {
-        self.send(AppEvent::CodexOp(
-            AppCommand::list_skills(cwds, force_reload).into_core(),
-        ));
+        self.send(AppEvent::CodexOp(AppCommand::list_skills(
+            cwds,
+            force_reload,
+        )));
     }
 
     #[cfg_attr(target_os = "linux", allow(dead_code))]
-    pub(crate) fn realtime_conversation_audio(&self, params: ConversationAudioParams) {
-        self.send(AppEvent::CodexOp(
-            AppCommand::realtime_conversation_audio(params).into_core(),
-        ));
+    pub(crate) fn realtime_conversation_audio(&self, frame: ThreadRealtimeAudioChunk) {
+        self.send(AppEvent::CodexOp(AppCommand::realtime_conversation_audio(
+            frame,
+        )));
     }
 
-    pub(crate) fn user_input_answer(&self, id: String, response: RequestUserInputResponse) {
-        self.send(AppEvent::CodexOp(
-            AppCommand::user_input_answer(id, response).into_core(),
-        ));
+    pub(crate) fn user_input_answer(&self, id: String, response: ToolRequestUserInputResponse) {
+        self.send(AppEvent::CodexOp(AppCommand::user_input_answer(
+            id, response,
+        )));
     }
 
-    pub(crate) fn exec_approval(&self, thread_id: ThreadId, id: String, decision: ReviewDecision) {
+    pub(crate) fn exec_approval(
+        &self,
+        thread_id: ThreadId,
+        id: String,
+        decision: CommandExecutionApprovalDecision,
+    ) {
         self.send(AppEvent::SubmitThreadOp {
             thread_id,
-            op: AppCommand::exec_approval(id, /*turn_id*/ None, decision).into_core(),
+            op: AppCommand::exec_approval(id, /*turn_id*/ None, decision),
         });
     }
 
@@ -91,14 +99,19 @@ impl AppEventSender {
     ) {
         self.send(AppEvent::SubmitThreadOp {
             thread_id,
-            op: AppCommand::request_permissions_response(id, response).into_core(),
+            op: AppCommand::request_permissions_response(id, response),
         });
     }
 
-    pub(crate) fn patch_approval(&self, thread_id: ThreadId, id: String, decision: ReviewDecision) {
+    pub(crate) fn patch_approval(
+        &self,
+        thread_id: ThreadId,
+        id: String,
+        decision: FileChangeApprovalDecision,
+    ) {
         self.send(AppEvent::SubmitThreadOp {
             thread_id,
-            op: AppCommand::patch_approval(id, decision).into_core(),
+            op: AppCommand::patch_approval(id, decision),
         });
     }
 
@@ -106,15 +119,14 @@ impl AppEventSender {
         &self,
         thread_id: ThreadId,
         server_name: String,
-        request_id: McpRequestId,
-        decision: ElicitationAction,
+        request_id: AppServerRequestId,
+        decision: McpServerElicitationAction,
         content: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) {
         self.send(AppEvent::SubmitThreadOp {
             thread_id,
-            op: AppCommand::resolve_elicitation(server_name, request_id, decision, content, meta)
-                .into_core(),
+            op: AppCommand::resolve_elicitation(server_name, request_id, decision, content, meta),
         });
     }
 }

@@ -551,6 +551,7 @@ fn append_inference_with_tool_call(writer: &TraceWriter) -> anyhow::Result<()> {
     writer.append(RawTraceEventPayload::InferenceCompleted {
         inference_call_id: "inference-1".to_string(),
         response_id: Some("resp-1".to_string()),
+        upstream_request_id: None,
         response_payload: response,
     })?;
     Ok(())

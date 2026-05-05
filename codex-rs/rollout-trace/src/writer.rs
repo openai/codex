@@ -226,6 +226,7 @@ mod tests {
         writer.append(RawTraceEventPayload::InferenceCompleted {
             inference_call_id: "inference-1".to_string(),
             response_id: Some("resp-1".to_string()),
+            upstream_request_id: Some("req-1".to_string()),
             response_payload: inference_response.clone(),
         })?;
         writer.append(RawTraceEventPayload::CodexTurnEnded {

@@ -117,6 +117,8 @@ pub enum Phase2JobClaimOutcome {
     },
     /// The global job is in retry backoff.
     SkippedRetryUnavailable,
+    /// The global job completed recently enough that consolidation is cooling down.
+    SkippedCooldown,
     /// Another worker currently owns a fresh global consolidation lease.
     SkippedRunning,
 }

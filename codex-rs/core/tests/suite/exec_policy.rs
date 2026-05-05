@@ -5,10 +5,10 @@ use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -18,6 +18,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use serde_json::Value;
 use serde_json::json;
@@ -38,10 +39,12 @@ async fn submit_user_turn(
     test: &core_test_support::test_codex::TestCodex,
     prompt: &str,
     approval_policy: AskForApproval,
-    sandbox_policy: SandboxPolicy,
+    permission_profile: PermissionProfile,
     collaboration_mode: Option<CollaborationMode>,
 ) -> Result<()> {
     let session_model = test.session_configured.model.clone();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(permission_profile, test.config.cwd.as_path());
     test.codex
         .submit(Op::UserTurn {
             environments: None,
@@ -54,7 +57,7 @@ async fn submit_user_turn(
             approval_policy,
             approvals_reviewer: None,
             sandbox_policy,
-            permission_profile: None,
+            permission_profile,
             model: session_model,
             effort: None,
             summary: None,
@@ -78,11 +81,6 @@ fn assert_no_matched_rules_invariant(output_item: &Value) {
 
 #[tokio::test]
 async fn execpolicy_blocks_shell_invocation() -> Result<()> {
-    // TODO execpolicy doesn't parse powershell commands yet
-    if cfg!(windows) {
-        return Ok(());
-    }
-
     let mut builder = test_codex().with_config(|config| {
         let policy_path = config.codex_home.join("rules").join("policy.rules");
         fs::create_dir_all(
@@ -125,6 +123,8 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
     .await;
 
     let session_model = test.session_configured.model.clone();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
     test.codex
         .submit(Op::UserTurn {
             environments: None,
@@ -136,8 +136,8 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
+            sandbox_policy,
+            permission_profile,
             model: session_model,
             effort: None,
             summary: None,
@@ -208,7 +208,7 @@ async fn shell_command_empty_script_with_collaboration_mode_does_not_panic() -> 
         &test,
         "run an empty shell command",
         AskForApproval::OnRequest,
-        SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
         Some(collaboration_mode),
     )
     .await?;
@@ -267,7 +267,7 @@ async fn unified_exec_empty_script_with_collaboration_mode_does_not_panic() -> R
         &test,
         "run empty unified exec command",
         AskForApproval::OnRequest,
-        SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
         Some(collaboration_mode),
     )
     .await?;
@@ -322,7 +322,7 @@ async fn shell_command_whitespace_script_with_collaboration_mode_does_not_panic(
         &test,
         "run whitespace shell command",
         AskForApproval::OnRequest,
-        SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
         Some(collaboration_mode),
     )
     .await?;
@@ -381,7 +381,7 @@ async fn unified_exec_whitespace_script_with_collaboration_mode_does_not_panic()
         &test,
         "run whitespace unified exec command",
         AskForApproval::OnRequest,
-        SandboxPolicy::DangerFullAccess,
+        PermissionProfile::Disabled,
         Some(collaboration_mode),
     )
     .await?;

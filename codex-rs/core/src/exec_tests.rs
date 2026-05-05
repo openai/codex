@@ -8,6 +8,7 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
+use tokio::time::timeout;
 
 fn make_exec_output(
     exit_code: i32,
@@ -1033,22 +1034,23 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
         tokio::time::sleep(Duration::from_millis(1_000)).await;
         cancel_tx.cancel();
     });
-    let permission_profile = PermissionProfile::Disabled;
-    let result = process_exec_tool_call(
-        params,
-        &permission_profile,
-        &cwd,
-        &None,
-        /*use_legacy_landlock*/ false,
-        /*stdout_stream*/ None,
+    let result = timeout(
+        Duration::from_secs(5),
+        process_exec_tool_call(
+            params,
+            &PermissionProfile::Disabled,
+            &cwd,
+            &None,
+            /*use_legacy_landlock*/ false,
+            /*stdout_stream*/ None,
+        ),
     )
-    .await;
-    let output = match result {
-        Err(CodexErr::Sandbox(SandboxErr::Timeout { output })) => output,
-        other => panic!("expected timeout error, got {other:?}"),
-    };
-    assert!(output.timed_out);
-    assert_eq!(output.exit_code, EXEC_TIMEOUT_EXIT_CODE);
+    .await
+    .expect("cancellation should stop the process promptly");
+    let output = result.expect("cancellation should return a non-timeout exec result");
+    assert!(!output.timed_out);
+    assert_ne!(output.exit_code, 0);
+    assert_ne!(output.exit_code, EXEC_TIMEOUT_EXIT_CODE);
     Ok(())
 }
 

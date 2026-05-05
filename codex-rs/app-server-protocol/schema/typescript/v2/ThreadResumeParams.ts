@@ -26,9 +26,4 @@ model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier 
  * Override where approval requests are routed for review on this thread
  * and subsequent turns.
  */
-approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, /**
- * When true, return only thread metadata and live-resume state without
- * populating `thread.turns`. This is useful when the client plans to call
- * `thread/turns/list` immediately after resuming.
- */
-excludeTurns?: boolean};
+approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null};

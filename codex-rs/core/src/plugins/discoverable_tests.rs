@@ -1,11 +1,11 @@
 use super::*;
-use crate::plugins::PluginInstallRequest;
 use crate::plugins::test_support::load_plugins_config;
 use crate::plugins::test_support::write_curated_plugin;
 use crate::plugins::test_support::write_curated_plugin_sha;
 use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use crate::plugins::test_support::write_plugins_feature_config;
+use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
 use codex_tools::DiscoverablePluginInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -39,6 +39,35 @@ async fn list_tool_suggest_discoverable_plugins_returns_uninstalled_curated_plug
             mcp_server_names: vec!["sample-docs".to_string()],
             app_connector_ids: vec!["connector_calendar".to_string()],
         }]
+    );
+}
+
+#[tokio::test]
+async fn list_tool_suggest_discoverable_plugins_returns_microsoft_curated_plugins() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let curated_root = curated_plugins_repo_path(codex_home.path());
+    write_openai_curated_marketplace(
+        &curated_root,
+        &["teams", "sharepoint", "outlook-email", "outlook-calendar"],
+    );
+    write_plugins_feature_config(codex_home.path());
+
+    let config = load_plugins_config(codex_home.path()).await;
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        discoverable_plugins
+            .into_iter()
+            .map(|plugin| plugin.id)
+            .collect::<Vec<_>>(),
+        vec![
+            "outlook-calendar@openai-curated".to_string(),
+            "outlook-email@openai-curated".to_string(),
+            "sharepoint@openai-curated".to_string(),
+            "teams@openai-curated".to_string(),
+        ]
     );
 }
 
@@ -224,6 +253,31 @@ async fn list_tool_suggest_discoverable_plugins_omits_installed_curated_plugins(
 
     let refreshed_config = load_plugins_config(codex_home.path()).await;
     let discoverable_plugins = list_tool_suggest_discoverable_plugins(&refreshed_config)
+        .await
+        .unwrap();
+
+    assert_eq!(discoverable_plugins, Vec::<DiscoverablePluginInfo>::new());
+}
+
+#[tokio::test]
+async fn list_tool_suggest_discoverable_plugins_omits_disabled_tool_suggestions() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let curated_root = curated_plugins_repo_path(codex_home.path());
+    write_openai_curated_marketplace(&curated_root, &["slack"]);
+    write_file(
+        &codex_home.path().join(crate::config::CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[tool_suggest]
+disabled_tools = [
+  { type = "plugin", id = "slack@openai-curated" }
+]
+"#,
+    );
+
+    let config = load_plugins_config(codex_home.path()).await;
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
         .await
         .unwrap();
 

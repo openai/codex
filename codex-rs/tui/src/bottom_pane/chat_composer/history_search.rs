@@ -41,6 +41,8 @@ use super::ComposerDraft;
 use super::InputResult;
 use crate::app_event::AppEvent;
 use crate::key_hint;
+use crate::key_hint::KeyBinding;
+use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::has_ctrl_or_alt;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 
@@ -84,44 +86,12 @@ impl ChatComposer {
     /// some terminals emit. Callers should only use this before generic text handling; treating the
     /// raw control character as ordinary input would insert an invisible byte into the search query
     /// or composer draft.
-    pub(super) fn is_history_search_key(key_event: &KeyEvent) -> bool {
-        matches!(
-            key_event,
-            KeyEvent {
-                code: KeyCode::Char(c),
-                modifiers,
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'r')
-        ) || matches!(
-            key_event,
-            KeyEvent {
-                code: KeyCode::Char('\u{0012}'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            }
-        )
+    pub(super) fn is_history_search_key(key_event: &KeyEvent, bindings: &[KeyBinding]) -> bool {
+        bindings.is_pressed(*key_event)
     }
 
-    fn is_history_search_forward_key(key_event: &KeyEvent) -> bool {
-        matches!(
-            key_event,
-            KeyEvent {
-                code: KeyCode::Char(c),
-                modifiers,
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'s')
-        ) || matches!(
-            key_event,
-            KeyEvent {
-                code: KeyCode::Char('\u{0013}'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            }
-        )
+    fn is_history_search_forward_key(key_event: &KeyEvent, bindings: &[KeyBinding]) -> bool {
+        bindings.is_pressed(*key_event)
     }
 
     /// Opens footer-owned reverse history search without previewing history yet.
@@ -166,12 +136,14 @@ impl ChatComposer {
             return (InputResult::None, false);
         }
 
-        if Self::is_history_search_key(&key_event) || matches!(key_event.code, KeyCode::Up) {
+        if Self::is_history_search_key(&key_event, &self.history_search_previous_keys)
+            || matches!(key_event.code, KeyCode::Up)
+        {
             let result = self.history_search_in_direction(HistorySearchDirection::Older);
             return (result, true);
         }
 
-        if Self::is_history_search_forward_key(&key_event)
+        if Self::is_history_search_forward_key(&key_event, &self.history_search_next_keys)
             || matches!(key_event.code, KeyCode::Down)
         {
             let result = self.history_search_in_direction(HistorySearchDirection::Newer);
@@ -598,6 +570,32 @@ mod tests {
         assert!(!composer.history_search_active());
         assert_eq!(composer.textarea.text(), "git status");
         assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+    }
+
+    #[test]
+    fn vim_normal_history_search_preview_places_cursor_on_last_char() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer
+            .history
+            .record_local_submission(HistoryEntry::new("git status".to_string()));
+        composer.set_vim_enabled(/*enabled*/ true);
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        for ch in ['g', 'i', 't'] {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+
+        assert_eq!(composer.textarea.text(), "git status");
+        assert_eq!(composer.textarea.cursor(), "git status".len() - 1);
+        assert_eq!(composer.footer_mode(), FooterMode::HistorySearch);
     }
 
     #[test]

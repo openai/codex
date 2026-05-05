@@ -19,6 +19,7 @@ use uuid::Uuid;
 const JOB_KIND_MEMORY_STAGE1: &str = "memory_stage1";
 const JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL: &str = "memory_consolidate_global";
 const MEMORY_CONSOLIDATION_JOB_KEY: &str = "global";
+const PHASE2_SUCCESS_COOLDOWN_SECONDS: i64 = 6 * 60 * 60;
 
 const DEFAULT_RETRY_REMAINING: i64 = 3;
 
@@ -873,6 +874,8 @@ WHERE kind = ? AND job_key = ?
     ///   dirtiness is the source of truth after the caller materializes inputs
     /// - returns `SkippedRetryUnavailable` when retry backoff is active
     /// - returns `SkippedRunning` when an active running lease exists
+    /// - returns `SkippedCooldown` when the latest successful run finished
+    ///   within the phase-2 success cooldown
     /// - otherwise updates the row to `running`, sets ownership + lease, and
     ///   returns `Claimed`
     pub async fn try_claim_global_phase2_job(
@@ -882,6 +885,7 @@ WHERE kind = ? AND job_key = ?
     ) -> anyhow::Result<Phase2JobClaimOutcome> {
         let now = Utc::now().timestamp();
         let lease_until = now.saturating_add(lease_seconds.max(0));
+        let cooldown_cutoff = now.saturating_sub(PHASE2_SUCCESS_COOLDOWN_SECONDS);
         let ownership_token = Uuid::new_v4().to_string();
         let worker_id = worker_id.to_string();
 
@@ -889,7 +893,7 @@ WHERE kind = ? AND job_key = ?
 
         let existing_job = sqlx::query(
             r#"
-SELECT status, lease_until, retry_at, input_watermark
+SELECT status, lease_until, retry_at, input_watermark, finished_at, last_error
 FROM jobs
 WHERE kind = ? AND job_key = ?
             "#,
@@ -946,6 +950,8 @@ INSERT INTO jobs (
         let status: String = existing_job.try_get("status")?;
         let existing_lease_until: Option<i64> = existing_job.try_get("lease_until")?;
         let retry_at: Option<i64> = existing_job.try_get("retry_at")?;
+        let finished_at: Option<i64> = existing_job.try_get("finished_at")?;
+        let last_error: Option<String> = existing_job.try_get("last_error")?;
         if retry_at.is_some_and(|retry_at| retry_at > now) {
             tx.commit().await?;
             return Ok(Phase2JobClaimOutcome::SkippedRetryUnavailable);
@@ -954,6 +960,12 @@ INSERT INTO jobs (
         {
             tx.commit().await?;
             return Ok(Phase2JobClaimOutcome::SkippedRunning);
+        }
+        if last_error.is_none()
+            && finished_at.is_some_and(|finished_at| finished_at > cooldown_cutoff)
+        {
+            tx.commit().await?;
+            return Ok(Phase2JobClaimOutcome::SkippedCooldown);
         }
 
         let rows_affected = sqlx::query(
@@ -971,6 +983,7 @@ SET
 WHERE kind = ? AND job_key = ?
   AND (status != 'running' OR lease_until IS NULL OR lease_until <= ?)
   AND (retry_at IS NULL OR retry_at <= ?)
+  AND (last_error IS NOT NULL OR finished_at IS NULL OR finished_at <= ?)
             "#,
         )
         .bind(worker_id.as_str())
@@ -981,6 +994,7 @@ WHERE kind = ? AND job_key = ?
         .bind(MEMORY_CONSOLIDATION_JOB_KEY)
         .bind(now)
         .bind(now)
+        .bind(cooldown_cutoff)
         .execute(&mut *tx)
         .await?
         .rows_affected();
@@ -1260,6 +1274,8 @@ ON CONFLICT(kind, job_key) DO UPDATE SET
 mod tests {
     use super::JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL;
     use super::JOB_KIND_MEMORY_STAGE1;
+    use super::MEMORY_CONSOLIDATION_JOB_KEY;
+    use super::PHASE2_SUCCESS_COOLDOWN_SECONDS;
     use super::StateRuntime;
     use super::test_support::test_thread_metadata;
     use super::test_support::unique_temp_dir;
@@ -1276,6 +1292,16 @@ mod tests {
 
     fn stable_thread_id(value: &str) -> ThreadId {
         ThreadId::from_string(value).expect("thread id")
+    }
+
+    async fn age_phase2_success_beyond_cooldown(runtime: &StateRuntime) {
+        sqlx::query("UPDATE jobs SET finished_at = ? WHERE kind = ? AND job_key = ?")
+            .bind(Utc::now().timestamp() - PHASE2_SUCCESS_COOLDOWN_SECONDS - 1)
+            .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+            .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("age phase2 success beyond cooldown");
     }
 
     #[tokio::test]
@@ -2363,6 +2389,7 @@ WHERE kind = 'memory_stage1'
                 .expect("stage1 output count");
         assert_eq!(output_row_count, 0);
 
+        age_phase2_success_beyond_cooldown(&runtime).await;
         let claim_phase2 = runtime
             .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
@@ -2486,7 +2513,7 @@ WHERE kind = 'memory_stage1'
     }
 
     #[tokio::test]
-    async fn phase2_global_lock_can_be_reclaimed_after_success_without_new_watermark() {
+    async fn phase2_global_lock_respects_success_cooldown() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -2522,10 +2549,27 @@ WHERE kind = 'memory_stage1'
             .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
             .expect("claim phase2 after success");
-        assert!(
-            matches!(claim_after_success, Phase2JobClaimOutcome::Claimed { .. }),
-            "the DB claim is only a lock; git workspace diff decides whether there is work"
-        );
+        assert_eq!(claim_after_success, Phase2JobClaimOutcome::SkippedCooldown);
+
+        runtime
+            .enqueue_global_consolidation(/*input_watermark*/ 101)
+            .await
+            .expect("enqueue global consolidation after success");
+        let claim_after_enqueue = runtime
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
+            .await
+            .expect("claim phase2 after enqueue");
+        assert_eq!(claim_after_enqueue, Phase2JobClaimOutcome::SkippedCooldown);
+
+        age_phase2_success_beyond_cooldown(&runtime).await;
+        let claim_after_cooldown = runtime
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
+            .await
+            .expect("claim phase2 after cooldown");
+        assert!(matches!(
+            claim_after_cooldown,
+            Phase2JobClaimOutcome::Claimed { .. }
+        ));
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -3127,6 +3171,7 @@ VALUES (?, ?, ?, ?, ?)
             "thread should transition to polluted"
         );
 
+        age_phase2_success_beyond_cooldown(&runtime).await;
         let next_claim = runtime
             .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
@@ -3495,6 +3540,7 @@ VALUES (?, ?, ?, ?, ?)
             "refreshed stage1 success should persist output"
         );
 
+        age_phase2_success_beyond_cooldown(&runtime).await;
         let second_phase2_claim = runtime
             .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
@@ -4457,10 +4503,7 @@ VALUES (?, ?, ?, ?, ?)
             .try_claim_global_phase2_job(owner_b, /*lease_seconds*/ 3_600)
             .await
             .expect("claim global phase2 lock after success");
-        assert!(
-            matches!(claim_after_success, Phase2JobClaimOutcome::Claimed { .. }),
-            "git workspace diff, not the DB watermark, decides whether the claimed lock has work"
-        );
+        assert_eq!(claim_after_success, Phase2JobClaimOutcome::SkippedCooldown);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -4583,6 +4626,7 @@ VALUES (?, ?, ?, ?, ?)
             .await
             .expect("enqueue lower-watermark consolidation");
 
+        age_phase2_success_beyond_cooldown(&runtime).await;
         let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner b");
         let claim_b = runtime
             .try_claim_global_phase2_job(owner_b, /*lease_seconds*/ 3_600)

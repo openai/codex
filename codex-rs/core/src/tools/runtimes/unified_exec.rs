@@ -48,6 +48,7 @@ use codex_tools::UnifiedExecShellMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+use tokio_util::sync::CancellationToken;
 
 /// Request payload used by the unified-exec runtime after approvals and
 /// sandbox preferences have been resolved for the current turn.
@@ -86,6 +87,19 @@ pub struct UnifiedExecApprovalKey {
 pub struct UnifiedExecRuntime<'a> {
     manager: &'a UnifiedExecProcessManager,
     shell_mode: UnifiedExecShellMode,
+}
+
+fn unified_exec_options(
+    network_denial_cancellation_token: Option<CancellationToken>,
+) -> ExecOptions {
+    let mut expiration = ExecExpiration::DefaultTimeout;
+    if let Some(cancellation) = network_denial_cancellation_token {
+        expiration = expiration.with_cancellation(cancellation);
+    }
+    ExecOptions {
+        expiration,
+        capture_policy: ExecCapturePolicy::ShellTool,
+    }
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
@@ -240,9 +254,9 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         }
         let environment_is_remote = ctx
             .turn
-            .environment
-            .as_ref()
-            .is_some_and(|environment| environment.is_remote());
+            .environments
+            .primary()
+            .is_some_and(|turn_environment| turn_environment.environment.is_remote());
         let command = if environment_is_remote {
             base_command.to_vec()
         } else {
@@ -264,10 +278,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             let command =
                 build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
                     .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
-            let options = ExecOptions {
-                expiration: ExecExpiration::DefaultTimeout,
-                capture_policy: ExecCapturePolicy::ShellTool,
-            };
+            let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
             let mut exec_env = attempt
                 .env_for(command, options, managed_network)
                 .map_err(|err| ToolError::Codex(err.into()))?;
@@ -282,12 +293,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .await?
             {
                 Some(prepared) => {
-                    let Some(environment) = ctx.turn.environment.as_ref() else {
+                    let Some(turn_environment) = ctx.turn.environments.primary() else {
                         return Err(ToolError::Rejected(
                             "exec_command is unavailable in this session".to_string(),
                         ));
                     };
-                    if environment.is_remote() {
+                    if turn_environment.environment.is_remote() {
                         return Err(ToolError::Rejected(
                             "unified_exec zsh-fork is not supported when exec_server_url is configured".to_string(),
                         ));
@@ -299,7 +310,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                             &prepared.exec_request,
                             req.tty,
                             prepared.spawn_lifecycle,
-                            environment.as_ref(),
+                            turn_environment.environment.as_ref(),
                         )
                         .await
                         .map_err(|err| match err {
@@ -322,15 +333,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let command =
             build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
                 .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
-        let options = ExecOptions {
-            expiration: ExecExpiration::DefaultTimeout,
-            capture_policy: ExecCapturePolicy::ShellTool,
-        };
+        let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
         let mut exec_env = attempt
             .env_for(command, options, managed_network)
             .map_err(|err| ToolError::Codex(err.into()))?;
         exec_env.exec_server_env_config = req.exec_server_env_config.clone();
-        let Some(environment) = ctx.turn.environment.as_ref() else {
+        let Some(turn_environment) = ctx.turn.environments.primary() else {
             return Err(ToolError::Rejected(
                 "exec_command is unavailable in this session".to_string(),
             ));
@@ -341,7 +349,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 &exec_env,
                 req.tty,
                 Box::new(NoopSpawnLifecycle),
-                environment.as_ref(),
+                turn_environment.environment.as_ref(),
             )
             .await
             .map_err(|err| match err {
@@ -353,5 +361,34 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 }
                 other => ToolError::Rejected(other.to_string()),
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
+    use std::time::Duration;
+
+    #[test]
+    fn unified_exec_options_combines_default_timeout_with_network_denial_cancellation() {
+        let cancellation = CancellationToken::new();
+        let options = unified_exec_options(Some(cancellation.clone()));
+
+        assert_eq!(options.capture_policy, ExecCapturePolicy::ShellTool);
+        match options.expiration {
+            ExecExpiration::TimeoutOrCancellation {
+                timeout,
+                cancellation: actual,
+            } => {
+                assert_eq!(
+                    timeout,
+                    Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)
+                );
+                cancellation.cancel();
+                assert!(actual.is_cancelled());
+            }
+            other => panic!("expected timeout-or-cancellation expiration, got {other:?}"),
+        }
     }
 }

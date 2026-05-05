@@ -1,0 +1,509 @@
+//! Catalog and accessors for keymap actions shown by `/keymap`.
+//!
+//! The descriptor table is the single UI-facing inventory of configurable
+//! actions. Each descriptor ties together the config path segment, user-facing
+//! context label, stable action name, and short description used by the picker
+//! and action menu.
+//!
+//! The accessors below deliberately mirror the descriptor table for both the
+//! editable root config and the resolved runtime keymap. Keeping those matches
+//! in one module makes it easier to audit a new action: if it appears in the
+//! catalog, it must also be readable from runtime state and writable in
+//! `TuiKeymap`.
+
+use std::collections::BTreeSet;
+
+use codex_config::types::KeybindingsSpec;
+use codex_config::types::TuiKeymap;
+use crossterm::event::KeyEvent;
+
+use crate::key_hint::KeyBinding;
+use crate::keymap::RuntimeKeymap;
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct KeymapActionDescriptor {
+    /// Config context segment, such as `composer` in `tui.keymap.composer.submit`.
+    pub(super) context: &'static str,
+    /// Human-readable group label shown in the picker.
+    pub(super) context_label: &'static str,
+    /// Config action segment, such as `submit` in `tui.keymap.composer.submit`.
+    pub(super) action: &'static str,
+    /// Short user-facing explanation of what the action does.
+    pub(super) description: &'static str,
+    /// Feature required before the action appears in `/keymap`.
+    required_feature: Option<KeymapActionFeature>,
+}
+
+const fn action(
+    context: &'static str,
+    context_label: &'static str,
+    action: &'static str,
+    description: &'static str,
+) -> KeymapActionDescriptor {
+    KeymapActionDescriptor {
+        context,
+        context_label,
+        action,
+        description,
+        required_feature: None,
+    }
+}
+
+const fn gated_action(
+    context: &'static str,
+    context_label: &'static str,
+    action: &'static str,
+    description: &'static str,
+    required_feature: KeymapActionFeature,
+) -> KeymapActionDescriptor {
+    KeymapActionDescriptor {
+        context,
+        context_label,
+        action,
+        description,
+        required_feature: Some(required_feature),
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum KeymapActionFeature {
+    FastMode,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct KeymapActionFilter {
+    pub(crate) fast_mode_enabled: bool,
+}
+
+impl KeymapActionDescriptor {
+    pub(super) fn is_visible(self, filter: KeymapActionFilter) -> bool {
+        match self.required_feature {
+            None => true,
+            Some(KeymapActionFeature::FastMode) => filter.fast_mode_enabled,
+        }
+    }
+}
+
+#[rustfmt::skip]
+pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
+    action("global", "Global", "open_transcript", "Open the transcript overlay."),
+    action("global", "Global", "open_external_editor", "Open the current draft in an external editor."),
+    action("global", "Global", "copy", "Copy the last agent response to the clipboard."),
+    action("global", "Global", "clear_terminal", "Clear the terminal UI."),
+    action("global", "Global", "toggle_vim_mode", "Turn Vim composer mode on or off."),
+    gated_action("global", "Global", "toggle_fast_mode", "Turn Fast mode on or off.", KeymapActionFeature::FastMode),
+    action("chat", "Chat", "decrease_reasoning_effort", "Decrease reasoning effort."),
+    action("chat", "Chat", "increase_reasoning_effort", "Increase reasoning effort."),
+    action("chat", "Chat", "edit_queued_message", "Edit the most recently queued message."),
+    action("composer", "Composer", "submit", "Submit the current composer draft."),
+    action("composer", "Composer", "queue", "Queue the draft while a task is running."),
+    action("composer", "Composer", "toggle_shortcuts", "Show or hide the composer shortcut overlay."),
+    action("composer", "Composer", "history_search_previous", "Open history search or move to the previous match."),
+    action("composer", "Composer", "history_search_next", "Move to the next history search match."),
+    action("editor", "Editor", "insert_newline", "Insert a newline in the editor."),
+    action("editor", "Editor", "move_left", "Move the cursor left."),
+    action("editor", "Editor", "move_right", "Move the cursor right."),
+    action("editor", "Editor", "move_up", "Move the cursor up."),
+    action("editor", "Editor", "move_down", "Move the cursor down."),
+    action("editor", "Editor", "move_word_left", "Move to the beginning of the previous word."),
+    action("editor", "Editor", "move_word_right", "Move to the end of the next word."),
+    action("editor", "Editor", "move_line_start", "Move to the beginning of the line."),
+    action("editor", "Editor", "move_line_end", "Move to the end of the line."),
+    action("editor", "Editor", "delete_backward", "Delete one grapheme to the left."),
+    action("editor", "Editor", "delete_forward", "Delete one grapheme to the right."),
+    action("editor", "Editor", "delete_backward_word", "Delete the previous word."),
+    action("editor", "Editor", "delete_forward_word", "Delete the next word."),
+    action("editor", "Editor", "kill_line_start", "Delete from cursor to line start."),
+    action("editor", "Editor", "kill_whole_line", "Delete the current line."),
+    action("editor", "Editor", "kill_line_end", "Delete from cursor to line end."),
+    action("editor", "Editor", "yank", "Paste the kill buffer."),
+    action("vim_normal", "Vim normal", "enter_insert", "Enter insert mode at the cursor."),
+    action("vim_normal", "Vim normal", "append_after_cursor", "Enter insert mode after the cursor."),
+    action("vim_normal", "Vim normal", "append_line_end", "Enter insert mode at end of line."),
+    action("vim_normal", "Vim normal", "insert_line_start", "Enter insert mode at the first non-blank character."),
+    action("vim_normal", "Vim normal", "open_line_below", "Open a new line below and enter insert mode."),
+    action("vim_normal", "Vim normal", "open_line_above", "Open a new line above and enter insert mode."),
+    action("vim_normal", "Vim normal", "move_left", "Move left in Vim normal mode."),
+    action("vim_normal", "Vim normal", "move_right", "Move right in Vim normal mode."),
+    action("vim_normal", "Vim normal", "move_up", "Move up or recall older history in Vim normal mode."),
+    action("vim_normal", "Vim normal", "move_down", "Move down or recall newer history in Vim normal mode."),
+    action("vim_normal", "Vim normal", "move_word_forward", "Move to the start of the next word."),
+    action("vim_normal", "Vim normal", "move_word_backward", "Move to the start of the previous word."),
+    action("vim_normal", "Vim normal", "move_word_end", "Move to the end of the current or next word."),
+    action("vim_normal", "Vim normal", "move_line_start", "Move to the start of the line."),
+    action("vim_normal", "Vim normal", "move_line_end", "Move to the end of the line."),
+    action("vim_normal", "Vim normal", "delete_char", "Delete the character under the cursor."),
+    action("vim_normal", "Vim normal", "delete_to_line_end", "Delete from cursor to end of line."),
+    action("vim_normal", "Vim normal", "yank_line", "Yank the entire line."),
+    action("vim_normal", "Vim normal", "paste_after", "Paste after the cursor."),
+    action("vim_normal", "Vim normal", "start_delete_operator", "Begin a delete operator and wait for a motion."),
+    action("vim_normal", "Vim normal", "start_yank_operator", "Begin a yank operator and wait for a motion."),
+    action("vim_normal", "Vim normal", "cancel_operator", "Cancel a pending Vim operator."),
+    action("vim_operator", "Vim operator", "delete_line", "Repeat delete operator to delete the whole line."),
+    action("vim_operator", "Vim operator", "yank_line", "Repeat yank operator to yank the whole line."),
+    action("vim_operator", "Vim operator", "motion_left", "Operator motion left."),
+    action("vim_operator", "Vim operator", "motion_right", "Operator motion right."),
+    action("vim_operator", "Vim operator", "motion_up", "Operator motion up."),
+    action("vim_operator", "Vim operator", "motion_down", "Operator motion down."),
+    action("vim_operator", "Vim operator", "motion_word_forward", "Operator motion to start of next word."),
+    action("vim_operator", "Vim operator", "motion_word_backward", "Operator motion to start of previous word."),
+    action("vim_operator", "Vim operator", "motion_word_end", "Operator motion to end of word."),
+    action("vim_operator", "Vim operator", "motion_line_start", "Operator motion to line start."),
+    action("vim_operator", "Vim operator", "motion_line_end", "Operator motion to line end."),
+    action("vim_operator", "Vim operator", "cancel", "Cancel the pending operator."),
+    action("pager", "Pager", "scroll_up", "Scroll up by one row."),
+    action("pager", "Pager", "scroll_down", "Scroll down by one row."),
+    action("pager", "Pager", "page_up", "Scroll up by one page."),
+    action("pager", "Pager", "page_down", "Scroll down by one page."),
+    action("pager", "Pager", "half_page_up", "Scroll up by half a page."),
+    action("pager", "Pager", "half_page_down", "Scroll down by half a page."),
+    action("pager", "Pager", "jump_top", "Jump to the beginning."),
+    action("pager", "Pager", "jump_bottom", "Jump to the end."),
+    action("pager", "Pager", "close", "Close the pager overlay."),
+    action("pager", "Pager", "close_transcript", "Close the transcript overlay."),
+    action("list", "List", "move_up", "Move list selection up."),
+    action("list", "List", "move_down", "Move list selection down."),
+    action("list", "List", "accept", "Accept the current list selection."),
+    action("list", "List", "cancel", "Cancel and close selection views."),
+    action("approval", "Approval", "open_fullscreen", "Open approval details fullscreen."),
+    action("approval", "Approval", "open_thread", "Open the approval source thread when available."),
+    action("approval", "Approval", "approve", "Approve the primary option."),
+    action("approval", "Approval", "approve_for_session", "Approve for the session when available."),
+    action("approval", "Approval", "approve_for_prefix", "Approve with an exec-policy prefix when available."),
+    action("approval", "Approval", "deny", "Choose the explicit deny option when available."),
+    action("approval", "Approval", "decline", "Decline and provide corrective guidance."),
+    action("approval", "Approval", "cancel", "Cancel an elicitation request."),
+];
+
+/// Convert a stable action identifier into a display label.
+///
+/// This is intentionally presentation-only: the returned string must never be
+/// parsed back into an action name, because underscores and casing are part of
+/// the stable config contract.
+pub(super) fn action_label(action: &str) -> String {
+    action
+        .split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            let Some(first) = chars.next() else {
+                return String::new();
+            };
+            format!("{}{}", first.to_ascii_uppercase(), chars.as_str())
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[rustfmt::skip]
+/// Return the mutable root-config binding slot for one catalog action.
+///
+/// The returned `Option<KeybindingsSpec>` distinguishes three states that the
+/// editor must preserve: absent means use fallback/default resolution, `Some`
+/// with one or more keys is a custom binding, and `Some(Many([]))` is an
+/// explicit unbind.
+pub(super) fn binding_slot<'a>(
+    keymap: &'a mut TuiKeymap,
+    context: &str,
+    action: &str,
+) -> Option<&'a mut Option<KeybindingsSpec>> {
+    match (context, action) {
+        ("global", "open_transcript") => Some(&mut keymap.global.open_transcript),
+        ("global", "open_external_editor") => Some(&mut keymap.global.open_external_editor),
+        ("global", "copy") => Some(&mut keymap.global.copy),
+        ("global", "clear_terminal") => Some(&mut keymap.global.clear_terminal),
+        ("global", "toggle_vim_mode") => Some(&mut keymap.global.toggle_vim_mode),
+        ("global", "toggle_fast_mode") => Some(&mut keymap.global.toggle_fast_mode),
+        ("chat", "decrease_reasoning_effort") => Some(&mut keymap.chat.decrease_reasoning_effort),
+        ("chat", "increase_reasoning_effort") => Some(&mut keymap.chat.increase_reasoning_effort),
+        ("chat", "edit_queued_message") => Some(&mut keymap.chat.edit_queued_message),
+        ("composer", "submit") => Some(&mut keymap.composer.submit),
+        ("composer", "queue") => Some(&mut keymap.composer.queue),
+        ("composer", "toggle_shortcuts") => Some(&mut keymap.composer.toggle_shortcuts),
+        ("composer", "history_search_previous") => Some(&mut keymap.composer.history_search_previous),
+        ("composer", "history_search_next") => Some(&mut keymap.composer.history_search_next),
+        ("editor", "insert_newline") => Some(&mut keymap.editor.insert_newline),
+        ("editor", "move_left") => Some(&mut keymap.editor.move_left),
+        ("editor", "move_right") => Some(&mut keymap.editor.move_right),
+        ("editor", "move_up") => Some(&mut keymap.editor.move_up),
+        ("editor", "move_down") => Some(&mut keymap.editor.move_down),
+        ("editor", "move_word_left") => Some(&mut keymap.editor.move_word_left),
+        ("editor", "move_word_right") => Some(&mut keymap.editor.move_word_right),
+        ("editor", "move_line_start") => Some(&mut keymap.editor.move_line_start),
+        ("editor", "move_line_end") => Some(&mut keymap.editor.move_line_end),
+        ("editor", "delete_backward") => Some(&mut keymap.editor.delete_backward),
+        ("editor", "delete_forward") => Some(&mut keymap.editor.delete_forward),
+        ("editor", "delete_backward_word") => Some(&mut keymap.editor.delete_backward_word),
+        ("editor", "delete_forward_word") => Some(&mut keymap.editor.delete_forward_word),
+        ("editor", "kill_line_start") => Some(&mut keymap.editor.kill_line_start),
+        ("editor", "kill_whole_line") => Some(&mut keymap.editor.kill_whole_line),
+        ("editor", "kill_line_end") => Some(&mut keymap.editor.kill_line_end),
+        ("editor", "yank") => Some(&mut keymap.editor.yank),
+        ("vim_normal", "enter_insert") => Some(&mut keymap.vim_normal.enter_insert),
+        ("vim_normal", "append_after_cursor") => Some(&mut keymap.vim_normal.append_after_cursor),
+        ("vim_normal", "append_line_end") => Some(&mut keymap.vim_normal.append_line_end),
+        ("vim_normal", "insert_line_start") => Some(&mut keymap.vim_normal.insert_line_start),
+        ("vim_normal", "open_line_below") => Some(&mut keymap.vim_normal.open_line_below),
+        ("vim_normal", "open_line_above") => Some(&mut keymap.vim_normal.open_line_above),
+        ("vim_normal", "move_left") => Some(&mut keymap.vim_normal.move_left),
+        ("vim_normal", "move_right") => Some(&mut keymap.vim_normal.move_right),
+        ("vim_normal", "move_up") => Some(&mut keymap.vim_normal.move_up),
+        ("vim_normal", "move_down") => Some(&mut keymap.vim_normal.move_down),
+        ("vim_normal", "move_word_forward") => Some(&mut keymap.vim_normal.move_word_forward),
+        ("vim_normal", "move_word_backward") => Some(&mut keymap.vim_normal.move_word_backward),
+        ("vim_normal", "move_word_end") => Some(&mut keymap.vim_normal.move_word_end),
+        ("vim_normal", "move_line_start") => Some(&mut keymap.vim_normal.move_line_start),
+        ("vim_normal", "move_line_end") => Some(&mut keymap.vim_normal.move_line_end),
+        ("vim_normal", "delete_char") => Some(&mut keymap.vim_normal.delete_char),
+        ("vim_normal", "delete_to_line_end") => Some(&mut keymap.vim_normal.delete_to_line_end),
+        ("vim_normal", "yank_line") => Some(&mut keymap.vim_normal.yank_line),
+        ("vim_normal", "paste_after") => Some(&mut keymap.vim_normal.paste_after),
+        ("vim_normal", "start_delete_operator") => Some(&mut keymap.vim_normal.start_delete_operator),
+        ("vim_normal", "start_yank_operator") => Some(&mut keymap.vim_normal.start_yank_operator),
+        ("vim_normal", "cancel_operator") => Some(&mut keymap.vim_normal.cancel_operator),
+        ("vim_operator", "delete_line") => Some(&mut keymap.vim_operator.delete_line),
+        ("vim_operator", "yank_line") => Some(&mut keymap.vim_operator.yank_line),
+        ("vim_operator", "motion_left") => Some(&mut keymap.vim_operator.motion_left),
+        ("vim_operator", "motion_right") => Some(&mut keymap.vim_operator.motion_right),
+        ("vim_operator", "motion_up") => Some(&mut keymap.vim_operator.motion_up),
+        ("vim_operator", "motion_down") => Some(&mut keymap.vim_operator.motion_down),
+        ("vim_operator", "motion_word_forward") => Some(&mut keymap.vim_operator.motion_word_forward),
+        ("vim_operator", "motion_word_backward") => Some(&mut keymap.vim_operator.motion_word_backward),
+        ("vim_operator", "motion_word_end") => Some(&mut keymap.vim_operator.motion_word_end),
+        ("vim_operator", "motion_line_start") => Some(&mut keymap.vim_operator.motion_line_start),
+        ("vim_operator", "motion_line_end") => Some(&mut keymap.vim_operator.motion_line_end),
+        ("vim_operator", "cancel") => Some(&mut keymap.vim_operator.cancel),
+        ("pager", "scroll_up") => Some(&mut keymap.pager.scroll_up),
+        ("pager", "scroll_down") => Some(&mut keymap.pager.scroll_down),
+        ("pager", "page_up") => Some(&mut keymap.pager.page_up),
+        ("pager", "page_down") => Some(&mut keymap.pager.page_down),
+        ("pager", "half_page_up") => Some(&mut keymap.pager.half_page_up),
+        ("pager", "half_page_down") => Some(&mut keymap.pager.half_page_down),
+        ("pager", "jump_top") => Some(&mut keymap.pager.jump_top),
+        ("pager", "jump_bottom") => Some(&mut keymap.pager.jump_bottom),
+        ("pager", "close") => Some(&mut keymap.pager.close),
+        ("pager", "close_transcript") => Some(&mut keymap.pager.close_transcript),
+        ("list", "move_up") => Some(&mut keymap.list.move_up),
+        ("list", "move_down") => Some(&mut keymap.list.move_down),
+        ("list", "accept") => Some(&mut keymap.list.accept),
+        ("list", "cancel") => Some(&mut keymap.list.cancel),
+        ("approval", "open_fullscreen") => Some(&mut keymap.approval.open_fullscreen),
+        ("approval", "open_thread") => Some(&mut keymap.approval.open_thread),
+        ("approval", "approve") => Some(&mut keymap.approval.approve),
+        ("approval", "approve_for_session") => Some(&mut keymap.approval.approve_for_session),
+        ("approval", "approve_for_prefix") => Some(&mut keymap.approval.approve_for_prefix),
+        ("approval", "deny") => Some(&mut keymap.approval.deny),
+        ("approval", "decline") => Some(&mut keymap.approval.decline),
+        ("approval", "cancel") => Some(&mut keymap.approval.cancel),
+        _ => None,
+    }
+}
+
+#[rustfmt::skip]
+/// Return the resolved runtime bindings for one catalog action.
+///
+/// This reads from [`RuntimeKeymap`] rather than root config so UI labels show
+/// the actual active binding after defaults, global fallback, explicit
+/// unbinding, and duplicate-key validation have already been applied.
+pub(super) fn bindings_for_action<'a>(
+    runtime_keymap: &'a RuntimeKeymap,
+    context: &str,
+    action: &str,
+) -> Option<&'a [KeyBinding]> {
+    match (context, action) {
+        ("global", "open_transcript") => Some(runtime_keymap.app.open_transcript.as_slice()),
+        ("global", "open_external_editor") => Some(runtime_keymap.app.open_external_editor.as_slice()),
+        ("global", "copy") => Some(runtime_keymap.app.copy.as_slice()),
+        ("global", "clear_terminal") => Some(runtime_keymap.app.clear_terminal.as_slice()),
+        ("global", "toggle_vim_mode") => Some(runtime_keymap.app.toggle_vim_mode.as_slice()),
+        ("global", "toggle_fast_mode") => Some(runtime_keymap.app.toggle_fast_mode.as_slice()),
+        ("chat", "decrease_reasoning_effort") => Some(runtime_keymap.chat.decrease_reasoning_effort.as_slice()),
+        ("chat", "increase_reasoning_effort") => Some(runtime_keymap.chat.increase_reasoning_effort.as_slice()),
+        ("chat", "edit_queued_message") => Some(runtime_keymap.chat.edit_queued_message.as_slice()),
+        ("composer", "submit") => Some(runtime_keymap.composer.submit.as_slice()),
+        ("composer", "queue") => Some(runtime_keymap.composer.queue.as_slice()),
+        ("composer", "toggle_shortcuts") => Some(runtime_keymap.composer.toggle_shortcuts.as_slice()),
+        ("composer", "history_search_previous") => Some(runtime_keymap.composer.history_search_previous.as_slice()),
+        ("composer", "history_search_next") => Some(runtime_keymap.composer.history_search_next.as_slice()),
+        ("editor", "insert_newline") => Some(runtime_keymap.editor.insert_newline.as_slice()),
+        ("editor", "move_left") => Some(runtime_keymap.editor.move_left.as_slice()),
+        ("editor", "move_right") => Some(runtime_keymap.editor.move_right.as_slice()),
+        ("editor", "move_up") => Some(runtime_keymap.editor.move_up.as_slice()),
+        ("editor", "move_down") => Some(runtime_keymap.editor.move_down.as_slice()),
+        ("editor", "move_word_left") => Some(runtime_keymap.editor.move_word_left.as_slice()),
+        ("editor", "move_word_right") => Some(runtime_keymap.editor.move_word_right.as_slice()),
+        ("editor", "move_line_start") => Some(runtime_keymap.editor.move_line_start.as_slice()),
+        ("editor", "move_line_end") => Some(runtime_keymap.editor.move_line_end.as_slice()),
+        ("editor", "delete_backward") => Some(runtime_keymap.editor.delete_backward.as_slice()),
+        ("editor", "delete_forward") => Some(runtime_keymap.editor.delete_forward.as_slice()),
+        ("editor", "delete_backward_word") => Some(runtime_keymap.editor.delete_backward_word.as_slice()),
+        ("editor", "delete_forward_word") => Some(runtime_keymap.editor.delete_forward_word.as_slice()),
+        ("editor", "kill_line_start") => Some(runtime_keymap.editor.kill_line_start.as_slice()),
+        ("editor", "kill_whole_line") => Some(runtime_keymap.editor.kill_whole_line.as_slice()),
+        ("editor", "kill_line_end") => Some(runtime_keymap.editor.kill_line_end.as_slice()),
+        ("editor", "yank") => Some(runtime_keymap.editor.yank.as_slice()),
+        ("vim_normal", "enter_insert") => Some(runtime_keymap.vim_normal.enter_insert.as_slice()),
+        ("vim_normal", "append_after_cursor") => Some(runtime_keymap.vim_normal.append_after_cursor.as_slice()),
+        ("vim_normal", "append_line_end") => Some(runtime_keymap.vim_normal.append_line_end.as_slice()),
+        ("vim_normal", "insert_line_start") => Some(runtime_keymap.vim_normal.insert_line_start.as_slice()),
+        ("vim_normal", "open_line_below") => Some(runtime_keymap.vim_normal.open_line_below.as_slice()),
+        ("vim_normal", "open_line_above") => Some(runtime_keymap.vim_normal.open_line_above.as_slice()),
+        ("vim_normal", "move_left") => Some(runtime_keymap.vim_normal.move_left.as_slice()),
+        ("vim_normal", "move_right") => Some(runtime_keymap.vim_normal.move_right.as_slice()),
+        ("vim_normal", "move_up") => Some(runtime_keymap.vim_normal.move_up.as_slice()),
+        ("vim_normal", "move_down") => Some(runtime_keymap.vim_normal.move_down.as_slice()),
+        ("vim_normal", "move_word_forward") => Some(runtime_keymap.vim_normal.move_word_forward.as_slice()),
+        ("vim_normal", "move_word_backward") => Some(runtime_keymap.vim_normal.move_word_backward.as_slice()),
+        ("vim_normal", "move_word_end") => Some(runtime_keymap.vim_normal.move_word_end.as_slice()),
+        ("vim_normal", "move_line_start") => Some(runtime_keymap.vim_normal.move_line_start.as_slice()),
+        ("vim_normal", "move_line_end") => Some(runtime_keymap.vim_normal.move_line_end.as_slice()),
+        ("vim_normal", "delete_char") => Some(runtime_keymap.vim_normal.delete_char.as_slice()),
+        ("vim_normal", "delete_to_line_end") => Some(runtime_keymap.vim_normal.delete_to_line_end.as_slice()),
+        ("vim_normal", "yank_line") => Some(runtime_keymap.vim_normal.yank_line.as_slice()),
+        ("vim_normal", "paste_after") => Some(runtime_keymap.vim_normal.paste_after.as_slice()),
+        ("vim_normal", "start_delete_operator") => Some(runtime_keymap.vim_normal.start_delete_operator.as_slice()),
+        ("vim_normal", "start_yank_operator") => Some(runtime_keymap.vim_normal.start_yank_operator.as_slice()),
+        ("vim_normal", "cancel_operator") => Some(runtime_keymap.vim_normal.cancel_operator.as_slice()),
+        ("vim_operator", "delete_line") => Some(runtime_keymap.vim_operator.delete_line.as_slice()),
+        ("vim_operator", "yank_line") => Some(runtime_keymap.vim_operator.yank_line.as_slice()),
+        ("vim_operator", "motion_left") => Some(runtime_keymap.vim_operator.motion_left.as_slice()),
+        ("vim_operator", "motion_right") => Some(runtime_keymap.vim_operator.motion_right.as_slice()),
+        ("vim_operator", "motion_up") => Some(runtime_keymap.vim_operator.motion_up.as_slice()),
+        ("vim_operator", "motion_down") => Some(runtime_keymap.vim_operator.motion_down.as_slice()),
+        ("vim_operator", "motion_word_forward") => Some(runtime_keymap.vim_operator.motion_word_forward.as_slice()),
+        ("vim_operator", "motion_word_backward") => Some(runtime_keymap.vim_operator.motion_word_backward.as_slice()),
+        ("vim_operator", "motion_word_end") => Some(runtime_keymap.vim_operator.motion_word_end.as_slice()),
+        ("vim_operator", "motion_line_start") => Some(runtime_keymap.vim_operator.motion_line_start.as_slice()),
+        ("vim_operator", "motion_line_end") => Some(runtime_keymap.vim_operator.motion_line_end.as_slice()),
+        ("vim_operator", "cancel") => Some(runtime_keymap.vim_operator.cancel.as_slice()),
+        ("pager", "scroll_up") => Some(runtime_keymap.pager.scroll_up.as_slice()),
+        ("pager", "scroll_down") => Some(runtime_keymap.pager.scroll_down.as_slice()),
+        ("pager", "page_up") => Some(runtime_keymap.pager.page_up.as_slice()),
+        ("pager", "page_down") => Some(runtime_keymap.pager.page_down.as_slice()),
+        ("pager", "half_page_up") => Some(runtime_keymap.pager.half_page_up.as_slice()),
+        ("pager", "half_page_down") => Some(runtime_keymap.pager.half_page_down.as_slice()),
+        ("pager", "jump_top") => Some(runtime_keymap.pager.jump_top.as_slice()),
+        ("pager", "jump_bottom") => Some(runtime_keymap.pager.jump_bottom.as_slice()),
+        ("pager", "close") => Some(runtime_keymap.pager.close.as_slice()),
+        ("pager", "close_transcript") => Some(runtime_keymap.pager.close_transcript.as_slice()),
+        ("list", "move_up") => Some(runtime_keymap.list.move_up.as_slice()),
+        ("list", "move_down") => Some(runtime_keymap.list.move_down.as_slice()),
+        ("list", "accept") => Some(runtime_keymap.list.accept.as_slice()),
+        ("list", "cancel") => Some(runtime_keymap.list.cancel.as_slice()),
+        ("approval", "open_fullscreen") => Some(runtime_keymap.approval.open_fullscreen.as_slice()),
+        ("approval", "open_thread") => Some(runtime_keymap.approval.open_thread.as_slice()),
+        ("approval", "approve") => Some(runtime_keymap.approval.approve.as_slice()),
+        ("approval", "approve_for_session") => Some(runtime_keymap.approval.approve_for_session.as_slice()),
+        ("approval", "approve_for_prefix") => Some(runtime_keymap.approval.approve_for_prefix.as_slice()),
+        ("approval", "deny") => Some(runtime_keymap.approval.deny.as_slice()),
+        ("approval", "decline") => Some(runtime_keymap.approval.decline.as_slice()),
+        ("approval", "cancel") => Some(runtime_keymap.approval.cancel.as_slice()),
+        _ => None,
+    }
+}
+
+/// Format a resolved binding list for compact menu display.
+///
+/// Duplicate runtime variants that normalize to the same config spec are shown
+/// once so compatibility defaults, such as alternate SHIFT reporting forms, do
+/// not look like separate user choices.
+pub(super) fn format_binding_summary(bindings: &[KeyBinding]) -> String {
+    let mut seen = BTreeSet::new();
+    let specs = bindings
+        .iter()
+        .filter_map(|binding| super::binding_to_config_key_spec(*binding).ok())
+        .filter(|spec| seen.insert(spec.clone()))
+        .collect::<Vec<_>>();
+    if specs.is_empty() {
+        "unbound".to_string()
+    } else {
+        specs.join(", ")
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum KeymapDebugBindingSource {
+    Custom,
+    CustomGlobal,
+    Default,
+}
+
+impl KeymapDebugBindingSource {
+    pub(super) const fn label(&self) -> &'static str {
+        match self {
+            Self::Custom => "Custom",
+            Self::CustomGlobal => "Custom global",
+            Self::Default => "Default",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct KeymapDebugActionMatch {
+    pub(super) context: &'static str,
+    pub(super) action: &'static str,
+    pub(super) label: String,
+    pub(super) description: &'static str,
+    pub(super) source: KeymapDebugBindingSource,
+}
+
+pub(super) fn matching_actions_for_key_event(
+    runtime_keymap: &RuntimeKeymap,
+    keymap_config: &TuiKeymap,
+    event: KeyEvent,
+) -> Vec<KeymapDebugActionMatch> {
+    KEYMAP_ACTIONS
+        .iter()
+        .filter_map(|descriptor| {
+            let bindings =
+                bindings_for_action(runtime_keymap, descriptor.context, descriptor.action)?;
+            bindings
+                .iter()
+                .any(|binding| binding.is_press(event))
+                .then(|| KeymapDebugActionMatch {
+                    context: descriptor.context,
+                    action: descriptor.action,
+                    label: action_label(descriptor.action),
+                    description: descriptor.description,
+                    source: debug_binding_source(keymap_config, descriptor),
+                })
+        })
+        .collect()
+}
+
+fn debug_binding_source(
+    keymap_config: &TuiKeymap,
+    descriptor: &KeymapActionDescriptor,
+) -> KeymapDebugBindingSource {
+    let mut keymap_config = keymap_config.clone();
+    let Some(slot) = binding_slot(&mut keymap_config, descriptor.context, descriptor.action) else {
+        return KeymapDebugBindingSource::Default;
+    };
+    if slot.is_some() {
+        return KeymapDebugBindingSource::Custom;
+    }
+
+    let Some(global_slot) = global_fallback_slot(&mut keymap_config, descriptor) else {
+        return KeymapDebugBindingSource::Default;
+    };
+    if global_slot.is_some() {
+        KeymapDebugBindingSource::CustomGlobal
+    } else {
+        KeymapDebugBindingSource::Default
+    }
+}
+
+fn global_fallback_slot<'a>(
+    keymap: &'a mut TuiKeymap,
+    descriptor: &KeymapActionDescriptor,
+) -> Option<&'a mut Option<KeybindingsSpec>> {
+    if descriptor.context != "composer" {
+        return None;
+    }
+
+    match descriptor.action {
+        "submit" => Some(&mut keymap.global.submit),
+        "queue" => Some(&mut keymap.global.queue),
+        "toggle_shortcuts" => Some(&mut keymap.global.toggle_shortcuts),
+        _ => None,
+    }
+}

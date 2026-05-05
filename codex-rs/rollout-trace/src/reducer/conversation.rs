@@ -6,6 +6,7 @@
 //! later model-facing payload carries their content.
 
 use anyhow::Context;
+use anyhow::Ok;
 use anyhow::Result;
 use anyhow::bail;
 use serde_json::Value;
@@ -76,7 +77,7 @@ impl TraceReducer {
                 .values()
                 .find(|inference| {
                     inference.thread_id == thread_id
-                        && inference.upstream_request_id.as_deref() == Some(previous_response_id)
+                        && inference.response_id.as_deref() == Some(previous_response_id)
                 })
                 .map(|inference| {
                     let mut ids = inference.request_item_ids.clone();
@@ -209,7 +210,6 @@ impl TraceReducer {
             let index = context.start_index + offset;
             let tool_link_item = item.clone();
             self.ensure_call_id_consistency(context.thread_id, &item)?;
-            self.ensure_reasoning_consistency(context.thread_id, &item)?;
             let item_id = if let Some(previous_item_id) = previous_snapshot.get(index) {
                 if self.item_matches(previous_item_id, &item) {
                     previous_item_id.clone()
@@ -366,7 +366,6 @@ impl TraceReducer {
         for item in items {
             let tool_link_item = item.clone();
             self.ensure_call_id_consistency(context.thread_id, &item)?;
-            self.ensure_reasoning_consistency(context.thread_id, &item)?;
             let item_id = self
                 .find_matching_snapshot_item(&context.candidates, &item_ids, &item)
                 .unwrap_or_else(|| {
@@ -497,31 +496,6 @@ impl TraceReducer {
         Ok(())
     }
 
-    fn ensure_reasoning_consistency(
-        &self,
-        thread_id: &str,
-        normalized: &NormalizedConversationItem,
-    ) -> Result<()> {
-        if normalized.kind != ConversationItemKind::Reasoning {
-            return Ok(());
-        };
-        let Some((label, value)) = reasoning_encoded_part(&normalized.body) else {
-            return Ok(());
-        };
-
-        for item in self.rollout.conversation_items.values() {
-            if item.thread_id == thread_id
-                && item.kind == ConversationItemKind::Reasoning
-                && item.channel == normalized.channel
-                && reasoning_encoded_part(&item.body) == Some((label, value))
-                && !reasoning_body_matches(&item.body, &normalized.body)
-            {
-                bail!("reasoning encrypted_content was reused with different readable content");
-            }
-        }
-        Ok(())
-    }
-
     fn item_matches(&self, item_id: &str, normalized: &NormalizedConversationItem) -> bool {
         let Some(item) = self.rollout.conversation_items.get(item_id) else {
             return false;
@@ -636,9 +610,10 @@ fn reasoning_body_matches(left: &ConversationBody, right: &ConversationBody) -> 
     }
 
     // The Responses API may return readable reasoning on completion, but later
-    // request snapshots often replay only the encrypted blob. The blob is the
-    // stable model-visible identity; readable text/summary is extra evidence
-    // that must agree whenever both sides provide it.
+    // request snapshots often replay only the encrypted blob. Treat the blob as
+    // stable model-visible identity and merge readable text as best-effort
+    // evidence, because request/response serialization can observe different
+    // readable forms for the same encrypted reasoning item.
     let Some(left_encoded) = reasoning_encoded_part(left) else {
         return false;
     };
@@ -646,7 +621,7 @@ fn reasoning_body_matches(left: &ConversationBody, right: &ConversationBody) -> 
         return false;
     };
 
-    left_encoded == right_encoded && readable_reasoning_parts_match(left, right)
+    left_encoded == right_encoded
 }
 
 fn merge_reasoning_body(
@@ -657,14 +632,62 @@ fn merge_reasoning_body(
         return Ok(());
     }
     if !reasoning_body_matches(existing, incoming) {
-        bail!("reasoning encrypted_content was reused with different readable content");
+        bail!("reasoning item merge attempted with different encrypted_content identity");
     }
-    if readable_reasoning_parts(existing).is_empty()
-        && !readable_reasoning_parts(incoming).is_empty()
-    {
-        existing.parts = incoming.parts.clone();
+
+    let existing_text_parts = reasoning_text_parts(existing);
+    let existing_summary_parts = reasoning_summary_parts(existing);
+    if !existing_text_parts.is_empty() && !existing_summary_parts.is_empty() {
+        return Ok(());
     }
+
+    let incoming_text_parts = reasoning_text_parts(incoming);
+    let incoming_summary_parts = reasoning_summary_parts(incoming);
+
+    let text_parts = if !existing_text_parts.is_empty() {
+        existing_text_parts
+    } else {
+        incoming_text_parts
+    };
+
+    let summary_parts = if !existing_summary_parts.is_empty() {
+        existing_summary_parts
+    } else {
+        incoming_summary_parts
+    };
+
+    // We already know that the encoded part exist (and matches).
+    let encoded_parts = reasoning_encoded_parts(existing);
+
+    existing.parts = text_parts
+        .into_iter()
+        .cloned()
+        .chain(summary_parts.into_iter().cloned())
+        .chain(encoded_parts.into_iter().cloned())
+        .collect();
+
     Ok(())
+}
+
+fn reasoning_text_parts(body: &ConversationBody) -> Vec<&ConversationPart> {
+    body.parts
+        .iter()
+        .filter(|part| matches!(part, ConversationPart::Text { .. }))
+        .collect()
+}
+
+fn reasoning_summary_parts(body: &ConversationBody) -> Vec<&ConversationPart> {
+    body.parts
+        .iter()
+        .filter(|part| matches!(part, ConversationPart::Summary { .. }))
+        .collect()
+}
+
+fn reasoning_encoded_parts(body: &ConversationBody) -> Vec<&ConversationPart> {
+    body.parts
+        .iter()
+        .filter(|part| matches!(part, ConversationPart::Encoded { .. }))
+        .collect()
 }
 
 fn reasoning_encoded_part(body: &ConversationBody) -> Option<(&str, &str)> {
@@ -675,24 +698,6 @@ fn reasoning_encoded_part(body: &ConversationBody) -> Option<(&str, &str)> {
             None
         }
     })
-}
-
-fn readable_reasoning_parts_match(left: &ConversationBody, right: &ConversationBody) -> bool {
-    let left = readable_reasoning_parts(left);
-    let right = readable_reasoning_parts(right);
-    left.is_empty() || right.is_empty() || left == right
-}
-
-fn readable_reasoning_parts(body: &ConversationBody) -> Vec<&ConversationPart> {
-    body.parts
-        .iter()
-        .filter(|part| {
-            matches!(
-                part,
-                ConversationPart::Text { .. } | ConversationPart::Summary { .. }
-            )
-        })
-        .collect()
 }
 
 #[cfg(test)]

@@ -152,7 +152,9 @@ pub struct InferenceCall {
     pub execution: ExecutionWindow,
     pub model: String,
     pub provider_name: String,
-    /// Upstream request ID returned by HTTP/proxy/engine infrastructure.
+    /// Responses API response id, used by follow-up `previous_response_id` requests.
+    pub response_id: Option<String>,
+    /// Request id returned by HTTP/proxy/engine infrastructure.
     pub upstream_request_id: Option<String>,
     /// Complete ordered input snapshot sent with this request.
     pub request_item_ids: Vec<ConversationItemId>,

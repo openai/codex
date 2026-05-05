@@ -441,7 +441,74 @@ fn encrypted_reasoning_reuses_response_item_in_later_request() -> anyhow::Result
 }
 
 #[test]
-fn same_encrypted_reasoning_with_different_text_is_reducer_error() -> anyhow::Result<()> {
+fn encrypted_reasoning_upgrades_when_later_sighting_has_more_readable_body() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = create_started_writer(&temp)?;
+    start_turn(&writer, "turn-1")?;
+
+    let user = message("user", "count files");
+    // Both sightings carry the same encrypted identity, but each has a
+    // different kind of readable evidence. The reducer should keep both
+    // observations because text and summary are complementary.
+    let text_only_reasoning = json!({
+        "type": "reasoning",
+        "content": [{"type": "text", "text": "need count"}],
+        "summary": [],
+        "encrypted_content": "encoded-reasoning"
+    });
+    let summary_only_reasoning = json!({
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "counting files"}],
+        "encrypted_content": "encoded-reasoning"
+    });
+
+    let first_request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({
+            "input": [user, text_only_reasoning]
+        }),
+    )?;
+    append_inference_start(&writer, "inference-1", "turn-1", first_request)?;
+    start_turn(&writer, "turn-2")?;
+
+    let second_request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({
+            "input": [user, summary_only_reasoning]
+        }),
+    )?;
+    append_inference_start(&writer, "inference-2", "turn-2", second_request)?;
+
+    let rollout = replay_bundle(temp.path())?;
+    let first = &rollout.inference_calls["inference-1"];
+    let second = &rollout.inference_calls["inference-2"];
+    let reasoning_item_id = &first.request_item_ids[1];
+
+    // The reducer should keep one conversation item and merge the missing
+    // readable kind without treating the second sighting as a conflict.
+    assert_eq!(&second.request_item_ids[1], reasoning_item_id);
+    assert_eq!(
+        rollout.conversation_items[reasoning_item_id].body.parts,
+        vec![
+            ConversationPart::Text {
+                text: "need count".to_string(),
+            },
+            ConversationPart::Summary {
+                text: "counting files".to_string(),
+            },
+            ConversationPart::Encoded {
+                label: "encrypted_content".to_string(),
+                value: "encoded-reasoning".to_string(),
+            },
+        ],
+    );
+    assert_eq!(rollout.conversation_items.len(), 2);
+
+    Ok(())
+}
+
+#[test]
+fn same_encrypted_reasoning_with_different_text_reuses_first_readable_body() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = create_started_writer(&temp)?;
     start_turn(&writer, "turn-1")?;
@@ -455,6 +522,9 @@ fn same_encrypted_reasoning_with_different_text_is_reducer_error() -> anyhow::Re
     )?;
     append_inference_start(&writer, "inference-1", "turn-1", request)?;
 
+    // The response is the first readable observation for this encrypted
+    // reasoning blob, so it is the body later conflicting sightings must not
+    // overwrite.
     let response = writer.write_json_payload(
         RawPayloadKind::InferenceResponse,
         &json!({
@@ -486,10 +556,32 @@ fn same_encrypted_reasoning_with_different_text_is_reducer_error() -> anyhow::Re
     )?;
     append_inference_start(&writer, "inference-2", "turn-2", conflicting_request)?;
 
-    expect_replay_error(
-        &temp,
-        "reasoning encrypted_content was reused with different readable content",
-    )
+    let rollout = replay_bundle(temp.path())?;
+    let first = &rollout.inference_calls["inference-1"];
+    let second = &rollout.inference_calls["inference-2"];
+    let reasoning_item_id = &first.response_item_ids[0];
+
+    // Same encrypted identity still reuses the response item, but conflicting
+    // readable text is not a safe upgrade.
+    assert_eq!(
+        second.request_item_ids,
+        vec![first.request_item_ids[0].clone(), reasoning_item_id.clone(),],
+    );
+    assert_eq!(
+        rollout.conversation_items[reasoning_item_id].body.parts,
+        vec![
+            ConversationPart::Text {
+                text: "first text".to_string(),
+            },
+            ConversationPart::Encoded {
+                label: "encrypted_content".to_string(),
+                value: "encoded-reasoning".to_string(),
+            },
+        ],
+    );
+    assert_eq!(rollout.conversation_items.len(), 2);
+
+    Ok(())
 }
 
 #[test]
@@ -673,6 +765,75 @@ fn compaction_boundary_repeats_prefix_and_reuses_replacement_items() -> anyhow::
             compaction_id: "compaction-1".to_string()
         }],
     );
+    assert_eq!(
+        rollout.conversation_items[&compaction.replacement_item_ids[2]].channel,
+        Some(ConversationChannel::Summary),
+    );
+    assert_eq!(
+        rollout.conversation_items[&compaction.replacement_item_ids[2]].kind,
+        ConversationItemKind::Message,
+    );
+    assert_eq!(
+        rollout.conversation_items[&compaction.replacement_item_ids[2]]
+            .body
+            .parts,
+        vec![ConversationPart::Encoded {
+            label: "encrypted_content".to_string(),
+            value: "encrypted-summary".to_string(),
+        }],
+    );
+
+    Ok(())
+}
+
+#[test]
+fn context_compaction_boundary_repeats_prefix_and_reuses_replacement_items() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = create_started_writer(&temp)?;
+    start_turn(&writer, "turn-1")?;
+
+    let developer = message("developer", "follow repo rules");
+    let user = message("user", "count files");
+    let request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({
+            "input": [developer, user]
+        }),
+    )?;
+    append_inference_start(&writer, "inference-1", "turn-1", request)?;
+
+    let summary = message("user", "summary from compacted history");
+    let compaction_summary = json!({
+        "type": "context_compaction",
+        "encrypted_content": "encrypted-summary",
+    });
+    let checkpoint = writer.write_json_payload(
+        RawPayloadKind::CompactionCheckpoint,
+        &json!({
+            "input_history": [developer, user],
+            "replacement_history": [user, summary, compaction_summary]
+        }),
+    )?;
+    writer.append_with_context(
+        trace_context("turn-1"),
+        RawTraceEventPayload::CompactionInstalled {
+            compaction_id: "compaction-1".to_string(),
+            checkpoint_payload: checkpoint,
+        },
+    )?;
+
+    start_turn(&writer, "turn-2")?;
+    let post_compaction_request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({
+            "input": [developer, user, summary, compaction_summary]
+        }),
+    )?;
+    append_inference_start(&writer, "inference-2", "turn-2", post_compaction_request)?;
+
+    let rollout = replay_bundle(temp.path())?;
+    let compaction = &rollout.compactions["compaction-1"];
+
     assert_eq!(
         rollout.conversation_items[&compaction.replacement_item_ids[2]].channel,
         Some(ConversationChannel::Summary),

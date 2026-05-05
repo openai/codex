@@ -1,12 +1,12 @@
 use super::*;
 use crate::config::test_config;
+use crate::init_state_db;
 use crate::rollout::RolloutRecorder;
 use crate::session::session::SessionSettingsUpdate;
 use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_features::Feature;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -45,20 +45,6 @@ fn assistant_msg(text: &str) -> ResponseItem {
         }],
         phase: None,
     }
-}
-
-fn disabled_environment_manager_for_tests() -> Arc<codex_exec_server::EnvironmentManager> {
-    let runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
-        std::env::current_exe().expect("current exe path"),
-        /*codex_linux_sandbox_exe*/ None,
-    )
-    .expect("runtime paths");
-    Arc::new(codex_exec_server::EnvironmentManager::new(
-        codex_exec_server::EnvironmentManagerArgs {
-            exec_server_url: Some("none".to_string()),
-            local_runtime_paths: runtime_paths,
-        },
-    ))
 }
 
 fn contextual_user_interrupted_marker() -> ResponseItem {
@@ -282,7 +268,7 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
         .expect("start first thread")
         .thread_id;
     let thread_2 = manager
-        .start_thread(config)
+        .start_thread(config.clone())
         .await
         .expect("start second thread")
         .thread_id;
@@ -307,11 +293,23 @@ async fn start_thread_accepts_explicit_environment_when_default_environment_is_d
     config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
 
+    let runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
+        std::env::current_exe().expect("current exe path"),
+        /*codex_linux_sandbox_exe*/ None,
+    )
+    .expect("runtime paths");
+    let environment_manager = Arc::new(
+        codex_exec_server::EnvironmentManager::create_for_tests(
+            Some("none".to_string()),
+            runtime_paths,
+        )
+        .await,
+    );
     let manager = ThreadManager::with_models_provider_and_home_for_tests(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
-        disabled_environment_manager_for_tests(),
+        environment_manager,
     );
 
     let thread = manager
@@ -390,9 +388,10 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
-        CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
     );
     let selected_cwd =
         AbsolutePathBuf::try_from(config.cwd.as_path().join("selected")).expect("absolute path");
@@ -401,7 +400,6 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         cwd: selected_cwd.clone(),
     }];
     let default_cwd = config.cwd.clone();
-
     let source = manager
         .start_thread_with_options(StartThreadOptions {
             config: config.clone(),
@@ -425,6 +423,12 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .thread
         .rollout_path()
         .expect("source rollout path should exist");
+    source
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown source thread before resume");
+    let _ = manager.remove_thread(&source.thread_id).await;
 
     let resumed = manager
         .resume_thread_from_rollout(
@@ -442,9 +446,15 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .new_turn_with_sub_id("resume-turn".to_string(), SessionSettingsUpdate::default())
         .await
         .expect("build resumed turn context");
-    assert_eq!(resumed_turn.environments.len(), 1);
-    assert_eq!(resumed_turn.environments[0].cwd, default_cwd);
-    assert_ne!(resumed_turn.environments[0].cwd, selected_cwd);
+    assert_eq!(resumed_turn.environments.turn_environments.len(), 1);
+    assert_eq!(
+        resumed_turn.environments.turn_environments[0].cwd,
+        default_cwd
+    );
+    assert_ne!(
+        resumed_turn.environments.turn_environments[0].cwd,
+        selected_cwd
+    );
 
     let forked = manager
         .fork_thread(
@@ -463,9 +473,128 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .new_turn_with_sub_id("fork-turn".to_string(), SessionSettingsUpdate::default())
         .await
         .expect("build forked turn context");
-    assert_eq!(forked_turn.environments.len(), 1);
-    assert_eq!(forked_turn.environments[0].cwd, default_cwd);
-    assert_ne!(forked_turn.environments[0].cwd, selected_cwd);
+    assert_eq!(forked_turn.environments.turn_environments.len(), 1);
+    assert_eq!(
+        forked_turn.environments.turn_environments[0].cwd,
+        default_cwd
+    );
+    assert_ne!(
+        forked_turn.environments.turn_environments[0].cwd,
+        selected_cwd
+    );
+}
+
+#[tokio::test]
+async fn resume_active_thread_from_rollout_returns_running_thread() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
+    );
+
+    let source = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start source thread");
+    source.thread.ensure_rollout_materialized().await;
+    source
+        .thread
+        .flush_rollout()
+        .await
+        .expect("flush source rollout");
+    let rollout_path = source
+        .thread
+        .rollout_path()
+        .expect("source rollout path should exist");
+
+    let resumed = manager
+        .resume_thread_from_rollout(
+            config,
+            rollout_path,
+            auth_manager,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("resume active source thread");
+    assert_eq!(resumed.thread_id, source.thread_id);
+    assert!(Arc::ptr_eq(&resumed.thread, &source.thread));
+
+    source
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown source thread");
+}
+
+#[tokio::test]
+async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
+    );
+
+    let source = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start source thread");
+    source.thread.ensure_rollout_materialized().await;
+    source
+        .thread
+        .flush_rollout()
+        .await
+        .expect("flush source rollout");
+    let rollout_path = source
+        .thread
+        .rollout_path()
+        .expect("source rollout path should exist");
+    source
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown source thread");
+
+    let resumed = manager
+        .resume_thread_from_rollout(
+            config,
+            rollout_path,
+            auth_manager,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("resume stopped source thread");
+    assert_eq!(resumed.thread_id, source.thread_id);
+    assert!(!Arc::ptr_eq(&resumed.thread, &source.thread));
+
+    resumed
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown resumed thread");
 }
 
 #[tokio::test]
@@ -487,9 +616,10 @@ async fn new_uses_active_provider_for_model_refresh() {
         &config,
         auth_manager,
         SessionSource::Exec,
-        CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
     );
 
     let _ = manager.list_models(RefreshStrategy::Online).await;
@@ -694,13 +824,15 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let state_db = init_state_db(&config).await;
     let manager = ThreadManager::new(
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
-        CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        thread_store_from_config(&config, state_db.clone()),
+        state_db.clone(),
     );
 
     let source = manager
@@ -731,7 +863,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
     let forked = manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            config,
+            config.clone(),
             source_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -796,13 +928,15 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let state_db = init_state_db(&config).await;
     let manager = ThreadManager::new(
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
-        CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        thread_store_from_config(&config, state_db.clone()),
+        state_db.clone(),
     );
 
     let source = manager
@@ -844,7 +978,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
     let forked = manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            config,
+            config.clone(),
             source_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -887,13 +1021,15 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let state_db = init_state_db(&config).await;
     let manager = ThreadManager::new(
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
-        CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        thread_store_from_config(&config, state_db.clone()),
+        state_db.clone(),
     );
 
     let source = manager
@@ -962,7 +1098,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let reforked = manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            config,
+            config.clone(),
             forked_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -1010,7 +1146,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
 }
 
 #[tokio::test]
-async fn resumed_thread_activates_paused_goal_and_continues_on_request() -> anyhow::Result<()> {
+async fn resumed_thread_keeps_paused_goal_paused() -> anyhow::Result<()> {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -1023,13 +1159,15 @@ async fn resumed_thread_activates_paused_goal_and_continues_on_request() -> anyh
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let state_db = init_state_db(&config).await;
     let manager = ThreadManager::new(
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
-        CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        thread_store_from_config(&config, state_db.clone()),
+        state_db.clone(),
     );
 
     let source = manager
@@ -1059,11 +1197,12 @@ async fn resumed_thread_activates_paused_goal_and_continues_on_request() -> anyh
             /*token_budget*/ None,
         )
         .await?;
+    source.thread.shutdown_and_wait().await?;
     manager.remove_thread(&source.thread_id).await;
 
     let resumed = manager
         .resume_thread_from_rollout(
-            config,
+            config.clone(),
             source_path,
             auth_manager,
             /*parent_trace*/ None,
@@ -1074,7 +1213,7 @@ async fn resumed_thread_activates_paused_goal_and_continues_on_request() -> anyh
         .get_thread_goal(resumed.thread_id)
         .await?
         .expect("goal should still exist after resume");
-    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
     assert!(
         resumed
             .thread
@@ -1095,7 +1234,7 @@ async fn resumed_thread_activates_paused_goal_and_continues_on_request() -> anyh
             .active_turn
             .lock()
             .await
-            .is_some()
+            .is_none()
     );
 
     resumed.thread.shutdown_and_wait().await?;

@@ -22,12 +22,14 @@ use super::mantle::region_from_config;
 const AWS_BEARER_TOKEN_BEDROCK_ENV_VAR: &str = "AWS_BEARER_TOKEN_BEDROCK";
 const LEGACY_SESSION_ID_HEADER: &str = "session_id";
 
-enum BedrockAuthMethod {
+pub(super) enum BedrockAuthMethod {
     EnvBearerToken { token: String, region: String },
     AwsSdkAuth { context: AwsAuthContext },
 }
 
-async fn resolve_auth_method(aws: &ModelProviderAwsAuthInfo) -> Result<BedrockAuthMethod> {
+pub(super) async fn resolve_auth_method(
+    aws: &ModelProviderAwsAuthInfo,
+) -> Result<BedrockAuthMethod> {
     if let Some(token) = bearer_token_from_env() {
         let region = bearer_token_region_from_config(aws)?;
         return Ok(BedrockAuthMethod::EnvBearerToken { token, region });
@@ -52,13 +54,6 @@ pub(super) async fn resolve_provider_auth(
         BedrockAuthMethod::AwsSdkAuth { context } => {
             Ok(Arc::new(BedrockMantleSigV4AuthProvider::new(context)))
         }
-    }
-}
-
-pub(super) async fn resolve_region(aws: &ModelProviderAwsAuthInfo) -> Result<String> {
-    match resolve_auth_method(aws).await? {
-        BedrockAuthMethod::EnvBearerToken { region, .. } => Ok(region),
-        BedrockAuthMethod::AwsSdkAuth { context, .. } => Ok(context.region().to_string()),
     }
 }
 

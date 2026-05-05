@@ -1,7 +1,4 @@
-use crate::DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT;
-use crate::STAGE_ONE_CONTEXT_WINDOW_PERCENT;
 use crate::memory_extensions_root;
-use crate::workspace::WORKSPACE_DIFF_FILENAME;
 use codex_protocol::openai_models::ModelInfo;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
@@ -24,13 +21,13 @@ static STAGE_ONE_INPUT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
 });
 static MEMORY_EXTENSIONS_FOLDER_STRUCTURE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     parse_embedded_template(
-        MEMORY_EXTENSIONS_FOLDER_STRUCTURE,
+        crate::prompt_blocks::EXTENSIONS_FOLDER_STRUCTURE,
         "memories/extensions_folder_structure.md",
     )
 });
 static MEMORY_EXTENSIONS_PRIMARY_INPUTS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     parse_embedded_template(
-        MEMORY_EXTENSIONS_PRIMARY_INPUTS,
+        crate::prompt_blocks::EXTENSIONS_PRIMARY_INPUTS,
         "memories/extensions_primary_inputs.md",
     )
 });
@@ -42,39 +39,13 @@ fn parse_embedded_template(source: &'static str, template_name: &str) -> Templat
     }
 }
 
-const MEMORY_EXTENSIONS_FOLDER_STRUCTURE: &str = r#"
-Memory extensions (under {{ memory_extensions_root }}/):
-
-- <extension_name>/instructions.md
-  - Source-specific guidance for interpreting additional memory signals. If an
-    extension folder exists, you must read its instructions.md to determine how to use this memory
-    source.
-
-If the user has any memory extensions, you MUST read the instructions for each extension to
-determine how to use the memory source. If the workspace diff shows deleted extension resource files,
-remove stale memories derived only from those resources. If it has no extension folders, continue
-with the standard memory inputs only.
-"#;
-
-const MEMORY_EXTENSIONS_PRIMARY_INPUTS: &str = r#"
-Optional source-specific inputs:
-Under `{{ memory_extensions_root }}/`:
-
-- `<extension_name>/instructions.md`
-  - If extension folders exist, read each instructions.md first and follow it when interpreting
-    that extension's memory source.
-
-If the workspace diff shows deleted memory extension resources, use that extension-specific deletion
-signal to remove stale memories derived only from those resources.
-"#;
-
 /// Builds the consolidation subagent prompt for a specific memory root.
 pub fn build_consolidation_prompt(memory_root: &Path) -> String {
     let memory_extensions_root = memory_extensions_root(memory_root);
     let memory_extensions_exist = memory_extensions_root.is_dir();
     let memory_root = memory_root.display().to_string();
     let memory_extensions_root = memory_extensions_root.display().to_string();
-    let phase2_workspace_diff_file = WORKSPACE_DIFF_FILENAME.to_string();
+    let phase2_workspace_diff_file = crate::workspace_diff::FILENAME.to_string();
     let memory_extensions_folder_structure = if memory_extensions_exist {
         render_memory_extensions_block(
             &MEMORY_EXTENSIONS_FOLDER_STRUCTURE_TEMPLATE,
@@ -138,9 +109,9 @@ pub fn build_stage_one_input_message(
         .resolved_context_window()
         .and_then(|limit| (limit > 0).then_some(limit))
         .map(|limit| limit.saturating_mul(model_info.effective_context_window_percent) / 100)
-        .map(|limit| (limit.saturating_mul(STAGE_ONE_CONTEXT_WINDOW_PERCENT) / 100).max(1))
+        .map(|limit| (limit.saturating_mul(crate::stage_one::CONTEXT_WINDOW_PERCENT) / 100).max(1))
         .and_then(|limit| usize::try_from(limit).ok())
-        .unwrap_or(DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT);
+        .unwrap_or(crate::stage_one::DEFAULT_ROLLOUT_TOKEN_LIMIT);
     let truncated_rollout_contents = truncate_text(
         rollout_contents,
         TruncationPolicy::Tokens(rollout_token_limit),

@@ -12,7 +12,7 @@ fn render_workspace_diff_file_bounds_large_diff() {
             status: GitBaselineChangeStatus::Modified,
             path: "MEMORY.md".to_string(),
         }],
-        unified_diff: "a".repeat(WORKSPACE_DIFF_MAX_BYTES + 128),
+        unified_diff: "a".repeat(crate::workspace_diff::MAX_BYTES + 128),
     };
 
     let rendered = render_workspace_diff_file(&diff);
@@ -47,7 +47,7 @@ async fn reset_memory_workspace_baseline_removes_generated_diff() {
         .await
         .expect("reset baseline");
 
-    assert!(!root.join(WORKSPACE_DIFF_FILENAME).exists());
+    assert!(!root.join(crate::workspace_diff::FILENAME).exists());
     let diff = memory_workspace_diff(&root)
         .await
         .expect("load workspace diff");

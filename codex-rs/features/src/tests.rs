@@ -120,6 +120,16 @@ fn request_permissions_tool_is_under_development() {
 }
 
 #[test]
+fn remote_compaction_v2_is_under_development() {
+    assert_eq!(Feature::RemoteCompactionV2.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::RemoteCompactionV2.default_enabled(), false);
+    assert_eq!(
+        feature_for_key("remote_compaction_v2"),
+        Some(Feature::RemoteCompactionV2)
+    );
+}
+
+#[test]
 fn terminal_resize_reflow_is_experimental_and_enabled_by_default() {
     assert_eq!(
         feature_for_key("terminal_resize_reflow"),
@@ -156,6 +166,13 @@ fn browser_controls_are_stable_and_enabled_by_default() {
     assert_eq!(Feature::BrowserUse.stage(), Stage::Stable);
     assert_eq!(Feature::BrowserUse.default_enabled(), true);
     assert_eq!(feature_for_key("browser_use"), Some(Feature::BrowserUse));
+
+    assert_eq!(Feature::BrowserUseExternal.stage(), Stage::Stable);
+    assert_eq!(Feature::BrowserUseExternal.default_enabled(), true);
+    assert_eq!(
+        feature_for_key("browser_use_external"),
+        Some(Feature::BrowserUseExternal)
+    );
 
     assert_eq!(Feature::ComputerUse.stage(), Stage::Stable);
     assert_eq!(Feature::ComputerUse.default_enabled(), true);
@@ -258,6 +275,12 @@ fn telepathy_is_legacy_alias_for_chronicle() {
 fn collab_is_legacy_alias_for_multi_agent() {
     assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
     assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
+}
+
+#[test]
+fn codex_hooks_is_legacy_alias_for_hooks() {
+    assert_eq!(feature_for_key("hooks"), Some(Feature::CodexHooks));
+    assert_eq!(feature_for_key("codex_hooks"), Some(Feature::CodexHooks));
 }
 
 #[test]
@@ -413,6 +436,7 @@ fn multi_agent_v2_feature_config_deserializes_table() {
 [multi_agent_v2]
 enabled = true
 max_concurrent_threads_per_session = 4
+min_wait_timeout_ms = 2500
 usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 root_agent_usage_hint_text = "Root guidance."
@@ -431,6 +455,7 @@ hide_spawn_agent_metadata = true
         Some(crate::FeatureToml::Config(crate::MultiAgentV2ConfigToml {
             enabled: Some(true),
             max_concurrent_threads_per_session: Some(4),
+            min_wait_timeout_ms: Some(2500),
             usage_hint_enabled: Some(false),
             usage_hint_text: Some("Custom delegation guidance.".to_string()),
             root_agent_usage_hint_text: Some("Root guidance.".to_string()),
@@ -465,6 +490,7 @@ usage_hint_enabled = false
         Some(crate::FeatureToml::Config(crate::MultiAgentV2ConfigToml {
             enabled: None,
             max_concurrent_threads_per_session: None,
+            min_wait_timeout_ms: None,
             usage_hint_enabled: Some(false),
             usage_hint_text: None,
             root_agent_usage_hint_text: None,
@@ -472,6 +498,54 @@ usage_hint_enabled = false
             hide_spawn_agent_metadata: None,
         }))
     );
+}
+
+#[test]
+fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config() {
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::MultiAgentV2);
+    features.disable(Feature::ToolSearch);
+
+    let mut features_toml = FeaturesToml {
+        multi_agent_v2: Some(FeatureToml::Config(crate::MultiAgentV2ConfigToml {
+            enabled: Some(false),
+            min_wait_timeout_ms: Some(2500),
+            ..Default::default()
+        })),
+        entries: BTreeMap::from([("include_apply_patch_tool".to_string(), true)]),
+        ..Default::default()
+    };
+
+    features_toml.materialize_resolved_enabled(&features);
+
+    let entries = features_toml.entries();
+    assert_eq!(entries.get("include_apply_patch_tool"), None);
+    for spec in crate::FEATURES {
+        assert_eq!(
+            entries.get(spec.key),
+            Some(&features.enabled(spec.id)),
+            "{}",
+            spec.key
+        );
+    }
+    assert_eq!(
+        features_toml.multi_agent_v2,
+        Some(FeatureToml::Config(crate::MultiAgentV2ConfigToml {
+            enabled: Some(true),
+            min_wait_timeout_ms: Some(2500),
+            ..Default::default()
+        }))
+    );
+    let replayed = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+    assert_eq!(replayed.enabled(Feature::ApplyPatchFreeform), false);
 }
 
 #[test]

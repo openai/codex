@@ -191,7 +191,7 @@ async fn fork_thread_from_history_does_not_require_source_rollout_path() {
     } = thread_manager
         .fork_thread_from_history(
             ForkSnapshot::Interrupted,
-            test.config,
+            test.config.clone(),
             InitialHistory::Resumed(ResumedHistory {
                 conversation_id: test.session_configured.session_id,
                 history: source_items.clone(),

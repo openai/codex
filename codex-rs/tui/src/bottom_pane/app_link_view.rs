@@ -1,8 +1,8 @@
-use codex_protocol::ThreadId;
-use codex_protocol::approvals::ElicitationAction;
-use codex_protocol::mcp::RequestId as McpRequestId;
 #[cfg(test)]
-use codex_protocol::protocol::Op;
+use crate::app_command::AppCommand as Op;
+use codex_app_server_protocol::McpServerElicitationAction;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
+use codex_protocol::ThreadId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -50,7 +50,7 @@ pub(crate) enum AppLinkSuggestionType {
 pub(crate) struct AppLinkElicitationTarget {
     pub(crate) thread_id: ThreadId,
     pub(crate) server_name: String,
-    pub(crate) request_id: McpRequestId,
+    pub(crate) request_id: AppServerRequestId,
 }
 
 pub(crate) struct AppLinkViewParams {
@@ -148,7 +148,7 @@ impl AppLinkView {
         self.elicitation_target.is_some()
     }
 
-    fn resolve_elicitation(&self, decision: ElicitationAction) {
+    fn resolve_elicitation(&self, decision: McpServerElicitationAction) {
         let Some(target) = self.elicitation_target.as_ref() else {
             return;
         };
@@ -163,7 +163,7 @@ impl AppLinkView {
     }
 
     fn decline_tool_suggestion(&mut self) {
-        self.resolve_elicitation(ElicitationAction::Decline);
+        self.resolve_elicitation(McpServerElicitationAction::Decline);
         self.complete = true;
     }
 
@@ -182,7 +182,7 @@ impl AppLinkView {
             force_refetch: true,
         });
         if self.is_tool_suggestion() {
-            self.resolve_elicitation(ElicitationAction::Accept);
+            self.resolve_elicitation(McpServerElicitationAction::Accept);
         }
         self.complete = true;
     }
@@ -199,7 +199,7 @@ impl AppLinkView {
             enabled: self.is_enabled,
         });
         if self.is_tool_suggestion() {
-            self.resolve_elicitation(ElicitationAction::Accept);
+            self.resolve_elicitation(McpServerElicitationAction::Accept);
             self.complete = true;
         }
     }
@@ -466,7 +466,7 @@ impl BottomPaneView for AppLinkView {
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         if self.is_tool_suggestion() {
-            self.resolve_elicitation(ElicitationAction::Decline);
+            self.resolve_elicitation(McpServerElicitationAction::Decline);
         }
         self.complete = true;
         CancellationEvent::Handled
@@ -582,7 +582,7 @@ mod tests {
             thread_id: ThreadId::try_from("00000000-0000-0000-0000-000000000001")
                 .expect("valid thread id"),
             server_name: "codex_apps".to_string(),
-            request_id: McpRequestId::String("request-1".to_string()),
+            request_id: AppServerRequestId::String("request-1".to_string()),
         }
     }
 
@@ -856,8 +856,8 @@ mod tests {
                     op,
                     Op::ResolveElicitation {
                         server_name: "codex_apps".to_string(),
-                        request_id: McpRequestId::String("request-1".to_string()),
-                        decision: ElicitationAction::Accept,
+                        request_id: AppServerRequestId::String("request-1".to_string()),
+                        decision: McpServerElicitationAction::Accept,
                         content: None,
                         meta: None,
                     }
@@ -898,8 +898,8 @@ mod tests {
                     op,
                     Op::ResolveElicitation {
                         server_name: "codex_apps".to_string(),
-                        request_id: McpRequestId::String("request-1".to_string()),
-                        decision: ElicitationAction::Decline,
+                        request_id: AppServerRequestId::String("request-1".to_string()),
+                        decision: McpServerElicitationAction::Decline,
                         content: None,
                         meta: None,
                     }
@@ -948,8 +948,8 @@ mod tests {
                     op,
                     Op::ResolveElicitation {
                         server_name: "codex_apps".to_string(),
-                        request_id: McpRequestId::String("request-1".to_string()),
-                        decision: ElicitationAction::Accept,
+                        request_id: AppServerRequestId::String("request-1".to_string()),
+                        decision: McpServerElicitationAction::Accept,
                         content: None,
                         meta: None,
                     }
@@ -984,7 +984,7 @@ mod tests {
         assert!(
             view.dismiss_app_server_request(&ResolvedAppServerRequest::McpElicitation {
                 server_name: "codex_apps".to_string(),
-                request_id: McpRequestId::String("request-1".to_string()),
+                request_id: AppServerRequestId::String("request-1".to_string()),
             })
         );
         assert!(view.is_complete());
@@ -1013,7 +1013,7 @@ mod tests {
         assert!(
             !view.dismiss_app_server_request(&ResolvedAppServerRequest::McpElicitation {
                 server_name: "other_server".to_string(),
-                request_id: McpRequestId::String("request-1".to_string()),
+                request_id: AppServerRequestId::String("request-1".to_string()),
             })
         );
         assert!(!view.is_complete());

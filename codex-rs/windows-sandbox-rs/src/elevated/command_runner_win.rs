@@ -15,7 +15,7 @@ use anyhow::Result;
 use codex_windows_sandbox::ErrorPayload;
 use codex_windows_sandbox::ExitPayload;
 use codex_windows_sandbox::FramedMessage;
-use codex_windows_sandbox::LaunchDesktop;
+use codex_windows_sandbox::LocalSid;
 use codex_windows_sandbox::Message;
 use codex_windows_sandbox::OutputPayload;
 use codex_windows_sandbox::OutputStream;
@@ -27,9 +27,8 @@ use codex_windows_sandbox::SpawnRequest;
 use codex_windows_sandbox::StderrMode;
 use codex_windows_sandbox::StdinMode;
 use codex_windows_sandbox::allow_null_device;
-use codex_windows_sandbox::convert_string_sid_to_sid;
-use codex_windows_sandbox::create_readonly_token_with_caps_from;
-use codex_windows_sandbox::create_workspace_write_token_with_caps_from;
+use codex_windows_sandbox::create_readonly_token_with_caps_and_user_from;
+use codex_windows_sandbox::create_workspace_write_token_with_caps_and_user_from;
 use codex_windows_sandbox::decode_bytes;
 use codex_windows_sandbox::encode_bytes;
 use codex_windows_sandbox::get_current_token_for_restriction;
@@ -41,7 +40,6 @@ use codex_windows_sandbox::read_handle_loop;
 use codex_windows_sandbox::spawn_process_with_pipes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::write_frame;
-use std::ffi::c_void;
 use std::fs::File;
 use std::os::windows::io::FromRawHandle;
 use std::path::Path;
@@ -52,14 +50,12 @@ use std::sync::Mutex as StdMutex;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
-use windows_sys::Win32::Foundation::HLOCAL;
-use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows_sys::Win32::System::Console::COORD;
-use windows_sys::Win32::System::Console::ClosePseudoConsole;
 use windows_sys::Win32::System::Console::ResizePseudoConsole;
 use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
 use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
@@ -89,20 +85,55 @@ struct IpcSpawnedProcess {
     stdout_handle: HANDLE,
     stderr_handle: HANDLE,
     stdin_handle: Option<HANDLE>,
+    conpty_owner: Option<codex_windows_sandbox::ConptyInstance>,
     hpc_handle: Option<HANDLE>,
-    _desktop_owner: Option<LaunchDesktop>,
     _pipe_handles: Option<PipeSpawnHandles>,
 }
 
+/// Small RAII wrapper for raw Win32 handles.
+///
+/// The elevated runner has a few early-return paths where we acquire a token, job, or pipe
+/// handle and then may fail while preparing the child. Keeping those handles in a guard makes
+/// the error paths read more directly and closes the gaps that were previously leaking them.
+struct OwnedWinHandle(HANDLE);
+
+impl OwnedWinHandle {
+    fn new(handle: HANDLE) -> Self {
+        Self(handle)
+    }
+
+    fn raw(&self) -> HANDLE {
+        self.0
+    }
+
+    fn into_raw(mut self) -> HANDLE {
+        // Transfer ownership to the caller. After this point the caller is responsible for
+        // eventually closing the returned HANDLE.
+        let handle = self.0;
+        self.0 = 0;
+        handle
+    }
+}
+
+impl Drop for OwnedWinHandle {
+    fn drop(&mut self) {
+        if self.0 != 0 && self.0 != INVALID_HANDLE_VALUE {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+}
+
 unsafe fn create_job_kill_on_close() -> Result<HANDLE> {
-    let h = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
-    if h == 0 {
+    let h_job = OwnedWinHandle::new(CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()));
+    if h_job.raw() == 0 {
         return Err(anyhow::anyhow!("CreateJobObjectW failed"));
     }
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     let ok = SetInformationJobObject(
-        h,
+        h_job.raw(),
         JobObjectExtendedLimitInformation,
         &mut limits as *mut _ as *mut _,
         std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
@@ -110,7 +141,7 @@ unsafe fn create_job_kill_on_close() -> Result<HANDLE> {
     if ok == 0 {
         return Err(anyhow::anyhow!("SetInformationJobObject failed"));
     }
-    Ok(h)
+    Ok(h_job.into_raw())
 }
 
 /// Open a named pipe created by the parent process.
@@ -190,64 +221,62 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
     let log_dir = req.codex_home.clone();
     hide_current_user_profile_dir(req.codex_home.as_path());
     let policy = parse_policy(&req.policy_json_or_preset).context("parse policy_json_or_preset")?;
-    let mut cap_psids: Vec<*mut c_void> = Vec::new();
+    let mut cap_psids: Vec<LocalSid> = Vec::new();
     for sid in &req.cap_sids {
-        let Some(psid) = (unsafe { convert_string_sid_to_sid(sid) }) else {
-            anyhow::bail!("ConvertStringSidToSidW failed for capability SID");
-        };
-        cap_psids.push(psid);
+        cap_psids.push(
+            LocalSid::from_string(sid)
+                .context("ConvertStringSidToSidW failed for capability SID")?,
+        );
     }
     if cap_psids.is_empty() {
         anyhow::bail!("runner: empty capability SID list");
     }
 
-    let base = unsafe { get_current_token_for_restriction()? };
-    let token_res: Result<(HANDLE, *mut c_void)> = unsafe {
+    // The token helpers still take raw SID pointers, but we keep ownership in `LocalSid`
+    // wrappers for as long as possible. That way any failure after SID parsing but before the
+    // child is fully spawned still releases the backing LocalAlloc memory automatically.
+    let cap_psid_ptrs: Vec<*mut _> = cap_psids.iter().map(LocalSid::as_ptr).collect();
+    let base = OwnedWinHandle::new(unsafe { get_current_token_for_restriction()? });
+    let h_token = OwnedWinHandle::new(unsafe {
         match &policy {
             SandboxPolicy::ReadOnly { .. } => {
-                create_readonly_token_with_caps_from(base, &cap_psids)
-                    .map(|h_token| (h_token, cap_psids[0]))
+                create_readonly_token_with_caps_and_user_from(base.raw(), &cap_psid_ptrs)
             }
             SandboxPolicy::WorkspaceWrite { .. } => {
-                create_workspace_write_token_with_caps_from(base, &cap_psids)
-                    .map(|h_token| (h_token, cap_psids[0]))
+                create_workspace_write_token_with_caps_and_user_from(base.raw(), &cap_psid_ptrs)
             }
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                 unreachable!()
             }
         }
-    };
-    let (h_token, psid_to_use) = token_res?;
+    }?);
     unsafe {
-        CloseHandle(base);
-        allow_null_device(psid_to_use);
-        for psid in &cap_psids {
+        // These ACL adjustments need the raw SID values, but ownership stays with `cap_psids`.
+        // We do not manually `LocalFree` anything here; the wrappers handle every return path.
+        allow_null_device(cap_psid_ptrs[0]);
+        for psid in &cap_psid_ptrs {
             allow_null_device(*psid);
-        }
-        for psid in cap_psids {
-            if !psid.is_null() {
-                LocalFree(psid as HLOCAL);
-            }
         }
     }
 
     let effective_cwd = effective_cwd(&req.cwd, Some(log_dir.as_path()));
 
+    let mut conpty_owner = None;
     let mut hpc_handle: Option<HANDLE> = None;
-    let mut desktop_owner = None;
     let mut pipe_handles = None;
     let (pi, stdout_handle, stderr_handle, stdin_handle) = if req.tty {
-        let (pi, conpty) = codex_windows_sandbox::spawn_conpty_process_as_user(
-            h_token,
+        let (pi, mut conpty) = codex_windows_sandbox::spawn_conpty_process_as_user(
+            h_token.raw(),
             &req.command,
             &effective_cwd,
             &req.env,
             req.use_private_desktop,
             Some(log_dir.as_path()),
         )?;
-        let (hpc, input_write, output_read, desktop) = conpty.into_raw();
-        hpc_handle = Some(hpc);
-        desktop_owner = desktop;
+        hpc_handle = conpty.raw_handle();
+        let input_write = conpty.take_input_write();
+        let output_read = conpty.take_output_read();
+        conpty_owner = Some(conpty);
         let stdin_handle = if req.stdin_open {
             Some(input_write)
         } else {
@@ -269,7 +298,7 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
             StdinMode::Closed
         };
         let spawned_pipes: PipeSpawnHandles = spawn_process_with_pipes(
-            h_token,
+            h_token.raw(),
             &req.command,
             &effective_cwd,
             &req.env,
@@ -287,18 +316,14 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
         pipe_handles = Some(spawned_pipes);
         (pi, stdout_handle, stderr_handle, stdin_handle)
     };
-
-    unsafe {
-        CloseHandle(h_token);
-    }
     Ok(IpcSpawnedProcess {
         log_dir,
         pi,
         stdout_handle,
         stderr_handle,
         stdin_handle,
+        conpty_owner,
         hpc_handle,
-        _desktop_owner: desktop_owner,
         _pipe_handles: pipe_handles,
     })
 }
@@ -337,7 +362,7 @@ fn spawn_input_loop(
     stdin_handle: Option<HANDLE>,
     hpc_handle: Arc<StdMutex<Option<HANDLE>>>,
     process_handle: Arc<StdMutex<Option<HANDLE>>>,
-    _log_dir: Option<PathBuf>,
+    log_dir: Option<PathBuf>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut stdin_handle = stdin_handle;
@@ -353,15 +378,54 @@ fn spawn_input_loop(
                         continue;
                     };
                     if let Some(handle) = stdin_handle {
-                        let mut written: u32 = 0;
-                        unsafe {
-                            let _ = windows_sys::Win32::Storage::FileSystem::WriteFile(
-                                handle,
-                                bytes.as_ptr(),
-                                bytes.len() as u32,
-                                &mut written,
-                                ptr::null_mut(),
-                            );
+                        let mut offset = 0usize;
+                        // `WriteFile` can report success after consuming only part of the buffer
+                        // when the target is a pipe. Treat this like a normal partial write and
+                        // keep advancing until every decoded stdin byte has been forwarded.
+                        //
+                        // If the child closes stdin or the pipe enters an error state, we log
+                        // that fact, close our local HANDLE, and stop trying to forward later
+                        // `Stdin` frames. That prevents silent truncation while also avoiding an
+                        // endless stream of failing writes after the child is already gone.
+                        while offset < bytes.len() {
+                            let chunk = &bytes[offset..];
+                            let chunk_len = chunk.len().min(u32::MAX as usize);
+                            let mut written = 0u32;
+                            let ok = unsafe {
+                                windows_sys::Win32::Storage::FileSystem::WriteFile(
+                                    handle,
+                                    chunk.as_ptr(),
+                                    chunk_len as u32,
+                                    &mut written,
+                                    ptr::null_mut(),
+                                )
+                            };
+                            if ok == 0 {
+                                log_note(
+                                    &format!(
+                                        "runner stdin write failed after {offset} bytes: {}",
+                                        unsafe { GetLastError() }
+                                    ),
+                                    log_dir.as_deref(),
+                                );
+                                unsafe {
+                                    CloseHandle(handle);
+                                }
+                                stdin_handle = None;
+                                break;
+                            }
+                            if written == 0 {
+                                log_note(
+                                    "runner stdin write made no progress; closing child stdin",
+                                    log_dir.as_deref(),
+                                );
+                                unsafe {
+                                    CloseHandle(handle);
+                                }
+                                stdin_handle = None;
+                                break;
+                            }
+                            offset += written as usize;
                         }
                     }
                 }
@@ -432,11 +496,14 @@ pub fn main() -> Result<()> {
         anyhow::bail!("runner: no pipe-out provided");
     };
 
-    let h_pipe_in = open_pipe(&pipe_in, FILE_GENERIC_READ)?;
-    let h_pipe_out = open_pipe(&pipe_out, FILE_GENERIC_WRITE)?;
-    let mut pipe_read = unsafe { File::from_raw_handle(h_pipe_in as _) };
+    // Open both pipe ends under guards first so a failure on the second open cannot leak the
+    // first HANDLE. Only after both opens succeed do we transfer ownership into `File`, which
+    // then becomes responsible for closing them.
+    let h_pipe_in = OwnedWinHandle::new(open_pipe(&pipe_in, FILE_GENERIC_READ)?);
+    let h_pipe_out = OwnedWinHandle::new(open_pipe(&pipe_out, FILE_GENERIC_WRITE)?);
+    let mut pipe_read = unsafe { File::from_raw_handle(h_pipe_in.into_raw() as _) };
     let pipe_write = Arc::new(StdMutex::new(unsafe {
-        File::from_raw_handle(h_pipe_out as _)
+        File::from_raw_handle(h_pipe_out.into_raw() as _)
     }));
 
     let req = match read_spawn_request(&mut pipe_read) {
@@ -458,6 +525,7 @@ pub fn main() -> Result<()> {
     let pi = ipc_spawn.pi;
     let stdout_handle = ipc_spawn.stdout_handle;
     let stderr_handle = ipc_spawn.stderr_handle;
+    let mut conpty_owner = ipc_spawn.conpty_owner;
     let stdin_handle = ipc_spawn.stdin_handle;
     let hpc_handle = Arc::new(StdMutex::new(ipc_spawn.hpc_handle));
 
@@ -537,13 +605,10 @@ pub fn main() -> Result<()> {
         }
     }
 
-    if let Ok(mut guard) = hpc_handle.lock()
-        && let Some(hpc) = guard.take()
-    {
-        unsafe {
-            ClosePseudoConsole(hpc);
-        }
+    if let Ok(mut guard) = hpc_handle.lock() {
+        let _ = guard.take();
     }
+    drop(conpty_owner.take());
 
     let _ = out_thread.join();
     if let Some(thread) = err_thread {

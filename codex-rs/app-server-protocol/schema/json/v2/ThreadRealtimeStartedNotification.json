@@ -11,7 +11,7 @@
   },
   "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
   "properties": {
-    "sessionId": {
+    "realtimeSessionId": {
       "type": [
         "string",
         "null"

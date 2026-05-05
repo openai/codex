@@ -50,6 +50,10 @@ fn pwsh_path() -> Option<PathBuf> {
 }
 
 fn sandbox_cwd() -> PathBuf {
+    if let Ok(workspace_root) = std::env::var("INSTA_WORKSPACE_ROOT") {
+        return PathBuf::from(workspace_root);
+    }
+
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("repo root")

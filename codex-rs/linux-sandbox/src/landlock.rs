@@ -8,8 +8,8 @@ use std::path::Path;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::error::SandboxErr;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use landlock::ABI;
@@ -39,14 +39,15 @@ use seccompiler::apply_filter;
 /// - installing the network seccomp filter when network access is disabled.
 ///
 /// Filesystem restrictions are intentionally handled by bubblewrap.
-pub(crate) fn apply_sandbox_policy_to_current_thread(
-    sandbox_policy: &SandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
+pub(crate) fn apply_permission_profile_to_current_thread(
+    permission_profile: &PermissionProfile,
     cwd: &Path,
     apply_landlock_fs: bool,
     allow_network_for_proxy: bool,
     proxy_routed_network: bool,
 ) -> Result<()> {
+    let (file_system_sandbox_policy, network_sandbox_policy) =
+        permission_profile.to_runtime_permissions();
     let network_seccomp_mode = network_seccomp_mode(
         network_sandbox_policy,
         allow_network_for_proxy,
@@ -58,7 +59,7 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     // we avoid this unless we need seccomp or we are explicitly using the
     // legacy Landlock filesystem pipeline.
     if network_seccomp_mode.is_some()
-        || (apply_landlock_fs && !sandbox_policy.has_full_disk_write_access())
+        || (apply_landlock_fs && !file_system_sandbox_policy.has_full_disk_write_access())
     {
         set_no_new_privs()?;
     }
@@ -67,15 +68,15 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
         install_network_seccomp_filter_on_current_thread(mode)?;
     }
 
-    if apply_landlock_fs && !sandbox_policy.has_full_disk_write_access() {
-        if !sandbox_policy.has_full_disk_read_access() {
+    if apply_landlock_fs && !file_system_sandbox_policy.has_full_disk_write_access() {
+        if !file_system_sandbox_policy.has_full_disk_read_access() {
             return Err(CodexErr::UnsupportedOperation(
                 "Restricted read-only access is not supported by the legacy Linux Landlock filesystem backend."
                     .to_string(),
             ));
         }
 
-        let writable_roots = sandbox_policy
+        let writable_roots = file_system_sandbox_policy
             .get_writable_roots_with_cwd(cwd)
             .into_iter()
             .map(|writable_root| writable_root.root)
@@ -176,6 +177,8 @@ fn install_network_seccomp_filter_on_current_thread(
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
 
     deny_syscall(&mut rules, libc::SYS_ptrace);
+    deny_syscall(&mut rules, libc::SYS_process_vm_readv);
+    deny_syscall(&mut rules, libc::SYS_process_vm_writev);
     deny_syscall(&mut rules, libc::SYS_io_uring_setup);
     deny_syscall(&mut rules, libc::SYS_io_uring_enter);
     deny_syscall(&mut rules, libc::SYS_io_uring_register);

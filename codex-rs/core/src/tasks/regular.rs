@@ -33,6 +33,10 @@ impl SessionTask for RegularTask {
         "session_task.turn"
     }
 
+    fn records_turn_token_usage_on_span(&self) -> bool {
+        true
+    }
+
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,

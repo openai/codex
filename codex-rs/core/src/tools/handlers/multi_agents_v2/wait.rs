@@ -1,4 +1,5 @@
 use super::*;
+use crate::turn_timing::now_unix_timestamp_ms;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -28,13 +29,18 @@ impl ToolHandler for Handler {
         let arguments = function_arguments(payload)?;
         let args: WaitArgs = parse_arguments(&arguments)?;
         let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
+        let min_timeout_ms = turn
+            .config
+            .multi_agent_v2
+            .min_wait_timeout_ms
+            .clamp(1, MAX_WAIT_TIMEOUT_MS);
         let timeout_ms = match timeout_ms {
             ms if ms <= 0 => {
                 return Err(FunctionCallError::RespondToModel(
                     "timeout_ms must be greater than zero".to_owned(),
                 ));
             }
-            ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
+            ms => ms.clamp(min_timeout_ms, MAX_WAIT_TIMEOUT_MS),
         };
 
         let mut mailbox_seq_rx = session.subscribe_mailbox_seq();
@@ -43,6 +49,7 @@ impl ToolHandler for Handler {
             .send_event(
                 &turn,
                 CollabWaitingBeginEvent {
+                    started_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_ids: Vec::new(),
                     receiver_agents: Vec::new(),
@@ -66,6 +73,7 @@ impl ToolHandler for Handler {
                 CollabWaitingEndEvent {
                     sender_thread_id: session.conversation_id,
                     call_id,
+                    completed_at_ms: now_unix_timestamp_ms(),
                     agent_statuses: Vec::new(),
                     statuses: HashMap::new(),
                 }

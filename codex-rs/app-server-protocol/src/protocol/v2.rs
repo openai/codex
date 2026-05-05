@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use crate::RequestId;
 use crate::protocol::common::AuthMode;
+use crate::protocol::item_builders::convert_patch_changes;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::account::PlanType;
 use codex_protocol::account::ProviderAccount;
@@ -30,6 +31,8 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+use codex_protocol::items::McpToolCallError as CoreMcpToolCallError;
+use codex_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::CallToolResult as CoreMcpCallToolResult;
 use codex_protocol::mcp::Resource as McpResource;
@@ -38,6 +41,8 @@ use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
 use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
+use codex_protocol::models::ActivePermissionProfile as CoreActivePermissionProfile;
+use codex_protocol::models::ActivePermissionProfileModification as CoreActivePermissionProfileModification;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
 use codex_protocol::models::ManagedFileSystemPermissions as CoreManagedFileSystemPermissions;
@@ -469,6 +474,8 @@ v2_enum_from_core!(
         Project,
         Mdm,
         SessionFlags,
+        Plugin,
+        CloudRequirements,
         LegacyManagedConfigFile,
         LegacyManagedConfigMdm,
         Unknown,
@@ -1091,6 +1098,18 @@ pub enum ExternalAgentConfigMigrationItemType {
     #[serde(rename = "MCP_SERVER_CONFIG")]
     #[ts(rename = "MCP_SERVER_CONFIG")]
     McpServerConfig,
+    #[serde(rename = "SUBAGENTS")]
+    #[ts(rename = "SUBAGENTS")]
+    Subagents,
+    #[serde(rename = "HOOKS")]
+    #[ts(rename = "HOOKS")]
+    Hooks,
+    #[serde(rename = "COMMANDS")]
+    #[ts(rename = "COMMANDS")]
+    Commands,
+    #[serde(rename = "SESSIONS")]
+    #[ts(rename = "SESSIONS")]
+    Sessions,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -1108,8 +1127,56 @@ pub struct PluginsMigration {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct SessionMigration {
+    pub path: PathBuf,
+    pub cwd: PathBuf,
+    pub title: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HookMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SubagentMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct MigrationDetails {
+    #[serde(default)]
     pub plugins: Vec<PluginsMigration>,
+    #[serde(default)]
+    pub sessions: Vec<SessionMigration>,
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerMigration>,
+    #[serde(default)]
+    pub hooks: Vec<HookMigration>,
+    #[serde(default)]
+    pub subagents: Vec<SubagentMigration>,
+    #[serde(default)]
+    pub commands: Vec<CommandMigration>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -1645,6 +1712,109 @@ impl From<PermissionProfile> for CorePermissionProfile {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ActivePermissionProfile {
+    /// Identifier from `default_permissions` or the implicit built-in default,
+    /// such as `:workspace` or a user-defined `[permissions.<id>]` profile.
+    pub id: String,
+    /// Parent profile identifier once permissions profiles support
+    /// inheritance. This is currently always `null`.
+    #[serde(default)]
+    pub extends: Option<String>,
+    /// Bounded user-requested modifications applied on top of the named
+    /// profile, if any.
+    #[serde(default)]
+    pub modifications: Vec<ActivePermissionProfileModification>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum ActivePermissionProfileModification {
+    /// Additional concrete directory that should be writable.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    AdditionalWritableRoot { path: AbsolutePathBuf },
+}
+
+impl From<CoreActivePermissionProfileModification> for ActivePermissionProfileModification {
+    fn from(value: CoreActivePermissionProfileModification) -> Self {
+        match value {
+            CoreActivePermissionProfileModification::AdditionalWritableRoot { path } => {
+                Self::AdditionalWritableRoot { path }
+            }
+        }
+    }
+}
+
+impl From<ActivePermissionProfileModification> for CoreActivePermissionProfileModification {
+    fn from(value: ActivePermissionProfileModification) -> Self {
+        match value {
+            ActivePermissionProfileModification::AdditionalWritableRoot { path } => {
+                Self::AdditionalWritableRoot { path }
+            }
+        }
+    }
+}
+
+impl From<CoreActivePermissionProfile> for ActivePermissionProfile {
+    fn from(value: CoreActivePermissionProfile) -> Self {
+        Self {
+            id: value.id,
+            extends: value.extends,
+            modifications: value
+                .modifications
+                .into_iter()
+                .map(ActivePermissionProfileModification::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<ActivePermissionProfile> for CoreActivePermissionProfile {
+    fn from(value: ActivePermissionProfile) -> Self {
+        Self {
+            id: value.id,
+            extends: value.extends,
+            modifications: value
+                .modifications
+                .into_iter()
+                .map(CoreActivePermissionProfileModification::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum PermissionProfileSelectionParams {
+    /// Select a named built-in or user-defined profile and optionally apply
+    /// bounded modifications that Codex knows how to validate.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Profile {
+        id: String,
+        #[ts(optional = nullable)]
+        modifications: Option<Vec<PermissionProfileModificationParams>>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum PermissionProfileModificationParams {
+    /// Additional concrete directory that should be writable.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    AdditionalWritableRoot { path: AbsolutePathBuf },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct AdditionalPermissionProfile {
     /// Partial overlay used for per-command permission requests.
     pub network: Option<AdditionalNetworkPermissions>,
@@ -2113,9 +2283,12 @@ pub enum LoginAccountParams {
         #[ts(rename = "apiKey")]
         api_key: String,
     },
-    #[serde(rename = "chatgpt")]
-    #[ts(rename = "chatgpt")]
-    Chatgpt,
+    #[serde(rename = "chatgpt", rename_all = "camelCase")]
+    #[ts(rename = "chatgpt", rename_all = "camelCase")]
+    Chatgpt {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        codex_streamlined_login: bool,
+    },
     #[serde(rename = "chatgptDeviceCode")]
     #[ts(rename = "chatgptDeviceCode")]
     ChatgptDeviceCode,
@@ -2294,6 +2467,20 @@ pub struct GetAccountResponse {
     pub requires_openai_auth: bool,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelProviderCapabilitiesReadParams {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelProviderCapabilitiesReadResponse {
+    pub namespace_tools: bool,
+    pub image_generation: bool,
+    pub web_search: bool,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -2327,6 +2514,15 @@ impl From<CoreModelAvailabilityNux> for ModelAvailabilityNux {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ModelServiceTier {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct Model {
     pub id: String,
     pub model: String,
@@ -2342,8 +2538,11 @@ pub struct Model {
     pub input_modalities: Vec<InputModality>,
     #[serde(default)]
     pub supports_personality: bool,
+    /// Deprecated: use `serviceTiers` instead.
     #[serde(default)]
     pub additional_speed_tiers: Vec<String>,
+    #[serde(default)]
+    pub service_tiers: Vec<ModelServiceTier>,
     // Only one model should be marked as default.
     pub is_default: bool,
 }
@@ -2594,6 +2793,24 @@ impl From<CoreMcpCallToolResult> for McpServerToolCallResponse {
             structured_content: result.structured_content,
             is_error: result.is_error,
             meta: result.meta,
+        }
+    }
+}
+
+impl From<CoreMcpCallToolResult> for McpToolCallResult {
+    fn from(result: CoreMcpCallToolResult) -> Self {
+        Self {
+            content: result.content,
+            structured_content: result.structured_content,
+            meta: result.meta,
+        }
+    }
+}
+
+impl From<CoreMcpToolCallError> for McpToolCallError {
+    fn from(error: CoreMcpToolCallError) -> Self {
+        Self {
+            message: error.message,
         }
     }
 }
@@ -2860,6 +3077,25 @@ pub struct DeviceKeyPublicResponse {
     pub public_key_spki_der_base64: String,
     pub algorithm: DeviceKeyAlgorithm,
     pub protection_class: DeviceKeyProtectionClass,
+}
+
+/// Current remote-control connection status and environment id exposed to clients.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlStatusChangedNotification {
+    pub status: RemoteControlConnectionStatus,
+    pub environment_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum RemoteControlConnectionStatus {
+    Disabled,
+    Connecting,
+    Connected,
+    Errored,
 }
 
 /// Audience for a remote-control client connection device-key proof.
@@ -3334,6 +3570,204 @@ pub enum CommandExecOutputStream {
     Stderr,
 }
 
+/// PTY size in character cells for `process/spawn` PTY sessions.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessTerminalSize {
+    /// Terminal height in character cells.
+    pub rows: u16,
+    /// Terminal width in character cells.
+    pub cols: u16,
+}
+
+/// Spawn a standalone process (argv vector) without a Codex sandbox on the host
+/// where the app server is running.
+///
+/// `process/spawn` returns after the process has started and the connection-scoped
+/// `processHandle` has been registered. Process output and exit are reported via
+/// `process/outputDelta` and `process/exited` notifications.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessSpawnParams {
+    /// Command argv vector. Empty arrays are rejected.
+    pub command: Vec<String>,
+    /// Client-supplied, connection-scoped process handle.
+    ///
+    /// Duplicate active handles are rejected on the same connection. The same
+    /// handle can be reused after the prior process exits.
+    pub process_handle: String,
+    /// Absolute working directory for the process.
+    pub cwd: AbsolutePathBuf,
+    /// Enable PTY mode.
+    ///
+    /// This implies `streamStdin` and `streamStdoutStderr`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tty: bool,
+    /// Allow follow-up `process/writeStdin` requests to write stdin bytes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stream_stdin: bool,
+    /// Stream stdout/stderr via `process/outputDelta` notifications.
+    ///
+    /// Streamed bytes are not duplicated into the `process/exited` notification.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stream_stdout_stderr: bool,
+    /// Optional per-stream stdout/stderr capture cap in bytes.
+    ///
+    /// When omitted, the server default applies. Set to `null` to disable the
+    /// cap.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(type = "number | null")]
+    #[ts(optional = nullable)]
+    pub output_bytes_cap: Option<Option<usize>>,
+    /// Optional timeout in milliseconds.
+    ///
+    /// When omitted, the server default applies. Set to `null` to disable the
+    /// timeout.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(type = "number | null")]
+    #[ts(optional = nullable)]
+    pub timeout_ms: Option<Option<i64>>,
+    /// Optional environment overrides merged into the app-server process
+    /// environment.
+    ///
+    /// Matching names override inherited values. Set a key to `null` to unset
+    /// an inherited variable.
+    #[ts(optional = nullable)]
+    pub env: Option<HashMap<String, Option<String>>>,
+    /// Optional initial PTY size in character cells. Only valid when `tty` is
+    /// true.
+    #[ts(optional = nullable)]
+    pub size: Option<ProcessTerminalSize>,
+}
+
+/// Successful response for `process/spawn`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessSpawnResponse {}
+
+/// Write stdin bytes to a running `process/spawn` session, close stdin, or
+/// both.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessWriteStdinParams {
+    /// Client-supplied, connection-scoped `processHandle` from `process/spawn`.
+    pub process_handle: String,
+    /// Optional base64-encoded stdin bytes to write.
+    #[ts(optional = nullable)]
+    pub delta_base64: Option<String>,
+    /// Close stdin after writing `deltaBase64`, if present.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub close_stdin: bool,
+}
+
+/// Empty success response for `process/writeStdin`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessWriteStdinResponse {}
+
+/// Terminate a running `process/spawn` session.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessKillParams {
+    /// Client-supplied, connection-scoped `processHandle` from `process/spawn`.
+    pub process_handle: String,
+}
+
+/// Empty success response for `process/kill`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessKillResponse {}
+
+/// Resize a running PTY-backed `process/spawn` session.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessResizePtyParams {
+    /// Client-supplied, connection-scoped `processHandle` from `process/spawn`.
+    pub process_handle: String,
+    /// New PTY size in character cells.
+    pub size: ProcessTerminalSize,
+}
+
+/// Empty success response for `process/resizePty`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessResizePtyResponse {}
+
+/// Stream label for `process/outputDelta` notifications.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ProcessOutputStream {
+    /// stdout stream. PTY mode multiplexes terminal output here.
+    Stdout,
+    /// stderr stream.
+    Stderr,
+}
+
+/// Base64-encoded output chunk emitted for a streaming `process/spawn` request.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessOutputDeltaNotification {
+    /// Client-supplied, connection-scoped `processHandle` from `process/spawn`.
+    pub process_handle: String,
+    /// Output stream this chunk belongs to.
+    pub stream: ProcessOutputStream,
+    /// Base64-encoded output bytes.
+    pub delta_base64: String,
+    /// True on the final streamed chunk for this stream when output was
+    /// truncated by `outputBytesCap`.
+    pub cap_reached: bool,
+}
+
+/// Final process exit notification for `process/spawn`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessExitedNotification {
+    /// Client-supplied, connection-scoped `processHandle` from `process/spawn`.
+    pub process_handle: String,
+    /// Process exit code.
+    pub exit_code: i32,
+    /// Buffered stdout capture.
+    ///
+    /// Empty when stdout was streamed via `process/outputDelta`.
+    pub stdout: String,
+    /// Whether stdout reached `outputBytesCap`.
+    ///
+    /// In streaming mode, stdout is empty and cap state is also reported on the
+    /// final stdout `process/outputDelta` notification.
+    pub stdout_cap_reached: bool,
+    /// Buffered stderr capture.
+    ///
+    /// Empty when stderr was streamed via `process/outputDelta`.
+    pub stderr: String,
+    /// Whether stderr reached `outputBytesCap`.
+    ///
+    /// In streaming mode, stderr is empty and cap state is also reported on the
+    /// final stderr `process/outputDelta` notification.
+    pub stderr_cap_reached: bool,
+}
+
 // === Threads, Turns, and Items ===
 // Thread APIs
 #[derive(
@@ -3365,11 +3799,12 @@ pub struct ThreadStartParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
-    /// Full permissions override for this thread. Cannot be combined with
-    /// `sandbox`.
-    #[experimental("thread/start.permissionProfile")]
+    /// Named profile selection for this thread. Cannot be combined with
+    /// `sandbox`. Use bounded `modifications` for supported turn/thread
+    /// adjustments instead of replacing the full permissions profile.
+    #[experimental("thread/start.permissions")]
     #[ts(optional = nullable)]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permissions: Option<PermissionProfileSelectionParams>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
     #[ts(optional = nullable)]
@@ -3406,8 +3841,9 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.experimentalRawEvents")]
     #[serde(default)]
     pub experimental_raw_events: bool,
-    /// If true, persist additional rollout EventMsg variants required to
-    /// reconstruct a richer thread history on resume/fork/read.
+    /// If true, persist additional EventMsg variants to the rollout file.
+    /// However, `thread/read`, `thread/resume`, and `thread/fork` still only
+    /// return the limited form of thread history for scalability reasons.
     #[experimental("thread/start.persistFullHistory")]
     #[serde(default)]
     pub persist_extended_history: bool,
@@ -3446,14 +3882,20 @@ pub struct ThreadStartResponse {
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
-    /// Legacy sandbox policy retained for compatibility. New clients should use
-    /// `permissionProfile` when present as the canonical active permissions
-    /// view.
+    /// Legacy sandbox policy retained for compatibility. Experimental clients
+    /// should prefer `permissionProfile` when they need exact runtime
+    /// permissions.
     pub sandbox: SandboxPolicy,
-    /// Canonical active permissions view for this thread.
+    /// Full active permissions for this thread. `activePermissionProfile`
+    /// carries display/provenance metadata for this runtime profile.
     #[experimental("thread/start.permissionProfile")]
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
+    /// Named or implicit built-in profile that produced the active
+    /// permissions, when known.
+    #[experimental("thread/start.activePermissionProfile")]
+    #[serde(default)]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -3511,11 +3953,12 @@ pub struct ThreadResumeParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
-    /// Full permissions override for the resumed thread. Cannot be combined
-    /// with `sandbox`.
-    #[experimental("thread/resume.permissionProfile")]
+    /// Named profile selection for the resumed thread. Cannot be combined
+    /// with `sandbox`. Use bounded `modifications` for supported thread
+    /// adjustments instead of replacing the full permissions profile.
+    #[experimental("thread/resume.permissions")]
     #[ts(optional = nullable)]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permissions: Option<PermissionProfileSelectionParams>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -3527,10 +3970,12 @@ pub struct ThreadResumeParams {
     /// When true, return only thread metadata and live-resume state without
     /// populating `thread.turns`. This is useful when the client plans to call
     /// `thread/turns/list` immediately after resuming.
+    #[experimental("thread/resume.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
-    /// If true, persist additional rollout EventMsg variants required to
-    /// reconstruct a richer thread history on subsequent resume/fork/read.
+    /// If true, persist additional EventMsg variants to the rollout file.
+    /// However, `thread/read`, `thread/resume`, and `thread/fork` still only
+    /// return the limited form of thread history for scalability reasons.
     #[experimental("thread/resume.persistFullHistory")]
     #[serde(default)]
     pub persist_extended_history: bool,
@@ -3552,14 +3997,20 @@ pub struct ThreadResumeResponse {
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
-    /// Legacy sandbox policy retained for compatibility. New clients should use
-    /// `permissionProfile` when present as the canonical active permissions
-    /// view.
+    /// Legacy sandbox policy retained for compatibility. Experimental clients
+    /// should prefer `permissionProfile` when they need exact runtime
+    /// permissions.
     pub sandbox: SandboxPolicy,
-    /// Canonical active permissions view for this thread.
+    /// Full active permissions for this thread. `activePermissionProfile`
+    /// carries display/provenance metadata for this runtime profile.
     #[experimental("thread/resume.permissionProfile")]
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
+    /// Named or implicit built-in profile that produced the active
+    /// permissions, when known.
+    #[experimental("thread/resume.activePermissionProfile")]
+    #[serde(default)]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -3608,11 +4059,12 @@ pub struct ThreadForkParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
-    /// Full permissions override for the forked thread. Cannot be combined
-    /// with `sandbox`.
-    #[experimental("thread/fork.permissionProfile")]
+    /// Named profile selection for the forked thread. Cannot be combined with
+    /// `sandbox`. Use bounded `modifications` for supported thread
+    /// adjustments instead of replacing the full permissions profile.
+    #[experimental("thread/fork.permissions")]
     #[ts(optional = nullable)]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permissions: Option<PermissionProfileSelectionParams>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -3624,10 +4076,12 @@ pub struct ThreadForkParams {
     /// When true, return only thread metadata and live fork state without
     /// populating `thread.turns`. This is useful when the client plans to call
     /// `thread/turns/list` immediately after forking.
+    #[experimental("thread/fork.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
-    /// If true, persist additional rollout EventMsg variants required to
-    /// reconstruct a richer thread history on subsequent resume/fork/read.
+    /// If true, persist additional EventMsg variants to the rollout file.
+    /// However, `thread/read`, `thread/resume`, and `thread/fork` still only
+    /// return the limited form of thread history for scalability reasons.
     #[experimental("thread/fork.persistFullHistory")]
     #[serde(default)]
     pub persist_extended_history: bool,
@@ -3649,14 +4103,20 @@ pub struct ThreadForkResponse {
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
-    /// Legacy sandbox policy retained for compatibility. New clients should use
-    /// `permissionProfile` when present as the canonical active permissions
-    /// view.
+    /// Legacy sandbox policy retained for compatibility. Experimental clients
+    /// should prefer `permissionProfile` when they need exact runtime
+    /// permissions.
     pub sandbox: SandboxPolicy,
-    /// Canonical active permissions view for this thread.
+    /// Full active permissions for this thread. `activePermissionProfile`
+    /// carries display/provenance metadata for this runtime profile.
     #[experimental("thread/fork.permissionProfile")]
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
+    /// Named or implicit built-in profile that produced the active
+    /// permissions, when known.
+    #[experimental("thread/fork.activePermissionProfile")]
+    #[serde(default)]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -4263,6 +4723,22 @@ pub struct SkillsListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct HooksListParams {
+    /// When empty, defaults to the current session working directory.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cwds: Vec<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HooksListResponse {
+    pub data: Vec<HooksListEntry>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct MarketplaceAddParams {
     pub source: String,
     #[ts(optional = nullable)]
@@ -4367,6 +4843,72 @@ pub struct PluginReadResponse {
     pub plugin: PluginDetail,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginSkillReadParams {
+    pub remote_marketplace_name: String,
+    pub remote_plugin_id: String,
+    pub skill_name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginSkillReadResponse {
+    pub contents: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareSaveParams {
+    pub plugin_path: AbsolutePathBuf,
+    #[ts(optional = nullable)]
+    pub remote_plugin_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareSaveResponse {
+    pub remote_plugin_id: String,
+    pub share_url: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareListParams {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareListResponse {
+    pub data: Vec<PluginShareListItem>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareDeleteParams {
+    pub remote_plugin_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareDeleteResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareListItem {
+    pub plugin: PluginSummary,
+    pub share_url: String,
+    pub local_plugin_path: Option<AbsolutePathBuf>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -4466,6 +5008,43 @@ pub struct SkillsListEntry {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct HooksListEntry {
+    pub cwd: PathBuf,
+    pub hooks: Vec<HookMetadata>,
+    pub warnings: Vec<String>,
+    pub errors: Vec<HookErrorInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HookMetadata {
+    pub key: String,
+    pub event_name: HookEventName,
+    pub handler_type: HookHandlerType,
+    pub matcher: Option<String>,
+    pub command: Option<String>,
+    pub timeout_sec: u64,
+    pub status_message: Option<String>,
+    pub source_path: AbsolutePathBuf,
+    pub source: HookSource,
+    pub plugin_id: Option<String>,
+    pub display_order: i64,
+    pub enabled: bool,
+    pub is_managed: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HookErrorInfo {
+    pub path: PathBuf,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct PluginMarketplaceEntry {
     pub name: String,
     /// Local marketplace file path when the marketplace is backed by a local file.
@@ -4507,6 +5086,21 @@ pub enum PluginAuthPolicy {
     OnUse,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub enum PluginAvailability {
+    /// Plugin-service currently sends `"ENABLED"` for available remote plugins.
+    /// Codex app-server exposes `"AVAILABLE"` in its API; the alias keeps
+    /// decoding compatible with that upstream response.
+    #[serde(rename = "AVAILABLE", alias = "ENABLED")]
+    #[ts(rename = "AVAILABLE")]
+    #[default]
+    Available,
+    #[serde(rename = "DISABLED_BY_ADMIN")]
+    #[ts(rename = "DISABLED_BY_ADMIN")]
+    DisabledByAdmin,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -4518,6 +5112,9 @@ pub struct PluginSummary {
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
     pub auth_policy: PluginAuthPolicy,
+    /// Availability state for installing and using the plugin.
+    #[serde(default)]
+    pub availability: PluginAvailability,
     pub interface: Option<PluginInterface>,
 }
 
@@ -4975,7 +5572,7 @@ pub struct ThreadRealtimeStartParams {
     #[ts(optional = nullable)]
     pub prompt: Option<Option<String>>,
     #[ts(optional = nullable)]
-    pub session_id: Option<String>,
+    pub realtime_session_id: Option<String>,
     #[ts(optional = nullable)]
     pub transport: Option<ThreadRealtimeStartTransport>,
     #[ts(optional = nullable)]
@@ -5065,7 +5662,7 @@ pub struct ThreadRealtimeListVoicesResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartedNotification {
     pub thread_id: String,
-    pub session_id: Option<String>,
+    pub realtime_session_id: Option<String>,
     pub version: RealtimeConversationVersion,
 }
 
@@ -5191,11 +5788,13 @@ pub struct TurnStartParams {
     /// Override the sandbox policy for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
-    /// Override the full permissions profile for this turn and subsequent
-    /// turns. Cannot be combined with `sandboxPolicy`.
-    #[experimental("turn/start.permissionProfile")]
+    /// Select a named permissions profile for this turn and subsequent turns.
+    /// Cannot be combined with `sandboxPolicy`. Use bounded `modifications`
+    /// for supported turn adjustments instead of replacing the full
+    /// permissions profile.
+    #[experimental("turn/start.permissions")]
     #[ts(optional = nullable)]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permissions: Option<PermissionProfileSelectionParams>,
     /// Override the model for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub model: Option<String>,
@@ -6097,6 +6696,10 @@ impl From<CoreTurnItem> for ThreadItem {
                 query: search.query,
                 action: Some(WebSearchAction::from(search.action)),
             },
+            CoreTurnItem::ImageView(image) => ThreadItem::ImageView {
+                id: image.id,
+                path: image.path,
+            },
             CoreTurnItem::ImageGeneration(image) => ThreadItem::ImageGeneration {
                 id: image.id,
                 status: image.status,
@@ -6104,6 +6707,32 @@ impl From<CoreTurnItem> for ThreadItem {
                 result: image.result,
                 saved_path: image.saved_path,
             },
+            CoreTurnItem::FileChange(file_change) => ThreadItem::FileChange {
+                id: file_change.id,
+                changes: convert_patch_changes(&file_change.changes),
+                status: file_change
+                    .status
+                    .as_ref()
+                    .map(PatchApplyStatus::from)
+                    .unwrap_or(PatchApplyStatus::InProgress),
+            },
+            CoreTurnItem::McpToolCall(mcp) => {
+                let duration_ms = mcp
+                    .duration
+                    .and_then(|duration| i64::try_from(duration.as_millis()).ok());
+
+                ThreadItem::McpToolCall {
+                    id: mcp.id,
+                    server: mcp.server,
+                    tool: mcp.tool,
+                    status: McpToolCallStatus::from(mcp.status),
+                    arguments: mcp.arguments,
+                    mcp_app_resource_uri: mcp.mcp_app_resource_uri,
+                    result: mcp.result.map(McpToolCallResult::from).map(Box::new),
+                    error: mcp.error.map(McpToolCallError::from),
+                    duration_ms,
+                }
+            }
             CoreTurnItem::ContextCompaction(compaction) => {
                 ThreadItem::ContextCompaction { id: compaction.id }
             }
@@ -6209,6 +6838,16 @@ impl From<&CorePatchApplyStatus> for PatchApplyStatus {
             CorePatchApplyStatus::Completed => PatchApplyStatus::Completed,
             CorePatchApplyStatus::Failed => PatchApplyStatus::Failed,
             CorePatchApplyStatus::Declined => PatchApplyStatus::Declined,
+        }
+    }
+}
+
+impl From<CoreMcpToolCallStatus> for McpToolCallStatus {
+    fn from(value: CoreMcpToolCallStatus) -> Self {
+        match value {
+            CoreMcpToolCallStatus::InProgress => McpToolCallStatus::InProgress,
+            CoreMcpToolCallStatus::Completed => McpToolCallStatus::Completed,
+            CoreMcpToolCallStatus::Failed => McpToolCallStatus::Failed,
         }
     }
 }
@@ -6499,6 +7138,9 @@ pub struct ItemStartedNotification {
     pub item: ThreadItem,
     pub thread_id: String,
     pub turn_id: String,
+    /// Unix timestamp (in milliseconds) when this item lifecycle started.
+    #[ts(type = "number")]
+    pub started_at_ms: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -6561,6 +7203,9 @@ pub struct ItemCompletedNotification {
     pub item: ThreadItem,
     pub thread_id: String,
     pub turn_id: String,
+    /// Unix timestamp (in milliseconds) when this item lifecycle completed.
+    #[ts(type = "number")]
+    pub completed_at_ms: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -6672,6 +7317,9 @@ pub struct CommandExecOutputDeltaNotification {
     pub cap_reached: bool,
 }
 
+/// Deprecated legacy notification for `apply_patch` textual output.
+///
+/// The server no longer emits this notification.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -7710,10 +8358,15 @@ mod tests {
     use super::*;
     use codex_protocol::items::AgentMessageContent;
     use codex_protocol::items::AgentMessageItem;
+    use codex_protocol::items::FileChangeItem;
+    use codex_protocol::items::ImageViewItem;
+    use codex_protocol::items::McpToolCallItem;
+    use codex_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
     use codex_protocol::items::ReasoningItem;
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
     use codex_protocol::items::WebSearchItem;
+    use codex_protocol::mcp::CallToolResult;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
     use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
     use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -7723,6 +8376,7 @@ mod tests {
     use serde_json::json;
     use std::num::NonZeroUsize;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     fn absolute_path_string(path: &str) -> String {
         let path = format!("/{}", path.trim_start_matches('/'));
@@ -7841,7 +8495,46 @@ mod tests {
                         marketplace_name: "team-marketplace".to_string(),
                         plugin_names: vec!["asana".to_string()],
                     }],
+                    ..Default::default()
                 }),
+            }
+        );
+    }
+
+    #[test]
+    fn external_agent_config_import_params_accept_legacy_plugin_details() {
+        let params: ExternalAgentConfigImportParams = serde_json::from_value(json!({
+            "migrationItems": [{
+                "itemType": "PLUGINS",
+                "description": "Install supported plugins from Claude settings",
+                "cwd": absolute_path_string("repo"),
+                "details": {
+                    "plugins": [
+                        {
+                            "marketplaceName": "team-marketplace",
+                            "pluginNames": ["asana"]
+                        }
+                    ]
+                }
+            }]
+        }))
+        .expect("legacy plugin import params should deserialize");
+
+        assert_eq!(
+            params,
+            ExternalAgentConfigImportParams {
+                migration_items: vec![ExternalAgentConfigMigrationItem {
+                    item_type: ExternalAgentConfigMigrationItemType::Plugins,
+                    description: "Install supported plugins from Claude settings".to_string(),
+                    cwd: Some(PathBuf::from(absolute_path_string("repo"))),
+                    details: Some(MigrationDetails {
+                        plugins: vec![PluginsMigration {
+                            marketplace_name: "team-marketplace".to_string(),
+                            plugin_names: vec!["asana".to_string()],
+                        }],
+                        ..Default::default()
+                    }),
+                }],
             }
         );
     }
@@ -8665,6 +9358,97 @@ mod tests {
     }
 
     #[test]
+    fn process_spawn_params_round_trips_without_sandbox_policy() {
+        let params = ProcessSpawnParams {
+            command: vec!["sleep".to_string(), "30".to_string()],
+            process_handle: "sleep-1".to_string(),
+            cwd: test_absolute_path(),
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            timeout_ms: None,
+            env: None,
+            size: None,
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize process/spawn params");
+        assert_eq!(
+            value,
+            json!({
+                "command": ["sleep", "30"],
+                "processHandle": "sleep-1",
+                "cwd": absolute_path_string("readable"),
+                "env": null,
+                "size": null,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<ProcessSpawnParams>(value).expect("deserialize round-trip");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn process_spawn_params_distinguish_omitted_null_and_value_limits() {
+        let base = json!({
+            "command": ["sleep", "30"],
+            "processHandle": "sleep-1",
+            "cwd": absolute_path_string("readable"),
+        });
+
+        let expected_omitted = ProcessSpawnParams {
+            command: vec!["sleep".to_string(), "30".to_string()],
+            process_handle: "sleep-1".to_string(),
+            cwd: test_absolute_path(),
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            timeout_ms: None,
+            env: None,
+            size: None,
+        };
+        let decoded =
+            serde_json::from_value::<ProcessSpawnParams>(base).expect("deserialize omitted limits");
+        assert_eq!(decoded, expected_omitted);
+
+        let decoded = serde_json::from_value::<ProcessSpawnParams>(json!({
+            "command": ["sleep", "30"],
+            "processHandle": "sleep-1",
+            "cwd": absolute_path_string("readable"),
+            "outputBytesCap": null,
+            "timeoutMs": null,
+        }))
+        .expect("deserialize disabled limits");
+        assert_eq!(
+            decoded,
+            ProcessSpawnParams {
+                output_bytes_cap: Some(None),
+                timeout_ms: Some(None),
+                ..expected_omitted.clone()
+            }
+        );
+
+        let decoded = serde_json::from_value::<ProcessSpawnParams>(json!({
+            "command": ["sleep", "30"],
+            "processHandle": "sleep-1",
+            "cwd": absolute_path_string("readable"),
+            "outputBytesCap": 123,
+            "timeoutMs": 456,
+        }))
+        .expect("deserialize explicit limits");
+        assert_eq!(
+            decoded,
+            ProcessSpawnParams {
+                output_bytes_cap: Some(Some(123)),
+                timeout_ms: Some(Some(456)),
+                ..expected_omitted
+            }
+        );
+    }
+
+    #[test]
     fn command_exec_params_round_trips_disable_output_cap() {
         let params = CommandExecParams {
             command: vec!["yes".to_string()],
@@ -8894,6 +9678,110 @@ mod tests {
         let decoded = serde_json::from_value::<CommandExecOutputDeltaNotification>(value)
             .expect("deserialize round-trip");
         assert_eq!(decoded, notification);
+    }
+
+    #[test]
+    fn process_control_params_round_trip() {
+        let write = ProcessWriteStdinParams {
+            process_handle: "proc-7".to_string(),
+            delta_base64: None,
+            close_stdin: true,
+        };
+        let value = serde_json::to_value(&write).expect("serialize process/writeStdin params");
+        assert_eq!(
+            value,
+            json!({
+                "processHandle": "proc-7",
+                "deltaBase64": null,
+                "closeStdin": true,
+            })
+        );
+        let decoded = serde_json::from_value::<ProcessWriteStdinParams>(value)
+            .expect("deserialize process/writeStdin params");
+        assert_eq!(decoded, write);
+
+        let resize = ProcessResizePtyParams {
+            process_handle: "proc-7".to_string(),
+            size: ProcessTerminalSize {
+                rows: 50,
+                cols: 160,
+            },
+        };
+        let value = serde_json::to_value(&resize).expect("serialize process/resizePty params");
+        assert_eq!(
+            value,
+            json!({
+                "processHandle": "proc-7",
+                "size": {
+                    "rows": 50,
+                    "cols": 160,
+                },
+            })
+        );
+        let decoded = serde_json::from_value::<ProcessResizePtyParams>(value)
+            .expect("deserialize process/resizePty params");
+        assert_eq!(decoded, resize);
+
+        let kill = ProcessKillParams {
+            process_handle: "proc-7".to_string(),
+        };
+        let value = serde_json::to_value(&kill).expect("serialize process/kill params");
+        assert_eq!(
+            value,
+            json!({
+                "processHandle": "proc-7",
+            })
+        );
+        let decoded =
+            serde_json::from_value::<ProcessKillParams>(value).expect("deserialize process/kill");
+        assert_eq!(decoded, kill);
+    }
+
+    #[test]
+    fn process_notifications_round_trip() {
+        let delta = ProcessOutputDeltaNotification {
+            process_handle: "proc-1".to_string(),
+            stream: ProcessOutputStream::Stdout,
+            delta_base64: "AQI=".to_string(),
+            cap_reached: false,
+        };
+        let value = serde_json::to_value(&delta).expect("serialize process/outputDelta");
+        assert_eq!(
+            value,
+            json!({
+                "processHandle": "proc-1",
+                "stream": "stdout",
+                "deltaBase64": "AQI=",
+                "capReached": false,
+            })
+        );
+        let decoded = serde_json::from_value::<ProcessOutputDeltaNotification>(value)
+            .expect("deserialize process/outputDelta");
+        assert_eq!(decoded, delta);
+
+        let exited = ProcessExitedNotification {
+            process_handle: "proc-1".to_string(),
+            exit_code: 0,
+            stdout: "out".to_string(),
+            stdout_cap_reached: false,
+            stderr: "err".to_string(),
+            stderr_cap_reached: true,
+        };
+        let value = serde_json::to_value(&exited).expect("serialize process/exited");
+        assert_eq!(
+            value,
+            json!({
+                "processHandle": "proc-1",
+                "exitCode": 0,
+                "stdout": "out",
+                "stdoutCapReached": false,
+                "stderr": "err",
+                "stderrCapReached": true,
+            })
+        );
+        let decoded = serde_json::from_value::<ProcessExitedNotification>(value)
+            .expect("deserialize process/exited");
+        assert_eq!(decoded, exited);
     }
 
     #[test]
@@ -9951,6 +10839,111 @@ mod tests {
                 }),
             }
         );
+
+        let image_view_item = TurnItem::ImageView(ImageViewItem {
+            id: "view-image-1".to_string(),
+            path: test_path_buf("/tmp/view-image.png").abs(),
+        });
+
+        assert_eq!(
+            ThreadItem::from(image_view_item),
+            ThreadItem::ImageView {
+                id: "view-image-1".to_string(),
+                path: test_path_buf("/tmp/view-image.png").abs(),
+            }
+        );
+
+        let file_change_item = TurnItem::FileChange(FileChangeItem {
+            id: "patch-1".to_string(),
+            changes: [(
+                PathBuf::from("README.md"),
+                codex_protocol::protocol::FileChange::Add {
+                    content: "hello\n".to_string(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            status: Some(codex_protocol::protocol::PatchApplyStatus::Completed),
+            auto_approved: None,
+            stdout: Some("Done!".to_string()),
+            stderr: Some(String::new()),
+        });
+
+        assert_eq!(
+            ThreadItem::from(file_change_item),
+            ThreadItem::FileChange {
+                id: "patch-1".to_string(),
+                changes: vec![FileUpdateChange {
+                    path: "README.md".to_string(),
+                    kind: PatchChangeKind::Add,
+                    diff: "hello\n".to_string(),
+                }],
+                status: PatchApplyStatus::Completed,
+            }
+        );
+
+        let mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
+            id: "mcp-1".to_string(),
+            server: "server".to_string(),
+            tool: "tool".to_string(),
+            arguments: json!({"arg": "value"}),
+            mcp_app_resource_uri: Some("app://connector".to_string()),
+            status: CoreMcpToolCallStatus::InProgress,
+            result: None,
+            error: None,
+            duration: None,
+        });
+
+        assert_eq!(
+            ThreadItem::from(mcp_tool_call_item),
+            ThreadItem::McpToolCall {
+                id: "mcp-1".to_string(),
+                server: "server".to_string(),
+                tool: "tool".to_string(),
+                status: McpToolCallStatus::InProgress,
+                arguments: json!({"arg": "value"}),
+                mcp_app_resource_uri: Some("app://connector".to_string()),
+                result: None,
+                error: None,
+                duration_ms: None,
+            }
+        );
+
+        let completed_mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
+            id: "mcp-2".to_string(),
+            server: "server".to_string(),
+            tool: "tool".to_string(),
+            arguments: JsonValue::Null,
+            mcp_app_resource_uri: None,
+            status: CoreMcpToolCallStatus::Completed,
+            result: Some(CallToolResult {
+                content: vec![json!({"type": "text", "text": "ok"})],
+                structured_content: Some(json!({"ok": true})),
+                is_error: Some(false),
+                meta: Some(json!({"trace": "1"})),
+            }),
+            error: None,
+            duration: Some(Duration::from_millis(42)),
+        });
+
+        assert_eq!(
+            ThreadItem::from(completed_mcp_tool_call_item),
+            ThreadItem::McpToolCall {
+                id: "mcp-2".to_string(),
+                server: "server".to_string(),
+                tool: "tool".to_string(),
+                status: McpToolCallStatus::Completed,
+                arguments: JsonValue::Null,
+                mcp_app_resource_uri: None,
+                result: Some(Box::new(McpToolCallResult {
+                    content: vec![json!({"type": "text", "text": "ok"})],
+                    structured_content: Some(json!({"ok": true})),
+                    meta: Some(json!({"trace": "1"})),
+                })),
+                error: None,
+                duration_ms: Some(42),
+            }
+        );
     }
 
     #[test]
@@ -10286,6 +11279,156 @@ mod tests {
     }
 
     #[test]
+    fn plugin_skill_read_params_serialization_uses_remote_plugin_id() {
+        assert_eq!(
+            serde_json::to_value(PluginSkillReadParams {
+                remote_marketplace_name: "chatgpt-global".to_string(),
+                remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                skill_name: "plan-work".to_string(),
+            })
+            .unwrap(),
+            json!({
+                "remoteMarketplaceName": "chatgpt-global",
+                "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+                "skillName": "plan-work",
+            }),
+        );
+    }
+
+    #[test]
+    fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
+        let plugin_path = if cfg!(windows) {
+            r"C:\plugins\gmail"
+        } else {
+            "/plugins/gmail"
+        };
+        let plugin_path = AbsolutePathBuf::try_from(PathBuf::from(plugin_path)).unwrap();
+        let plugin_path_json = plugin_path.as_path().display().to_string();
+
+        assert_eq!(
+            serde_json::to_value(PluginShareSaveParams {
+                plugin_path: plugin_path.clone(),
+                remote_plugin_id: None,
+            })
+            .unwrap(),
+            json!({
+                "pluginPath": plugin_path_json,
+                "remotePluginId": null,
+            }),
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginShareSaveParams {
+                plugin_path,
+                remote_plugin_id: Some(
+                    "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                ),
+            })
+            .unwrap(),
+            json!({
+                "pluginPath": plugin_path_json,
+                "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+            }),
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginShareSaveResponse {
+                remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                share_url: String::new(),
+            })
+            .unwrap(),
+            json!({
+                "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+                "shareUrl": "",
+            }),
+        );
+
+        assert_eq!(
+            serde_json::from_value::<PluginShareListParams>(json!({})).unwrap(),
+            PluginShareListParams {},
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginShareDeleteParams {
+                remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+            })
+            .unwrap(),
+            json!({
+                "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+            }),
+        );
+    }
+
+    #[test]
+    fn plugin_share_list_response_serializes_share_items() {
+        assert_eq!(
+            serde_json::to_value(PluginShareListResponse {
+                data: vec![PluginShareListItem {
+                    plugin: PluginSummary {
+                        id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                        name: "gmail".to_string(),
+                        source: PluginSource::Remote,
+                        installed: false,
+                        enabled: false,
+                        install_policy: PluginInstallPolicy::Available,
+                        auth_policy: PluginAuthPolicy::OnUse,
+                        availability: PluginAvailability::Available,
+                        interface: None,
+                    },
+                    share_url: "https://chatgpt.example/plugins/share/share-key-1".to_string(),
+                    local_plugin_path: None,
+                }],
+            })
+            .unwrap(),
+            json!({
+                "data": [{
+                    "plugin": {
+                        "id": "plugins~Plugin_00000000000000000000000000000000",
+                        "name": "gmail",
+                        "source": { "type": "remote" },
+                        "installed": false,
+                        "enabled": false,
+                        "installPolicy": "AVAILABLE",
+                        "authPolicy": "ON_USE",
+                        "availability": "AVAILABLE",
+                        "interface": null,
+                    },
+                    "shareUrl": "https://chatgpt.example/plugins/share/share-key-1",
+                    "localPluginPath": null,
+                }],
+            }),
+        );
+    }
+
+    #[test]
+    fn plugin_summary_defaults_missing_availability_to_available() {
+        let summary: PluginSummary = serde_json::from_value(json!({
+            "id": "plugins~Plugin_00000000000000000000000000000000",
+            "name": "gmail",
+            "source": { "type": "remote" },
+            "installed": false,
+            "enabled": false,
+            "installPolicy": "AVAILABLE",
+            "authPolicy": "ON_USE",
+            "interface": null,
+        }))
+        .unwrap();
+
+        assert_eq!(summary.availability, PluginAvailability::Available);
+    }
+
+    #[test]
+    fn plugin_availability_deserializes_enabled_alias() {
+        let availability: PluginAvailability = serde_json::from_value(json!("ENABLED")).unwrap();
+
+        assert_eq!(availability, PluginAvailability::Available);
+        assert_eq!(
+            serde_json::to_value(availability).unwrap(),
+            json!("AVAILABLE")
+        );
+    }
+
+    #[test]
     fn plugin_uninstall_params_serialization_omits_force_remote_sync() {
         assert_eq!(
             serde_json::to_value(PluginUninstallParams {
@@ -10604,6 +11747,9 @@ mod tests {
         assert_eq!(start.permission_profile, None);
         assert_eq!(resume.permission_profile, None);
         assert_eq!(fork.permission_profile, None);
+        assert_eq!(start.active_permission_profile, None);
+        assert_eq!(resume.active_permission_profile, None);
+        assert_eq!(fork.active_permission_profile, None);
     }
 
     #[test]
@@ -10631,7 +11777,7 @@ mod tests {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
+            permissions: None,
             model: None,
             service_tier: None,
             effort: None,

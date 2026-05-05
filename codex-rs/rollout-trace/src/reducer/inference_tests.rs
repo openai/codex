@@ -40,6 +40,7 @@ fn cancelled_inference_reduces_partial_response_items() -> anyhow::Result<()> {
     )?;
     writer.append(RawTraceEventPayload::InferenceCancelled {
         inference_call_id: "inference-1".to_string(),
+        upstream_request_id: Some("req-cancelled".to_string()),
         reason: "test interruption".to_string(),
         partial_response_payload: Some(partial_response),
     })?;
@@ -49,6 +50,10 @@ fn cancelled_inference_reduces_partial_response_items() -> anyhow::Result<()> {
     let response_item_id = &inference.response_item_ids[0];
 
     assert_eq!(inference.execution.status, ExecutionStatus::Cancelled);
+    assert_eq!(
+        inference.upstream_request_id,
+        Some("req-cancelled".to_string()),
+    );
     assert_eq!(inference.response_item_ids.len(), 1);
     assert_eq!(
         rollout.conversation_items[response_item_id].kind,
@@ -123,6 +128,7 @@ fn late_cancelled_inference_preserves_turn_end_status() -> anyhow::Result<()> {
     )?;
     writer.append(RawTraceEventPayload::InferenceCancelled {
         inference_call_id: "inference-1".to_string(),
+        upstream_request_id: Some("req-late-cancelled".to_string()),
         reason: "stream mapper noticed cancellation after turn end".to_string(),
         partial_response_payload: Some(partial_response.clone()),
     })?;
@@ -134,6 +140,10 @@ fn late_cancelled_inference_preserves_turn_end_status() -> anyhow::Result<()> {
     assert_eq!(
         inference.raw_response_payload_id,
         Some(partial_response.raw_payload_id),
+    );
+    assert_eq!(
+        inference.upstream_request_id,
+        Some("req-late-cancelled".to_string()),
     );
     assert_eq!(inference.response_item_ids.len(), 1);
     let response_item_id = &inference.response_item_ids[0];

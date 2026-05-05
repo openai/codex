@@ -3,6 +3,9 @@ use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 
+use super::auth::BedrockAuthMethod;
+use super::auth::resolve_auth_method;
+
 const BEDROCK_MANTLE_SERVICE_NAME: &str = "bedrock-mantle";
 const BEDROCK_MANTLE_SUPPORTED_REGIONS: [&str; 12] = [
     "us-east-2",
@@ -37,11 +40,23 @@ pub(super) fn region_from_config(aws: &ModelProviderAwsAuthInfo) -> Option<Strin
 
 pub(super) fn base_url(region: &str) -> Result<String> {
     if BEDROCK_MANTLE_SUPPORTED_REGIONS.contains(&region) {
-        Ok(format!("https://bedrock-mantle.{region}.api.aws/v1"))
+        Ok(format!("https://bedrock-mantle.{region}.api.aws/openai/v1"))
     } else {
         Err(CodexErr::Fatal(format!(
             "Amazon Bedrock Mantle does not support region `{region}`"
         )))
+    }
+}
+
+pub(super) async fn runtime_base_url(aws: &ModelProviderAwsAuthInfo) -> Result<String> {
+    let region = resolve_region(aws).await?;
+    base_url(&region)
+}
+
+async fn resolve_region(aws: &ModelProviderAwsAuthInfo) -> Result<String> {
+    match resolve_auth_method(aws).await? {
+        BedrockAuthMethod::EnvBearerToken { region, .. } => Ok(region),
+        BedrockAuthMethod::AwsSdkAuth { context } => Ok(context.region().to_string()),
     }
 }
 
@@ -55,7 +70,7 @@ mod tests {
     fn base_url_uses_region_endpoint() {
         assert_eq!(
             base_url("ap-northeast-1").expect("supported region"),
-            "https://bedrock-mantle.ap-northeast-1.api.aws/v1"
+            "https://bedrock-mantle.ap-northeast-1.api.aws/openai/v1"
         );
     }
 

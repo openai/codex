@@ -9,7 +9,7 @@ pub fn is_safe_command_windows(command: &[String]) -> bool {
     if let Some(commands) = try_parse_powershell_command_sequence(command) {
         commands
             .iter()
-            .all(|cmd| is_safe_powershell_command(cmd.as_slice()))
+            .all(|cmd| is_safe_powershell_words(cmd.as_slice()))
     } else {
         // Only PowerShell invocations are allowed on Windows for now; anything else is unsafe.
         false
@@ -142,7 +142,7 @@ fn quote_argument(arg: &str) -> String {
 
 /// Validates that a parsed PowerShell command stays within our read-only safelist.
 /// Everything before this is parsing, and rejecting things that make us feel uncomfortable.
-fn is_safe_powershell_command(words: &[String]) -> bool {
+pub(crate) fn is_safe_powershell_words(words: &[String]) -> bool {
     if words.is_empty() {
         // Examples rejected here: "pwsh -Command ''" and "pwsh -Command \"\"".
         return false;
