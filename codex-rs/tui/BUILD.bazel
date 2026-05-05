@@ -16,6 +16,7 @@ codex_rust_crate(
         "//codex-rs/collaboration-mode-templates:templates/plan.md",
     ],
     test_data_extra = glob([
+        "pets/assets/**",
         "src/**/*.rs",
         "src/**/snapshots/**",
     ]) + ["//codex-rs/core:model_availability_nux_fixtures"],

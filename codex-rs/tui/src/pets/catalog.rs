@@ -74,8 +74,29 @@ pub(super) fn builtin_pet(id: &str) -> Option<BuiltinPet> {
 }
 
 pub(super) fn builtin_spritesheet_path(file: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    let cargo_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("pets")
         .join("assets")
-        .join(file)
+        .join(file);
+    if cargo_path.is_file() {
+        return cargo_path;
+    }
+
+    if let Some(bazel_package) = option_env!("BAZEL_PACKAGE")
+        && let Ok(current_dir) = std::env::current_dir()
+    {
+        let package = bazel_package
+            .strip_prefix("codex-rs/")
+            .unwrap_or(bazel_package);
+        let bazel_path = current_dir
+            .join(package)
+            .join("pets")
+            .join("assets")
+            .join(file);
+        if bazel_path.is_file() {
+            return bazel_path;
+        }
+    }
+
+    cargo_path
 }
