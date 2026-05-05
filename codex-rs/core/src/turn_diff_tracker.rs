@@ -35,7 +35,7 @@ impl TurnDiffTracker {
     }
 
     pub fn track_successful_patch(&mut self, action: &ApplyPatchAction) {
-        for change in action.ordered_changes() {
+        for change in action.changes() {
             self.apply_change(change);
         }
     }
@@ -82,28 +82,26 @@ impl TurnDiffTracker {
     }
 
     fn apply_change(&mut self, change: &ApplyPatchChange) {
-        let source_path = change.path();
-        match change.change() {
-            ApplyPatchFileChange::Add { content } => {
-                self.apply_add(source_path, content, change.pre_change_content())
-            }
+        let source_path = change.path.as_path();
+        match &change.change {
+            ApplyPatchFileChange::Add {
+                content,
+                overwritten_content,
+            } => self.apply_add(source_path, content, overwritten_content.as_deref()),
             ApplyPatchFileChange::Delete { content } => self.apply_delete(source_path, content),
             ApplyPatchFileChange::Update {
                 move_path,
+                old_content,
+                overwritten_move_content,
                 new_content,
-                ..
-            } => {
-                let Some(old_content) = change.pre_change_content() else {
-                    return;
-                };
-                self.apply_update(
-                    source_path,
-                    move_path.as_deref(),
-                    old_content,
-                    change.overwritten_move_content(),
-                    new_content,
-                )
-            }
+                unified_diff: _unified_diff,
+            } => self.apply_update(
+                source_path,
+                move_path.as_deref(),
+                old_content,
+                overwritten_move_content.as_deref(),
+                new_content,
+            ),
         }
     }
 
