@@ -603,17 +603,18 @@ async fn sandbox_reports_codex_symlink_build_failure_without_panicking() {
     let dot_codex = tmpdir.path().join(".codex");
     symlink(&decoy, &dot_codex).expect("create .codex symlink");
 
-    let output = expect_denied(
-        run_cmd_result_with_writable_roots(
-            &["bash", "-lc", "true"],
-            &[tmpdir.path().to_path_buf()],
-            LONG_TIMEOUT_MS,
-            /*use_legacy_landlock*/ false,
-            /*network_access*/ true,
-        )
-        .await,
-        ".codex symlink build failure should deny",
-    );
+    let output = match run_cmd_result_with_writable_roots(
+        &["bash", "-lc", "true"],
+        &[tmpdir.path().to_path_buf()],
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+        /*network_access*/ true,
+    )
+    .await
+    {
+        Err(CodexErr::Sandbox(SandboxErr::Denied { output, .. })) => *output,
+        result => panic!(".codex symlink build failure should deny: {result:?}"),
+    };
 
     assert_eq!(output.exit_code, 1);
     assert!(
