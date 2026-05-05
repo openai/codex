@@ -22,7 +22,6 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -213,7 +212,7 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
         .await?;
     test.fs()
         .write_file(
-            &remote_cwd.join(&remote_marker_name),
+            &remote_cwd.join(remote_marker_name),
             b"remote-routing".to_vec(),
             /*sandbox*/ None,
         )

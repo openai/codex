@@ -267,7 +267,6 @@ mod tests {
     use codex_sandboxing::policy_transforms::intersect_permission_profiles;
     use codex_sandboxing::policy_transforms::merge_permission_profiles;
     use codex_utils_absolute_path::AbsolutePathBuf;
-    use core_test_support::PathExt;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
