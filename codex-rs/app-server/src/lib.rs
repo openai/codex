@@ -623,6 +623,7 @@ pub async fn run_main_with_transport_options(
         error!("failed to initialize sqlite state db: {err}");
     }
 
+    let installation_id = resolve_installation_id(&config.codex_home).await?;
     let transport_shutdown_token = CancellationToken::new();
     let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
 
@@ -755,7 +756,6 @@ pub async fn run_main_with_transport_options(
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
         let analytics_events_client =
             analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
-        let installation_id = resolve_installation_id(&config.codex_home).await?;
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
             outgoing_tx,
             analytics_events_client.clone(),
