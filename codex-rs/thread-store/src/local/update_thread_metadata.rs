@@ -72,11 +72,7 @@ pub(super) async fn update_thread_metadata(
 
     let resolved_git_info = match git_info {
         Some(git_info) => {
-            let Some(state_db) = store.state_db().await else {
-                return Err(ThreadStoreError::Internal {
-                    message: format!("sqlite state db unavailable for thread {thread_id}"),
-                });
-            };
+            let state_db = store.state_db();
             let metadata =
                 state_db
                     .get_thread(thread_id)
@@ -156,11 +152,7 @@ async fn apply_thread_git_info(
     branch: &Option<String>,
     origin_url: &Option<String>,
 ) -> ThreadStoreResult<()> {
-    let Some(state_db) = store.state_db().await else {
-        return Err(ThreadStoreError::Internal {
-            message: format!("sqlite state db unavailable for thread {thread_id}"),
-        });
-    };
+    let state_db = store.state_db();
     let updated = state_db
         .update_thread_git_info(
             thread_id,
@@ -447,13 +439,8 @@ mod tests {
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let path =
             write_session_file(home.path(), "2025-01-03T18-30-00", uuid).expect("session file");
-        let runtime = codex_state::StateRuntime::init(
-            config.sqlite_home.clone(),
-            config.default_model_provider_id.clone(),
-        )
-        .await
-        .expect("state db should initialize");
-        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let runtime = init_test_state_db(&config).await;
+        let store = LocalThreadStore::new(config.clone(), runtime.clone());
 
         store
             .update_thread_metadata(UpdateThreadMetadataParams {
@@ -553,13 +540,8 @@ mod tests {
     async fn update_thread_metadata_sets_git_info() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
-        let runtime = codex_state::StateRuntime::init(
-            config.sqlite_home.clone(),
-            config.default_model_provider_id.clone(),
-        )
-        .await
-        .expect("state db should initialize");
-        let store = LocalThreadStore::new(config, Some(runtime));
+        let runtime = init_test_state_db(&config).await;
+        let store = LocalThreadStore::new(config, runtime);
         let uuid = Uuid::from_u128(309);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         write_session_file(home.path(), "2025-01-03T17-00-00", uuid).expect("session file");
@@ -596,13 +578,8 @@ mod tests {
     async fn update_thread_metadata_partially_updates_git_info() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
-        let runtime = codex_state::StateRuntime::init(
-            config.sqlite_home.clone(),
-            config.default_model_provider_id.clone(),
-        )
-        .await
-        .expect("state db should initialize");
-        let store = LocalThreadStore::new(config, Some(runtime));
+        let runtime = init_test_state_db(&config).await;
+        let store = LocalThreadStore::new(config, runtime);
         let uuid = Uuid::from_u128(310);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         write_session_file(home.path(), "2025-01-03T17-30-00", uuid).expect("session file");
@@ -654,13 +631,8 @@ mod tests {
     async fn update_thread_metadata_clears_git_info_fields() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
-        let runtime = codex_state::StateRuntime::init(
-            config.sqlite_home.clone(),
-            config.default_model_provider_id.clone(),
-        )
-        .await
-        .expect("state db should initialize");
-        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let runtime = init_test_state_db(&config).await;
+        let store = LocalThreadStore::new(config.clone(), runtime.clone());
         let uuid = Uuid::from_u128(311);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let path =

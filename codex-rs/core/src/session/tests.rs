@@ -5058,8 +5058,8 @@ where
     F: FnOnce(&mut Config),
 {
     let (tx_event, rx_event) = async_channel::unbounded();
-    let codex_home = tempfile::tempdir().expect("create temp dir");
-    let mut config = build_test_config(codex_home.path()).await;
+    let codex_home = tempfile::tempdir().expect("create temp dir").keep();
+    let mut config = build_test_config(codex_home.as_path()).await;
     configure_config(&mut config);
     let config = Arc::new(config);
     let conversation_id = ThreadId::default();

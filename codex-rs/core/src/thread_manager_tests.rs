@@ -1174,7 +1174,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
 }
 
 #[tokio::test]
-async fn resumed_thread_activates_paused_goal_and_continues_on_request() -> anyhow::Result<()> {
+async fn resumed_thread_keeps_paused_goal_paused() -> anyhow::Result<()> {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -1242,7 +1242,7 @@ async fn resumed_thread_activates_paused_goal_and_continues_on_request() -> anyh
         .get_thread_goal(resumed.thread_id)
         .await?
         .expect("goal should still exist after resume");
-    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
     assert!(
         resumed
             .thread
@@ -1263,8 +1263,13 @@ async fn resumed_thread_activates_paused_goal_and_continues_on_request() -> anyh
             .active_turn
             .lock()
             .await
-            .is_some()
+            .is_none()
     );
+    let goal = state_db
+        .get_thread_goal(resumed.thread_id)
+        .await?
+        .expect("goal should still exist after resume");
+    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
 
     resumed.thread.shutdown_and_wait().await?;
     Ok(())

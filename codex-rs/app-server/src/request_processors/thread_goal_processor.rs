@@ -72,12 +72,6 @@ impl ThreadGoalRequestProcessor {
         }
     }
 
-    pub(crate) async fn pending_resume_goal_state(&self) -> (bool, Option<StateDbHandle>) {
-        let emit_thread_goal_update = self.config.features.enabled(Feature::Goals);
-        let thread_goal_state_db = emit_thread_goal_update.then_some(self.state_db.clone());
-        (emit_thread_goal_update, thread_goal_state_db)
-    }
-
     async fn thread_goal_set_inner(
         &self,
         request_id: ConnectionRequestId,

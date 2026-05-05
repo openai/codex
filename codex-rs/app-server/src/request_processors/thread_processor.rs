@@ -2561,8 +2561,10 @@ impl ThreadRequestProcessor {
                 )));
             };
 
-            let (emit_thread_goal_update, thread_goal_state_db) =
-                self.thread_goal_processor.pending_resume_goal_state().await;
+            let emit_thread_goal_update = self.config.features.enabled(Feature::Goals);
+            let thread_goal_state_db = emit_thread_goal_update
+                .then(|| self.state_db.clone())
+                .flatten();
 
             let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
                 Box::new(crate::thread_state::PendingThreadResumeRequest {

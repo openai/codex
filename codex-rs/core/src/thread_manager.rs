@@ -301,7 +301,7 @@ async fn state_db_from_roots_for_tests(
     };
     state_db::try_init(&config)
         .await
-        .expect("test state db should initialize")
+        .unwrap_or_else(|err| panic!("test state db should initialize: {err}"))
 }
 
 impl ThreadManager {
