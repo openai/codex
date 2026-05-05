@@ -25,6 +25,7 @@ const KITTY_CHUNK_SIZE: usize = 4096;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageProtocol {
     Kitty,
+    KittyLocalFile,
     Sixel,
 }
 
@@ -137,6 +138,10 @@ fn pet_image_support_for_terminal(info: &TerminalInfo) -> PetImageSupport {
         None => {}
     }
 
+    if supports_iterm2_kitty_graphics(info) {
+        return PetImageSupport::Supported(ImageProtocol::KittyLocalFile);
+    }
+
     if supports_kitty_graphics(info) {
         return PetImageSupport::Supported(ImageProtocol::Kitty);
     }
@@ -148,16 +153,20 @@ fn pet_image_support_for_terminal(info: &TerminalInfo) -> PetImageSupport {
     PetImageSupport::Unsupported(PetImageUnsupportedReason::Terminal)
 }
 
+fn supports_iterm2_kitty_graphics(info: &TerminalInfo) -> bool {
+    matches!(info.name, TerminalName::Iterm2)
+        || terminal_field_contains(info.term_program.as_deref(), "iterm")
+}
+
 fn supports_kitty_graphics(info: &TerminalInfo) -> bool {
     matches!(
         info.name,
-        TerminalName::Ghostty | TerminalName::Iterm2 | TerminalName::Kitty | TerminalName::WezTerm
+        TerminalName::Ghostty | TerminalName::Kitty | TerminalName::WezTerm
     ) || terminal_field_contains(info.term.as_deref(), "kitty")
         || terminal_field_contains(info.term.as_deref(), "ghostty")
         || terminal_field_contains(info.term.as_deref(), "wezterm")
         || terminal_field_contains(info.term_program.as_deref(), "kitty")
         || terminal_field_contains(info.term_program.as_deref(), "ghostty")
-        || terminal_field_contains(info.term_program.as_deref(), "iterm")
         || terminal_field_contains(info.term_program.as_deref(), "wezterm")
 }
 
@@ -209,6 +218,24 @@ pub fn kitty_transmit_png_with_id(
             ));
         }
     }
+
+    Ok(wrap_for_tmux_if_needed(&command))
+}
+
+pub fn kitty_transmit_png_file_with_id(
+    path: &Path,
+    columns: u16,
+    rows: u16,
+    image_id: Option<u32>,
+) -> Result<String> {
+    let path = path
+        .canonicalize()
+        .with_context(|| format!("canonicalize {}", path.display()))?;
+    let payload = general_purpose::STANDARD.encode(path.to_string_lossy().as_bytes());
+    let image_id = image_id
+        .map(|image_id| format!(",i={image_id}"))
+        .unwrap_or_default();
+    let command = format!("{ESC}_Ga=T,t=f,f=100,c={columns},r={rows},q=2{image_id};{payload}{ST}");
 
     Ok(wrap_for_tmux_if_needed(&command))
 }
@@ -378,18 +405,35 @@ mod tests {
     }
 
     #[test]
+    fn pet_image_support_detects_iterm2_kitty_file_graphics() {
+        for info in [
+            terminal_info_for_test(
+                TerminalName::Iterm2,
+                /*multiplexer*/ None,
+                Some("iTerm.app"),
+                /*term*/ None,
+            ),
+            terminal_info_for_test(
+                TerminalName::Unknown,
+                /*multiplexer*/ None,
+                Some("iTerm.app"),
+                Some("xterm-256color"),
+            ),
+        ] {
+            assert_eq!(
+                pet_image_support_for_terminal(&info),
+                PetImageSupport::Supported(ImageProtocol::KittyLocalFile)
+            );
+        }
+    }
+
+    #[test]
     fn pet_image_support_detects_kitty_graphics_terminals() {
         for info in [
             terminal_info_for_test(
                 TerminalName::Ghostty,
                 /*multiplexer*/ None,
                 Some("Ghostty"),
-                /*term*/ None,
-            ),
-            terminal_info_for_test(
-                TerminalName::Iterm2,
-                /*multiplexer*/ None,
-                Some("iTerm.app"),
                 /*term*/ None,
             ),
             terminal_info_for_test(
@@ -415,12 +459,6 @@ mod tests {
                 /*multiplexer*/ None,
                 /*term_program*/ None,
                 Some("wezterm"),
-            ),
-            terminal_info_for_test(
-                TerminalName::Unknown,
-                /*multiplexer*/ None,
-                Some("iTerm.app"),
-                Some("xterm-256color"),
             ),
             terminal_info_for_test(
                 TerminalName::Unknown,
@@ -524,5 +562,27 @@ mod tests {
 
         assert!(sixel.starts_with("\x1bP"));
         assert!(sixel.ends_with("\x1b\\"));
+    }
+
+    #[test]
+    fn kitty_file_png_transmission_encodes_local_file_reference() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("frame.png");
+        fs::write(&path, b"png").unwrap();
+
+        let command = kitty_transmit_png_file_with_id(
+            &path,
+            /*columns*/ 4,
+            /*rows*/ 3,
+            /*image_id*/ Some(7),
+        )
+        .unwrap();
+        let path = path.canonicalize().unwrap();
+        let payload = general_purpose::STANDARD.encode(path.to_string_lossy().as_bytes());
+
+        assert_eq!(
+            command,
+            format!("\x1b_Ga=T,t=f,f=100,c=4,r=3,q=2,i=7;{payload}\x1b\\")
+        );
     }
 }

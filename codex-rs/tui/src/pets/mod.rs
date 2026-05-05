@@ -59,15 +59,30 @@ fn render_pet_image(
     use crossterm::queue;
     use image_protocol::ImageProtocol;
 
-    write!(writer, "{}", image_protocol::kitty_delete_image(image_id))?;
     let Some(request) = request else {
+        write!(writer, "{}", image_protocol::kitty_delete_image(image_id))?;
         writer.flush()?;
         return Ok(());
     };
 
+    if matches!(
+        request.protocol,
+        ImageProtocol::Kitty | ImageProtocol::KittyLocalFile
+    ) {
+        write!(writer, "{}", image_protocol::kitty_delete_image(image_id))?;
+    }
+
     let payload = match request.protocol {
         ImageProtocol::Kitty => {
             AmbientPetPayload::Text(image_protocol::kitty_transmit_png_with_id(
+                &request.frame,
+                request.columns,
+                request.rows,
+                Some(image_id),
+            )?)
+        }
+        ImageProtocol::KittyLocalFile => {
+            AmbientPetPayload::Text(image_protocol::kitty_transmit_png_file_with_id(
                 &request.frame,
                 request.columns,
                 request.rows,
@@ -144,5 +159,32 @@ mod tests {
         assert!(!output.contains("\x1b7"));
         assert!(!output.contains("\x1b["));
         assert!(!output.contains("\x1b8"));
+    }
+
+    #[test]
+    fn kitty_local_file_pet_image_uses_file_reference_without_inline_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let frame = dir.path().join("frame.png");
+        std::fs::write(&frame, b"png").unwrap();
+        let request = AmbientPetDraw {
+            frame,
+            protocol: ImageProtocol::KittyLocalFile,
+            x: 2,
+            y: 3,
+            columns: 4,
+            rows: 2,
+            height_px: 75,
+            sixel_dir: PathBuf::new(),
+        };
+        let mut output = Vec::new();
+
+        render_ambient_pet_image(&mut output, Some(request)).unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("a=d,d=I,i=49374,q=2;"));
+        assert!(output.contains("\x1b[4;3H"));
+        assert!(output.contains("a=T,t=f,f=100,c=4,r=2,q=2,i=49374;"));
+        assert!(!output.contains("cG5n"));
+        assert!(output.contains("\x1b8"));
     }
 }
