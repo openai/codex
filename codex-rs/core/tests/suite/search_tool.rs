@@ -570,6 +570,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
 
     let requests = mock.requests();
     assert_eq!(requests.len(), 3);
+    let first_request_body = requests[0].body_json();
 
     let apps_tool_call = server
         .received_requests()
@@ -604,6 +605,22 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
             .is_some_and(|turn_id| !turn_id.is_empty()),
         "apps tools/call should include turn metadata turn_id: {apps_tool_call:?}"
     );
+    assert_eq!(
+        apps_tool_call
+            .pointer("/params/_meta/x-codex-turn-metadata/model")
+            .and_then(Value::as_str),
+        Some("gpt-5.4")
+    );
+    let first_request_reasoning_effort = first_request_body
+        .pointer("/reasoning/effort")
+        .and_then(Value::as_str)
+        .expect("first response request should include reasoning effort");
+    assert_eq!(
+        apps_tool_call
+            .pointer("/params/_meta/x-codex-turn-metadata/reasoning_effort")
+            .and_then(Value::as_str),
+        Some(first_request_reasoning_effort)
+    );
     let mcp_turn_started_at_unix_ms = apps_tool_call
         .pointer("/params/_meta/x-codex-turn-metadata/turn_started_at_unix_ms")
         .and_then(Value::as_i64)
@@ -626,7 +643,6 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
         Some(mcp_turn_started_at_unix_ms)
     );
 
-    let first_request_body = requests[0].body_json();
     let first_request_tools = tool_names(&first_request_body);
     assert!(
         first_request_tools

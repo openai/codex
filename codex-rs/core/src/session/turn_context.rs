@@ -118,18 +118,19 @@ impl TurnContext {
         )
     }
 
-    pub(crate) fn effective_reasoning_effort_for_tracing(&self) -> String {
+    pub(crate) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         if self.model_info.supports_reasoning_summaries {
-            match self
-                .reasoning_effort
+            self.reasoning_effort
                 .or(self.model_info.default_reasoning_level)
-            {
-                Some(effort) => effort.to_string(),
-                None => "default".to_string(),
-            }
         } else {
-            "default".to_string()
+            None
         }
+    }
+
+    pub(crate) fn effective_reasoning_effort_for_tracing(&self) -> String {
+        self.effective_reasoning_effort()
+            .map(|effort| effort.to_string())
+            .unwrap_or_else(|| "default".to_string())
     }
 
     pub(crate) fn model_context_window(&self) -> Option<i64> {

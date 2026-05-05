@@ -4,6 +4,7 @@ use crate::session::tests::make_session_and_context;
 use crate::session::tests::make_session_and_context_with_rx;
 use crate::state::ActiveTurn;
 use crate::test_support::models_manager_with_provider;
+use crate::turn_metadata::McpTurnMetadataContext;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::AppConfig;
@@ -67,6 +68,13 @@ fn approval_metadata(
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+    }
+}
+
+fn mcp_turn_metadata_context(turn_context: &TurnContext) -> McpTurnMetadataContext<'_> {
+    McpTurnMetadataContext {
+        model: turn_context.model_info.slug.as_str(),
+        reasoning_effort: turn_context.effective_reasoning_effort(),
     }
 }
 
@@ -908,13 +916,10 @@ fn truncate_mcp_tool_result_for_event_bounds_large_error() {
 #[tokio::test]
 async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
     let (_, turn_context) = make_session_and_context().await;
-    let expected_turn_metadata = serde_json::from_str::<serde_json::Value>(
-        &turn_context
-            .turn_metadata_state
-            .current_header_value()
-            .expect("turn metadata header"),
-    )
-    .expect("turn metadata json");
+    let expected_turn_metadata = turn_context
+        .turn_metadata_state
+        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
+        .expect("turn metadata");
 
     let meta = build_mcp_tool_call_request_meta(
         &turn_context,
@@ -923,6 +928,25 @@ async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
         /*metadata*/ None,
     )
     .expect("custom servers should receive turn metadata");
+    let turn_metadata = meta
+        .get(crate::X_CODEX_TURN_METADATA_HEADER)
+        .expect("turn metadata should be present");
+
+    assert_eq!(
+        turn_metadata
+            .get("model")
+            .and_then(serde_json::Value::as_str),
+        Some(turn_context.model_info.slug.as_str())
+    );
+    assert_eq!(
+        turn_metadata
+            .get("reasoning_effort")
+            .and_then(serde_json::Value::as_str),
+        turn_context
+            .effective_reasoning_effort()
+            .map(|effort| effort.to_string())
+            .as_deref()
+    );
 
     assert_eq!(
         meta,
@@ -961,13 +985,10 @@ async fn mcp_tool_call_request_meta_includes_turn_started_at_unix_ms() {
 #[tokio::test]
 async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps_meta() {
     let (_, turn_context) = make_session_and_context().await;
-    let expected_turn_metadata = serde_json::from_str::<serde_json::Value>(
-        &turn_context
-            .turn_metadata_state
-            .current_header_value()
-            .expect("turn metadata header"),
-    )
-    .expect("turn metadata json");
+    let expected_turn_metadata = turn_context
+        .turn_metadata_state
+        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
+        .expect("turn metadata");
     let metadata = McpToolApprovalMetadata {
         annotations: None,
         connector_id: Some("calendar".to_string()),
@@ -1011,13 +1032,10 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
 #[tokio::test]
 async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_codex_apps_meta() {
     let (_, turn_context) = make_session_and_context().await;
-    let expected_turn_metadata = serde_json::from_str::<serde_json::Value>(
-        &turn_context
-            .turn_metadata_state
-            .current_header_value()
-            .expect("turn metadata header"),
-    )
-    .expect("turn metadata json");
+    let expected_turn_metadata = turn_context
+        .turn_metadata_state
+        .current_meta_value_for_mcp_request(mcp_turn_metadata_context(&turn_context))
+        .expect("turn metadata");
 
     assert_eq!(
         build_mcp_tool_call_request_meta(
