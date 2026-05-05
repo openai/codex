@@ -99,7 +99,7 @@ fn render_pet_image(
 
     queue!(writer, SavePosition)?;
     if matches!(request.protocol, ImageProtocol::Sixel) {
-        clear_pet_cell_area(writer, &request)?;
+        clear_sixel_artifact_area(writer, &request)?;
     }
     queue!(writer, MoveTo(request.x, request.y))?;
     match payload {
@@ -116,13 +116,17 @@ enum AmbientPetPayload {
     Bytes(Vec<u8>),
 }
 
-fn clear_pet_cell_area(writer: &mut impl Write, request: &AmbientPetDraw) -> std::io::Result<()> {
+fn clear_sixel_artifact_area(
+    writer: &mut impl Write,
+    request: &AmbientPetDraw,
+) -> std::io::Result<()> {
     use crossterm::cursor::MoveTo;
     use crossterm::queue;
 
     let blank = " ".repeat(request.columns.into());
-    for row in 0..request.rows {
-        queue!(writer, MoveTo(request.x, request.y.saturating_add(row)))?;
+    let clear_bottom_y = request.y.saturating_add(request.rows);
+    for row in request.clear_top_y..clear_bottom_y {
+        queue!(writer, MoveTo(request.x, row))?;
         write!(writer, "{blank}")?;
     }
     Ok(())
@@ -145,6 +149,7 @@ mod tests {
             protocol: ImageProtocol::Kitty,
             x: 2,
             y: 3,
+            clear_top_y: 3,
             columns: 4,
             rows: 5,
             height_px: 75,
@@ -187,6 +192,7 @@ mod tests {
             protocol: ImageProtocol::KittyLocalFile,
             x: 2,
             y: 3,
+            clear_top_y: 3,
             columns: 4,
             rows: 2,
             height_px: 75,
@@ -218,6 +224,7 @@ mod tests {
             protocol: ImageProtocol::Sixel,
             x: 2,
             y: 3,
+            clear_top_y: 1,
             columns: 4,
             rows: 2,
             height_px: 75,
@@ -228,7 +235,7 @@ mod tests {
         render_ambient_pet_image(&mut output, Some(request)).unwrap();
 
         let output = String::from_utf8(output).unwrap();
-        assert!(output.contains("\x1b[4;3H    \x1b[5;3H    \x1b[4;3H"));
+        assert!(output.contains("\x1b[2;3H    \x1b[3;3H    \x1b[4;3H    \x1b[5;3H    \x1b[4;3H"));
         assert!(output.contains("fake-sixel"));
         assert!(output.contains("\x1b8"));
     }
