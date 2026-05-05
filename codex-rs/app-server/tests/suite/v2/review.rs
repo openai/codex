@@ -87,7 +87,16 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
     let turn_id = turn.id.clone();
     assert_eq!(turn.status, TurnStatus::InProgress);
     assert_eq!(turn.items_view, TurnItemsView::NotLoaded);
-    assert!(turn.items.is_empty());
+    assert_eq!(
+        turn.items,
+        vec![ThreadItem::UserMessage {
+            id: turn_id.clone(),
+            content: vec![V2UserInput::Text {
+                text: "commit 1234567: Tidy UI colors".to_string(),
+                text_elements: Vec::new(),
+            }],
+        }]
+    );
 
     // Confirm we see the EnteredReviewMode marker on the main thread.
     let mut saw_entered_review_mode = false;
@@ -186,7 +195,16 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
     let ReviewStartResponse { turn, .. } = to_response::<ReviewStartResponse>(review_resp)?;
     let turn_id = turn.id.clone();
     assert_eq!(turn.items_view, TurnItemsView::NotLoaded);
-    assert!(turn.items.is_empty());
+    assert_eq!(
+        turn.items,
+        vec![ThreadItem::UserMessage {
+            id: turn_id.clone(),
+            content: vec![V2UserInput::Text {
+                text: "commit 1234567: Check review approvals".to_string(),
+                text_elements: Vec::new(),
+            }],
+        }]
+    );
 
     let server_req = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -306,7 +324,16 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
 
     assert_eq!(turn.status, TurnStatus::InProgress);
     assert_eq!(turn.items_view, TurnItemsView::NotLoaded);
-    assert!(turn.items.is_empty());
+    assert_eq!(
+        turn.items,
+        vec![ThreadItem::UserMessage {
+            id: turn.id.clone(),
+            content: vec![V2UserInput::Text {
+                text: "detached review".to_string(),
+                text_elements: Vec::new(),
+            }],
+        }]
+    );
     assert_ne!(
         review_thread_id, thread_id,
         "detached review should run on a different thread"
