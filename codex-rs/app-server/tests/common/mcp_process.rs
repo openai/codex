@@ -74,6 +74,7 @@ use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadInjectItemsParams;
+use codex_app_server_protocol::ThreadTurnsItemsListParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryModeSetParams;

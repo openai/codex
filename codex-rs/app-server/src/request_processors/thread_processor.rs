@@ -597,11 +597,11 @@ impl ThreadRequestProcessor {
 
     pub(crate) async fn thread_turns_items_list(
         &self,
-        _params: ThreadTurnsItemsListParams,
+        params: ThreadTurnsItemsListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        Err(method_not_found(
-            "thread/turns/items/list is not supported yet",
-        ))
+        self.thread_turns_items_list_response_inner(params)
+            .await
+            .map(|response| Some(response.into()))
     }
 
     pub(crate) async fn thread_shell_command(
@@ -2173,6 +2173,62 @@ impl ThreadRequestProcessor {
         })
     }
 
+    async fn thread_turns_items_list_response_inner(
+        &self,
+        params: ThreadTurnsItemsListParams,
+    ) -> Result<ThreadTurnsItemsListResponse, JSONRPCErrorError> {
+        let ThreadTurnsItemsListParams {
+            thread_id,
+            turn_id,
+            cursor,
+            limit,
+            sort_direction,
+        } = params;
+
+        let thread_uuid = ThreadId::from_string(&thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+        let items = self
+            .load_thread_turns_list_history(thread_uuid)
+            .await
+            .map_err(thread_read_view_error)?;
+        let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
+        let has_live_running_thread = match loaded_thread.as_ref() {
+            Some(thread) => matches!(thread.agent_status().await, AgentStatus::Running),
+            None => false,
+        };
+        let active_turn = if loaded_thread.is_some() {
+            let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
+            let state = thread_state.lock().await;
+            state.active_turn_snapshot()
+        } else {
+            None
+        };
+        let turns = reconstruct_thread_turns_for_turns_list(
+            &items,
+            self.thread_watch_manager
+                .loaded_status_for_thread(&thread_uuid.to_string())
+                .await,
+            has_live_running_thread,
+            active_turn,
+        );
+        let turn_items = turns
+            .into_iter()
+            .find(|turn| turn.id == turn_id)
+            .ok_or_else(|| invalid_request(format!("turn not found: {turn_id}")))?
+            .items;
+        let page = paginate_thread_items(
+            turn_items,
+            cursor.as_deref(),
+            limit,
+            sort_direction.unwrap_or(SortDirection::Asc),
+        )?;
+        Ok(ThreadTurnsItemsListResponse {
+            data: page.items,
+            next_cursor: page.next_cursor,
+            backwards_cursor: page.backwards_cursor,
+        })
+    }
+
     async fn load_thread_turns_list_history(
         &self,
         thread_id: ThreadId,
@@ -3389,6 +3445,8 @@ fn xcode_26_4_mcp_elicitations_auto_deny(
 
 const THREAD_TURNS_DEFAULT_LIMIT: usize = 25;
 const THREAD_TURNS_MAX_LIMIT: usize = 100;
+const THREAD_ITEMS_DEFAULT_LIMIT: usize = 100;
+const THREAD_ITEMS_MAX_LIMIT: usize = 500;
 
 fn thread_backwards_cursor_for_sort_key(
     thread: &StoredThread,
@@ -3414,10 +3472,23 @@ struct ThreadTurnsPage {
     pub(super) backwards_cursor: Option<String>,
 }
 
+struct ThreadItemsPage {
+    pub(super) items: Vec<ThreadItem>,
+    pub(super) next_cursor: Option<String>,
+    pub(super) backwards_cursor: Option<String>,
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ThreadTurnsCursor {
     turn_id: String,
+    include_anchor: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadItemsCursor {
+    item_id: String,
     include_anchor: bool,
 }
 
@@ -3513,6 +3584,112 @@ fn serialize_thread_turns_cursor(
 
 fn parse_thread_turns_cursor(cursor: &str) -> Result<ThreadTurnsCursor, JSONRPCErrorError> {
     serde_json::from_str(cursor).map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))
+}
+
+fn paginate_thread_items(
+    items: Vec<ThreadItem>,
+    cursor: Option<&str>,
+    limit: Option<u32>,
+    sort_direction: SortDirection,
+) -> Result<ThreadItemsPage, JSONRPCErrorError> {
+    if items.is_empty() {
+        return Ok(ThreadItemsPage {
+            items: Vec::new(),
+            next_cursor: None,
+            backwards_cursor: None,
+        });
+    }
+
+    let anchor = cursor.map(parse_thread_items_cursor).transpose()?;
+    let page_size = limit
+        .map(|value| value as usize)
+        .unwrap_or(THREAD_ITEMS_DEFAULT_LIMIT)
+        .clamp(1, THREAD_ITEMS_MAX_LIMIT);
+
+    let anchor_index = anchor
+        .as_ref()
+        .and_then(|anchor| items.iter().position(|item| item.id() == anchor.item_id));
+    if anchor.is_some() && anchor_index.is_none() {
+        return Err(JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message: "invalid cursor: anchor item is no longer present".to_string(),
+            data: None,
+        });
+    }
+
+    let mut keyed_items: Vec<_> = items.into_iter().enumerate().collect();
+    match sort_direction {
+        SortDirection::Asc => {
+            if let (Some(anchor), Some(anchor_index)) = (anchor.as_ref(), anchor_index) {
+                keyed_items.retain(|(index, _)| {
+                    if anchor.include_anchor {
+                        *index >= anchor_index
+                    } else {
+                        *index > anchor_index
+                    }
+                });
+            }
+        }
+        SortDirection::Desc => {
+            keyed_items.reverse();
+            if let (Some(anchor), Some(anchor_index)) = (anchor.as_ref(), anchor_index) {
+                keyed_items.retain(|(index, _)| {
+                    if anchor.include_anchor {
+                        *index <= anchor_index
+                    } else {
+                        *index < anchor_index
+                    }
+                });
+            }
+        }
+    }
+
+    let more_items_available = keyed_items.len() > page_size;
+    keyed_items.truncate(page_size);
+    let backwards_cursor = keyed_items
+        .first()
+        .map(|(_, item)| serialize_thread_items_cursor(item.id(), /*include_anchor*/ true))
+        .transpose()?;
+    let next_cursor = if more_items_available {
+        keyed_items
+            .last()
+            .map(|(_, item)| {
+                serialize_thread_items_cursor(item.id(), /*include_anchor*/ false)
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    let items = keyed_items.into_iter().map(|(_, item)| item).collect();
+
+    Ok(ThreadItemsPage {
+        items,
+        next_cursor,
+        backwards_cursor,
+    })
+}
+
+fn serialize_thread_items_cursor(
+    item_id: &str,
+    include_anchor: bool,
+) -> Result<String, JSONRPCErrorError> {
+    serde_json::to_string(&ThreadItemsCursor {
+        item_id: item_id.to_string(),
+        include_anchor,
+    })
+    .map_err(|err| JSONRPCErrorError {
+        code: INTERNAL_ERROR_CODE,
+        message: format!("failed to serialize cursor: {err}"),
+        data: None,
+    })
+}
+
+fn parse_thread_items_cursor(cursor: &str) -> Result<ThreadItemsCursor, JSONRPCErrorError> {
+    serde_json::from_str(cursor).map_err(|_| JSONRPCErrorError {
+        code: INVALID_REQUEST_ERROR_CODE,
+        message: format!("invalid cursor: {cursor}"),
+        data: None,
+    })
 }
 
 fn reconstruct_thread_turns_for_turns_list(
