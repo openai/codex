@@ -236,7 +236,7 @@ impl ToolEmitter {
                     } else {
                         PatchApplyStatus::Failed
                     },
-                    None,
+                    /*action*/ None,
                 )
                 .await;
             }
@@ -250,7 +250,7 @@ impl ToolEmitter {
                     String::new(),
                     (*message).to_string(),
                     PatchApplyStatus::Failed,
-                    None,
+                    /*action*/ None,
                 )
                 .await;
             }
@@ -264,7 +264,7 @@ impl ToolEmitter {
                     String::new(),
                     (*message).to_string(),
                     PatchApplyStatus::Declined,
-                    None,
+                    /*action*/ None,
                 )
                 .await;
             }
