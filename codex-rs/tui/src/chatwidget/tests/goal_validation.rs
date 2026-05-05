@@ -1,6 +1,7 @@
 use super::*;
 use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
+use pretty_assertions::assert_eq;
 
 fn complete_turn_with_message(chat: &mut ChatWidget, turn_id: &str, message: Option<&str>) {
     if let Some(message) = message {
@@ -185,7 +186,7 @@ async fn goal_slash_command_giant_paste_uses_goal_specific_error() {
 }
 
 #[tokio::test]
-async fn queued_goal_slash_command_rejects_oversized_objective() {
+async fn queued_goal_slash_command_rejects_oversized_objective_and_drains_next_input() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.thread_id = Some(ThreadId::new());
@@ -193,7 +194,8 @@ async fn queued_goal_slash_command_rejects_oversized_objective() {
     let objective = "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1);
 
     queue_composer_text_with_tab(&mut chat, &format!("/goal {objective}"));
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    queue_composer_text_with_tab(&mut chat, "continue");
+    assert_eq!(chat.queued_user_messages.len(), 2);
 
     complete_turn_with_message(&mut chat, "turn-1", Some("done"));
 
@@ -207,5 +209,16 @@ async fn queued_goal_slash_command_rejects_oversized_objective() {
     let rendered = rendered_insert_history(&events);
     assert!(rendered.contains("Goal objective is too long"));
     assert!(rendered.contains("Put longer instructions in a file"));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "continue".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued follow-up after oversized goal, got {other:?}"),
+    }
+    assert!(chat.queued_user_messages.is_empty());
     assert_no_submit_op(&mut op_rx);
 }

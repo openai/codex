@@ -812,6 +812,11 @@ impl ChatWidget {
             rest_offset + leading_trimmed,
             &text_elements,
         );
+        if cmd == SlashCommand::Goal
+            && !self.goal_objective_is_allowed(trimmed_rest, GoalObjectiveValidationSource::Queued)
+        {
+            return QueueDrain::Continue;
+        }
         self.dispatch_prepared_command_with_args(
             cmd,
             PreparedSlashCommandArgs {
