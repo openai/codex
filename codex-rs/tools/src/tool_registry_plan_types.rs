@@ -20,7 +20,6 @@ pub enum ToolHandlerKind {
     FollowupTaskV2,
     Goal,
     ListAgentsV2,
-    ListDir,
     Mcp,
     McpResource,
     Plan,

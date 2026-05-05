@@ -535,7 +535,7 @@ fn disabled_environment_omits_environment_backed_tools() {
     let mut features = Features::with_defaults();
     features.enable(Feature::UnifiedExec);
     let available_models = Vec::new();
-    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
@@ -546,9 +546,6 @@ fn disabled_environment_omits_environment_backed_tools() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     })
     .with_environment_mode(ToolEnvironmentMode::None);
-    tools_config
-        .experimental_supported_tools
-        .push("list_dir".to_string());
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
@@ -559,7 +556,6 @@ fn disabled_environment_omits_environment_backed_tools() {
     assert_lacks_tool_name(&tools, "exec_command");
     assert_lacks_tool_name(&tools, "write_stdin");
     assert_lacks_tool_name(&tools, "apply_patch");
-    assert_lacks_tool_name(&tools, "list_dir");
     assert_lacks_tool_name(&tools, VIEW_IMAGE_TOOL_NAME);
 }
 

@@ -32,7 +32,6 @@ use crate::create_followup_task_tool;
 use crate::create_get_goal_tool;
 use crate::create_image_generation_tool;
 use crate::create_list_agents_tool;
-use crate::create_list_dir_tool;
 use crate::create_list_mcp_resource_templates_tool;
 use crate::create_list_mcp_resources_tool;
 use crate::create_local_shell_tool;
@@ -346,20 +345,6 @@ pub fn build_tool_registry_plan(
             }
         }
         plan.register_handler("apply_patch", ToolHandlerKind::ApplyPatch);
-    }
-
-    if config.environment_mode.has_environment()
-        && config
-            .experimental_supported_tools
-            .iter()
-            .any(|tool| tool == "list_dir")
-    {
-        plan.push_spec(
-            create_list_dir_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        plan.register_handler("list_dir", ToolHandlerKind::ListDir);
     }
 
     if config

@@ -150,7 +150,6 @@ pub use tool_spec::create_image_generation_tool;
 pub use tool_spec::create_local_shell_tool;
 pub use tool_spec::create_tools_json_for_responses_api;
 pub use tool_spec::create_web_search_tool;
-pub use utility_tool::create_list_dir_tool;
 pub use utility_tool::create_test_sync_tool;
 pub use view_image::ViewImageToolOptions;
 pub use view_image::create_view_image_tool;
