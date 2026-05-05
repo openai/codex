@@ -437,6 +437,8 @@ export type { TurnSteerResponse } from "./TurnSteerResponse";
 export type { UserInput } from "./UserInput";
 export type { WarningNotification } from "./WarningNotification";
 export type { WebSearchAction } from "./WebSearchAction";
+export type { WindowsSandboxReadiness } from "./WindowsSandboxReadiness";
+export type { WindowsSandboxReadinessResponse } from "./WindowsSandboxReadinessResponse";
 export type { WindowsSandboxSetupCompletedNotification } from "./WindowsSandboxSetupCompletedNotification";
 export type { WindowsSandboxSetupMode } from "./WindowsSandboxSetupMode";
 export type { WindowsSandboxSetupStartParams } from "./WindowsSandboxSetupStartParams";

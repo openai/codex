@@ -314,6 +314,22 @@ if mode == "json_deny":
             "permissionDecisionReason": reason
         }}
     }}))
+elif mode == "context":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PreToolUse",
+            "additionalContext": reason
+        }}
+    }}))
+elif mode == "json_deny_with_context":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+            "additionalContext": reason
+        }}
+    }}))
 elif mode == "exit_2":
     sys.stderr.write(reason + "\n")
     raise SystemExit(2)
@@ -1976,6 +1992,158 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
         hook_inputs[0]["turn_id"]
             .as_str()
             .is_some_and(|turn_id| !turn_id.is_empty())
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn pre_tool_use_records_additional_context_for_shell_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "pretooluse-shell-command-context";
+    let command = "printf pre-tool-output".to_string();
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "pre hook context observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let pre_context = "Remember the bash pre-tool note.";
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_pre_tool_use_hook(home, Some("^Bash$"), "context", pre_context)
+            {
+                panic!("failed to write pre tool use hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run the shell command with pre hook")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .message_input_texts("developer")
+            .contains(&pre_context.to_string()),
+        "follow-up request should include pre tool use additional context",
+    );
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(
+        output.contains("pre-tool-output"),
+        "shell command output should still reach the model",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn blocked_pre_tool_use_records_additional_context_for_shell_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "pretooluse-shell-command-blocked-context";
+    let marker = std::env::temp_dir().join("pretooluse-shell-command-blocked-context-marker");
+    let command = format!("printf blocked > {}", marker.display());
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "blocked pre hook context observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let pre_context = "blocked by pre hook with context";
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_pre_tool_use_hook(home, Some("^Bash$"), "json_deny_with_context", pre_context)
+            {
+                panic!("failed to write pre tool use hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    if marker.exists() {
+        fs::remove_file(&marker).context("remove leftover pre tool use marker")?;
+    }
+
+    test.submit_turn_with_permission_profile(
+        "run the blocked shell command with pre hook context",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .message_input_texts("developer")
+            .contains(&pre_context.to_string()),
+        "follow-up request should include blocked pre tool use additional context",
+    );
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(
+        output.contains("Command blocked by PreToolUse hook: blocked by pre hook with context"),
+        "blocked tool output should still surface the hook reason",
+    );
+    assert!(
+        !marker.exists(),
+        "blocked command should not create marker file"
     );
 
     Ok(())

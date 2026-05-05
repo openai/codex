@@ -831,6 +831,11 @@ impl MessageProcessor {
                 .read(params)
                 .await
                 .map(|response| Some(response.into())),
+            ClientRequest::WindowsSandboxReadiness { .. } => self
+                .windows_sandbox_processor
+                .windows_sandbox_readiness()
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::ExternalAgentConfigDetect { params, .. } => self
                 .external_agent_config_processor
                 .detect(params)

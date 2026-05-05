@@ -480,7 +480,7 @@ pub struct Config {
     /// - `Some("...")`: use the provided attribution text verbatim
     pub commit_attribution: Option<String>,
 
-    /// Deprecated optional external notifier command. When set, Codex will spawn this
+    /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
     /// processing a user submission). The value must be the full command
     /// broken into argv tokens **without** the trailing JSON argument - Codex
@@ -499,7 +499,7 @@ pub struct Config {
     /// notify-send Codex '{"type":"agent-turn-complete","turn-id":"12345"}'
     /// ```
     ///
-    /// If unset the feature is disabled. Use lifecycle hooks for new automation.
+    /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
     /// TUI notification settings, including enabled events, delivery method, and focus condition.

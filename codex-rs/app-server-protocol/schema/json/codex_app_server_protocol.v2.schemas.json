@@ -2343,6 +2343,29 @@
             },
             "method": {
               "enum": [
+                "windowsSandbox/readiness"
+              ],
+              "title": "WindowsSandbox/readinessRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "WindowsSandbox/readinessRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "account/login/start"
               ],
               "title": "Account/login/startRequestMethod",
@@ -16256,6 +16279,27 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "WindowsSandboxReadiness": {
+      "enum": [
+        "ready",
+        "notConfigured",
+        "updateRequired"
+      ],
+      "type": "string"
+    },
+    "WindowsSandboxReadinessResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/WindowsSandboxReadiness"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "WindowsSandboxReadinessResponse",
       "type": "object"
     },
     "WindowsSandboxSetupCompletedNotification": {

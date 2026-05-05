@@ -5921,6 +5921,29 @@
         },
         "method": {
           "enum": [
+            "windowsSandbox/readiness"
+          ],
+          "title": "WindowsSandbox/readinessRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "WindowsSandbox/readinessRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "account/login/start"
           ],
           "title": "Account/login/startRequestMethod",

@@ -843,6 +843,11 @@ client_request_definitions! {
         serialization: global("windows-sandbox-setup"),
         response: v2::WindowsSandboxSetupStartResponse,
     },
+    WindowsSandboxReadiness => "windowsSandbox/readiness" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("config"),
+        response: v2::WindowsSandboxReadinessResponse,
+    },
 
     LoginAccount => "account/login/start" {
         params: v2::LoginAccountParams,

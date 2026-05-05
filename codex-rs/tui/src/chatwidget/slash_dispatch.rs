@@ -5,6 +5,7 @@
 //! dispatch step and records the staged entry once the command has been handled, so
 //! slash-command recall follows the same submitted-input rule as ordinary text.
 
+use super::goal_validation::GoalObjectiveValidationSource;
 use super::*;
 use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
@@ -475,6 +476,12 @@ impl ChatWidget {
             return;
         }
 
+        if cmd == SlashCommand::Goal
+            && !self.goal_objective_with_pending_pastes_is_allowed(&args, &text_elements)
+        {
+            return;
+        }
+
         let Some((prepared_args, prepared_elements)) =
             self.prepare_live_inline_args(args, text_elements)
         else {
@@ -672,6 +679,13 @@ impl ChatWidget {
                     }
                     return;
                 }
+                let validation_source = match source {
+                    SlashCommandDispatchSource::Live => GoalObjectiveValidationSource::Live,
+                    SlashCommandDispatchSource::Queued => GoalObjectiveValidationSource::Queued,
+                };
+                if !self.goal_objective_is_allowed(objective, validation_source) {
+                    return;
+                }
                 let Some(thread_id) = self.thread_id else {
                     if source == SlashCommandDispatchSource::Live {
                         self.queue_user_message_with_options(
@@ -804,6 +818,11 @@ impl ChatWidget {
             rest_offset + leading_trimmed,
             &text_elements,
         );
+        if cmd == SlashCommand::Goal
+            && !self.goal_objective_is_allowed(trimmed_rest, GoalObjectiveValidationSource::Queued)
+        {
+            return QueueDrain::Continue;
+        }
         self.dispatch_prepared_command_with_args(
             cmd,
             PreparedSlashCommandArgs {

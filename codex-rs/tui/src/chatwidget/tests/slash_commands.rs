@@ -16,6 +16,10 @@ fn complete_turn_with_message(chat: &mut ChatWidget, turn_id: &str, message: Opt
 fn submit_composer_text(chat: &mut ChatWidget, text: &str) {
     chat.bottom_pane
         .set_composer_text(text.to_string(), Vec::new(), Vec::new());
+    submit_current_composer(chat);
+}
+
+fn submit_current_composer(chat: &mut ChatWidget) {
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
