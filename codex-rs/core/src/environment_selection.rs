@@ -106,8 +106,7 @@ mod tests {
         let manager = EnvironmentManager::create_for_tests(
             Some("ws://127.0.0.1:8765".to_string()),
             test_runtime_paths(),
-        )
-        .await;
+        );
 
         assert_eq!(
             default_thread_environment_selections(&manager, &cwd),

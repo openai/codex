@@ -518,9 +518,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         feedback: CodexFeedback::new(),
         log_db: None,
         state_db: state_db.clone(),
-        environment_manager: std::sync::Arc::new(
-            EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await,
-        ),
+        environment_manager: std::sync::Arc::new(EnvironmentManager::new(
+            EnvironmentManagerArgs::new(local_runtime_paths),
+        )),
         config_warnings,
         session_source: SessionSource::Exec,
         enable_codex_api_key_env: true,

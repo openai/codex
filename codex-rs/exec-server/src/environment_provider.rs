@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use async_trait::async_trait;
-
 use crate::Environment;
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
@@ -14,10 +12,9 @@ use crate::environment::REMOTE_ENVIRONMENT_ID;
 /// Implementations own both the available environment list and the default
 /// environment id. Providers that want the local environment to be addressable
 /// by id should include it explicitly in the returned map.
-#[async_trait]
 pub trait EnvironmentProvider: Send + Sync {
     /// Returns the environments available for a new manager.
-    async fn get_environments(
+    fn get_environments(
         &self,
         local_runtime_paths: &ExecServerRuntimePaths,
     ) -> Result<HashMap<String, Environment>, ExecServerError>;
@@ -63,22 +60,10 @@ impl DefaultEnvironmentProvider {
 
         environments
     }
-
-    pub(crate) fn default_id(&self) -> Option<String> {
-        let (exec_server_url, disabled) = normalize_exec_server_url(self.exec_server_url.clone());
-        if disabled {
-            None
-        } else if exec_server_url.is_some() {
-            Some(REMOTE_ENVIRONMENT_ID.to_string())
-        } else {
-            Some(LOCAL_ENVIRONMENT_ID.to_string())
-        }
-    }
 }
 
-#[async_trait]
 impl EnvironmentProvider for DefaultEnvironmentProvider {
-    async fn get_environments(
+    fn get_environments(
         &self,
         local_runtime_paths: &ExecServerRuntimePaths,
     ) -> Result<HashMap<String, Environment>, ExecServerError> {
@@ -86,7 +71,19 @@ impl EnvironmentProvider for DefaultEnvironmentProvider {
     }
 
     fn default_environment_id(&self) -> Option<String> {
-        self.default_id()
+        let (exec_server_url, disabled) = normalize_exec_server_url(self.exec_server_url.clone());
+        if disabled {
+            return None;
+        }
+
+        Some(
+            if exec_server_url.is_some() {
+                REMOTE_ENVIRONMENT_ID
+            } else {
+                LOCAL_ENVIRONMENT_ID
+            }
+            .to_string(),
+        )
     }
 }
 
@@ -119,7 +116,6 @@ mod tests {
         let runtime_paths = test_runtime_paths();
         let environments = provider
             .get_environments(&runtime_paths)
-            .await
             .expect("environments");
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
@@ -128,6 +124,10 @@ mod tests {
             Some(&runtime_paths)
         );
         assert!(!environments.contains_key(REMOTE_ENVIRONMENT_ID));
+        assert_eq!(
+            provider.default_environment_id(),
+            Some(LOCAL_ENVIRONMENT_ID.to_string())
+        );
     }
 
     #[tokio::test]
@@ -136,11 +136,14 @@ mod tests {
         let runtime_paths = test_runtime_paths();
         let environments = provider
             .get_environments(&runtime_paths)
-            .await
             .expect("environments");
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
         assert!(!environments.contains_key(REMOTE_ENVIRONMENT_ID));
+        assert_eq!(
+            provider.default_environment_id(),
+            Some(LOCAL_ENVIRONMENT_ID.to_string())
+        );
     }
 
     #[tokio::test]
@@ -149,7 +152,6 @@ mod tests {
         let runtime_paths = test_runtime_paths();
         let environments = provider
             .get_environments(&runtime_paths)
-            .await
             .expect("environments");
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
@@ -163,7 +165,6 @@ mod tests {
         let runtime_paths = test_runtime_paths();
         let environments = provider
             .get_environments(&runtime_paths)
-            .await
             .expect("environments");
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
@@ -173,6 +174,10 @@ mod tests {
             remote_environment.exec_server_url(),
             Some("ws://127.0.0.1:8765")
         );
+        assert_eq!(
+            provider.default_environment_id(),
+            Some(REMOTE_ENVIRONMENT_ID.to_string())
+        );
     }
 
     #[tokio::test]
@@ -181,7 +186,6 @@ mod tests {
         let runtime_paths = test_runtime_paths();
         let environments = provider
             .get_environments(&runtime_paths)
-            .await
             .expect("environments");
 
         assert_eq!(
