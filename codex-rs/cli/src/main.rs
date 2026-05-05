@@ -42,6 +42,8 @@ use supports_color::Stream;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod app_cmd;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+mod app_selector;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod desktop_app;
 mod marketplace_cmd;
 mod mcp_cmd;
@@ -895,7 +897,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "app",
             )?;
-            app_cmd::run_app(app_cli).await?;
+            app_cmd::run_app(app_cli, root_config_overrides).await?;
         }
         Some(Subcommand::Resume(ResumeCommand {
             session_id,

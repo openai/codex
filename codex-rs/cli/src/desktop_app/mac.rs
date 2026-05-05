@@ -5,6 +5,11 @@ use std::path::PathBuf;
 use tempfile::Builder;
 use tokio::process::Command;
 
+use super::DesktopAppSelector;
+use super::open_args::OpenTarget;
+use super::open_args::build_open_args;
+use super::open_args::display_open_args;
+
 const CODEX_DMG_URL_ARM64: &str = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
 const CODEX_DMG_URL_X64: &str =
     "https://persistent.oaistatic.com/codex-app-prod/Codex-latest-x64.dmg";
@@ -12,13 +17,20 @@ const CODEX_DMG_URL_X64: &str =
 pub async fn run_mac_app_open_or_install(
     workspace: PathBuf,
     download_url_override: Option<String>,
+    selector: Option<DesktopAppSelector>,
+    config_overrides: Vec<String>,
 ) -> anyhow::Result<()> {
+    if let Some(selector) = selector {
+        open_selected_codex_app(selector, &workspace, &config_overrides).await?;
+        return Ok(());
+    }
+
     if let Some(app_path) = find_existing_codex_app_path() {
         eprintln!(
             "Opening Codex Desktop at {app_path}...",
             app_path = app_path.display()
         );
-        open_codex_app(&app_path, &workspace).await?;
+        open_codex_app(OpenTarget::AppPath(app_path), &workspace, &config_overrides).await?;
         return Ok(());
     }
     eprintln!("Codex Desktop not found; downloading installer...");
@@ -37,7 +49,49 @@ pub async fn run_mac_app_open_or_install(
         "Launching Codex Desktop from {installed_app}...",
         installed_app = installed_app.display()
     );
-    open_codex_app(&installed_app, &workspace).await?;
+    open_codex_app(
+        OpenTarget::AppPath(installed_app),
+        &workspace,
+        &config_overrides,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn open_selected_codex_app(
+    selector: DesktopAppSelector,
+    workspace: &Path,
+    config_overrides: &[String],
+) -> anyhow::Result<()> {
+    match selector {
+        DesktopAppSelector::BundleId(bundle_id) => {
+            eprintln!("Opening Codex Desktop bundle {bundle_id}...");
+            open_codex_app(OpenTarget::BundleId(bundle_id), workspace, config_overrides).await
+        }
+        DesktopAppSelector::AppPath(app_path) => {
+            validate_app_path_selector(&app_path)?;
+            eprintln!(
+                "Opening Codex Desktop at {app_path}...",
+                app_path = app_path.display()
+            );
+            open_codex_app(OpenTarget::AppPath(app_path), workspace, config_overrides).await
+        }
+    }
+}
+
+fn validate_app_path_selector(app_path: &Path) -> anyhow::Result<()> {
+    if app_path.extension().is_none_or(|ext| ext != "app") {
+        anyhow::bail!(
+            "--app-path must point to a .app bundle: {app_path}",
+            app_path = app_path.display()
+        );
+    }
+    if !app_path.is_dir() {
+        anyhow::bail!(
+            "--app-path does not exist or is not a directory: {app_path}",
+            app_path = app_path.display()
+        );
+    }
     Ok(())
 }
 
@@ -77,15 +131,18 @@ fn candidate_codex_app_paths() -> Vec<PathBuf> {
     paths
 }
 
-async fn open_codex_app(app_path: &Path, workspace: &Path) -> anyhow::Result<()> {
+async fn open_codex_app(
+    target: OpenTarget,
+    workspace: &Path,
+    config_overrides: &[String],
+) -> anyhow::Result<()> {
     eprintln!(
         "Opening workspace {workspace}...",
         workspace = workspace.display()
     );
+    let open_args = build_open_args(&target, workspace, config_overrides);
     let status = Command::new("open")
-        .arg("-a")
-        .arg(app_path)
-        .arg(workspace)
+        .args(&open_args)
         .status()
         .await
         .context("failed to invoke `open`")?;
@@ -95,9 +152,8 @@ async fn open_codex_app(app_path: &Path, workspace: &Path) -> anyhow::Result<()>
     }
 
     anyhow::bail!(
-        "`open -a {app_path} {workspace}` exited with {status}",
-        app_path = app_path.display(),
-        workspace = workspace.display()
+        "`open {args}` exited with {status}",
+        args = display_open_args(&open_args),
     );
 }
 
@@ -311,6 +367,42 @@ mod tests {
         assert_eq!(
             parse_hdiutil_attach_mount_point(output).as_deref(),
             Some("/Volumes/Codex Installer")
+        );
+    }
+
+    #[test]
+    fn builds_open_args_for_bundle_id_with_config_overrides() {
+        assert_eq!(
+            args_as_strings(build_open_args(
+                &OpenTarget::BundleId("com.openai.codex.nightly".to_string()),
+                Path::new("/tmp/workspace"),
+                &[
+                    "features.foo=true".to_string(),
+                    "hooks.on_event=[\"echo hi\"]".to_string(),
+                ],
+            )),
+            vec![
+                "-b",
+                "com.openai.codex.nightly",
+                "/tmp/workspace",
+                "--args",
+                "-c",
+                "features.foo=true",
+                "-c",
+                "hooks.on_event=[\"echo hi\"]",
+            ]
+        );
+    }
+
+    #[test]
+    fn builds_open_args_for_app_path_without_config_overrides() {
+        assert_eq!(
+            args_as_strings(build_open_args(
+                &OpenTarget::AppPath(PathBuf::from("/Applications/Codex (Nightly).app")),
+                Path::new("/tmp/workspace"),
+                &[],
+            )),
+            vec!["-a", "/Applications/Codex (Nightly).app", "/tmp/workspace",]
         );
     }
 }

@@ -3,6 +3,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Command;
 
+use super::DesktopAppSelector;
+
 const CODEX_WINDOWS_INSTALLER_URL: &str =
     "https://get.microsoft.com/installer/download/9PLM9XGG6VKS?cid=website_cta_psi";
 const CODEX_MICROSOFT_STORE_WEB_URL: &str = "https://apps.microsoft.com/detail/9plm9xgg6vks";
@@ -10,7 +12,16 @@ const CODEX_MICROSOFT_STORE_WEB_URL: &str = "https://apps.microsoft.com/detail/9
 pub async fn run_windows_app_open_or_install(
     workspace: PathBuf,
     download_url_override: Option<String>,
+    selector: Option<DesktopAppSelector>,
+    config_overrides: Vec<String>,
 ) -> anyhow::Result<()> {
+    if selector.is_some() {
+        anyhow::bail!("--bundle-id/--app-path are only supported by `codex app` on macOS");
+    }
+    if !config_overrides.is_empty() {
+        anyhow::bail!("-c/--enable/--disable overrides are only forwarded by `codex app` on macOS");
+    }
+
     if let Some(app_id) = find_codex_app_id().await? {
         eprintln!("Opening Codex Desktop...");
         open_installed_codex_app(&app_id).await?;
