@@ -79,6 +79,10 @@ common:ci --disk_cache=
 # Shared config for the main Bazel CI workflow.
 common:ci-bazel --config=ci
 common:ci-bazel --build_metadata=TAG_workflow=bazel
+# Bazel CI cross-compiles in several legs, and the V8-backed code-mode tests
+# are not stable in that setup yet. Keep running the rest of the Rust
+# integration suites through the workspace-root launcher.
+common:ci-bazel --test_env=CODEX_BAZEL_TEST_SKIP_FILTERS=suite::code_mode::
 
 # Shared config for Bazel-backed Rust linting.
 build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
@@ -164,9 +168,9 @@ common:ci-windows-cross --strategy=remote
 common:ci-windows-cross --strategy=TestRunner=local
 common:ci-windows-cross --local_test_jobs=4
 common:ci-windows-cross --test_env=RUST_TEST_THREADS=1
-# Native Windows CI still covers these tests. The cross-built gnullvm binaries
-# currently crash in V8-backed code-mode tests and hang in PowerShell AST parser
-# tests when those binaries are run on the Windows runner.
+# Native Windows CI still covers the PowerShell tests. The cross-built gnullvm
+# binaries currently hang in PowerShell AST parser tests when those binaries are
+# run on the Windows runner.
 common:ci-windows-cross --test_env=CODEX_BAZEL_TEST_SKIP_FILTERS=suite::code_mode::,powershell
 common:ci-windows-cross --platforms=//:windows_x86_64_gnullvm
 common:ci-windows-cross --extra_execution_platforms=//:rbe,//:windows_x86_64_msvc

@@ -2868,6 +2868,7 @@ dependencies = [
  "codex-plugin",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-output-truncation",
  "futures",
  "pretty_assertions",
  "regex",
@@ -2876,6 +2877,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

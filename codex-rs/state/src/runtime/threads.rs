@@ -670,6 +670,9 @@ WHERE id = ?
         creation_memory_mode: Option<&str>,
     ) -> anyhow::Result<()> {
         let updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
+        // Backfill/reconcile callers merge existing git info before upserting, but that
+        // read/modify/write is not atomic. Preserve non-null SQLite git fields here so
+        // an explicit metadata update cannot be lost if a stale rollout upsert lands later.
         sqlx::query(
             r#"
 INSERT INTO threads (
@@ -722,9 +725,9 @@ ON CONFLICT(id) DO UPDATE SET
     first_user_message = excluded.first_user_message,
     archived = excluded.archived,
     archived_at = excluded.archived_at,
-    git_sha = excluded.git_sha,
-    git_branch = excluded.git_branch,
-    git_origin_url = excluded.git_origin_url
+    git_sha = COALESCE(threads.git_sha, excluded.git_sha),
+    git_branch = COALESCE(threads.git_branch, excluded.git_branch),
+    git_origin_url = COALESCE(threads.git_origin_url, excluded.git_origin_url)
             "#,
         )
         .bind(metadata.id.to_string())
@@ -1445,6 +1448,47 @@ mod tests {
             .expect("thread should load")
             .expect("thread should exist");
         assert_eq!(persisted.git_sha.as_deref(), Some("rollout-sha"));
+        assert_eq!(persisted.git_branch.as_deref(), Some("sqlite-branch"));
+        assert_eq!(
+            persisted.git_origin_url.as_deref(),
+            Some("git@example.com:openai/codex.git")
+        );
+    }
+
+    #[tokio::test]
+    async fn upsert_thread_preserves_existing_git_fields_atomically() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000458").expect("valid thread id");
+        let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+        metadata.git_sha = Some("sqlite-sha".to_string());
+        metadata.git_branch = Some("sqlite-branch".to_string());
+        metadata.git_origin_url = Some("git@example.com:openai/codex.git".to_string());
+
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("initial upsert should succeed");
+
+        let mut rollout_metadata = metadata.clone();
+        rollout_metadata.git_sha = Some("rollout-sha".to_string());
+        rollout_metadata.git_branch = Some("rollout-branch".to_string());
+        rollout_metadata.git_origin_url = Some("https://example.com/repo.git".to_string());
+
+        runtime
+            .upsert_thread(&rollout_metadata)
+            .await
+            .expect("rollout upsert should succeed");
+
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(persisted.git_sha.as_deref(), Some("sqlite-sha"));
         assert_eq!(persisted.git_branch.as_deref(), Some("sqlite-branch"));
         assert_eq!(
             persisted.git_origin_url.as_deref(),

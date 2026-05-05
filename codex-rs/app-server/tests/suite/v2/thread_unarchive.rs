@@ -75,9 +75,10 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     )
     .await??;
 
-    let found_rollout_path = find_thread_path_by_id_str(codex_home.path(), &thread.id)
-        .await?
-        .expect("expected rollout path for thread id to exist");
+    let found_rollout_path =
+        find_thread_path_by_id_str(codex_home.path(), &thread.id, /*state_db_ctx*/ None)
+            .await?
+            .expect("expected rollout path for thread id to exist");
     assert_paths_match_on_disk(&found_rollout_path, &rollout_path)?;
 
     let archive_id = mcp
@@ -92,9 +93,13 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     .await??;
     let _: ThreadArchiveResponse = to_response::<ThreadArchiveResponse>(archive_resp)?;
 
-    let archived_path = find_archived_thread_path_by_id_str(codex_home.path(), &thread.id)
-        .await?
-        .expect("expected archived rollout path for thread id to exist");
+    let archived_path = find_archived_thread_path_by_id_str(
+        codex_home.path(),
+        &thread.id,
+        /*state_db_ctx*/ None,
+    )
+    .await?
+    .expect("expected archived rollout path for thread id to exist");
     let archived_path_display = archived_path.display();
     assert!(
         archived_path.exists(),

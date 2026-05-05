@@ -196,7 +196,7 @@ impl ToolHandler for UnifiedExecHandler {
             }
         };
 
-        let Some(turn_environment) = turn.primary_environment() else {
+        let Some(turn_environment) = turn.environments.primary() else {
             return Err(FunctionCallError::RespondToModel(
                 "unified exec is unavailable in this session".to_string(),
             ));

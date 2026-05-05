@@ -1015,13 +1015,11 @@ impl PluginRequestProcessor {
     ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
         let PluginUninstallParams { plugin_id } = params;
         if codex_plugin::PluginId::parse(&plugin_id).is_err()
-            && !is_valid_remote_uninstall_plugin_id(&plugin_id)
+            && !is_valid_remote_plugin_id(&plugin_id)
         {
-            return Err(invalid_request(
-                "invalid plugin id: expected a local plugin id in the form `plugin@marketplace` or a remote plugin id starting with `plugins~`, `plugins_`, `app_`, `asdk_app_`, or `connector_`",
-            ));
+            return Err(invalid_request("invalid remote plugin id"));
         }
-        if is_valid_remote_uninstall_plugin_id(&plugin_id) {
+        if is_valid_remote_plugin_id(&plugin_id) {
             return self.remote_plugin_uninstall_response(plugin_id).await;
         }
         let plugins_manager = self.thread_manager.plugins_manager();
@@ -1146,15 +1144,6 @@ impl PluginRequestProcessor {
         })?;
         Ok(PluginUninstallResponse {})
     }
-}
-
-fn is_valid_remote_uninstall_plugin_id(plugin_name: &str) -> bool {
-    is_valid_remote_plugin_id(plugin_name)
-        && (plugin_name.starts_with("plugins~")
-            || plugin_name.starts_with("plugins_")
-            || plugin_name.starts_with("app_")
-            || plugin_name.starts_with("asdk_app_")
-            || plugin_name.starts_with("connector_"))
 }
 
 async fn load_plugin_app_summaries(

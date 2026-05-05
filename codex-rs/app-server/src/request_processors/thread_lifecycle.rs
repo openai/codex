@@ -331,7 +331,6 @@ pub(super) async fn ensure_listener_task_running(
                         thread_watch_manager.clone(),
                         thread_list_state_permit.clone(),
                         fallback_model_provider.clone(),
-                        codex_home.as_path(),
                     )
                     .await;
                 }
@@ -542,17 +541,12 @@ pub(super) async fn handle_pending_thread_resume_request(
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
     let mut thread = pending.thread_summary;
-    if pending.include_turns
-        && let Err(message) = populate_thread_turns_from_history(
+    if pending.include_turns {
+        populate_thread_turns_from_history(
             &mut thread,
             &pending.history_items,
             active_turn.as_ref(),
-        )
-    {
-        outgoing
-            .send_error(request_id, internal_error(message))
-            .await;
-        return;
+        );
     }
 
     let thread_status = thread_watch_manager
@@ -709,17 +703,16 @@ pub(super) async fn send_thread_goal_snapshot_notification(
     }
 }
 
-pub(super) fn populate_thread_turns_from_history(
+pub(crate) fn populate_thread_turns_from_history(
     thread: &mut Thread,
     items: &[RolloutItem],
     active_turn: Option<&Turn>,
-) -> std::result::Result<(), String> {
-    let mut turns = build_turns_from_rollout_items(items);
+) {
+    let mut turns = build_api_turns_from_rollout_items(items);
     if let Some(active_turn) = active_turn {
         merge_turn_history_with_active_turn(&mut turns, active_turn.clone());
     }
     thread.turns = turns;
-    Ok(())
 }
 
 pub(super) async fn resolve_pending_server_request(

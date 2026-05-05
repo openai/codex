@@ -221,7 +221,7 @@ impl Session {
         let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
         let auth_statuses =
             compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
-        let mcp_runtime_environment = match turn_context.primary_environment() {
+        let mcp_runtime_environment = match turn_context.environments.primary() {
             Some(turn_environment) => McpRuntimeEnvironment::new(
                 Arc::clone(&turn_environment.environment),
                 turn_environment.cwd.to_path_buf(),

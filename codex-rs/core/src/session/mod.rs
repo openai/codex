@@ -41,6 +41,7 @@ use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
 use crate::turn_metadata::TurnMetadataState;
+use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;
 use async_channel::Sender;
 use chrono::Local;
@@ -355,6 +356,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_tools::ToolEnvironmentMode;
 use codex_tools::ToolsConfig;
 use codex_tools::ToolsConfigParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -474,7 +476,7 @@ impl Codex {
         let fs = environment_selections.primary_filesystem();
         let plugins_input = config.plugins_config_input();
         let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
-        let effective_skill_roots = plugin_outcome.effective_skill_roots();
+        let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
         let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
         let loaded_skills = skills_manager.skills_for_config(&skills_input, fs).await;
 
@@ -555,7 +557,15 @@ impl Codex {
             };
             match thread_id {
                 Some(thread_id) => {
-                    let state_db_ctx = state_db::get_state_db(&config).await;
+                    let state_db_ctx = if config.ephemeral {
+                        None
+                    } else if let Some(local_store) =
+                        thread_store.as_any().downcast_ref::<LocalThreadStore>()
+                    {
+                        local_store.state_db().await
+                    } else {
+                        None
+                    };
                     state_db::get_dynamic_tools(state_db_ctx.as_deref(), thread_id, "codex_spawn")
                         .await
                 }
@@ -1297,6 +1307,7 @@ impl Session {
             self.services.user_shell.as_ref().clone(),
             self.services.shell_snapshot_tx.clone(),
             self.services.session_telemetry.clone(),
+            self.services.state_db.clone(),
         );
     }
 
@@ -1642,6 +1653,7 @@ impl Session {
                 thread_id: self.conversation_id,
                 turn_id: turn_context.sub_id.clone(),
                 item: item.clone(),
+                started_at_ms: now_unix_timestamp_ms(),
             }),
         )
         .await;
@@ -1659,6 +1671,7 @@ impl Session {
                 thread_id: self.conversation_id,
                 turn_id: turn_context.sub_id.clone(),
                 item,
+                completed_at_ms: now_unix_timestamp_ms(),
             }),
         )
         .await;

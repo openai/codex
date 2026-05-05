@@ -11,6 +11,7 @@ use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use crate::ResponsesApiWebSearchFilters;
 use crate::ResponsesApiWebSearchUserLocation;
+use crate::ToolEnvironmentMode;
 use crate::ToolHandlerSpec;
 use crate::ToolName;
 use crate::ToolNamespace;
@@ -544,7 +545,7 @@ fn disabled_environment_omits_environment_backed_tools() {
         permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     })
-    .with_has_environment(/*has_environment*/ false);
+    .with_environment_mode(ToolEnvironmentMode::None);
     tools_config
         .experimental_supported_tools
         .push("list_dir".to_string());
@@ -1413,7 +1414,7 @@ fn search_tool_description_lists_each_mcp_source_once() {
                 "mcp__rmcp__",
                 "rmcp",
                 /*connector_name*/ None,
-                /*connector_description*/ None,
+                Some("Remote memory tools."),
             ),
         ]),
         &[],
@@ -1432,7 +1433,7 @@ fn search_tool_description_lists_each_mcp_source_once() {
             .count(),
         1
     );
-    assert!(description.contains("- rmcp"));
+    assert!(description.contains("- rmcp: Remote memory tools."));
     assert!(!description.contains("mcp__rmcp__echo"));
 
     assert!(handlers.contains(&ToolHandlerSpec {
@@ -1453,7 +1454,7 @@ fn search_tool_requires_model_capability_and_enabled_feature() {
         "mcp__codex_apps__calendar",
         CODEX_APPS_MCP_SERVER_NAME,
         Some("Calendar"),
-        /*connector_description*/ None,
+        /*description*/ None,
     )]);
 
     let features = Features::with_defaults();
@@ -2354,13 +2355,13 @@ fn deferred_mcp_tool<'a>(
     tool_namespace: &'a str,
     server_name: &'a str,
     connector_name: Option<&'a str>,
-    connector_description: Option<&'a str>,
+    description: Option<&'a str>,
 ) -> ToolRegistryPlanDeferredTool<'a> {
     ToolRegistryPlanDeferredTool {
         name: ToolName::namespaced(tool_namespace, tool_name),
         server_name,
         connector_name,
-        connector_description,
+        description,
     }
 }
 

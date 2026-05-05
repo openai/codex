@@ -19,6 +19,7 @@ pub struct SkillMetadata {
     /// Path to the SKILLS.md file that declares this skill.
     pub path_to_skills_md: AbsolutePathBuf,
     pub scope: SkillScope,
+    pub plugin_id: Option<String>,
 }
 
 impl SkillMetadata {

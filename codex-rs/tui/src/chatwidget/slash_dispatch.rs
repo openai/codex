@@ -178,12 +178,7 @@ impl ChatWidget {
                 self.open_model_popup();
             }
             SlashCommand::Fast => {
-                let next_tier = if matches!(self.current_service_tier(), Some(ServiceTier::Fast)) {
-                    None
-                } else {
-                    Some(ServiceTier::Fast)
-                };
-                self.set_service_tier_selection(next_tier);
+                self.toggle_fast_mode_from_ui();
             }
             SlashCommand::Realtime => {
                 if !self.realtime_conversation_enabled() {
@@ -236,9 +231,6 @@ impl ChatWidget {
             }
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
-            }
-            SlashCommand::Approvals => {
-                self.open_permissions_popup();
             }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
@@ -582,6 +574,20 @@ impl ChatWidget {
                 "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
                 _ => self.add_error_message("Usage: /mcp [verbose]".to_string()),
             },
+            SlashCommand::Keymap => match trimmed.to_ascii_lowercase().as_str() {
+                "" => self.open_keymap_picker(),
+                "debug" => {
+                    match crate::keymap::RuntimeKeymap::from_config(&self.config.tui_keymap) {
+                        Ok(runtime_keymap) => self.open_keymap_debug(&runtime_keymap),
+                        Err(err) => {
+                            self.add_error_message(format!(
+                                "Invalid `tui.keymap` configuration: {err}"
+                            ));
+                        }
+                    }
+                }
+                _ => self.add_error_message("Usage: /keymap [debug]".to_string()),
+            },
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
                     return;
@@ -876,7 +882,6 @@ impl ChatWidget {
             | SlashCommand::Keymap
             | SlashCommand::Agent
             | SlashCommand::MultiAgents
-            | SlashCommand::Approvals
             | SlashCommand::Permissions
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot

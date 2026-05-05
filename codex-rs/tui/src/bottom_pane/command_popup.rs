@@ -16,8 +16,7 @@ use crate::slash_command::SlashCommand;
 
 // Hide alias commands in the default popup list so each unique action appears once.
 // `quit` is an alias of `exit`, so we skip `quit` here.
-// `approvals` is an alias of `permissions`.
-const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit, SlashCommand::Approvals];
+const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit];
 const COMMAND_COLUMN_WIDTH: ColumnWidthConfig = ColumnWidthConfig::new(
     ColumnWidthMode::AutoAllRows,
     /*name_column_width*/ None,

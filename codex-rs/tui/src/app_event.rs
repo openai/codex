@@ -827,6 +827,11 @@ pub(crate) enum AppEvent {
         cwd: PathBuf,
         branch: Option<String>,
     },
+    /// Async update of Git summary fields for status line rendering.
+    StatusLineGitSummaryUpdated {
+        cwd: PathBuf,
+        summary: crate::chatwidget::StatusLineGitSummary,
+    },
     /// Apply a user-confirmed status-line item ordering/selection.
     StatusLineSetup {
         items: Vec<StatusLineItem>,
@@ -872,6 +877,9 @@ pub(crate) enum AppEvent {
         action: String,
         intent: KeymapEditIntent,
     },
+
+    /// Open the keymap keypress inspector.
+    OpenKeymapDebug,
 
     /// Apply a captured key to the selected keymap action.
     KeymapCaptured {

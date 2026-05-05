@@ -27,6 +27,10 @@ pub(crate) enum RequestSerializationQueueKey {
         connection_id: ConnectionId,
         process_id: String,
     },
+    Process {
+        connection_id: ConnectionId,
+        process_handle: String,
+    },
     FuzzyFileSearchSession {
         session_id: String,
     },
@@ -54,6 +58,10 @@ impl RequestSerializationQueueKey {
                     process_id,
                 }
             }
+            ClientRequestSerializationScope::Process { process_handle } => Self::Process {
+                connection_id,
+                process_handle,
+            },
             ClientRequestSerializationScope::FuzzyFileSearchSession { session_id } => {
                 Self::FuzzyFileSearchSession { session_id }
             }

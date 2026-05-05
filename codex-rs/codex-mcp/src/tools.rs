@@ -35,16 +35,16 @@ pub struct ToolInfo {
     /// Model-visible namespace used for deferred tool loading.
     #[serde(rename = "tool_namespace", alias = "callable_namespace")]
     pub callable_namespace: String,
-    /// Instructions from the MCP server initialize result.
-    #[serde(default)]
-    pub server_instructions: Option<String>,
+    /// Model-visible namespace description.
+    // Keep the old serialized field name readable for cached ToolInfo values.
+    #[serde(default, alias = "connector_description")]
+    pub namespace_description: Option<String>,
     /// Raw MCP tool definition; `tool.name` is sent back to the MCP server.
     pub tool: Tool,
     pub connector_id: Option<String>,
     pub connector_name: Option<String>,
     #[serde(default)]
     pub plugin_display_names: Vec<String>,
-    pub connector_description: Option<String>,
 }
 
 impl ToolInfo {
