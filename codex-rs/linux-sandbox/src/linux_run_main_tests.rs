@@ -298,6 +298,17 @@ fn cleanup_synthetic_mount_targets_removes_only_empty_mount_targets() {
 }
 
 #[test]
+fn synthetic_mount_registry_root_is_unique_to_effective_user() {
+    let effective_uid = unsafe { libc::geteuid() };
+    assert_eq!(
+        synthetic_mount_registry_root(),
+        std::env::temp_dir().join(format!(
+            "codex-bwrap-synthetic-mount-targets-{effective_uid}"
+        ))
+    );
+}
+
+#[test]
 fn cleanup_synthetic_mount_targets_waits_for_other_active_registrations() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
     let empty_file = temp_dir.path().join(".git");

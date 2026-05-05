@@ -1235,7 +1235,10 @@ fn synthetic_mount_marker_dir(path: &Path) -> PathBuf {
 }
 
 fn synthetic_mount_registry_root() -> PathBuf {
-    std::env::temp_dir().join("codex-bwrap-synthetic-mount-targets")
+    let effective_uid = unsafe { libc::geteuid() };
+    std::env::temp_dir().join(format!(
+        "codex-bwrap-synthetic-mount-targets-{effective_uid}"
+    ))
 }
 
 fn hash_path(path: &Path) -> u64 {
