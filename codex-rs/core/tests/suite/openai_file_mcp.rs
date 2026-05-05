@@ -60,17 +60,23 @@ fn enable_trusted_hooks(config: &mut Config) {
         .get_user_layer()
         .map(|layer| layer.config.clone())
         .unwrap_or_else(|| TomlValue::Table(Default::default()));
-    let state_table = user_config
-        .as_table_mut()
-        .expect("user config should be a table")
+    let Some(user_table) = user_config.as_table_mut() else {
+        panic!("user config should be a table");
+    };
+    let Some(hooks_table) = user_table
         .entry("hooks")
         .or_insert_with(|| TomlValue::Table(Default::default()))
         .as_table_mut()
-        .expect("hooks config should be a table")
+    else {
+        panic!("hooks config should be a table");
+    };
+    let Some(state_table) = hooks_table
         .entry("state")
         .or_insert_with(|| TomlValue::Table(Default::default()))
         .as_table_mut()
-        .expect("hook state config should be a table");
+    else {
+        panic!("hook state config should be a table");
+    };
     state_table.insert(
         listed.hooks[0].key.clone(),
         TomlValue::Table(toml::map::Map::from_iter([(

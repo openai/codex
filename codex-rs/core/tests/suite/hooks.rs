@@ -74,10 +74,9 @@ fn network_workspace_write_profile() -> PermissionProfile {
 }
 
 fn trust_discovered_hooks(config: &mut Config) {
-    config
-        .features
-        .enable(Feature::CodexHooks)
-        .expect("test config should allow feature update");
+    if let Err(err) = config.features.enable(Feature::CodexHooks) {
+        panic!("test config should allow feature update: {err}");
+    }
 
     let listed = codex_hooks::list_hooks(codex_hooks::HooksConfig {
         feature_enabled: true,
@@ -97,19 +96,23 @@ fn trust_hooks(config: &mut Config, hooks: Vec<codex_hooks::HookListEntry>) {
         .get_user_layer()
         .map(|layer| layer.config.clone())
         .unwrap_or_else(|| TomlValue::Table(Default::default()));
-    let user_table = user_config
-        .as_table_mut()
-        .expect("user config should be a table");
-    let hooks_table = user_table
+    let Some(user_table) = user_config.as_table_mut() else {
+        panic!("user config should be a table");
+    };
+    let Some(hooks_table) = user_table
         .entry("hooks")
         .or_insert_with(|| TomlValue::Table(Default::default()))
         .as_table_mut()
-        .expect("hooks config should be a table");
-    let state_table = hooks_table
+    else {
+        panic!("hooks config should be a table");
+    };
+    let Some(state_table) = hooks_table
         .entry("state")
         .or_insert_with(|| TomlValue::Table(Default::default()))
         .as_table_mut()
-        .expect("hook state config should be a table");
+    else {
+        panic!("hook state config should be a table");
+    };
     for hook in hooks {
         state_table.insert(
             hook.key,
@@ -127,10 +130,9 @@ fn trust_hooks(config: &mut Config, hooks: Vec<codex_hooks::HookListEntry>) {
 }
 
 fn trust_plugin_hooks(config: &mut Config, plugin_hook_sources: Vec<PluginHookSource>) {
-    config
-        .features
-        .enable(Feature::CodexHooks)
-        .expect("test config should allow feature update");
+    if let Err(err) = config.features.enable(Feature::CodexHooks) {
+        panic!("test config should allow feature update: {err}");
+    }
     let listed = codex_hooks::list_hooks(codex_hooks::HooksConfig {
         feature_enabled: true,
         config_layer_stack: Some(config.config_layer_stack.clone()),
@@ -2035,12 +2037,7 @@ async fn pre_tool_use_records_additional_context_for_shell_command() -> Result<(
                 panic!("failed to write pre tool use hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     test.submit_turn("run the shell command with pre hook")
@@ -2106,12 +2103,7 @@ async fn blocked_pre_tool_use_records_additional_context_for_shell_command() -> 
                 panic!("failed to write pre tool use hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     if marker.exists() {
