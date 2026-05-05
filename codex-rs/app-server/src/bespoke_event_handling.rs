@@ -3274,7 +3274,6 @@ mod tests {
             thread_watch_manager,
             Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
             "test-provider".to_string(),
-            codex_home.path(),
         )
         .await;
 
