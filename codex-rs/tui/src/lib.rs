@@ -1430,6 +1430,11 @@ async fn run_ratatui_app(
         None => None,
     };
 
+    let picker_cancelled_without_selection = matches!(
+        session_selection,
+        resume_picker::SessionSelection::StartFresh
+    ) && (cli.resume_picker || cli.fork_picker);
+
     let mut config = match &session_selection {
         resume_picker::SessionSelection::Resume(_) | resume_picker::SessionSelection::Fork(_) => {
             load_config_or_exit_with_fallback_cwd(
@@ -1437,6 +1442,14 @@ async fn run_ratatui_app(
                 overrides.clone(),
                 cloud_requirements.clone(),
                 fallback_cwd,
+            )
+            .await
+        }
+        resume_picker::SessionSelection::StartFresh if picker_cancelled_without_selection => {
+            load_config_or_exit(
+                cli_kv_overrides.clone(),
+                overrides.clone(),
+                cloud_requirements.clone(),
             )
             .await
         }

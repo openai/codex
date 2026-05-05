@@ -105,6 +105,12 @@ pub enum SessionPickerAction {
     Fork,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionPickerLaunchContext {
+    Startup,
+    ExistingSession,
+}
+
 impl SessionPickerAction {
     fn title(self) -> &'static str {
         match self {
@@ -270,6 +276,7 @@ struct SessionPickerRunOptions {
     filter_cwd: Option<PathBuf>,
     local_filter_cwd: Option<PathBuf>,
     action: SessionPickerAction,
+    launch_context: SessionPickerLaunchContext,
     provider_filter: ProviderFilter,
     initial_density: SessionListDensity,
     view_persistence: Option<SessionPickerViewPersistence>,
@@ -282,7 +289,7 @@ struct SessionPickerRunOptions {
 /// Sessions render as compact multi-line records with stable metadata first and
 /// the conversation preview last. Users can focus Sort/Filter toolbar controls
 /// with Tab, change the focused control with the arrow keys, and expand the
-/// selected session with Space to load recent transcript context on demand.
+/// selected session with Ctrl+E to load recent transcript context on demand.
 ///
 /// Sessions are loaded on-demand via cursor-based pagination. The backend
 /// `thread/list` API returns pages ordered by the selected sort key, and the
@@ -298,6 +305,43 @@ pub async fn run_resume_picker_with_app_server(
     show_all: bool,
     include_non_interactive: bool,
     app_server: AppServerSession,
+) -> Result<SessionSelection> {
+    run_resume_picker_with_launch_context(
+        tui,
+        config,
+        show_all,
+        include_non_interactive,
+        app_server,
+        SessionPickerLaunchContext::Startup,
+    )
+    .await
+}
+
+pub async fn run_resume_picker_from_existing_session_with_app_server(
+    tui: &mut Tui,
+    config: &Config,
+    show_all: bool,
+    include_non_interactive: bool,
+    app_server: AppServerSession,
+) -> Result<SessionSelection> {
+    run_resume_picker_with_launch_context(
+        tui,
+        config,
+        show_all,
+        include_non_interactive,
+        app_server,
+        SessionPickerLaunchContext::ExistingSession,
+    )
+    .await
+}
+
+async fn run_resume_picker_with_launch_context(
+    tui: &mut Tui,
+    config: &Config,
+    show_all: bool,
+    include_non_interactive: bool,
+    app_server: AppServerSession,
+    launch_context: SessionPickerLaunchContext,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
     let is_remote = app_server.is_remote();
@@ -315,6 +359,7 @@ pub async fn run_resume_picker_with_app_server(
         filter_cwd: cwd_filter,
         local_filter_cwd,
         action: SessionPickerAction::Resume,
+        launch_context,
         provider_filter,
         initial_density: SessionListDensity::from(config.tui_session_picker_view),
         view_persistence: Some(SessionPickerViewPersistence {
@@ -359,6 +404,7 @@ pub async fn run_fork_picker_with_app_server(
         filter_cwd: cwd_filter,
         local_filter_cwd,
         action: SessionPickerAction::Fork,
+        launch_context: SessionPickerLaunchContext::Startup,
         provider_filter,
         initial_density: SessionListDensity::from(config.tui_session_picker_view),
         view_persistence: Some(SessionPickerViewPersistence {
@@ -400,6 +446,7 @@ async fn run_session_picker_with_loader(
     state.density = options.initial_density;
     state.view_persistence = options.view_persistence;
     state.pager_keymap = options.pager_keymap;
+    state.launch_context = options.launch_context;
     state.start_initial_load();
     state.request_frame();
 
@@ -596,6 +643,7 @@ struct PickerState {
     local_filter_cwd: Option<PathBuf>,
     toolbar_focus: ToolbarControl,
     density: SessionListDensity,
+    launch_context: SessionPickerLaunchContext,
     view_persistence: Option<SessionPickerViewPersistence>,
     action: SessionPickerAction,
     sort_key: ThreadSortKey,
@@ -867,6 +915,7 @@ impl PickerState {
             filter_cwd,
             toolbar_focus: ToolbarControl::Filter,
             density: SessionListDensity::Comfortable,
+            launch_context: SessionPickerLaunchContext::Startup,
             view_persistence: None,
             action,
             sort_key: ThreadSortKey::UpdatedAt,
@@ -1005,11 +1054,25 @@ impl PickerState {
                 self.open_selected_transcript();
             }
             KeyEvent {
+                code: KeyCode::Char('e'),
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_selected_expansion();
+            }
+            KeyEvent {
                 code: KeyCode::Char('\u{0014}'),
                 modifiers: KeyModifiers::NONE,
                 ..
             } /* ^T */ => {
                 self.open_selected_transcript();
+            }
+            KeyEvent {
+                code: KeyCode::Char('\u{0005}'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } /* ^E */ => {
+                self.toggle_selected_expansion();
             }
             KeyEvent {
                 code: KeyCode::Char('o'),
@@ -1168,12 +1231,6 @@ impl PickerState {
             } => {
                 self.change_focused_toolbar_value();
                 self.request_frame();
-            }
-            KeyEvent {
-                code: KeyCode::Char(' '),
-                ..
-            } => {
-                self.toggle_selected_expansion();
             }
             KeyEvent {
                 code: KeyCode::Backspace,
@@ -2119,10 +2176,17 @@ fn footer_hint_lines(state: &PickerState, width: u16) -> Vec<Line<'static>> {
     }
 
     let action_label = state.action.action_label();
-    let esc_label = if state.query.is_empty() {
-        "start new"
+    let (esc_label, esc_compact_label) = if state.query.is_empty() {
+        match state.launch_context {
+            SessionPickerLaunchContext::Startup => ("start new", "new"),
+            SessionPickerLaunchContext::ExistingSession => ("exit", "exit"),
+        }
     } else {
-        "clear search"
+        ("clear search", "clear")
+    };
+    let ctrl_c_label = match state.launch_context {
+        SessionPickerLaunchContext::Startup => "quit",
+        SessionPickerLaunchContext::ExistingSession => "exit",
     };
     let density_label = match state.density {
         SessionListDensity::Comfortable => "dense view",
@@ -2142,17 +2206,13 @@ fn footer_hint_lines(state: &PickerState, width: u16) -> Vec<Line<'static>> {
         PickerFooterHint {
             key: "esc",
             wide_label: esc_label.to_string(),
-            compact_label: if state.query.is_empty() {
-                String::from("new")
-            } else {
-                String::from("clear")
-            },
+            compact_label: esc_compact_label.to_string(),
             priority: 1,
         },
         PickerFooterHint {
             key: "ctrl+c",
-            wide_label: String::from("quit"),
-            compact_label: String::from("quit"),
+            wide_label: ctrl_c_label.to_string(),
+            compact_label: ctrl_c_label.to_string(),
             priority: 2,
         },
         PickerFooterHint {
@@ -2182,7 +2242,7 @@ fn footer_hint_lines(state: &PickerState, width: u16) -> Vec<Line<'static>> {
             priority: 4,
         },
         PickerFooterHint {
-            key: "space",
+            key: "ctrl+e",
             wide_label: String::from("expand"),
             compact_label: String::from("exp"),
             priority: 6,
@@ -3712,6 +3772,32 @@ mod tests {
     }
 
     #[test]
+    fn hint_line_labels_cancel_keys_as_exit_for_existing_session_resume_picker() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.launch_context = SessionPickerLaunchContext::ExistingSession;
+
+        let wide = footer_lines_text(&state, /*width*/ 220);
+        assert!(wide.contains("esc exit"));
+        assert!(wide.contains("ctrl+c exit"));
+
+        let compact = footer_lines_text(&state, /*width*/ 119);
+        assert!(compact.contains("esc exit"));
+        assert!(compact.contains("ctrl+c exit"));
+
+        state.query = String::from("picker");
+
+        assert!(footer_lines_text(&state, /*width*/ 220).contains("esc clear search"));
+    }
+
+    #[test]
     fn hint_line_switches_density_label() {
         let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
@@ -3725,6 +3811,7 @@ mod tests {
 
         assert!(footer_lines_text(&state, /*width*/ 220).contains("ctrl+o dense view"));
         assert!(footer_lines_text(&state, /*width*/ 220).contains("ctrl+t transcript"));
+        assert!(footer_lines_text(&state, /*width*/ 220).contains("ctrl+e expand"));
 
         state.density = SessionListDensity::Dense;
 
@@ -3750,6 +3837,7 @@ mod tests {
         assert!(rendered.contains("←/→ option"));
         assert!(rendered.contains("ctrl+o dense"));
         assert!(rendered.contains("ctrl+t preview"));
+        assert!(rendered.contains("ctrl+e exp"));
         assert!(!rendered.contains("focus sort/filter"));
     }
 
@@ -3818,6 +3906,7 @@ mod tests {
         assert!(rendered.contains("ctrl+c"));
         assert!(rendered.contains("ctrl+o"));
         assert!(rendered.contains("ctrl+t"));
+        assert!(rendered.contains("ctrl+e"));
         assert!(rendered.contains("↑/↓"));
     }
 
@@ -4462,6 +4551,108 @@ session_picker_view = "dense"
 
         assert_eq!(state.density, SessionListDensity::Dense);
         assert_eq!(state.query, "pick");
+    }
+
+    #[tokio::test]
+    async fn space_appends_to_search_query() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.query = String::from("resize");
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
+            .await
+            .unwrap();
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE))
+            .await
+            .unwrap();
+
+        assert_eq!(state.query, "resize r");
+        assert_eq!(state.expanded_thread_id, None);
+    }
+
+    #[tokio::test]
+    async fn ctrl_e_toggles_selected_session_expansion() {
+        let thread_id = ThreadId::new();
+        let recorded_requests: Arc<Mutex<Vec<ThreadId>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader: PickerLoader = Arc::new(move |request| {
+            if let PickerLoadRequest::Preview { thread_id } = request {
+                request_sink.lock().unwrap().push(thread_id);
+            }
+        });
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.filtered_rows = vec![Row {
+            path: None,
+            preview: String::from("preview"),
+            thread_id: Some(thread_id),
+            thread_name: None,
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+        }];
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert_eq!(state.expanded_thread_id, Some(thread_id));
+        assert_eq!(*recorded_requests.lock().unwrap(), vec![thread_id]);
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert_eq!(state.expanded_thread_id, None);
+    }
+
+    #[tokio::test]
+    async fn raw_ctrl_e_toggles_selected_session_expansion() {
+        let thread_id = ThreadId::new();
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.filtered_rows = vec![Row {
+            path: None,
+            preview: String::from("preview"),
+            thread_id: Some(thread_id),
+            thread_name: None,
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+        }];
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('\u{0005}'), KeyModifiers::NONE))
+            .await
+            .unwrap();
+
+        assert_eq!(state.expanded_thread_id, Some(thread_id));
     }
 
     #[test]
