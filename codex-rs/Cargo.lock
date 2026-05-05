@@ -1856,7 +1856,6 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
- "codex-agent-graph-store",
  "codex-analytics",
  "codex-app-server-protocol",
  "codex-app-server-transport",

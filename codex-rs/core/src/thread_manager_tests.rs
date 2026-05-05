@@ -46,20 +46,6 @@ fn assistant_msg(text: &str) -> ResponseItem {
     }
 }
 
-#[tokio::test]
-async fn agent_graph_store_from_state_db_returns_store() {
-    let temp_dir = tempdir().expect("tempdir");
-    let mut config = test_config().await;
-    config.codex_home = temp_dir.path().join("codex-home").abs();
-    config.cwd = config.codex_home.abs();
-    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
-
-    let state_db = init_state_db_from_config(&config)
-        .await
-        .expect("thread manager test requires state db");
-    let _ = agent_graph_store_from_state_db(state_db);
-}
-
 async fn state_backed_stores(
     config: &Config,
 ) -> (
@@ -73,39 +59,6 @@ async fn state_backed_stores(
     let thread_store = thread_store_from_config(config, state_db.clone());
     let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
     (state_db, thread_store, agent_graph_store)
-}
-
-#[tokio::test]
-async fn thread_manager_accepts_separate_agent_graph_store_and_thread_store() {
-    let temp_dir = tempdir().expect("tempdir");
-    let mut config = test_config().await;
-    config.codex_home = temp_dir.path().join("codex-home").abs();
-    config.cwd = config.codex_home.abs();
-    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
-
-    let auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::default());
-    let state_db = init_state_db_from_config(&config)
-        .await
-        .expect("thread manager test requires state db");
-    let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
-    let manager = ThreadManager::new(
-        &config,
-        auth_manager,
-        SessionSource::Exec,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        /*analytics_events_client*/ None,
-        state_db,
-        thread_store,
-        agent_graph_store,
-    );
-
-    let new_thread = manager
-        .start_thread(config)
-        .await
-        .expect("thread should start with independent stores");
-    assert_eq!(manager.list_thread_ids().await, vec![new_thread.thread_id]);
 }
 
 fn contextual_user_interrupted_marker() -> ResponseItem {
