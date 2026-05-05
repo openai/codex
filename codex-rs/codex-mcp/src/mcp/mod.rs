@@ -17,8 +17,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use async_channel::unbounded;
-use codex_builtin_mcps::BuiltinMcpServerOptions;
-use codex_builtin_mcps::configured_builtin_mcp_servers;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
@@ -110,8 +108,6 @@ pub struct McpConfig {
     pub chatgpt_base_url: String,
     /// Optional path override for the built-in apps MCP server.
     pub apps_mcp_path_override: Option<String>,
-    /// Path to the current Codex executable used to launch built-in stdio MCPs.
-    pub codex_self_exe: Option<PathBuf>,
     /// Codex home directory used for MCP OAuth state and app-tool cache files.
     pub codex_home: PathBuf,
     /// Preferred credential store for MCP OAuth tokens.
@@ -133,9 +129,11 @@ pub struct McpConfig {
     /// ChatGPT auth is checked separately at runtime before the built-in apps
     /// MCP server is added.
     pub apps_enabled: bool,
-    /// Whether the built-in memories MCP server should be added.
-    pub memories_enabled: bool,
-    /// User-configured and plugin-provided MCP servers keyed by server name.
+    /// Configured MCP servers keyed by server name.
+    ///
+    /// This includes product-owned built-ins, user-configured servers, and
+    /// plugin-provided servers. Runtime-only additions belong in
+    /// [`effective_mcp_servers`].
     pub configured_mcp_servers: HashMap<String, McpServerConfig>,
     /// Plugin metadata used to attribute MCP tools/connectors to plugin display names.
     pub plugin_capability_summaries: Vec<PluginCapabilitySummary>,
@@ -215,18 +213,6 @@ pub fn with_codex_apps_mcp(
     servers
 }
 
-pub fn with_builtin_mcp_servers(
-    mut servers: HashMap<String, McpServerConfig>,
-    config: &McpConfig,
-) -> HashMap<String, McpServerConfig> {
-    servers.extend(configured_builtin_mcp_servers(BuiltinMcpServerOptions {
-        codex_self_exe: config.codex_self_exe.as_deref(),
-        codex_home: config.codex_home.as_path(),
-        memories_enabled: config.memories_enabled,
-    }));
-    servers
-}
-
 pub fn configured_mcp_servers(config: &McpConfig) -> HashMap<String, McpServerConfig> {
     config.configured_mcp_servers.clone()
 }
@@ -236,7 +222,6 @@ pub fn effective_mcp_servers(
     auth: Option<&CodexAuth>,
 ) -> HashMap<String, McpServerConfig> {
     let servers = configured_mcp_servers(config);
-    let servers = with_builtin_mcp_servers(servers, config);
     with_codex_apps_mcp(servers, auth, config)
 }
 

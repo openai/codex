@@ -91,8 +91,7 @@ mod tests {
 
     #[test]
     fn configured_builtin_mcp_servers_adds_memories_when_enabled() {
-        let codex_home =
-            AbsolutePathBuf::try_from("/tmp/codex-home").expect("absolute codex home");
+        let codex_home = AbsolutePathBuf::try_from("/tmp/codex-home").expect("absolute codex home");
         let servers = configured_builtin_mcp_servers(BuiltinMcpServerOptions {
             codex_self_exe: Some(Path::new("/tmp/codex")),
             codex_home: codex_home.as_path(),
@@ -121,8 +120,7 @@ mod tests {
 
     #[test]
     fn configured_builtin_mcp_servers_requires_reexec_path() {
-        let codex_home =
-            AbsolutePathBuf::try_from("/tmp/codex-home").expect("absolute codex home");
+        let codex_home = AbsolutePathBuf::try_from("/tmp/codex-home").expect("absolute codex home");
         let servers = configured_builtin_mcp_servers(BuiltinMcpServerOptions {
             codex_self_exe: None,
             codex_home: codex_home.as_path(),

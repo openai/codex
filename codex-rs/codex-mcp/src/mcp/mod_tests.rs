@@ -18,7 +18,6 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
     McpConfig {
         chatgpt_base_url: "https://chatgpt.com".to_string(),
         apps_mcp_path_override: None,
-        codex_self_exe: None,
         codex_home,
         mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode::default(),
         mcp_oauth_callback_port: None,
@@ -28,81 +27,9 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
         apps_enabled: false,
-        memories_enabled: false,
         configured_mcp_servers: HashMap::new(),
         plugin_capability_summaries: Vec::new(),
     }
-}
-
-#[test]
-fn builtin_mcp_servers_add_memories_when_enabled() {
-    let mut config = test_mcp_config(PathBuf::from("/tmp/codex-home"));
-    config.codex_self_exe = Some(PathBuf::from("/tmp/codex"));
-    config.memories_enabled = true;
-
-    let servers = with_builtin_mcp_servers(HashMap::new(), &config);
-    let server = servers
-        .get(codex_builtin_mcps::MEMORIES_MCP_SERVER_NAME)
-        .expect("memories server should exist");
-
-    assert_eq!(
-        server.transport,
-        McpServerTransportConfig::Stdio {
-            command: "/tmp/codex".to_string(),
-            args: vec![
-                "builtin-mcp".to_string(),
-                "memories".to_string(),
-                "--codex-home".to_string(),
-                "/tmp/codex-home".to_string(),
-            ],
-            env: None,
-            env_vars: Vec::new(),
-            cwd: None,
-        }
-    );
-}
-
-#[test]
-fn builtin_mcp_servers_reserve_builtin_names() {
-    let mut config = test_mcp_config(PathBuf::from("/tmp/codex-home"));
-    config.codex_self_exe = Some(PathBuf::from("/tmp/codex"));
-    config.memories_enabled = true;
-
-    let servers = with_builtin_mcp_servers(
-        HashMap::from([(
-            codex_builtin_mcps::MEMORIES_MCP_SERVER_NAME.to_string(),
-            McpServerConfig {
-                transport: McpServerTransportConfig::StreamableHttp {
-                    url: "https://user.example/memories".to_string(),
-                    bearer_token_env_var: None,
-                    http_headers: None,
-                    env_http_headers: None,
-                },
-                experimental_environment: None,
-                enabled: true,
-                required: false,
-                supports_parallel_tool_calls: false,
-                disabled_reason: None,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                default_tools_approval_mode: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            },
-        )]),
-        &config,
-    );
-
-    let server = servers
-        .get(codex_builtin_mcps::MEMORIES_MCP_SERVER_NAME)
-        .expect("memories server should exist");
-    assert!(matches!(
-        server.transport,
-        McpServerTransportConfig::Stdio { .. }
-    ));
 }
 
 #[test]

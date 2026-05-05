@@ -69,7 +69,9 @@ use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
+use codex_mcp::BuiltinMcpServerOptions;
 use codex_mcp::McpConfig;
+use codex_mcp::configured_builtin_mcp_servers;
 use codex_memories_read::memory_root;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -1081,7 +1083,15 @@ impl Config {
     ) -> McpConfig {
         let plugins_input = self.plugins_config_input();
         let loaded_plugins = plugins_manager.plugins_for_config(&plugins_input).await;
-        let mut configured_mcp_servers = self.mcp_servers.get().clone();
+        let mut configured_mcp_servers = configured_builtin_mcp_servers(BuiltinMcpServerOptions {
+            codex_self_exe: self.codex_self_exe.as_deref(),
+            codex_home: self.codex_home.as_path(),
+            memories_enabled: self.features.enabled(Feature::MemoryTool)
+                && self.memories.use_memories,
+        });
+        for (name, user_server) in self.mcp_servers.get().clone() {
+            configured_mcp_servers.entry(name).or_insert(user_server);
+        }
         for plugin in loaded_plugins
             .plugins()
             .iter()
@@ -1100,14 +1110,14 @@ impl Config {
         if let Some(mcp_requirements) = self.config_layer_stack.requirements().mcp_servers.as_ref()
             && mcp_requirements.value.is_empty()
         {
-            // A present empty allowlist bans all MCPs, including plugin MCPs merged above.
+            // A present empty allowlist bans all MCPs, including built-ins and plugin MCPs
+            // merged above.
             filter_mcp_servers_by_requirements(&mut configured_mcp_servers, Some(mcp_requirements));
         }
 
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
             apps_mcp_path_override: self.apps_mcp_path_override.clone(),
-            codex_self_exe: self.codex_self_exe.clone(),
             codex_home: self.codex_home.to_path_buf(),
             mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
             mcp_oauth_callback_port: self.mcp_oauth_callback_port,
@@ -1119,8 +1129,6 @@ impl Config {
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             use_legacy_landlock: self.features.use_legacy_landlock(),
             apps_enabled: self.features.enabled(Feature::Apps),
-            memories_enabled: self.features.enabled(Feature::MemoryTool)
-                && self.memories.use_memories,
             configured_mcp_servers,
             plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
         }
