@@ -264,7 +264,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
         "write outside the workspace",
         approval_policy,
         permission_profile,
-        /*approvals_reviewer*/ None,
+        Some(ApprovalsReviewer::User),
     )
     .await?;
 
@@ -340,6 +340,7 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
     let permission_profile_for_config = permission_profile.clone();
 
     let mut builder = test_codex().with_config(move |config| {
+        config.include_apply_patch_tool = true;
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config
             .permissions
@@ -367,7 +368,10 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
     } else {
         "patched-via-request-permissions"
     };
-    let requested_file = requested_dir.path().join(requested_file_name);
+    let requested_file = requested_dir
+        .path()
+        .canonicalize()?
+        .join(requested_file_name);
     let requested_permissions = requested_directory_write_permissions(requested_dir.path());
     let normalized_requested_permissions =
         normalized_directory_write_permissions(requested_dir.path())?;
@@ -422,7 +426,7 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
         "patch outside the workspace",
         approval_policy,
         permission_profile,
-        strict_auto_review.then_some(ApprovalsReviewer::User),
+        Some(ApprovalsReviewer::User),
     )
     .await?;
 
@@ -463,8 +467,7 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
             EventMsg::TurnComplete(_) => {}
             EventMsg::ApplyPatchApprovalRequest(approval) => {
                 panic!(
-                    "unexpected apply_patch approval request after granted permissions: {:?}",
-                    approval.call_id
+                    "unexpected apply_patch approval request after granted permissions: {approval:?}",
                 )
             }
             other => panic!("unexpected event: {other:?}"),

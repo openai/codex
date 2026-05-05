@@ -15,6 +15,9 @@ use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SortDirection;
+use codex_app_server_protocol::ThreadForkParams;
+use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
@@ -22,6 +25,8 @@ use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadTurnsListParams;
+use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
@@ -38,7 +43,8 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
-async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> Result<()> {
+async fn thread_shell_command_history_responses_exclude_persisted_command_executions() -> Result<()>
+{
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
@@ -126,7 +132,7 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
-            thread_id: thread.id,
+            thread_id: thread.id.clone(),
             include_turns: true,
         })
         .await?;
@@ -137,22 +143,40 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
     .await??;
     let ThreadReadResponse { thread, .. } = to_response::<ThreadReadResponse>(read_resp)?;
     assert_eq!(thread.turns.len(), 1);
-    let ThreadItem::CommandExecution {
-        source,
-        status,
-        aggregated_output,
-        ..
-    } = thread.turns[0]
-        .items
-        .iter()
-        .find(|item| matches!(item, ThreadItem::CommandExecution { .. }))
-        .expect("expected persisted command execution item")
-    else {
-        unreachable!("matched command execution item");
-    };
-    assert_eq!(source, &CommandExecutionSource::UserShell);
-    assert_eq!(status, &CommandExecutionStatus::Completed);
-    assert_eq!(aggregated_output.as_deref(), Some(expected_output.as_str()));
+    assert_no_command_executions(&thread.turns[0].items, "thread/read");
+
+    let turns_list_id = mcp
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: thread.id.clone(),
+            cursor: None,
+            limit: None,
+            sort_direction: Some(SortDirection::Asc),
+        })
+        .await?;
+    let turns_list_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turns_list_id)),
+    )
+    .await??;
+    let ThreadTurnsListResponse { data, .. } =
+        to_response::<ThreadTurnsListResponse>(turns_list_resp)?;
+    assert_eq!(data.len(), 1);
+    assert_no_command_executions(&data[0].items, "thread/turns/list");
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: thread.id,
+            ..Default::default()
+        })
+        .await?;
+    let fork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+    assert_eq!(thread.turns.len(), 1);
+    assert_no_command_executions(&thread.turns[0].items, "thread/fork");
 
     Ok(())
 }
@@ -307,21 +331,18 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
     .await??;
     let ThreadReadResponse { thread, .. } = to_response::<ThreadReadResponse>(read_resp)?;
     assert_eq!(thread.turns.len(), 1);
-    assert!(
-        thread.turns[0].items.iter().any(|item| {
-            matches!(
-                item,
-                ThreadItem::CommandExecution {
-                    source: CommandExecutionSource::UserShell,
-                    aggregated_output,
-                    ..
-                } if aggregated_output.as_deref() == Some(expected_output.as_str())
-            )
-        }),
-        "expected active-turn shell command to be persisted on the existing turn"
-    );
+    assert_no_command_executions(&thread.turns[0].items, "thread/read");
 
     Ok(())
+}
+
+fn assert_no_command_executions(items: &[ThreadItem], context: &str) {
+    assert!(
+        items
+            .iter()
+            .all(|item| !matches!(item, ThreadItem::CommandExecution { .. })),
+        "{context} should always exclude command executions from returned turns"
+    );
 }
 
 fn current_shell_output_command(text: &str) -> Result<(String, String)> {

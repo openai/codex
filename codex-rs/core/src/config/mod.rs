@@ -49,6 +49,7 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
+use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
@@ -132,6 +133,7 @@ mod network_proxy_spec;
 mod permissions;
 #[cfg(test)]
 mod schema;
+pub(crate) mod template_interpolation;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
@@ -479,7 +481,7 @@ pub struct Config {
     /// - `Some("...")`: use the provided attribution text verbatim
     pub commit_attribution: Option<String>,
 
-    /// Deprecated optional external notifier command. When set, Codex will spawn this
+    /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
     /// processing a user submission). The value must be the full command
     /// broken into argv tokens **without** the trailing JSON argument - Codex
@@ -498,7 +500,7 @@ pub struct Config {
     /// notify-send Codex '{"type":"agent-turn-complete","turn-id":"12345"}'
     /// ```
     ///
-    /// If unset the feature is disabled. Use lifecycle hooks for new automation.
+    /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
     /// TUI notification settings, including enabled events, delivery method, and focus condition.
@@ -515,6 +517,9 @@ pub struct Config {
 
     /// Start the composer in Vim mode (`Normal`) by default.
     pub tui_vim_mode_default: bool,
+
+    /// Start the TUI in raw scrollback mode for copy-friendly transcript output.
+    pub tui_raw_output_mode: bool,
 
     /// Start the TUI in the specified collaboration mode (plan/default).
 
@@ -542,6 +547,9 @@ pub struct Config {
 
     /// Syntax highlighting theme override (kebab-case name).
     pub tui_theme: Option<String>,
+
+    /// Preferred layout for resume/fork session picker results.
+    pub tui_session_picker_view: SessionPickerViewMode,
 
     /// Terminal resize-reflow tuning knobs.
     pub terminal_resize_reflow: TerminalResizeReflowConfig,
@@ -2016,6 +2024,63 @@ impl Config {
         codex_home: AbsolutePathBuf,
         config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
+        let config = Self::build_config_with_layer_stack(
+            fs,
+            cfg.clone(),
+            overrides.clone(),
+            codex_home.clone(),
+            config_layer_stack.clone(),
+        )
+        .await?;
+        let mut interpolation_source_cfg = cfg.clone();
+        template_interpolation::apply_resolved_config_fields(
+            &config,
+            &mut interpolation_source_cfg,
+        )
+        .map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("failed to materialize config for interpolation: {err}"),
+            )
+        })?;
+        let interpolation_source =
+            toml::Value::try_from(interpolation_source_cfg).map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("failed to serialize config for interpolation: {err}"),
+                )
+            })?;
+        let mut interpolated_cfg = cfg;
+        let interpolated = template_interpolation::interpolate_config_string_fields(
+            &mut interpolated_cfg,
+            &interpolation_source,
+        )
+        .map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("failed to interpolate config template fields: {err}"),
+            )
+        })?;
+        if interpolated {
+            return Self::build_config_with_layer_stack(
+                fs,
+                interpolated_cfg,
+                overrides,
+                codex_home,
+                config_layer_stack,
+            )
+            .await;
+        }
+        Ok(config)
+    }
+
+    async fn build_config_with_layer_stack(
+        fs: &dyn ExecutorFileSystem,
+        cfg: ConfigToml,
+        overrides: ConfigOverrides,
+        codex_home: AbsolutePathBuf,
+        config_layer_stack: ConfigLayerStack,
+    ) -> std::io::Result<Self> {
         // Keep the large config-construction future off small test thread stacks.
         Box::pin(async move {
         validate_model_providers(&cfg.model_providers)
@@ -3089,6 +3154,11 @@ impl Config {
                 .as_ref()
                 .map(|t| t.vim_mode_default)
                 .unwrap_or(false),
+            tui_raw_output_mode: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.raw_output_mode)
+                .unwrap_or(false),
             tui_alternate_screen: cfg
                 .tui
                 .as_ref()
@@ -3102,6 +3172,12 @@ impl Config {
                 .unwrap_or(true),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
+            tui_session_picker_view: config_profile
+                .tui
+                .as_ref()
+                .and_then(|t| t.session_picker_view)
+                .or_else(|| cfg.tui.as_ref().and_then(|t| t.session_picker_view))
+                .unwrap_or_default(),
             terminal_resize_reflow,
             tui_keymap: cfg
                 .tui

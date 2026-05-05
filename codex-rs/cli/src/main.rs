@@ -10,10 +10,10 @@ use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
 use codex_cli::WindowsCommand;
-use codex_cli::read_agent_identity_from_stdin;
+use codex_cli::read_access_token_from_stdin;
 use codex_cli::read_api_key_from_stdin;
 use codex_cli::run_login_status;
-use codex_cli::run_login_with_agent_identity;
+use codex_cli::run_login_with_access_token;
 use codex_cli::run_login_with_api_key;
 use codex_cli::run_login_with_chatgpt;
 use codex_cli::run_login_with_device_code;
@@ -364,10 +364,10 @@ struct LoginCommand {
     with_api_key: bool,
 
     #[arg(
-        long = "with-agent-identity",
-        help = "Read the experimental Agent Identity token from stdin (e.g. `printenv CODEX_AGENT_IDENTITY | codex login --with-agent-identity`)"
+        long = "with-access-token",
+        help = "Read the access token from stdin (e.g. `printenv CODEX_ACCESS_TOKEN | codex login --with-access-token`)"
     )]
-    with_agent_identity: bool,
+    with_access_token: bool,
 
     #[arg(
         long = "api-key",
@@ -446,13 +446,21 @@ struct AppServerCommand {
 
 #[derive(Debug, Parser)]
 struct ExecServerCommand {
-    /// Transport endpoint URL. Supported values: `ws://IP:PORT` (default).
-    #[arg(
-        long = "listen",
-        value_name = "URL",
-        default_value = "ws://127.0.0.1:0"
-    )]
-    listen: String,
+    /// Transport endpoint URL. Supported values: `ws://IP:PORT` (default), `stdio`, `stdio://`.
+    #[arg(long = "listen", value_name = "URL", conflicts_with = "remote")]
+    listen: Option<String>,
+
+    /// Register this exec-server as a remote executor using the given base URL.
+    #[arg(long = "remote", value_name = "URL", requires = "executor_id")]
+    remote: Option<String>,
+
+    /// Executor id to attach to when registering remotely.
+    #[arg(long = "executor-id", value_name = "ID")]
+    executor_id: Option<String>,
+
+    /// Human-readable executor name.
+    #[arg(long = "name", value_name = "NAME")]
+    name: Option<String>,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -966,9 +974,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     run_login_status(login_cli.config_overrides).await;
                 }
                 None => {
-                    if login_cli.with_api_key && login_cli.with_agent_identity {
+                    if login_cli.with_api_key && login_cli.with_access_token {
                         eprintln!(
-                            "Choose one login credential source: --with-api-key or --with-agent-identity."
+                            "Choose one login credential source: --with-api-key or --with-access-token."
                         );
                         std::process::exit(1);
                     } else if login_cli.use_device_code {
@@ -986,10 +994,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     } else if login_cli.with_api_key {
                         let api_key = read_api_key_from_stdin();
                         run_login_with_api_key(login_cli.config_overrides, api_key).await;
-                    } else if login_cli.with_agent_identity {
-                        let agent_identity = read_agent_identity_from_stdin();
-                        run_login_with_agent_identity(login_cli.config_overrides, agent_identity)
-                            .await;
+                    } else if login_cli.with_access_token {
+                        let access_token = read_access_token_from_stdin();
+                        run_login_with_access_token(login_cli.config_overrides, access_token).await;
                     } else {
                         run_login_with_chatgpt(login_cli.config_overrides).await;
                     }
@@ -1265,7 +1272,23 @@ async fn run_exec_server_command(
         codex_self_exe,
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
-    codex_exec_server::run_main(&cmd.listen, runtime_paths)
+    if let Some(base_url) = cmd.remote {
+        let executor_id = cmd
+            .executor_id
+            .ok_or_else(|| anyhow::anyhow!("--executor-id is required when --remote is set"))?;
+        let mut remote_config =
+            codex_exec_server::RemoteExecutorConfig::new(base_url, executor_id)?;
+        if let Some(name) = cmd.name {
+            remote_config.name = name;
+        }
+        codex_exec_server::run_remote_executor(remote_config, runtime_paths).await?;
+        return Ok(());
+    }
+    let listen_url = cmd
+        .listen
+        .as_deref()
+        .unwrap_or(codex_exec_server::DEFAULT_LISTEN_URL);
+    codex_exec_server::run_main(listen_url, runtime_paths)
         .await
         .map_err(anyhow::Error::from_boxed)
 }

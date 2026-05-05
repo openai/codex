@@ -33,6 +33,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
+use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -174,6 +175,7 @@ async fn thread_read_can_include_turns() -> Result<()> {
     assert_eq!(thread.turns.len(), 1);
     let turn = &thread.turns[0];
     assert_eq!(turn.status, TurnStatus::Completed);
+    assert_eq!(turn.items_view, TurnItemsView::Full);
     assert_eq!(turn.items.len(), 1, "expected user message item");
     match &turn.items[0] {
         ThreadItem::UserMessage { content, .. } => {
@@ -234,6 +236,10 @@ async fn thread_turns_list_can_page_backward_and_forward() -> Result<()> {
         backwards_cursor,
     } = to_response::<ThreadTurnsListResponse>(read_resp)?;
     assert_eq!(turn_user_texts(&data), vec!["third", "second"]);
+    assert!(
+        data.iter()
+            .all(|turn| turn.items_view == TurnItemsView::Full)
+    );
     let next_cursor = next_cursor.expect("expected nextCursor for older turns");
     let backwards_cursor = backwards_cursor.expect("expected backwardsCursor for newest turn");
 
@@ -300,6 +306,7 @@ async fn thread_turns_list_reads_store_history_without_rollout_path() -> Result<
         thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),
         log_db: None,
+        state_db: None,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         config_warnings: Vec::new(),
         session_source: SessionSource::Cli.into(),
@@ -363,6 +370,7 @@ async fn thread_read_loaded_include_turns_reads_store_history_without_rollout_pa
         thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),
         log_db: None,
+        state_db: None,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         config_warnings: Vec::new(),
         session_source: SessionSource::Cli.into(),
@@ -447,6 +455,7 @@ async fn thread_list_includes_store_thread_without_rollout_path() -> Result<()> 
         thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),
         log_db: None,
+        state_db: None,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         config_warnings: Vec::new(),
         session_source: SessionSource::Cli.into(),

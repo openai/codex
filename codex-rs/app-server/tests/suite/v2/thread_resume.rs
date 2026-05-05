@@ -41,6 +41,7 @@ use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -385,7 +386,7 @@ async fn thread_resume_can_skip_turns_for_metadata_only_resume() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_emits_active_goal_update_before_continuation() -> Result<()> {
+async fn thread_resume_keeps_paused_goal_paused() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -477,12 +478,12 @@ async fn thread_resume_emits_active_goal_update_before_continuation() -> Result<
     let ServerNotification::ThreadGoalUpdated(notification) = notification else {
         anyhow::bail!("expected thread goal update notification");
     };
-    assert_eq!(notification.goal.status, ThreadGoalStatus::Active);
+    assert_eq!(notification.goal.status, ThreadGoalStatus::Paused);
     assert!(
         !mcp.pending_notification_methods()
             .iter()
             .any(|method| method == "turn/started"),
-        "goal continuation should start only after the resume goal snapshot"
+        "paused goal should not continue after thread resume"
     );
 
     Ok(())
@@ -1629,6 +1630,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
     .await??;
     let TurnStartResponse { turn: running_turn } =
         to_response::<TurnStartResponse>(running_turn_resp)?;
+    assert_eq!(running_turn.items_view, TurnItemsView::NotLoaded);
     timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_notification_message("turn/started"),

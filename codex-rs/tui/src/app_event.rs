@@ -157,6 +157,11 @@ pub(crate) enum AppEvent {
     /// previous chat resumable.
     ClearUi,
 
+    /// Re-render the transcript using the selected scrollback rendering mode.
+    RawOutputModeChanged {
+        enabled: bool,
+    },
+
     /// Clear the current context, start a fresh session, and submit an initial user message.
     ///
     /// This is the Plan Mode handoff path: the previous thread remains resumable, but the model
@@ -485,6 +490,10 @@ pub(crate) enum AppEvent {
     /// Begin buffering initial resume replay rows before they are written to scrollback.
     BeginInitialHistoryReplayBuffer,
 
+    /// Begin buffering thread-switch replay cells so the final scrollback write can reuse the
+    /// resize-reflow tail renderer.
+    BeginThreadSwitchHistoryReplayBuffer,
+
     InsertHistoryCell(Box<dyn HistoryCell>),
 
     /// Finish buffering initial resume replay after all replay events have been queued.
@@ -749,10 +758,21 @@ pub(crate) enum AppEvent {
         enabled: bool,
     },
 
+    /// Trust the current definition for a hook by stable hook key.
+    TrustHook {
+        key: String,
+        current_hash: String,
+    },
+
     /// Result of persisting hook enabled state.
     HookEnabledSet {
         key: String,
         enabled: bool,
+        result: Result<(), String>,
+    },
+
+    /// Result of persisting hook trust state.
+    HookTrusted {
         result: Result<(), String>,
     },
 
@@ -823,6 +843,11 @@ pub(crate) enum AppEvent {
         cwd: PathBuf,
         branch: Option<String>,
     },
+    /// Async update of Git summary fields for status line rendering.
+    StatusLineGitSummaryUpdated {
+        cwd: PathBuf,
+        summary: crate::chatwidget::StatusLineGitSummary,
+    },
     /// Apply a user-confirmed status-line item ordering/selection.
     StatusLineSetup {
         items: Vec<StatusLineItem>,
@@ -868,6 +893,9 @@ pub(crate) enum AppEvent {
         action: String,
         intent: KeymapEditIntent,
     },
+
+    /// Open the keymap keypress inspector.
+    OpenKeymapDebug,
 
     /// Apply a captured key to the selected keymap action.
     KeymapCaptured {

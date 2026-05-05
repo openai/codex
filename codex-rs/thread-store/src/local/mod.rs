@@ -19,7 +19,6 @@ use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::sync::OnceCell;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -42,7 +41,7 @@ use crate::UpdateThreadMetadataParams;
 pub struct LocalThreadStore {
     pub(super) config: LocalThreadStoreConfig,
     live_recorders: Arc<Mutex<HashMap<ThreadId, RolloutRecorder>>>,
-    state_db: Arc<OnceCell<StateDbHandle>>,
+    state_db: StateDbHandle,
 }
 
 /// Process-scoped configuration for local thread storage.
@@ -52,7 +51,6 @@ pub struct LocalThreadStore {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalThreadStoreConfig {
     pub codex_home: PathBuf,
-    pub sqlite_home: PathBuf,
     /// Provider used only when older local metadata does not contain one.
     pub default_model_provider_id: String,
 }
@@ -61,7 +59,6 @@ impl LocalThreadStoreConfig {
     pub fn from_config(config: &impl codex_rollout::RolloutConfigView) -> Self {
         Self {
             codex_home: config.codex_home().to_path_buf(),
-            sqlite_home: config.sqlite_home().to_path_buf(),
             default_model_provider_id: config.model_provider_id().to_string(),
         }
     }
@@ -76,30 +73,23 @@ impl std::fmt::Debug for LocalThreadStore {
 }
 
 impl LocalThreadStore {
-    /// Create a local store from process-scoped local storage configuration.
-    pub fn new(config: LocalThreadStoreConfig) -> Self {
+    /// Create a local store from process-scoped local storage configuration and
+    /// the caller-provided shared state DB handle.
+    pub fn new(config: LocalThreadStoreConfig, state_db: StateDbHandle) -> Self {
         Self {
             config,
             live_recorders: Arc::new(Mutex::new(HashMap::new())),
-            state_db: Arc::new(OnceCell::new()),
+            state_db,
         }
     }
 
     /// Return the state DB handle used by local rollout writers.
-    pub async fn state_db(&self) -> Option<StateDbHandle> {
-        self.state_db
-            .get_or_try_init(|| async {
-                codex_rollout::state_db::init_with_roots(
-                    self.config.codex_home.clone(),
-                    self.config.sqlite_home.clone(),
-                    self.config.default_model_provider_id.clone(),
-                )
-                .await
-                .ok_or(())
-            })
-            .await
-            .ok()
-            .cloned()
+    pub fn state_db(&self) -> StateDbHandle {
+        self.state_db.clone()
+    }
+
+    pub(super) fn sqlite_home(&self) -> PathBuf {
+        self.state_db.codex_home().to_path_buf()
     }
 
     /// Read a local rollout-backed thread by path.
@@ -295,14 +285,16 @@ mod tests {
     use super::*;
     use crate::ThreadEventPersistenceMode;
     use crate::ThreadPersistenceMetadata;
+    use crate::local::test_support::init_test_state_db;
     use crate::local::test_support::test_config;
+    use crate::local::test_support::test_store;
     use crate::local::test_support::write_archived_session_file;
     use crate::local::test_support::write_session_file;
 
     #[tokio::test]
     async fn live_writer_lifecycle_writes_and_closes() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = test_store(home.path()).await;
         let thread_id = ThreadId::default();
 
         store
@@ -351,7 +343,7 @@ mod tests {
     #[tokio::test]
     async fn create_thread_rejects_missing_cwd() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = test_store(home.path()).await;
         let thread_id = ThreadId::default();
         let mut params = create_thread_params(thread_id);
         params.metadata.cwd = None;
@@ -371,7 +363,7 @@ mod tests {
     #[tokio::test]
     async fn discard_thread_drops_unmaterialized_live_writer() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = test_store(home.path()).await;
         let thread_id = ThreadId::default();
 
         store
@@ -409,8 +401,9 @@ mod tests {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
         let thread_id = ThreadId::default();
+        let state_db = init_test_state_db(&config).await;
 
-        let first_store = LocalThreadStore::new(config.clone());
+        let first_store = LocalThreadStore::new(config.clone(), state_db.clone());
         first_store
             .create_thread(create_thread_params(thread_id))
             .await
@@ -439,7 +432,7 @@ mod tests {
             .await
             .expect("shutdown initial writer");
 
-        let resumed_store = LocalThreadStore::new(config);
+        let resumed_store = LocalThreadStore::new(config, state_db);
         resumed_store
             .resume_thread(ResumeThreadParams {
                 thread_id,
@@ -470,7 +463,7 @@ mod tests {
     #[tokio::test]
     async fn create_thread_rejects_duplicate_live_writer() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = test_store(home.path()).await;
         let thread_id = ThreadId::default();
 
         store
@@ -490,7 +483,7 @@ mod tests {
     #[tokio::test]
     async fn resume_thread_rejects_duplicate_live_writer() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = test_store(home.path()).await;
         let thread_id = ThreadId::default();
 
         store
@@ -519,7 +512,7 @@ mod tests {
     #[tokio::test]
     async fn resume_thread_rejects_missing_cwd() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = test_store(home.path()).await;
         let uuid = uuid::Uuid::from_u128(407);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let rollout_path =
@@ -548,7 +541,7 @@ mod tests {
     async fn load_history_uses_live_writer_rollout_path() {
         let home = TempDir::new().expect("temp dir");
         let external_home = TempDir::new().expect("external temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = test_store(home.path()).await;
         let uuid = uuid::Uuid::from_u128(404);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let rollout_path = write_session_file(external_home.path(), "2025-01-04T10-00-00", uuid)
@@ -597,7 +590,7 @@ mod tests {
     async fn read_thread_uses_live_writer_rollout_path_for_external_resume() {
         let home = TempDir::new().expect("temp dir");
         let external_home = TempDir::new().expect("external temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = test_store(home.path()).await;
         let uuid = uuid::Uuid::from_u128(406);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let rollout_path = write_session_file(external_home.path(), "2025-01-04T11-00-00", uuid)
@@ -636,7 +629,7 @@ mod tests {
     #[tokio::test]
     async fn load_history_uses_live_writer_rollout_path_for_archived_source() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = test_store(home.path()).await;
         let uuid = uuid::Uuid::from_u128(405);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let rollout_path = write_archived_session_file(home.path(), "2025-01-04T10-30-00", uuid)
@@ -704,7 +697,7 @@ mod tests {
     #[tokio::test]
     async fn read_thread_by_rollout_path_includes_history() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let store = test_store(home.path()).await;
         let thread_id = ThreadId::default();
 
         store

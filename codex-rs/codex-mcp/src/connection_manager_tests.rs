@@ -40,7 +40,7 @@ fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
         server_name: server_name.to_string(),
         callable_name: tool_name.to_string(),
         callable_namespace: tool_namespace,
-        server_instructions: None,
+        namespace_description: None,
         tool: Tool {
             name: tool_name.to_string().into(),
             title: None,
@@ -55,7 +55,6 @@ fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),
-        connector_description: None,
     }
 }
 

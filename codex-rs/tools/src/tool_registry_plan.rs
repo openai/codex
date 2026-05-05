@@ -1,4 +1,5 @@
 use crate::CommandToolOptions;
+use crate::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 use crate::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
@@ -6,7 +7,7 @@ use crate::ShellToolOptions;
 use crate::SpawnAgentToolOptions;
 use crate::TOOL_SEARCH_DEFAULT_LIMIT;
 use crate::TOOL_SEARCH_TOOL_NAME;
-use crate::TOOL_SUGGEST_TOOL_NAME;
+use crate::ToolEnvironmentMode;
 use crate::ToolHandlerKind;
 use crate::ToolName;
 use crate::ToolRegistryPlan;
@@ -19,26 +20,25 @@ use crate::ViewImageToolOptions;
 use crate::WebSearchToolOptions;
 use crate::coalesce_loadable_tool_specs;
 use crate::collect_code_mode_exec_prompt_tool_definitions;
+use crate::collect_request_plugin_install_entries;
 use crate::collect_tool_search_source_infos;
-use crate::collect_tool_suggest_entries;
 use crate::create_apply_patch_freeform_tool;
 use crate::create_apply_patch_json_tool;
 use crate::create_close_agent_tool_v1;
 use crate::create_close_agent_tool_v2;
 use crate::create_code_mode_tool;
 use crate::create_create_goal_tool;
-use crate::create_exec_command_tool;
 use crate::create_followup_task_tool;
 use crate::create_get_goal_tool;
 use crate::create_image_generation_tool;
 use crate::create_list_agents_tool;
-use crate::create_list_dir_tool;
 use crate::create_list_mcp_resource_templates_tool;
 use crate::create_list_mcp_resources_tool;
 use crate::create_local_shell_tool;
 use crate::create_read_mcp_resource_tool;
 use crate::create_report_agent_job_result_tool;
 use crate::create_request_permissions_tool;
+use crate::create_request_plugin_install_tool;
 use crate::create_request_user_input_tool;
 use crate::create_resume_agent_tool;
 use crate::create_send_input_tool_v1;
@@ -50,7 +50,6 @@ use crate::create_spawn_agent_tool_v2;
 use crate::create_spawn_agents_on_csv_tool;
 use crate::create_test_sync_tool;
 use crate::create_tool_search_tool;
-use crate::create_tool_suggest_tool;
 use crate::create_update_goal_tool;
 use crate::create_update_plan_tool;
 use crate::create_view_image_tool;
@@ -61,6 +60,7 @@ use crate::create_web_search_tool;
 use crate::create_write_stdin_tool;
 use crate::default_namespace_description;
 use crate::dynamic_tool_to_loadable_tool_spec;
+use crate::local_tool::create_exec_command_tool_with_environment_id;
 use crate::mcp_tool_to_responses_api_tool;
 use crate::request_permissions_tool_description;
 use crate::request_user_input_tool_description;
@@ -135,7 +135,9 @@ pub fn build_tool_registry_plan(
         );
     }
 
-    if config.has_environment {
+    if config.environment_mode.has_environment() {
+        let include_environment_id =
+            matches!(config.environment_mode, ToolEnvironmentMode::Multiple);
         match &config.shell_type {
             ConfigShellToolType::Default => {
                 plan.push_spec(
@@ -155,10 +157,13 @@ pub fn build_tool_registry_plan(
             }
             ConfigShellToolType::UnifiedExec => {
                 plan.push_spec(
-                    create_exec_command_tool(CommandToolOptions {
-                        allow_login_shell: config.allow_login_shell,
-                        exec_permission_approvals_enabled,
-                    }),
+                    create_exec_command_tool_with_environment_id(
+                        CommandToolOptions {
+                            allow_login_shell: config.allow_login_shell,
+                            exec_permission_approvals_enabled,
+                        },
+                        include_environment_id,
+                    ),
                     /*supports_parallel_tool_calls*/ true,
                     config.code_mode_enabled,
                 );
@@ -167,8 +172,8 @@ pub fn build_tool_registry_plan(
                     /*supports_parallel_tool_calls*/ false,
                     config.code_mode_enabled,
                 );
-                plan.register_handler("exec_command", ToolHandlerKind::UnifiedExec);
-                plan.register_handler("write_stdin", ToolHandlerKind::UnifiedExec);
+                plan.register_handler("exec_command", ToolHandlerKind::ExecCommand);
+                plan.register_handler("write_stdin", ToolHandlerKind::WriteStdin);
             }
             ConfigShellToolType::Disabled => {}
             ConfigShellToolType::ShellCommand => {
@@ -184,10 +189,12 @@ pub fn build_tool_registry_plan(
         }
     }
 
-    if config.has_environment && config.shell_type != ConfigShellToolType::Disabled {
+    if config.environment_mode.has_environment()
+        && config.shell_type != ConfigShellToolType::Disabled
+    {
         plan.register_handler("shell", ToolHandlerKind::Shell);
-        plan.register_handler("container.exec", ToolHandlerKind::Shell);
-        plan.register_handler("local_shell", ToolHandlerKind::Shell);
+        plan.register_handler("container.exec", ToolHandlerKind::ContainerExec);
+        plan.register_handler("local_shell", ToolHandlerKind::LocalShell);
         plan.register_handler("shell_command", ToolHandlerKind::ShellCommand);
     }
 
@@ -207,9 +214,12 @@ pub fn build_tool_registry_plan(
             /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
         );
-        plan.register_handler("list_mcp_resources", ToolHandlerKind::McpResource);
-        plan.register_handler("list_mcp_resource_templates", ToolHandlerKind::McpResource);
-        plan.register_handler("read_mcp_resource", ToolHandlerKind::McpResource);
+        plan.register_handler("list_mcp_resources", ToolHandlerKind::ListMcpResources);
+        plan.register_handler(
+            "list_mcp_resource_templates",
+            ToolHandlerKind::ListMcpResourceTemplates,
+        );
+        plan.register_handler("read_mcp_resource", ToolHandlerKind::ReadMcpResource);
     }
 
     plan.push_spec(
@@ -224,19 +234,19 @@ pub fn build_tool_registry_plan(
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
-        plan.register_handler("get_goal", ToolHandlerKind::Goal);
+        plan.register_handler("get_goal", ToolHandlerKind::GetGoal);
         plan.push_spec(
             create_create_goal_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
-        plan.register_handler("create_goal", ToolHandlerKind::Goal);
+        plan.register_handler("create_goal", ToolHandlerKind::CreateGoal);
         plan.push_spec(
             create_update_goal_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
-        plan.register_handler("update_goal", ToolHandlerKind::Goal);
+        plan.register_handler("update_goal", ToolHandlerKind::UpdateGoal);
     }
 
     plan.push_spec(
@@ -280,7 +290,7 @@ pub fn build_tool_registry_plan(
                     ToolSearchSource {
                         server_name: tool.server_name,
                         connector_name: tool.connector_name,
-                        connector_description: tool.connector_description,
+                        description: tool.description,
                     }
                 }))
             })
@@ -312,14 +322,19 @@ pub fn build_tool_registry_plan(
             params.discoverable_tools.filter(|tools| !tools.is_empty())
     {
         plan.push_spec(
-            create_tool_suggest_tool(&collect_tool_suggest_entries(discoverable_tools)),
+            create_request_plugin_install_tool(&collect_request_plugin_install_entries(
+                discoverable_tools,
+            )),
             /*supports_parallel_tool_calls*/ true,
             /*code_mode_enabled*/ false,
         );
-        plan.register_handler(TOOL_SUGGEST_TOOL_NAME, ToolHandlerKind::ToolSuggest);
+        plan.register_handler(
+            REQUEST_PLUGIN_INSTALL_TOOL_NAME,
+            ToolHandlerKind::RequestPluginInstall,
+        );
     }
 
-    if config.has_environment
+    if config.environment_mode.has_environment()
         && let Some(apply_patch_tool_type) = &config.apply_patch_tool_type
     {
         match apply_patch_tool_type {
@@ -339,20 +354,6 @@ pub fn build_tool_registry_plan(
             }
         }
         plan.register_handler("apply_patch", ToolHandlerKind::ApplyPatch);
-    }
-
-    if config.has_environment
-        && config
-            .experimental_supported_tools
-            .iter()
-            .any(|tool| tool == "list_dir")
-    {
-        plan.push_spec(
-            create_list_dir_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        plan.register_handler("list_dir", ToolHandlerKind::ListDir);
     }
 
     if config
@@ -388,7 +389,7 @@ pub fn build_tool_registry_plan(
         );
     }
 
-    if config.has_environment {
+    if config.environment_mode.has_environment() {
         plan.push_spec(
             create_view_image_tool(ViewImageToolOptions {
                 can_request_original_image_detail: config.can_request_original_image_detail,
@@ -495,14 +496,17 @@ pub fn build_tool_registry_plan(
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
-        plan.register_handler("spawn_agents_on_csv", ToolHandlerKind::AgentJobs);
+        plan.register_handler("spawn_agents_on_csv", ToolHandlerKind::SpawnAgentsOnCsv);
         if config.agent_jobs_worker_tools {
             plan.push_spec(
                 create_report_agent_job_result_tool(),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-            plan.register_handler("report_agent_job_result", ToolHandlerKind::AgentJobs);
+            plan.register_handler(
+                "report_agent_job_result",
+                ToolHandlerKind::ReportAgentJobResult,
+            );
         }
     }
 

@@ -128,6 +128,14 @@ impl McpConnectionManager {
         }
     }
 
+    pub fn elicitations_auto_deny(&self) -> bool {
+        self.elicitation_requests.auto_deny()
+    }
+
+    pub fn set_elicitations_auto_deny(&self, auto_deny: bool) {
+        self.elicitation_requests.set_auto_deny(auto_deny);
+    }
+
     #[allow(clippy::new_ret_no_self, clippy::too_many_arguments)]
     pub async fn new(
         mcp_servers: &HashMap<String, McpServerConfig>,

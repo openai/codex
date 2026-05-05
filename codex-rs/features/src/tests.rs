@@ -120,6 +120,16 @@ fn request_permissions_tool_is_under_development() {
 }
 
 #[test]
+fn remote_compaction_v2_is_under_development() {
+    assert_eq!(Feature::RemoteCompactionV2.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::RemoteCompactionV2.default_enabled(), false);
+    assert_eq!(
+        feature_for_key("remote_compaction_v2"),
+        Some(Feature::RemoteCompactionV2)
+    );
+}
+
+#[test]
 fn terminal_resize_reflow_is_experimental_and_enabled_by_default() {
     assert_eq!(
         feature_for_key("terminal_resize_reflow"),

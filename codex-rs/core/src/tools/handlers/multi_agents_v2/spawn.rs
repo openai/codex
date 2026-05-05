@@ -5,7 +5,7 @@ use crate::agent::control::render_input_preview;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
-use crate::session::turn_context::TurnEnvironment;
+use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::AgentPath;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
@@ -14,6 +14,10 @@ pub(crate) struct Handler;
 
 impl ToolHandler for Handler {
     type Output = SpawnAgentResult;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("spawn_agent")
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -50,6 +54,7 @@ impl ToolHandler for Handler {
                 &turn,
                 CollabAgentSpawnBeginEvent {
                     call_id: call_id.clone(),
+                    started_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     prompt: prompt.clone(),
                     model: args.model.clone().unwrap_or_default(),
@@ -118,12 +123,7 @@ impl ToolHandler for Handler {
                 SpawnAgentOptions {
                     fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
                     fork_mode,
-                    environments: Some(
-                        turn.environments
-                            .iter()
-                            .map(TurnEnvironment::selection)
-                            .collect(),
-                    ),
+                    environments: Some(turn.environments.to_selections()),
                 },
             )
             .await
@@ -174,6 +174,7 @@ impl ToolHandler for Handler {
                 &turn,
                 CollabAgentSpawnEndEvent {
                     call_id,
+                    completed_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     new_thread_id,
                     new_agent_nickname,

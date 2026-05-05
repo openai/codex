@@ -12,6 +12,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::DOCUMENT_EXTRACT_TEXT_RESOURCE_URI;
+use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
@@ -162,9 +163,7 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
         })
         .with_config(move |config| {
             configure_apps(config, apps_server.chatgpt_base_url.as_str());
-            if let Err(err) = config.features.enable(Feature::CodexHooks) {
-                panic!("test config should allow feature update: {err}");
-            }
+            trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
     tokio::fs::write(test.cwd.path().join("report.txt"), b"hello world").await?;

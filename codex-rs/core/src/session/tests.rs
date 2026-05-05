@@ -52,6 +52,8 @@ use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use tracing::Span;
 
+use crate::goals::ExternalGoalPreviousStatus;
+use crate::goals::ExternalGoalSet;
 use crate::goals::GoalRuntimeEvent;
 use crate::goals::SetGoalRequest;
 use crate::rollout::recorder::RolloutRecorder;
@@ -64,9 +66,10 @@ use crate::tasks::execute_user_shell_command;
 use crate::tools::ToolRouter;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
-use crate::tools::handlers::GoalHandler;
+use crate::tools::handlers::CreateGoalHandler;
+use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ShellHandler;
-use crate::tools::handlers::UnifiedExecHandler;
+use crate::tools::handlers::UpdateGoalHandler;
 use crate::tools::registry::ToolHandler;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -864,7 +867,7 @@ async fn danger_full_access_turns_do_not_expose_managed_network_proxy() -> anyho
         &permission_profile_for_sandbox_policy(&SandboxPolicy::DangerFullAccess),
     )?;
 
-    let session = make_session_with_config(move |config| {
+    let (session, _codex_home) = make_session_with_config(move |config| {
         let cwd = config.cwd.clone();
         config
             .permissions
@@ -930,7 +933,7 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
         &permission_profile_for_sandbox_policy(&SandboxPolicy::DangerFullAccess),
     )?;
 
-    let session = make_session_with_config(move |config| {
+    let (session, _codex_home) = make_session_with_config(move |config| {
         let cwd = config.cwd.clone();
         config
             .permissions
@@ -1005,7 +1008,7 @@ async fn workspace_write_turns_continue_to_expose_managed_network_proxy() -> any
         &permission_profile_for_sandbox_policy(&sandbox_policy),
     )?;
 
-    let session = make_session_with_config(move |config| {
+    let (session, _codex_home) = make_session_with_config(move |config| {
         let cwd = config.cwd.clone();
         config
             .permissions
@@ -1032,7 +1035,7 @@ async fn user_shell_commands_do_not_inherit_managed_network_proxy() -> anyhow::R
         &permission_profile_for_sandbox_policy(&sandbox_policy),
     )?;
 
-    let (session, rx) = make_session_with_config_and_rx(move |config| {
+    let (session, rx, _codex_home) = make_session_with_config_and_rx(move |config| {
         let cwd = config.cwd.clone();
         config
             .permissions
@@ -1162,7 +1165,7 @@ async fn reload_user_config_layer_updates_effective_apps_config() {
 
 #[tokio::test]
 async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
-    let session = make_session_with_config(|config| {
+    let (session, _codex_home) = make_session_with_config(|config| {
         config
             .features
             .enable(Feature::CodexHooks)
@@ -1171,15 +1174,17 @@ async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
     .await?;
     let codex_home = session.codex_home().await;
     std::fs::create_dir_all(&codex_home)?;
-    std::fs::write(
-        codex_home.join(CONFIG_TOML_FILE),
-        r#"
-[hooks]
-
-[[hooks.SessionStart]]
-hooks = [{ type = "command", command = "python3 /tmp/user.py" }]
-"#,
-    )?;
+    let config_toml_path = codex_home.join(CONFIG_TOML_FILE);
+    let user_config: codex_config::TomlValue = serde_json::from_value(serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": "python3 /tmp/user.py",
+                }],
+            }],
+        },
+    }))?;
 
     let request = codex_hooks::SessionStartRequest {
         session_id: session.conversation_id,
@@ -1190,6 +1195,39 @@ hooks = [{ type = "command", command = "python3 /tmp/user.py" }]
         source: codex_hooks::SessionStartSource::Startup,
     };
     assert!(session.hooks().preview_session_start(&request).is_empty());
+
+    let config = session.get_config().await;
+    let hook_list = codex_hooks::list_hooks(codex_hooks::HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(
+            config
+                .config_layer_stack
+                .with_user_config(&config_toml_path, user_config.clone()),
+        ),
+        ..codex_hooks::HooksConfig::default()
+    });
+    assert_eq!(hook_list.hooks.len(), 1);
+    assert_eq!(
+        hook_list.hooks[0].trust_status,
+        codex_protocol::protocol::HookTrustStatus::Untrusted
+    );
+
+    let trusted_user_config: codex_config::TomlValue = serde_json::from_value(serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": "python3 /tmp/user.py",
+                }],
+            }],
+            "state": {
+                hook_list.hooks[0].key.clone(): {
+                    "trusted_hash": hook_list.hooks[0].current_hash.clone(),
+                },
+            },
+        },
+    }))?;
+    std::fs::write(&config_toml_path, toml::to_string(&trusted_user_config)?)?;
 
     session.reload_user_config_layer().await;
 
@@ -3399,7 +3437,7 @@ async fn absolute_cwd_update_with_turn_environment_is_allowed() {
 
     assert_eq!(turn_context.cwd, absolute_cwd);
     assert_eq!(turn_context.config.cwd, absolute_cwd);
-    assert_eq!(turn_context.environments.len(), 1);
+    assert_eq!(turn_context.environments.turn_environments.len(), 1);
 }
 
 #[tokio::test]
@@ -3488,8 +3526,15 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        /*state_db*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
+            codex_state::StateRuntime::init(
+                config.sqlite_home.clone(),
+                config.model_provider_id.clone(),
+            )
+            .await
+            .expect("state db should initialize"),
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
     )
@@ -3637,6 +3682,12 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         live_thread: None,
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
+            codex_state::StateRuntime::init(
+                config.sqlite_home.clone(),
+                config.model_provider_id.clone(),
+            )
+            .await
+            .expect("state db should initialize"),
         )),
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
@@ -3657,7 +3708,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         .plugins_manager
         .plugins_for_config(&per_turn_config.plugins_config_input())
         .await;
-    let effective_skill_roots = plugin_outcome.effective_skill_roots();
+    let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
     let skill_fs = environment.get_filesystem();
@@ -3681,7 +3732,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         model_info,
         &models_manager,
         /*network*/ None,
-        turn_environments,
+        crate::environment_selection::ResolvedTurnEnvironments { turn_environments },
         session_configuration.cwd.clone(),
         "turn_id".to_string(),
         skills_outcome,
@@ -3714,14 +3765,18 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
 
 async fn make_session_with_config(
     mutator: impl FnOnce(&mut Config),
-) -> anyhow::Result<Arc<Session>> {
-    let (session, _rx_event) = make_session_with_config_and_rx(mutator).await?;
-    Ok(session)
+) -> anyhow::Result<(Arc<Session>, tempfile::TempDir)> {
+    let (session, _rx_event, codex_home) = make_session_with_config_and_rx(mutator).await?;
+    Ok((session, codex_home))
 }
 
 async fn make_session_with_config_and_rx(
     mutator: impl FnOnce(&mut Config),
-) -> anyhow::Result<(Arc<Session>, async_channel::Receiver<Event>)> {
+) -> anyhow::Result<(
+    Arc<Session>,
+    async_channel::Receiver<Event>,
+    tempfile::TempDir,
+)> {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
     mutator(&mut config);
@@ -3806,14 +3861,21 @@ async fn make_session_with_config_and_rx(
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        /*state_db*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
+            codex_state::StateRuntime::init(
+                config.sqlite_home.clone(),
+                config.model_provider_id.clone(),
+            )
+            .await
+            .expect("state db should initialize"),
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
     )
     .await?;
 
-    Ok((session, rx_event))
+    Ok((session, rx_event, codex_home))
 }
 
 #[tokio::test]
@@ -4418,15 +4480,16 @@ async fn turn_environments_set_primary_environment() {
         .expect("turn should start");
 
     let turn_environments = &turn_context.environments;
-    assert_eq!(turn_environments.len(), 1);
+    assert_eq!(turn_environments.turn_environments.len(), 1);
     let turn_environment = turn_context
-        .primary_environment()
+        .environments
+        .primary()
         .expect("primary environment should be set");
     assert!(std::sync::Arc::ptr_eq(
         &turn_environment.environment,
-        &turn_environments[0].environment
+        &turn_environments.turn_environments[0].environment
     ));
-    assert!(!turn_context.environments.is_empty());
+    assert!(!turn_context.environments.turn_environments.is_empty());
     assert_eq!(turn_context.cwd.as_path(), selected_cwd.as_path());
     assert_eq!(turn_context.config.cwd.as_path(), selected_cwd.as_path());
 }
@@ -4449,13 +4512,14 @@ async fn default_turn_overlays_session_cwd_onto_stored_thread_environments() {
     let turn_context = session.new_default_turn().await;
 
     let turn_environments = &turn_context.environments;
-    assert_eq!(turn_environments.len(), 1);
+    assert_eq!(turn_environments.turn_environments.len(), 1);
     let turn_environment = turn_context
-        .primary_environment()
+        .environments
+        .primary()
         .expect("primary environment should be set");
     assert!(std::sync::Arc::ptr_eq(
         &turn_environment.environment,
-        &turn_environments[0].environment
+        &turn_environments.turn_environments[0].environment
     ));
     assert_eq!(turn_context.cwd, session_cwd);
     assert_eq!(turn_context.config.cwd, session_cwd);
@@ -4473,28 +4537,32 @@ async fn default_turn_honors_empty_stored_thread_environments() {
 
     let turn_context = session.new_default_turn().await;
 
-    assert!(turn_context.primary_environment().is_none());
-    assert!(turn_context.environments.is_empty());
+    assert!(turn_context.environments.primary_environment().is_none());
+    assert!(turn_context.environments.turn_environments.is_empty());
     assert_eq!(turn_context.cwd, session_cwd);
     assert_eq!(turn_context.config.cwd, session_cwd);
-    assert_eq!(turn_context.environments.len(), 0);
+    assert_eq!(turn_context.environments.turn_environments.len(), 0);
 }
 
 #[tokio::test]
 async fn primary_environment_uses_first_turn_environment() {
     let (_session, mut turn_context) = make_session_and_context().await;
-    let first_environment = turn_context.environments[0].clone();
+    let first_environment = turn_context.environments.turn_environments[0].clone();
     let second_cwd = turn_context.cwd.join("second");
-    turn_context.environments.push(TurnEnvironment {
-        environment_id: "second".to_string(),
-        environment: Arc::clone(&first_environment.environment),
-        cwd: second_cwd.clone(),
-        shell: first_environment.shell.clone(),
-    });
+    turn_context
+        .environments
+        .turn_environments
+        .push(TurnEnvironment {
+            environment_id: "second".to_string(),
+            environment: Arc::clone(&first_environment.environment),
+            cwd: second_cwd.clone(),
+            shell: "bash".to_string(),
+        });
 
     assert_eq!(
         turn_context
-            .primary_environment()
+            .environments
+            .primary()
             .expect("primary environment")
             .environment_id,
         first_environment.environment_id
@@ -4502,14 +4570,18 @@ async fn primary_environment_uses_first_turn_environment() {
     assert_eq!(
         turn_context
             .environments
+            .turn_environments
             .iter()
             .find(|environment| environment.environment_id == "second")
             .expect("second environment")
             .cwd,
         second_cwd
     );
-    assert_eq!(turn_context.environments.len(), 2);
-    assert_eq!(turn_context.environments[1].cwd, second_cwd);
+    assert_eq!(turn_context.environments.turn_environments.len(), 2);
+    assert_eq!(
+        turn_context.environments.turn_environments[1].cwd,
+        second_cwd
+    );
 }
 
 #[tokio::test]
@@ -4527,8 +4599,8 @@ async fn empty_turn_environments_clear_primary_environment() {
         .await
         .expect("turn should start");
 
-    assert!(turn_context.primary_environment().is_none());
-    assert!(turn_context.environments.is_empty());
+    assert!(turn_context.environments.primary_environment().is_none());
+    assert!(turn_context.environments.turn_environments.is_empty());
     assert_eq!(turn_context.cwd, session.get_config().await.cwd);
     assert_eq!(turn_context.config.cwd, session.get_config().await.cwd);
 }
@@ -4987,8 +5059,8 @@ where
     F: FnOnce(&mut Config),
 {
     let (tx_event, rx_event) = async_channel::unbounded();
-    let codex_home = tempfile::tempdir().expect("create temp dir");
-    let mut config = build_test_config(codex_home.path()).await;
+    let codex_home = tempfile::tempdir().expect("create temp dir").keep();
+    let mut config = build_test_config(codex_home.as_path()).await;
     configure_config(&mut config);
     let config = Arc::new(config);
     let conversation_id = ThreadId::default();
@@ -5075,6 +5147,12 @@ where
             .expect("create environment"),
     );
 
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await
+    .expect("state db should initialize");
     let skills_watcher = Arc::new(SkillsWatcher::noop());
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
@@ -5115,10 +5193,11 @@ where
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
-        state_db: None,
+        state_db: Some(state_db.clone()),
         live_thread: None,
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
+            state_db,
         )),
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
@@ -5139,7 +5218,7 @@ where
         .plugins_manager
         .plugins_for_config(&per_turn_config.plugins_config_input())
         .await;
-    let effective_skill_roots = plugin_outcome.effective_skill_roots();
+    let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
     let skill_fs = environment.get_filesystem();
@@ -5163,7 +5242,7 @@ where
         model_info,
         &models_manager,
         /*network*/ None,
-        turn_environments,
+        crate::environment_selection::ResolvedTurnEnvironments { turn_environments },
         session_configuration.cwd.clone(),
         "turn_id".to_string(),
         skills_outcome,
@@ -5776,6 +5855,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
             policy: None,
             path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
             scope: SkillScope::Admin,
+            plugin_id: None,
         },
         SkillMetadata {
             name: "repo-skill".to_string(),
@@ -5786,6 +5866,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
             policy: None,
             path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
             scope: SkillScope::Repo,
+            plugin_id: None,
         },
     ];
     turn_context.model_info.context_window = Some(100);
@@ -5821,6 +5902,7 @@ fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
         policy: None,
         path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
         scope: SkillScope::Repo,
+        plugin_id: None,
     }];
     let rendered = build_available_skills(
         &outcome,
@@ -5865,6 +5947,7 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
         policy: None,
         path_to_skills_md: test_path_buf("/tmp/alpha-skill/SKILL.md").abs(),
         scope: SkillScope::Repo,
+        plugin_id: None,
     };
     let beta = SkillMetadata {
         name: "beta-skill".to_string(),
@@ -5875,6 +5958,7 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
         policy: None,
         path_to_skills_md: test_path_buf("/tmp/beta-skill/SKILL.md").abs(),
         scope: SkillScope::Repo,
+        plugin_id: None,
     };
     let minimum_skill_line_cost = |skill: &SkillMetadata| {
         let path = skill.path_to_skills_md.to_string_lossy().replace('\\', "/");
@@ -5922,6 +6006,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
             policy: None,
             path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
             scope: SkillScope::Admin,
+            plugin_id: None,
         },
         SkillMetadata {
             name: "repo-skill".to_string(),
@@ -5932,6 +6017,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
             policy: None,
             path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
             scope: SkillScope::Repo,
+            plugin_id: None,
         },
     ];
     turn_context.model_info.context_window = Some(100);
@@ -7304,6 +7390,9 @@ fn post_goal_token_usage() -> TokenUsage {
 }
 
 async fn goal_test_state_db(sess: &Session) -> anyhow::Result<crate::StateDbHandle> {
+    if let Some(state_db) = sess.state_db() {
+        return Ok(state_db);
+    }
     let config = sess.get_config().await;
     codex_state::StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone())
         .await
@@ -7442,19 +7531,24 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
         .expect("goal should remain persisted");
     assert_eq!(70, goal.tokens_used);
 
-    state_db
+    let previous_status = goal.status;
+    let goal_id = goal.goal_id.clone();
+    let updated_goal = state_db
         .update_thread_goal(
             sess.conversation_id,
             codex_state::ThreadGoalUpdate {
                 status: Some(codex_state::ThreadGoalStatus::Complete),
                 token_budget: None,
-                expected_goal_id: Some(goal.goal_id),
+                expected_goal_id: Some(goal_id),
             },
         )
         .await?
         .expect("goal status update should succeed");
     sess.goal_runtime_apply(GoalRuntimeEvent::ExternalSet {
-        status: codex_state::ThreadGoalStatus::Complete,
+        external_set: ExternalGoalSet {
+            goal: updated_goal,
+            previous_status: ExternalGoalPreviousStatus::Existing(previous_status),
+        },
     })
     .await?;
 
@@ -7486,7 +7580,7 @@ async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow:
     set_total_token_usage(&sess, post_goal_token_usage()).await;
 
     let state_db = goal_test_state_db(sess.as_ref()).await?;
-    state_db
+    let goal = state_db
         .replace_thread_goal(
             sess.conversation_id,
             "Keep improving the benchmark",
@@ -7495,7 +7589,10 @@ async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow:
         )
         .await?;
     sess.goal_runtime_apply(GoalRuntimeEvent::ExternalSet {
-        status: codex_state::ThreadGoalStatus::Active,
+        external_set: ExternalGoalSet {
+            goal,
+            previous_status: ExternalGoalPreviousStatus::NewGoal,
+        },
     })
     .await?;
 
@@ -8139,7 +8236,7 @@ async fn sample_rollout(
 async fn create_goal_tool_rejects_existing_goal() {
     let (session, turn_context, _rx) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let handler = GoalHandler;
+    let handler = CreateGoalHandler;
 
     handler
         .handle(ToolInvocation {
@@ -8201,9 +8298,10 @@ async fn create_goal_tool_rejects_existing_goal() {
 async fn update_goal_tool_rejects_pausing_goal() {
     let (session, turn_context, _rx) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let handler = GoalHandler;
+    let create_handler = CreateGoalHandler;
+    let update_handler = UpdateGoalHandler;
 
-    handler
+    create_handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
@@ -8223,7 +8321,7 @@ async fn update_goal_tool_rejects_pausing_goal() {
         .await
         .expect("initial create_goal should succeed");
 
-    let response = handler
+    let response = update_handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
@@ -8261,9 +8359,10 @@ async fn update_goal_tool_rejects_pausing_goal() {
 async fn update_goal_tool_marks_goal_complete() {
     let (session, turn_context, _rx) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let handler = GoalHandler;
+    let create_handler = CreateGoalHandler;
+    let update_handler = UpdateGoalHandler;
 
-    handler
+    create_handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
@@ -8283,7 +8382,7 @@ async fn update_goal_tool_marks_goal_complete() {
         .await
         .expect("initial create_goal should succeed");
 
-    handler
+    update_handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
@@ -8440,7 +8539,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
     let turn_context = Arc::new(turn_context_raw);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let handler = UnifiedExecHandler;
+    let handler = ExecCommandHandler;
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
@@ -8495,17 +8594,27 @@ async fn session_start_hooks_only_load_from_trusted_project_layers() -> std::io:
         .build()
         .await?;
 
-    let preview = preview_session_start_hooks(&config).await?;
+    let hook_list = codex_hooks::list_hooks(codex_hooks::HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(config.config_layer_stack.clone()),
+        ..codex_hooks::HooksConfig::default()
+    });
     let expected_source_path = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
         nested_dot_codex.join("hooks.json"),
     )?;
     assert_eq!(
-        preview
+        hook_list
+            .hooks
             .iter()
-            .map(|run| &run.source_path)
+            .map(|hook| &hook.source_path)
             .collect::<Vec<_>>(),
         vec![&expected_source_path],
     );
+    assert_eq!(
+        hook_list.hooks[0].trust_status,
+        codex_protocol::protocol::HookTrustStatus::Untrusted
+    );
+    assert!(preview_session_start_hooks(&config).await?.is_empty());
 
     Ok(())
 }
@@ -8545,11 +8654,23 @@ async fn session_start_hooks_require_project_trust_without_config_toml() -> std:
             .build()
             .await?;
 
+        let hook_list = codex_hooks::list_hooks(codex_hooks::HooksConfig {
+            feature_enabled: true,
+            config_layer_stack: Some(config.config_layer_stack.clone()),
+            ..codex_hooks::HooksConfig::default()
+        });
         assert_eq!(
-            preview_session_start_hooks(&config).await?.len(),
+            hook_list.hooks.len(),
             expected_hooks,
-            "unexpected hook count for {name}",
+            "unexpected discovered hook count for {name}",
         );
+        assert!(preview_session_start_hooks(&config).await?.is_empty());
+        if expected_hooks == 1 {
+            assert_eq!(
+                hook_list.hooks[0].trust_status,
+                codex_protocol::protocol::HookTrustStatus::Untrusted
+            );
+        }
     }
 
     Ok(())

@@ -3,11 +3,12 @@
 //! This module decides *how* to get text onto the user's clipboard based on the
 //! current environment. The selection order is:
 //!
-//! 1. **SSH session** (`SSH_TTY` / `SSH_CONNECTION` set): use OSC 52 exclusively,
-//!    because the native clipboard belongs to the remote machine.
+//! 1. **SSH session** (`SSH_TTY` / `SSH_CONNECTION` set): use tmux clipboard
+//!    integration when available, otherwise OSC 52, because the native clipboard
+//!    belongs to the remote machine.
 //! 2. **Local session**: try `arboard` (native clipboard) first. On WSL, fall back
 //!    to the Windows clipboard through PowerShell if `arboard` fails. Finally, fall
-//!    back to OSC 52 if no native/WSL clipboard path succeeds.
+//!    back to terminal-mediated copy if no native/WSL clipboard path succeeds.
 //!
 //! On Linux, X11 and some Wayland compositors require the process that wrote the
 //! clipboard to keep its handle open. `ClipboardLease` wraps the `arboard::Clipboard`
@@ -29,17 +30,22 @@ static STDERR_SUPPRESSION_MUTEX: std::sync::OnceLock<std::sync::Mutex<()>> =
 
 /// Copy text to the system clipboard.
 ///
-/// Over SSH, uses OSC 52 so the text reaches the *local* terminal emulator's
-/// clipboard rather than a remote X11/Wayland clipboard that the user cannot
-/// access. On a local session, tries `arboard` (native clipboard) first and
-/// falls back to WSL PowerShell, then OSC 52, if needed.
+/// Over SSH, uses terminal-mediated copy so the text reaches the *local*
+/// terminal emulator's clipboard rather than a remote X11/Wayland clipboard
+/// that the user cannot access. On a local session, tries `arboard` (native
+/// clipboard) first and falls back to WSL PowerShell, then terminal-mediated
+/// copy, if needed.
 ///
 /// OSC 52 is supported by kitty, WezTerm, iTerm2, Ghostty, and others.
 pub(crate) fn copy_to_clipboard(text: &str) -> Result<Option<ClipboardLease>, String> {
     copy_to_clipboard_with(
         text,
-        is_ssh_session(),
-        is_wsl_session(),
+        CopyEnvironment {
+            ssh_session: is_ssh_session(),
+            wsl_session: is_wsl_session(),
+            tmux_session: is_tmux_session(),
+        },
+        tmux_clipboard_copy,
         osc52_copy,
         arboard_copy,
         wsl_clipboard_copy,
@@ -78,28 +84,45 @@ impl ClipboardLease {
 
 /// Core copy logic with injected backends, enabling deterministic unit tests
 /// without touching real clipboards or terminal I/O.
-fn copy_to_clipboard_with(
-    text: &str,
+#[derive(Clone, Copy)]
+struct CopyEnvironment {
     ssh_session: bool,
     wsl_session: bool,
+    tmux_session: bool,
+}
+
+fn copy_to_clipboard_with(
+    text: &str,
+    environment: CopyEnvironment,
+    tmux_copy_fn: impl Fn(&str) -> Result<(), String>,
     osc52_copy_fn: impl Fn(&str) -> Result<(), String>,
     arboard_copy_fn: impl Fn(&str) -> Result<Option<ClipboardLease>, String>,
     wsl_copy_fn: impl Fn(&str) -> Result<(), String>,
 ) -> Result<Option<ClipboardLease>, String> {
-    if ssh_session {
+    if environment.ssh_session {
         // Over SSH the native clipboard writes to the remote machine which is
-        // useless. Use OSC 52, which travels through the SSH tunnel to the
-        // local terminal emulator.
-        return osc52_copy_fn(text).map(|()| None).map_err(|osc_err| {
-            tracing::warn!("OSC 52 clipboard copy failed over SSH: {osc_err}");
-            format!("OSC 52 clipboard copy failed over SSH: {osc_err}")
+        // useless. Terminal-mediated copy reaches the local terminal emulator.
+        return terminal_clipboard_copy_with(
+            text,
+            environment.tmux_session,
+            &tmux_copy_fn,
+            &osc52_copy_fn,
+        )
+        .map(|()| None)
+        .map_err(|terminal_err| {
+            tracing::warn!("terminal clipboard copy failed over SSH: {terminal_err}");
+            if environment.tmux_session {
+                format!("terminal clipboard copy failed over SSH: {terminal_err}")
+            } else {
+                format!("OSC 52 clipboard copy failed over SSH: {terminal_err}")
+            }
         });
     }
 
     match arboard_copy_fn(text) {
         Ok(lease) => Ok(lease),
         Err(native_err) => {
-            if wsl_session {
+            if environment.wsl_session {
                 tracing::warn!(
                     "native clipboard copy failed: {native_err}, falling back to WSL PowerShell"
                 );
@@ -107,27 +130,80 @@ fn copy_to_clipboard_with(
                     Ok(()) => return Ok(None),
                     Err(wsl_err) => {
                         tracing::warn!(
-                            "WSL PowerShell clipboard copy failed: {wsl_err}, falling back to OSC 52"
+                            "WSL PowerShell clipboard copy failed: {wsl_err}, falling back to terminal clipboard"
                         );
-                        return osc52_copy_fn(text).map(|()| None).map_err(|osc_err| {
-                            format!(
-                                "native clipboard: {native_err}; WSL fallback: {wsl_err}; OSC 52 fallback: {osc_err}"
-                            )
+                        return terminal_clipboard_copy_with(
+                            text,
+                            environment.tmux_session,
+                            &tmux_copy_fn,
+                            &osc52_copy_fn,
+                        )
+                        .map(|()| None)
+                        .map_err(|terminal_err| {
+                            if environment.tmux_session {
+                                format!(
+                                    "native clipboard: {native_err}; WSL fallback: {wsl_err}; terminal fallback: {terminal_err}"
+                                )
+                            } else {
+                                format!(
+                                    "native clipboard: {native_err}; WSL fallback: {wsl_err}; OSC 52 fallback: {terminal_err}"
+                                )
+                            }
                         });
                     }
                 }
             }
-            tracing::warn!("native clipboard copy failed: {native_err}, falling back to OSC 52");
-            osc52_copy_fn(text).map(|()| None).map_err(|osc_err| {
-                format!("native clipboard: {native_err}; OSC 52 fallback: {osc_err}")
+            tracing::warn!(
+                "native clipboard copy failed: {native_err}, falling back to terminal clipboard"
+            );
+            terminal_clipboard_copy_with(
+                text,
+                environment.tmux_session,
+                &tmux_copy_fn,
+                &osc52_copy_fn,
+            )
+            .map(|()| None)
+            .map_err(|terminal_err| {
+                if environment.tmux_session {
+                    format!("native clipboard: {native_err}; terminal fallback: {terminal_err}")
+                } else {
+                    format!("native clipboard: {native_err}; OSC 52 fallback: {terminal_err}")
+                }
             })
         }
     }
 }
 
+/// Copy through the active terminal, preferring tmux's native clipboard path.
+fn terminal_clipboard_copy_with(
+    text: &str,
+    tmux_session: bool,
+    tmux_copy_fn: &impl Fn(&str) -> Result<(), String>,
+    osc52_copy_fn: &impl Fn(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    if tmux_session {
+        match tmux_copy_fn(text) {
+            Ok(()) => return Ok(()),
+            Err(tmux_err) => {
+                tracing::warn!("tmux clipboard copy failed: {tmux_err}, falling back to OSC 52");
+                return osc52_copy_fn(text).map_err(|osc_err| {
+                    format!("tmux clipboard: {tmux_err}; OSC 52 fallback: {osc_err}")
+                });
+            }
+        }
+    }
+
+    osc52_copy_fn(text)
+}
+
 /// Detect whether the current process is running inside an SSH session.
 fn is_ssh_session() -> bool {
     std::env::var_os("SSH_TTY").is_some() || std::env::var_os("SSH_CONNECTION").is_some()
+}
+
+/// Detect whether the current process is running inside tmux.
+fn is_tmux_session() -> bool {
+    std::env::var_os("TMUX").is_some() || std::env::var_os("TMUX_PANE").is_some()
 }
 
 #[cfg(target_os = "linux")]
@@ -232,6 +308,93 @@ fn wsl_clipboard_copy(text: &str) -> Result<(), String> {
 #[cfg(not(target_os = "linux"))]
 fn wsl_clipboard_copy(_text: &str) -> Result<(), String> {
     Err("WSL clipboard fallback unavailable on this platform".to_string())
+}
+
+/// Copy text through tmux's native clipboard integration.
+///
+/// `load-buffer -w -` lets tmux read the text from stdin, keep a matching tmux
+/// paste buffer, and forward the contents to the outer terminal clipboard when
+/// possible without relying on DCS passthrough.
+fn tmux_clipboard_copy(text: &str) -> Result<(), String> {
+    tmux_clipboard_copy_ready(
+        || tmux_command_output(["show-options", "-gv", "set-clipboard"]),
+        || tmux_command_output(["info"]),
+    )?;
+
+    let mut child = std::process::Command::new("tmux")
+        .args(["load-buffer", "-w", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to spawn tmux: {e}"))?;
+
+    let Some(mut stdin) = child.stdin.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("failed to open tmux stdin".to_string());
+    };
+
+    if let Err(err) = stdin.write_all(text.as_bytes()) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("failed to write to tmux: {err}"));
+    }
+
+    drop(stdin);
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("failed to wait for tmux: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.is_empty() {
+            let status = output.status;
+            Err(format!("tmux exited with status {status}"))
+        } else {
+            Err(format!("tmux failed: {stderr}"))
+        }
+    }
+}
+
+/// Verify that tmux is configured to forward clipboard writes to the outer terminal.
+fn tmux_clipboard_copy_ready(
+    set_clipboard_fn: impl FnOnce() -> Result<String, String>,
+    tmux_info_fn: impl FnOnce() -> Result<String, String>,
+) -> Result<(), String> {
+    let set_clipboard = set_clipboard_fn()?;
+    if set_clipboard.trim() == "off" {
+        return Err("tmux clipboard forwarding is disabled".to_string());
+    }
+
+    let tmux_info = tmux_info_fn()?;
+    if tmux_info.lines().any(|line| line.contains("Ms: [missing]")) {
+        return Err("tmux clipboard forwarding is unavailable: missing Ms capability".to_string());
+    }
+
+    Ok(())
+}
+
+fn tmux_command_output<const N: usize>(args: [&str; N]) -> Result<String, String> {
+    let output = std::process::Command::new("tmux")
+        .args(args)
+        .output()
+        .map_err(|e| format!("failed to spawn tmux: {e}"))?;
+
+    if output.status.success() {
+        String::from_utf8(output.stdout).map_err(|e| format!("tmux output was not UTF-8: {e}"))
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.is_empty() {
+            let status = output.status;
+            Err(format!("tmux exited with status {status}"))
+        } else {
+            Err(format!("tmux failed: {stderr}"))
+        }
+    }
 }
 
 /// RAII guard that redirects stderr (fd 2) to `/dev/null` on creation and
@@ -342,10 +505,49 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::cell::Cell;
 
+    use super::CopyEnvironment;
     use super::OSC52_MAX_RAW_BYTES;
     use super::copy_to_clipboard_with;
     use super::osc52_sequence;
+    use super::tmux_clipboard_copy_ready;
     use super::write_osc52_to_writer;
+
+    fn remote_environment() -> CopyEnvironment {
+        CopyEnvironment {
+            ssh_session: true,
+            wsl_session: true,
+            tmux_session: false,
+        }
+    }
+
+    fn remote_tmux_environment() -> CopyEnvironment {
+        CopyEnvironment {
+            tmux_session: true,
+            ..remote_environment()
+        }
+    }
+
+    fn local_environment() -> CopyEnvironment {
+        CopyEnvironment {
+            ssh_session: false,
+            wsl_session: false,
+            tmux_session: false,
+        }
+    }
+
+    fn local_wsl_environment() -> CopyEnvironment {
+        CopyEnvironment {
+            wsl_session: true,
+            ..local_environment()
+        }
+    }
+
+    fn local_tmux_environment() -> CopyEnvironment {
+        CopyEnvironment {
+            tmux_session: true,
+            ..local_environment()
+        }
+    }
 
     #[test]
     fn osc52_encoding_roundtrips() {
@@ -391,13 +593,17 @@ mod tests {
 
     #[test]
     fn ssh_uses_osc52_and_skips_native_on_success() {
+        let tmux_calls = Cell::new(0_u8);
         let osc_calls = Cell::new(0_u8);
         let native_calls = Cell::new(0_u8);
         let wsl_calls = Cell::new(0_u8);
         let result = copy_to_clipboard_with(
             "hello",
-            /*ssh_session*/ true,
-            /*wsl_session*/ true,
+            remote_environment(),
+            |_| {
+                tmux_calls.set(tmux_calls.get() + 1);
+                Ok(())
+            },
             |_| {
                 osc_calls.set(osc_calls.get() + 1);
                 Ok(())
@@ -413,6 +619,7 @@ mod tests {
         );
 
         assert!(matches!(result, Ok(None)));
+        assert_eq!(tmux_calls.get(), 0);
         assert_eq!(osc_calls.get(), 1);
         assert_eq!(native_calls.get(), 0);
         assert_eq!(wsl_calls.get(), 0);
@@ -420,13 +627,17 @@ mod tests {
 
     #[test]
     fn ssh_returns_osc52_error_and_skips_native() {
+        let tmux_calls = Cell::new(0_u8);
         let osc_calls = Cell::new(0_u8);
         let native_calls = Cell::new(0_u8);
         let wsl_calls = Cell::new(0_u8);
         let result = copy_to_clipboard_with(
             "hello",
-            /*ssh_session*/ true,
-            /*wsl_session*/ true,
+            remote_environment(),
+            |_| {
+                tmux_calls.set(tmux_calls.get() + 1);
+                Ok(())
+            },
             |_| {
                 osc_calls.set(osc_calls.get() + 1);
                 Err("blocked".into())
@@ -445,9 +656,134 @@ mod tests {
             panic!("expected OSC 52 error");
         };
         assert_eq!(error, "OSC 52 clipboard copy failed over SSH: blocked");
+        assert_eq!(tmux_calls.get(), 0);
         assert_eq!(osc_calls.get(), 1);
         assert_eq!(native_calls.get(), 0);
         assert_eq!(wsl_calls.get(), 0);
+    }
+
+    #[test]
+    fn ssh_inside_tmux_prefers_tmux_clipboard() {
+        let tmux_calls = Cell::new(0_u8);
+        let osc_calls = Cell::new(0_u8);
+        let native_calls = Cell::new(0_u8);
+        let wsl_calls = Cell::new(0_u8);
+        let result = copy_to_clipboard_with(
+            "hello",
+            remote_tmux_environment(),
+            |_| {
+                tmux_calls.set(tmux_calls.get() + 1);
+                Ok(())
+            },
+            |_| {
+                osc_calls.set(osc_calls.get() + 1);
+                Ok(())
+            },
+            |_| {
+                native_calls.set(native_calls.get() + 1);
+                Ok(None)
+            },
+            |_| {
+                wsl_calls.set(wsl_calls.get() + 1);
+                Ok(())
+            },
+        );
+
+        assert!(matches!(result, Ok(None)));
+        assert_eq!(tmux_calls.get(), 1);
+        assert_eq!(osc_calls.get(), 0);
+        assert_eq!(native_calls.get(), 0);
+        assert_eq!(wsl_calls.get(), 0);
+    }
+
+    #[test]
+    fn ssh_inside_tmux_falls_back_to_osc52_when_tmux_copy_fails() {
+        let tmux_calls = Cell::new(0_u8);
+        let osc_calls = Cell::new(0_u8);
+        let native_calls = Cell::new(0_u8);
+        let wsl_calls = Cell::new(0_u8);
+        let result = copy_to_clipboard_with(
+            "hello",
+            remote_tmux_environment(),
+            |_| {
+                tmux_calls.set(tmux_calls.get() + 1);
+                Err("tmux unavailable".into())
+            },
+            |_| {
+                osc_calls.set(osc_calls.get() + 1);
+                Ok(())
+            },
+            |_| {
+                native_calls.set(native_calls.get() + 1);
+                Ok(None)
+            },
+            |_| {
+                wsl_calls.set(wsl_calls.get() + 1);
+                Ok(())
+            },
+        );
+
+        assert!(matches!(result, Ok(None)));
+        assert_eq!(tmux_calls.get(), 1);
+        assert_eq!(osc_calls.get(), 1);
+        assert_eq!(native_calls.get(), 0);
+        assert_eq!(wsl_calls.get(), 0);
+    }
+
+    #[test]
+    fn ssh_inside_tmux_reports_tmux_and_osc52_errors_when_both_fail() {
+        let result = copy_to_clipboard_with(
+            "hello",
+            remote_tmux_environment(),
+            |_| Err("tmux unavailable".into()),
+            |_| Err("osc blocked".into()),
+            |_| Ok(None),
+            |_| Ok(()),
+        );
+
+        let Err(error) = result else {
+            panic!("expected tmux and OSC 52 errors");
+        };
+        assert_eq!(
+            error,
+            "terminal clipboard copy failed over SSH: tmux clipboard: tmux unavailable; OSC 52 fallback: osc blocked"
+        );
+    }
+
+    #[test]
+    fn tmux_clipboard_copy_ready_accepts_forwarding_configuration() {
+        let result = tmux_clipboard_copy_ready(
+            || Ok("external\n".to_string()),
+            || Ok("193: Ms: (string) \\033]52;%p1%s;%p2%s\\a\n".to_string()),
+        );
+
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn tmux_clipboard_copy_ready_rejects_disabled_forwarding() {
+        let result = tmux_clipboard_copy_ready(
+            || Ok("off\n".to_string()),
+            || panic!("tmux info should not be queried when forwarding is disabled"),
+        );
+
+        assert_eq!(
+            result,
+            Err("tmux clipboard forwarding is disabled".to_string())
+        );
+    }
+
+    #[test]
+    fn tmux_clipboard_copy_ready_rejects_missing_ms_capability() {
+        let result = tmux_clipboard_copy_ready(
+            || Ok("external\n".to_string()),
+            || Ok("193: Ms: [missing]\n".to_string()),
+        );
+
+        assert_eq!(
+            result,
+            Err("tmux clipboard forwarding is unavailable: missing Ms capability".to_string())
+        );
     }
 
     #[test]
@@ -457,8 +793,8 @@ mod tests {
         let wsl_calls = Cell::new(0_u8);
         let result = copy_to_clipboard_with(
             "hello",
-            /*ssh_session*/ false,
-            /*wsl_session*/ true,
+            local_wsl_environment(),
+            |_| Ok(()),
             |_| {
                 osc_calls.set(osc_calls.get() + 1);
                 Ok(())
@@ -486,8 +822,8 @@ mod tests {
         let wsl_calls = Cell::new(0_u8);
         let result = copy_to_clipboard_with(
             "hello",
-            /*ssh_session*/ false,
-            /*wsl_session*/ false,
+            local_environment(),
+            |_| Ok(()),
             |_| {
                 osc_calls.set(osc_calls.get() + 1);
                 Ok(())
@@ -509,14 +845,48 @@ mod tests {
     }
 
     #[test]
+    fn local_tmux_fallback_prefers_tmux_when_native_fails() {
+        let tmux_calls = Cell::new(0_u8);
+        let osc_calls = Cell::new(0_u8);
+        let native_calls = Cell::new(0_u8);
+        let wsl_calls = Cell::new(0_u8);
+        let result = copy_to_clipboard_with(
+            "hello",
+            local_tmux_environment(),
+            |_| {
+                tmux_calls.set(tmux_calls.get() + 1);
+                Ok(())
+            },
+            |_| {
+                osc_calls.set(osc_calls.get() + 1);
+                Ok(())
+            },
+            |_| {
+                native_calls.set(native_calls.get() + 1);
+                Err("native unavailable".into())
+            },
+            |_| {
+                wsl_calls.set(wsl_calls.get() + 1);
+                Ok(())
+            },
+        );
+
+        assert!(matches!(result, Ok(None)));
+        assert_eq!(tmux_calls.get(), 1);
+        assert_eq!(osc_calls.get(), 0);
+        assert_eq!(native_calls.get(), 1);
+        assert_eq!(wsl_calls.get(), 0);
+    }
+
+    #[test]
     fn local_wsl_native_failure_uses_powershell_and_skips_osc52_on_success() {
         let osc_calls = Cell::new(0_u8);
         let native_calls = Cell::new(0_u8);
         let wsl_calls = Cell::new(0_u8);
         let result = copy_to_clipboard_with(
             "hello",
-            /*ssh_session*/ false,
-            /*wsl_session*/ true,
+            local_wsl_environment(),
+            |_| Ok(()),
             |_| {
                 osc_calls.set(osc_calls.get() + 1);
                 Ok(())
@@ -544,8 +914,8 @@ mod tests {
         let wsl_calls = Cell::new(0_u8);
         let result = copy_to_clipboard_with(
             "hello",
-            /*ssh_session*/ false,
-            /*wsl_session*/ true,
+            local_wsl_environment(),
+            |_| Ok(()),
             |_| {
                 osc_calls.set(osc_calls.get() + 1);
                 Ok(())
@@ -573,8 +943,8 @@ mod tests {
         let wsl_calls = Cell::new(0_u8);
         let result = copy_to_clipboard_with(
             "hello",
-            /*ssh_session*/ false,
-            /*wsl_session*/ false,
+            local_environment(),
+            |_| Ok(()),
             |_| {
                 osc_calls.set(osc_calls.get() + 1);
                 Err("osc blocked".into())
@@ -608,8 +978,8 @@ mod tests {
         let wsl_calls = Cell::new(0_u8);
         let result = copy_to_clipboard_with(
             "hello",
-            /*ssh_session*/ false,
-            /*wsl_session*/ true,
+            local_wsl_environment(),
+            |_| Ok(()),
             |_| {
                 osc_calls.set(osc_calls.get() + 1);
                 Err("osc blocked".into())

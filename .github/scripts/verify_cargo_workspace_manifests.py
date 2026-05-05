@@ -25,7 +25,10 @@ TOP_LEVEL_NAME_EXCEPTIONS = {
 UTILITY_NAME_EXCEPTIONS = {
     "path-utils": "codex-utils-path",
 }
-MANIFEST_FEATURE_EXCEPTIONS = {}
+MANIFEST_FEATURE_EXCEPTIONS = {
+    "codex-rs/code-mode/Cargo.toml": {"sandbox": ("v8/v8_enable_sandbox",)},
+    "codex-rs/v8-poc/Cargo.toml": {"sandbox": ("v8/v8_enable_sandbox",)},
+}
 OPTIONAL_DEPENDENCY_EXCEPTIONS = set()
 INTERNAL_DEPENDENCY_FEATURE_EXCEPTIONS = {}
 

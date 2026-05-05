@@ -22,12 +22,12 @@ pub(super) async fn create_thread(
         })?;
     let config = RolloutConfig {
         codex_home: store.config.codex_home.clone(),
-        sqlite_home: store.config.sqlite_home.clone(),
+        sqlite_home: store.sqlite_home(),
         cwd,
         model_provider_id: params.metadata.model_provider.clone(),
         generate_memories: matches!(params.metadata.memory_mode, ThreadMemoryMode::Enabled),
     };
-    let state_db_ctx = store.state_db().await;
+    let state_db_ctx = Some(store.state_db());
     let recorder = RolloutRecorder::new(
         &config,
         RolloutRecorderParams::new(

@@ -52,6 +52,7 @@ members = [
     "login",
     "codex-mcp",
     "mcp-server",
+    "memories/mcp",
     "memories/read",
     "memories/write",
     "model-provider-info",
@@ -168,6 +169,7 @@ codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
+codex-memories-mcp = { path = "memories/mcp" }
 codex-memories-read = { path = "memories/read" }
 codex-memories-write = { path = "memories/write" }
 codex-mcp = { path = "codex-mcp" }
@@ -322,6 +324,10 @@ quick-xml = "0.38.4"
 rand = "0.9"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
+rcgen = { version = "0.14.7", default-features = false, features = [
+    "aws_lc_rs",
+    "pem",
+] }
 regex = "1.12.3"
 regex-lite = "0.1.8"
 reqwest = { version = "0.12", features = ["cookies"] }
@@ -457,6 +463,7 @@ unwrap_used = "deny"
 [workspace.metadata.cargo-shear]
 ignored = [
     "codex-agent-graph-store",
+    "codex-memories-mcp",
     "icu_provider",
     "openssl-sys",
     "codex-utils-readiness",

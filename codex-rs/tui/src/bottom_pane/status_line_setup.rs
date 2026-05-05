@@ -71,6 +71,12 @@ pub(crate) enum StatusLineItem {
     /// Current git branch name (if in a repository).
     GitBranch,
 
+    /// Open pull request number for the current branch.
+    PullRequestNumber,
+
+    /// Committed branch diff stats relative to the default branch.
+    BranchChanges,
+
     /// Compact runtime run-state text.
     #[strum(to_string = "run-state", serialize = "status")]
     Status,
@@ -111,6 +117,9 @@ pub(crate) enum StatusLineItem {
     /// Whether Fast mode is currently active.
     FastMode,
 
+    /// Whether raw scrollback mode is currently active.
+    RawOutput,
+
     /// Current thread title (if set by user).
     ThreadTitle,
 
@@ -127,6 +136,12 @@ impl StatusLineItem {
             StatusLineItem::CurrentDir => "Current working directory",
             StatusLineItem::ProjectRoot => "Project name (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
+            StatusLineItem::PullRequestNumber => {
+                "Open pull request number for the current branch (omitted when unavailable)"
+            }
+            StatusLineItem::BranchChanges => {
+                "Committed branch changes against the default branch (omitted when unavailable)"
+            }
             StatusLineItem::Status => "Compact session run-state text (Ready, Working, Thinking)",
             StatusLineItem::ContextRemaining => {
                 "Percentage of context window remaining (omitted when unknown)"
@@ -151,6 +166,7 @@ impl StatusLineItem {
                 "Current session identifier (omitted until session starts)"
             }
             StatusLineItem::FastMode => "Whether Fast mode is currently active",
+            StatusLineItem::RawOutput => "Whether raw scrollback mode is active",
             StatusLineItem::ThreadTitle => "Current thread title (omitted when unavailable)",
             StatusLineItem::TaskProgress => {
                 "Latest task progress from update_plan (omitted until available)"
@@ -165,6 +181,8 @@ impl StatusLineItem {
             StatusLineItem::CurrentDir => StatusSurfacePreviewItem::CurrentDir,
             StatusLineItem::ProjectRoot => StatusSurfacePreviewItem::ProjectRoot,
             StatusLineItem::GitBranch => StatusSurfacePreviewItem::GitBranch,
+            StatusLineItem::PullRequestNumber => StatusSurfacePreviewItem::PullRequestNumber,
+            StatusLineItem::BranchChanges => StatusSurfacePreviewItem::BranchChanges,
             StatusLineItem::Status => StatusSurfacePreviewItem::Status,
             StatusLineItem::ContextRemaining => StatusSurfacePreviewItem::ContextRemaining,
             StatusLineItem::ContextUsed => StatusSurfacePreviewItem::ContextUsed,
@@ -177,6 +195,7 @@ impl StatusLineItem {
             StatusLineItem::TotalOutputTokens => StatusSurfacePreviewItem::TotalOutputTokens,
             StatusLineItem::SessionId => StatusSurfacePreviewItem::SessionId,
             StatusLineItem::FastMode => StatusSurfacePreviewItem::FastMode,
+            StatusLineItem::RawOutput => StatusSurfacePreviewItem::RawOutput,
             StatusLineItem::ThreadTitle => StatusSurfacePreviewItem::ThreadTitle,
             StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
         }
@@ -406,6 +425,18 @@ mod tests {
         assert_eq!(
             "status".parse::<StatusLineItem>(),
             Ok(StatusLineItem::Status)
+        );
+    }
+
+    #[test]
+    fn git_summary_items_are_selectable_ids() {
+        assert_eq!(
+            "pull-request-number".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::PullRequestNumber)
+        );
+        assert_eq!(
+            "branch-changes".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::BranchChanges)
         );
     }
 

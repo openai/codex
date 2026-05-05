@@ -6,6 +6,7 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::DeprecationNoticeNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -49,6 +50,46 @@ use super::analytics::wait_for_analytics_payload;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+
+#[tokio::test]
+async fn thread_start_deprecates_persist_extended_history_true() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            persist_extended_history: true,
+            ..Default::default()
+        })
+        .await?;
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("deprecationNotice"),
+    )
+    .await??;
+    let notice: DeprecationNoticeNotification = serde_json::from_value(
+        notification
+            .params
+            .expect("deprecationNotice params should be present"),
+    )?;
+    assert_eq!(
+        notice.summary,
+        "persistExtendedHistory is deprecated and ignored"
+    );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn thread_start_creates_thread_and_emits_started() -> Result<()> {

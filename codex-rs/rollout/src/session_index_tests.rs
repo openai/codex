@@ -99,7 +99,7 @@ async fn find_thread_meta_by_name_str_skips_newest_entry_without_rollout() -> st
     ];
     write_index(&path, &lines)?;
 
-    let found = find_thread_meta_by_name_str(temp.path(), "same").await?;
+    let found = find_thread_meta_by_name_str(temp.path(), "same", /*state_db_ctx*/ None).await?;
 
     assert_eq!(
         found.map(|(path, session_meta)| (path, session_meta.meta.id)),
@@ -136,7 +136,7 @@ async fn find_thread_meta_by_name_str_skips_partial_rollout() -> std::io::Result
     ];
     write_index(&path, &lines)?;
 
-    let found = find_thread_meta_by_name_str(temp.path(), "same").await?;
+    let found = find_thread_meta_by_name_str(temp.path(), "same", /*state_db_ctx*/ None).await?;
 
     assert_eq!(found.map(|(path, _)| path), Some(saved_rollout_path));
     Ok(())
@@ -174,7 +174,7 @@ async fn find_thread_meta_by_name_str_ignores_historical_name_after_rename() -> 
     ];
     write_index(&path, &lines)?;
 
-    let found = find_thread_meta_by_name_str(temp.path(), "same").await?;
+    let found = find_thread_meta_by_name_str(temp.path(), "same", /*state_db_ctx*/ None).await?;
 
     assert_eq!(found.map(|(path, _)| path), Some(current_rollout_path));
     Ok(())

@@ -496,6 +496,9 @@
             "realtime_conversation": {
               "type": "boolean"
             },
+            "remote_compaction_v2": {
+              "type": "boolean"
+            },
             "remote_control": {
               "type": "boolean"
             },
@@ -670,6 +673,15 @@
         },
         "tools_view_image": {
           "type": "boolean"
+        },
+        "tui": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProfileTui"
+            }
+          ],
+          "default": null,
+          "description": "TUI settings scoped to this profile."
         },
         "web_search": {
           "$ref": "#/definitions/WebSearchMode"
@@ -996,6 +1008,9 @@
       "properties": {
         "enabled": {
           "type": "boolean"
+        },
+        "trusted_hash": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -1870,6 +1885,22 @@
       },
       "type": "object"
     },
+    "ProfileTui": {
+      "additionalProperties": false,
+      "description": "TUI settings supported inside a named profile.",
+      "properties": {
+        "session_picker_view": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SessionPickerViewMode"
+            }
+          ],
+          "default": null,
+          "description": "Preferred layout for resume/fork session picker results."
+        }
+      },
+      "type": "object"
+    },
     "ProjectConfig": {
       "additionalProperties": false,
       "properties": {
@@ -2157,6 +2188,14 @@
       ],
       "type": "string"
     },
+    "SessionPickerViewMode": {
+      "description": "Preferred layout for the resume/fork session picker.",
+      "enum": [
+        "comfortable",
+        "dense"
+      ],
+      "type": "string"
+    },
     "ShellEnvironmentPolicyInherit": {
       "oneOf": [
         {
@@ -2438,6 +2477,7 @@
               "insert_newline": null,
               "kill_line_end": null,
               "kill_line_start": null,
+              "kill_whole_line": null,
               "move_down": null,
               "move_left": null,
               "move_line_end": null,
@@ -2455,6 +2495,8 @@
               "open_transcript": null,
               "queue": null,
               "submit": null,
+              "toggle_fast_mode": null,
+              "toggle_raw_output": null,
               "toggle_shortcuts": null,
               "toggle_vim_mode": null
             },
@@ -2552,6 +2594,20 @@
           ],
           "default": true,
           "description": "Enable desktop notifications from the TUI. Defaults to `true`."
+        },
+        "raw_output_mode": {
+          "default": false,
+          "description": "Start the TUI in raw scrollback mode for copy-friendly transcript output. Defaults to `false`.",
+          "type": "boolean"
+        },
+        "session_picker_view": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SessionPickerViewMode"
+            }
+          ],
+          "default": null,
+          "description": "Preferred layout for resume/fork session picker results."
         },
         "show_tooltips": {
           "default": true,
@@ -2808,6 +2864,14 @@
           ],
           "description": "Kill text from cursor to line start."
         },
+        "kill_whole_line": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Kill the current line."
+        },
         "move_down": {
           "allOf": [
             {
@@ -2935,6 +2999,22 @@
           ],
           "description": "Submit the current composer draft."
         },
+        "toggle_fast_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle Fast mode."
+        },
+        "toggle_raw_output": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle raw scrollback mode for copy-friendly transcript selection."
+        },
         "toggle_shortcuts": {
           "allOf": [
             {
@@ -3015,6 +3095,7 @@
             "insert_newline": null,
             "kill_line_end": null,
             "kill_line_start": null,
+            "kill_whole_line": null,
             "move_down": null,
             "move_left": null,
             "move_line_end": null,
@@ -3039,6 +3120,8 @@
             "open_transcript": null,
             "queue": null,
             "submit": null,
+            "toggle_fast_mode": null,
+            "toggle_raw_output": null,
             "toggle_shortcuts": null,
             "toggle_vim_mode": null
           }
@@ -3962,6 +4045,9 @@
         "realtime_conversation": {
           "type": "boolean"
         },
+        "remote_compaction_v2": {
+          "type": "boolean"
+        },
         "remote_control": {
           "type": "boolean"
         },
@@ -4268,7 +4354,7 @@
     },
     "notify": {
       "default": null,
-      "description": "Deprecated optional external command to spawn for end-user notifications.",
+      "description": "Optional external command to spawn for end-user notifications.",
       "items": {
         "type": "string"
       },

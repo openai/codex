@@ -52,9 +52,9 @@ use std::time::Duration;
 
 use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
-use crate::error_code::INTERNAL_ERROR_CODE;
-use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::error_code::OVERLOADED_ERROR_CODE;
+use crate::error_code::internal_error;
+use crate::error_code::invalid_request;
 use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
@@ -82,10 +82,12 @@ use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
+use codex_core::init_state_db_from_config;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
 use codex_protocol::protocol::SessionSource;
+use codex_rollout::state_db::StateDbHandle;
 pub use codex_state::log_db::LogDbLayer;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -126,6 +128,8 @@ pub struct InProcessStartArgs {
     pub feedback: CodexFeedback,
     /// SQLite tracing layer used to flush recently emitted logs before feedback upload.
     pub log_db: Option<LogDbLayer>,
+    /// Optional state DB handle to use for the in-process runtime.
+    pub state_db: Option<StateDbHandle>,
     /// Environment manager used by core execution and filesystem operations.
     pub environment_manager: Arc<EnvironmentManager>,
     /// Startup warnings emitted after initialize succeeds.
@@ -251,6 +255,8 @@ pub struct InProcessClientHandle {
     client: InProcessClientSender,
     event_rx: mpsc::Receiver<InProcessServerEvent>,
     runtime_handle: tokio::task::JoinHandle<()>,
+    #[cfg(test)]
+    _test_codex_home: Option<tempfile::TempDir>,
 }
 
 impl InProcessClientHandle {
@@ -339,7 +345,7 @@ impl InProcessClientHandle {
 /// the runtime is shut down and an `InvalidData` error is returned.
 pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
     let initialize = args.initialize.clone();
-    let client = start_uninitialized(args);
+    let client = start_uninitialized(args).await;
 
     let initialize_response = client
         .request(ClientRequest::Initialize {
@@ -359,8 +365,12 @@ pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> 
     Ok(client)
 }
 
-fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
+async fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
     let channel_capacity = args.channel_capacity.max(1);
+    let state_db = match args.state_db.clone() {
+        Some(state_db) => Some(state_db),
+        None => init_state_db_from_config(args.config.as_ref()).await,
+    };
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
     let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
 
@@ -409,6 +419,12 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         );
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
+            let Some(state_db) = state_db else {
+                warn!(
+                    "in-process app-server state db initialization failed; shutting down processor task"
+                );
+                return;
+            };
             let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
                 outgoing: Arc::clone(&processor_outgoing),
                 analytics_events_client,
@@ -418,6 +434,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 environment_manager: args.environment_manager,
                 feedback: args.feedback,
                 log_db: args.log_db,
+                state_db,
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
                 auth_manager,
@@ -520,11 +537,9 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                     entry.insert(response_tx);
                                 }
                                 Entry::Occupied(_) => {
-                                    let _ = response_tx.send(Err(JSONRPCErrorError {
-                                        code: INVALID_REQUEST_ERROR_CODE,
-                                        message: format!("duplicate request id: {request_id:?}"),
-                                        data: None,
-                                    }));
+                                    let _ = response_tx.send(Err(invalid_request(format!(
+                                        "duplicate request id: {request_id:?}"
+                                    ))));
                                     continue;
                                 }
                             }
@@ -547,13 +562,9 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                     if let Some(response_tx) =
                                         pending_request_responses.remove(&request_id)
                                     {
-                                        let _ = response_tx.send(Err(JSONRPCErrorError {
-                                            code: INTERNAL_ERROR_CODE,
-                                            message:
-                                                "in-process app-server request processor is closed"
-                                                    .to_string(),
-                                            data: None,
-                                        }));
+                                        let _ = response_tx.send(Err(internal_error(
+                                            "in-process app-server request processor is closed",
+                                        )));
                                     }
                                     break;
                                 }
@@ -621,15 +632,20 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                             if let Err(send_error) = event_tx
                                 .try_send(InProcessServerEvent::ServerRequest(request))
                             {
-                                let (code, message, inner) = match send_error {
+                                let (error, inner) = match send_error {
                                     mpsc::error::TrySendError::Full(inner) => (
-                                        OVERLOADED_ERROR_CODE,
-                                        "in-process server request queue is full",
+                                        JSONRPCErrorError {
+                                            code: OVERLOADED_ERROR_CODE,
+                                            message:
+                                                "in-process server request queue is full".to_string(),
+                                            data: None,
+                                        },
                                         inner,
                                     ),
                                     mpsc::error::TrySendError::Closed(inner) => (
-                                        INTERNAL_ERROR_CODE,
-                                        "in-process server request consumer is closed",
+                                        internal_error(
+                                            "in-process server request consumer is closed",
+                                        ),
                                         inner,
                                     ),
                                 };
@@ -638,14 +654,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                     _ => unreachable!("we just sent a ServerRequest variant"),
                                 };
                                 outgoing_message_sender
-                                    .notify_client_error(
-                                        request_id,
-                                        JSONRPCErrorError {
-                                            code,
-                                            message: message.to_string(),
-                                            data: None,
-                                        },
-                                    )
+                                    .notify_client_error(request_id, error)
                                     .await;
                             }
                         }
@@ -682,21 +691,17 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         drop(writer_rx);
         drop(processor_tx);
         outgoing_message_sender
-            .cancel_all_requests(Some(JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: "in-process app-server runtime is shutting down".to_string(),
-                data: None,
-            }))
+            .cancel_all_requests(Some(internal_error(
+                "in-process app-server runtime is shutting down",
+            )))
             .await;
         // Drop the runtime's last sender before awaiting the router task so
         // `outgoing_rx.recv()` can observe channel closure and exit cleanly.
         drop(outgoing_message_sender);
         for (_, response_tx) in pending_request_responses {
-            let _ = response_tx.send(Err(JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: "in-process app-server runtime is shutting down".to_string(),
-                data: None,
-            }));
+            let _ = response_tx.send(Err(internal_error(
+                "in-process app-server runtime is shutting down",
+            )));
         }
 
         if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut processor_handle).await {
@@ -717,12 +722,15 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         client: InProcessClientSender { client_tx },
         event_rx,
         runtime_handle,
+        #[cfg(test)]
+        _test_codex_home: None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error_code::INVALID_REQUEST_ERROR_CODE;
     use codex_app_server_protocol::ClientInfo;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::DeviceKeyPublicParams;
@@ -735,16 +743,26 @@ mod tests {
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
+    use codex_app_server_protocol::TurnItemsView;
     use codex_app_server_protocol::TurnStatus;
     use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
+    use std::path::Path;
+    use tempfile::TempDir;
 
-    async fn build_test_config() -> Config {
-        match ConfigBuilder::default().build().await {
+    async fn build_test_config(codex_home: &Path) -> Config {
+        match ConfigBuilder::default()
+            .codex_home(codex_home.to_path_buf())
+            .build()
+            .await
+        {
             Ok(config) => config,
-            Err(_) => Config::load_default_with_cli_overrides(Vec::new())
-                .await
-                .expect("default config should load"),
+            Err(_) => Config::load_default_with_cli_overrides_for_codex_home(
+                codex_home.to_path_buf(),
+                Vec::new(),
+            )
+            .await
+            .expect("default config should load"),
         }
     }
 
@@ -752,15 +770,21 @@ mod tests {
         session_source: SessionSource,
         channel_capacity: usize,
     ) -> InProcessClientHandle {
+        let codex_home = TempDir::new().expect("temp dir");
+        let config = Arc::new(build_test_config(codex_home.path()).await);
+        let state_db = init_state_db_from_config(config.as_ref())
+            .await
+            .expect("state db should initialize for in-process test");
         let args = InProcessStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
-            config: Arc::new(build_test_config().await),
+            config,
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
             thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
             feedback: CodexFeedback::new(),
             log_db: None,
+            state_db: Some(state_db),
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
             config_warnings: Vec::new(),
             session_source,
@@ -775,7 +799,9 @@ mod tests {
             },
             channel_capacity,
         };
-        start(args).await.expect("in-process runtime should start")
+        let mut client = start(args).await.expect("in-process runtime should start");
+        client._test_codex_home = Some(codex_home);
+        client
     }
 
     async fn start_test_client(session_source: SessionSource) -> InProcessClientHandle {
@@ -947,6 +973,7 @@ mod tests {
                 turn: Turn {
                     id: "turn-1".to_string(),
                     items: Vec::new(),
+                    items_view: TurnItemsView::NotLoaded,
                     status: TurnStatus::Completed,
                     error: None,
                     started_at: None,
