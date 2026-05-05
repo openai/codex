@@ -1039,6 +1039,7 @@ impl UnifiedExecProcessManager {
             return UnifiedExecProcess::from_spawned(
                 spawned.map_err(|err| UnifiedExecError::create_process(err.to_string()))?,
                 request.sandbox,
+                request.sandbox_violation_context.clone(),
                 spawn_lifecycle,
             )
             .await;
