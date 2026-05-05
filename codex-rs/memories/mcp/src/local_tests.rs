@@ -26,9 +26,15 @@ async fn list_returns_shallow_memory_paths() {
     tokio::fs::create_dir_all(tempdir.path().join("skills/example"))
         .await
         .expect("create skills dir");
+    tokio::fs::create_dir_all(tempdir.path().join(".git"))
+        .await
+        .expect("create hidden dir");
     tokio::fs::write(tempdir.path().join("MEMORY.md"), "summary")
         .await
         .expect("write memory file");
+    tokio::fs::write(tempdir.path().join(".DS_Store"), "metadata")
+        .await
+        .expect("write hidden file");
     tokio::fs::write(tempdir.path().join("skills/example/SKILL.md"), "skill")
         .await
         .expect("write skill file");
@@ -194,6 +200,25 @@ async fn list_scoped_directory_is_shallow() {
 }
 
 #[tokio::test]
+async fn list_rejects_hidden_scoped_paths() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::create_dir_all(tempdir.path().join(".git"))
+        .await
+        .expect("create hidden dir");
+
+    let err = backend(&tempdir)
+        .list(ListMemoriesRequest {
+            path: Some(".git".to_string()),
+            cursor: None,
+            max_results: DEFAULT_LIST_MAX_RESULTS,
+        })
+        .await
+        .expect_err("hidden scoped paths should stay invisible");
+
+    assert!(matches!(err, MemoriesBackendError::NotFound { .. }));
+}
+
+#[tokio::test]
 async fn list_rejects_invalid_cursor() {
     let tempdir = TempDir::new().expect("tempdir");
     tokio::fs::write(tempdir.path().join("MEMORY.md"), "summary")
@@ -313,6 +338,29 @@ async fn read_supports_line_offset() {
             truncated: false,
         }
     );
+}
+
+#[tokio::test]
+async fn read_rejects_hidden_paths() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::create_dir_all(tempdir.path().join(".git"))
+        .await
+        .expect("create hidden dir");
+    tokio::fs::write(tempdir.path().join(".git/HEAD"), "ref: refs/heads/main\n")
+        .await
+        .expect("write hidden file");
+
+    let err = backend(&tempdir)
+        .read(ReadMemoryRequest {
+            path: ".git/HEAD".to_string(),
+            line_offset: 1,
+            max_lines: None,
+            max_tokens: DEFAULT_READ_MAX_TOKENS,
+        })
+        .await
+        .expect_err("hidden paths should stay invisible");
+
+    assert!(matches!(err, MemoriesBackendError::NotFound { .. }));
 }
 
 #[tokio::test]
@@ -557,6 +605,56 @@ async fn search_preserves_global_lexicographic_path_order() {
             },
         ]
     );
+}
+
+#[tokio::test]
+async fn search_skips_hidden_paths() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::create_dir_all(tempdir.path().join(".git"))
+        .await
+        .expect("create hidden dir");
+    tokio::fs::write(tempdir.path().join("MEMORY.md"), "needle visible\n")
+        .await
+        .expect("write visible file");
+    tokio::fs::write(tempdir.path().join(".git/HEAD"), "needle hidden\n")
+        .await
+        .expect("write hidden file");
+    tokio::fs::write(tempdir.path().join(".hidden"), "needle hidden\n")
+        .await
+        .expect("write hidden file");
+
+    let response = backend(&tempdir)
+        .search(search_request(&["needle"]))
+        .await
+        .expect("search memories");
+
+    assert_eq!(
+        response.matches,
+        vec![MemorySearchMatch {
+            path: "MEMORY.md".to_string(),
+            match_line_number: 1,
+            content_start_line_number: 1,
+            content: "needle visible".to_string(),
+            matched_queries: vec!["needle".to_string()],
+        }]
+    );
+}
+
+#[tokio::test]
+async fn search_rejects_hidden_scoped_paths() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::create_dir_all(tempdir.path().join(".git"))
+        .await
+        .expect("create hidden dir");
+
+    let mut request = search_request(&["needle"]);
+    request.path = Some(".git".to_string());
+    let err = backend(&tempdir)
+        .search(request)
+        .await
+        .expect_err("hidden scoped paths should stay invisible");
+
+    assert!(matches!(err, MemoriesBackendError::NotFound { .. }));
 }
 
 #[tokio::test]

@@ -58,6 +58,11 @@ impl LocalMemoriesBackend {
                 "must stay within the memories root",
             ));
         }
+        if relative.components().any(is_hidden_component) {
+            return Err(MemoriesBackendError::NotFound {
+                path: relative_path.to_string(),
+            });
+        }
 
         let components = relative.components().collect::<Vec<_>>();
         let mut scoped_path = self.root.clone();
@@ -122,6 +127,9 @@ impl MemoriesBackend for LocalMemoriesBackend {
         } else if metadata.is_dir() {
             let mut entries = Vec::new();
             for path in read_sorted_dir_paths(&start).await? {
+                if is_hidden_path(&path) {
+                    continue;
+                }
                 let Some(metadata) = Self::metadata_or_none(&path).await? else {
                     continue;
                 };
@@ -288,6 +296,9 @@ async fn search_entries(
     let mut pending = vec![current.to_path_buf()];
     while let Some(dir_path) = pending.pop() {
         for path in read_sorted_dir_paths(&dir_path).await? {
+            if is_hidden_path(&path) {
+                continue;
+            }
             let Some(metadata) = LocalMemoriesBackend::metadata_or_none(&path).await? else {
                 continue;
             };
@@ -401,6 +412,18 @@ fn reject_symlink(path: &str, metadata: &std::fs::Metadata) -> Result<(), Memori
         ));
     }
     Ok(())
+}
+
+fn is_hidden_component(component: Component<'_>) -> bool {
+    matches!(
+        component,
+        Component::Normal(name) if name.to_string_lossy().starts_with('.')
+    )
+}
+
+fn is_hidden_path(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.to_string_lossy().starts_with('.'))
 }
 
 fn display_relative_path(root: &Path, path: &Path) -> String {
