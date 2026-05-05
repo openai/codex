@@ -407,18 +407,18 @@ crate.annotation(
 
 inject_repo(crate, "alsa_lib")
 
-bazel_dep(name = "v8", version = "14.6.202.9")
+bazel_dep(name = "v8", version = "14.7.173.20")
 archive_override(
     module_name = "v8",
-    integrity = "sha256-JphDwLAzsd9KvgRZ7eQvNtPU6qGd3XjFt/a/1QITAJU=",
+    integrity = "sha256-v/x6I4X38a2wckzUIft3Dh0SUdkuOTokwxyF7lzW8Lc=",
     patch_strip = 3,
     patches = [
         "//patches:v8_module_deps.patch",
         "//patches:v8_bazel_rules.patch",
         "//patches:v8_source_portability.patch",
     ],
-    strip_prefix = "v8-14.6.202.9",
-    urls = ["https://github.com/v8/v8/archive/refs/tags/14.6.202.9.tar.gz"],
+    strip_prefix = "v8-14.7.173.20",
+    urls = ["https://github.com/v8/v8/archive/refs/tags/14.7.173.20.tar.gz"],
 )
 
 http_archive(
@@ -428,6 +428,15 @@ http_archive(
     strip_prefix = "v8-146.4.0",
     type = "tar.gz",
     urls = ["https://static.crates.io/crates/v8/v8-146.4.0.crate"],
+)
+
+http_archive(
+    name = "v8_crate_147_4_0",
+    build_file = "//third_party/v8:v8_crate.BUILD.bazel",
+    sha256 = "2df8fffd507fb18ed000673a83d937f58e60fb07f3306b2274284125b15137cd",
+    strip_prefix = "v8-147.4.0",
+    type = "tar.gz",
+    urls = ["https://static.crates.io/crates/v8/v8-147.4.0.crate"],
 )
 
 http_file(

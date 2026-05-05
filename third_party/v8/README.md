@@ -20,8 +20,8 @@ artifact contract.
 
 Current pinned versions:
 
-- Rust crate: `v8 = =146.4.0`
-- Embedded upstream V8 source for musl release builds: `14.6.202.9`
+- Rust crate: `v8 = =147.4.0`
+- Embedded upstream V8 source for musl release builds: `14.7.173.20`
 
 When bumping the Rust crate version, keep the checked-in checksum manifest and
 `MODULE.bazel` in sync:
