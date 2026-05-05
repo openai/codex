@@ -752,7 +752,7 @@ async fn search_supports_case_insensitive_matching() {
 }
 
 #[tokio::test]
-async fn search_supports_any_and_all_match_modes() {
+async fn search_supports_any_and_all_on_same_line_match_modes() {
     let tempdir = TempDir::new().expect("tempdir");
     tokio::fs::write(
         tempdir.path().join("MEMORY.md"),
@@ -793,11 +793,11 @@ async fn search_supports_any_and_all_match_modes() {
     );
 
     let mut request = search_request(&["alpha", "needle"]);
-    request.match_mode = SearchMatchMode::All;
+    request.match_mode = SearchMatchMode::AllOnSameLine;
     let all_response = backend(&tempdir)
         .search(request)
         .await
-        .expect("search with all match mode");
+        .expect("search with all-on-same-line match mode");
     assert_eq!(
         all_response.matches,
         vec![MemorySearchMatch {
@@ -808,6 +808,63 @@ async fn search_supports_any_and_all_match_modes() {
             matched_queries: vec!["alpha".to_string(), "needle".to_string()],
         }]
     );
+}
+
+#[tokio::test]
+async fn search_supports_all_within_lines_match_mode() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::write(
+        tempdir.path().join("MEMORY.md"),
+        "alpha first\nmiddle\nneedle later\nalpha again needle together\n",
+    )
+    .await
+    .expect("write memory file");
+
+    let mut request = search_request(&["alpha", "needle"]);
+    request.match_mode = SearchMatchMode::AllWithinLines { line_count: 3 };
+    request.context_lines = 1;
+    let response = backend(&tempdir)
+        .search(request)
+        .await
+        .expect("search with all-within-lines match mode");
+
+    assert_eq!(
+        response.matches,
+        vec![
+            MemorySearchMatch {
+                path: "MEMORY.md".to_string(),
+                match_line_number: 1,
+                content_start_line_number: 1,
+                content: "alpha first\nmiddle\nneedle later\nalpha again needle together"
+                    .to_string(),
+                matched_queries: vec!["alpha".to_string(), "needle".to_string()],
+            },
+            MemorySearchMatch {
+                path: "MEMORY.md".to_string(),
+                match_line_number: 4,
+                content_start_line_number: 3,
+                content: "needle later\nalpha again needle together".to_string(),
+                matched_queries: vec!["alpha".to_string(), "needle".to_string()],
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn search_rejects_zero_line_window() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::write(tempdir.path().join("MEMORY.md"), "needle\n")
+        .await
+        .expect("write memory file");
+
+    let mut request = search_request(&["needle"]);
+    request.match_mode = SearchMatchMode::AllWithinLines { line_count: 0 };
+    let err = backend(&tempdir)
+        .search(request)
+        .await
+        .expect_err("zero-width windows should be rejected");
+
+    assert!(matches!(err, MemoriesBackendError::InvalidMatchWindow));
 }
 
 #[tokio::test]

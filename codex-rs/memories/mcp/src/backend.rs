@@ -87,11 +87,15 @@ pub struct SearchMemoriesResponse {
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum SearchMatchMode {
     Any,
-    All,
+    AllOnSameLine,
+    AllWithinLines {
+        #[schemars(range(min = 1))]
+        line_count: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -136,6 +140,8 @@ pub enum MemoriesBackendError {
     NotFile { path: String },
     #[error("queries must not be empty or contain empty strings")]
     EmptyQuery,
+    #[error("all_within_lines.line_count must be a positive integer")]
+    InvalidMatchWindow,
     #[error("I/O error while reading memories: {0}")]
     Io(#[from] std::io::Error),
 }
