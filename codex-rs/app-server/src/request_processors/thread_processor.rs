@@ -2914,10 +2914,19 @@ impl ThreadRequestProcessor {
     }
 
     async fn attach_thread_name(&self, thread_id: ThreadId, thread: &mut Thread) {
-        if let Some(title) =
-            title_from_state_db(&self.config, self.state_db.as_ref(), thread_id).await
+        if let Ok(stored_thread) = self
+            .thread_store
+            .read_thread(StoreReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: false,
+            })
+            .await
+            && let Some(title) = stored_thread.name.as_deref().map(str::trim)
+            && !title.is_empty()
+            && stored_thread.preview.trim() != title
         {
-            set_thread_name_from_title(thread, title);
+            set_thread_name_from_title(thread, title.to_string());
         }
     }
 
@@ -3622,37 +3631,6 @@ fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPC
     match err {
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
         err => internal_error(format!("failed to {operation} thread: {err}")),
-    }
-}
-
-async fn title_from_state_db(
-    config: &Config,
-    state_db_ctx: Option<&StateDbHandle>,
-    thread_id: ThreadId,
-) -> Option<String> {
-    if let Some(state_db_ctx) = state_db_ctx
-        && let Some(metadata) = state_db_ctx.get_thread(thread_id).await.ok().flatten()
-        && let Some(title) = distinct_title(&metadata)
-    {
-        return Some(title);
-    }
-    find_thread_name_by_id(&config.codex_home, &thread_id)
-        .await
-        .ok()
-        .flatten()
-}
-
-fn non_empty_title(metadata: &ThreadMetadata) -> Option<String> {
-    let title = metadata.title.trim();
-    (!title.is_empty()).then(|| title.to_string())
-}
-
-fn distinct_title(metadata: &ThreadMetadata) -> Option<String> {
-    let title = non_empty_title(metadata)?;
-    if metadata.first_user_message.as_deref().map(str::trim) == Some(title.as_str()) {
-        None
-    } else {
-        Some(title)
     }
 }
 

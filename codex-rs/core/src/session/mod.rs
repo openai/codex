@@ -35,7 +35,6 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
-use crate::rollout::find_thread_name_by_id;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
@@ -133,6 +132,7 @@ use codex_thread_store::CreateThreadParams;
 use codex_thread_store::LiveThread;
 use codex_thread_store::LiveThreadInitGuard;
 use codex_thread_store::LocalThreadStore;
+use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadEventPersistenceMode;
 use codex_thread_store::ThreadPersistenceMetadata;
@@ -829,24 +829,33 @@ pub(crate) fn session_loop_termination_from_handle(
     .shared()
 }
 
-async fn thread_title_from_state_db(
-    state_db: Option<&state_db::StateDbHandle>,
-    codex_home: &AbsolutePathBuf,
+async fn thread_title_from_thread_store(
+    live_thread: Option<&LiveThread>,
+    thread_store: &Arc<dyn ThreadStore>,
     conversation_id: ThreadId,
 ) -> Option<String> {
-    if let Some(metadata) = state_db
-        && let Some(metadata) = metadata.get_thread(conversation_id).await.ok().flatten()
-    {
-        let title = metadata.title.trim();
-        if !title.is_empty() && metadata.first_user_message.as_deref().map(str::trim) != Some(title)
-        {
-            return Some(title.to_string());
+    let thread = match live_thread {
+        Some(live_thread) => {
+            live_thread
+                .read_thread(
+                    /*include_archived*/ true, /*include_history*/ false,
+                )
+                .await
+        }
+        None => {
+            thread_store
+                .read_thread(ReadThreadParams {
+                    thread_id: conversation_id,
+                    include_archived: true,
+                    include_history: false,
+                })
+                .await
         }
     }
-    find_thread_name_by_id(codex_home, &conversation_id)
-        .await
-        .ok()
-        .flatten()
+    .ok()?;
+
+    let title = thread.name.as_deref()?.trim();
+    (!title.is_empty() && thread.preview.trim() != title).then(|| title.to_string())
 }
 
 impl Session {
