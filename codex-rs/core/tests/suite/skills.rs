@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use codex_core::ThreadManager;
-use codex_core::agent_graph_store_from_config;
+use codex_core::agent_graph_store_from_state_db;
 use codex_core::init_state_db_from_config;
 use codex_core::thread_store_from_config;
 use codex_exec_server::CreateDirectoryOptions;
@@ -241,7 +241,7 @@ async fn list_skills_skips_cwd_roots_when_environment_disabled() -> Result<()> {
         .await
         .expect("skills test requires state db");
     let thread_store = thread_store_from_config(&config, state_db.clone());
-    let agent_graph_store = agent_graph_store_from_config(&config, state_db.clone());
+    let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
     let thread_manager = ThreadManager::new(
         &config,
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("dummy")),

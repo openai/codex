@@ -74,25 +74,21 @@ use tracing_subscriber::util::SubscriberInitExt;
 mod analytics_utils;
 mod app_server_tracing;
 mod bespoke_event_handling;
-mod codex_message_processor;
 mod command_exec;
 mod config;
-mod config_api;
 mod config_manager;
 mod config_manager_service;
 mod connection_rpc_gate;
-mod device_key_api;
 mod dynamic_tools;
 mod error_code;
-mod external_agent_config_api;
 mod filters;
-mod fs_api;
 mod fs_watch;
 mod fuzzy_file_search;
 pub mod in_process;
 mod message_processor;
 mod models;
 mod outgoing_message;
+mod request_processors;
 mod request_serialization;
 mod server_request_error;
 mod thread_state;
@@ -461,9 +457,10 @@ pub async fn run_main_with_transport_options(
             let effective_toml = config.config_layer_stack.effective_config();
             match effective_toml.try_into() {
                 Ok(config_toml) => {
-                    if let Err(err) = codex_core::personality_migration::maybe_migrate_personality(
+                    if let Err(err) = codex_core::personality_migration::maybe_migrate_personality_with_sqlite_home(
                         &config.codex_home,
                         &config_toml,
+                        &config.sqlite_home,
                     )
                     .await
                     {

@@ -17,9 +17,11 @@ pub(super) async fn unarchive_thread(
     params: ArchiveThreadParams,
 ) -> ThreadStoreResult<StoredThread> {
     let thread_id = params.thread_id;
+    let state_db = store.state_db();
     let archived_path = find_archived_thread_path_by_id_str(
         store.config.codex_home.as_path(),
         &thread_id.to_string(),
+        Some(state_db.as_ref()),
     )
     .await
     .map_err(|err| ThreadStoreError::InvalidRequest {

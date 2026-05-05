@@ -20,7 +20,6 @@ use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_agent_graph_store::AgentGraphStore;
 use codex_agent_graph_store::LocalAgentGraphStore;
-use codex_agent_graph_store::RemoteAgentGraphStore;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
@@ -288,29 +287,21 @@ pub fn agent_graph_store_from_state_db(state_db: StateDbHandle) -> Arc<dyn Agent
     Arc::new(LocalAgentGraphStore::new(state_db))
 }
 
-pub fn agent_graph_store_from_config(
-    config: &Config,
-    state_db: StateDbHandle,
-) -> Arc<dyn AgentGraphStore> {
-    match &config.experimental_thread_store {
-        ThreadStoreConfig::Remote { endpoint } => {
-            Arc::new(RemoteAgentGraphStore::new(endpoint.clone()))
-        }
-        ThreadStoreConfig::Local | ThreadStoreConfig::InMemory { .. } => {
-            agent_graph_store_from_state_db(state_db)
-        }
-    }
-}
-
 async fn state_db_from_roots_for_tests(
     codex_home: PathBuf,
     sqlite_home: PathBuf,
     default_model_provider_id: String,
 ) -> StateDbHandle {
-    match state_db::init_with_roots(codex_home, sqlite_home, default_model_provider_id).await {
-        Some(state_db) => state_db,
-        None => panic!("test state db should initialize"),
-    }
+    let config = codex_rollout::RolloutConfig {
+        codex_home: codex_home.clone(),
+        sqlite_home,
+        cwd: codex_home,
+        model_provider_id: default_model_provider_id,
+        generate_memories: false,
+    };
+    state_db::try_init(&config)
+        .await
+        .expect("test state db should initialize")
 }
 
 impl ThreadManager {
@@ -1181,7 +1172,7 @@ impl ThreadManagerState {
         }
         let environment_selections =
             resolve_environment_selections(self.environment_manager.as_ref(), &environments)?;
-        let watch_registration = match environment_selections.primary_turn_environment() {
+        let watch_registration = match environment_selections.primary() {
             Some(turn_environment) if !turn_environment.environment.is_remote() => {
                 self.skills_watcher
                     .register_config(

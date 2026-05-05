@@ -884,10 +884,10 @@ pub async fn run_main(
     let effective_toml = config.config_layer_stack.effective_config();
     match effective_toml.try_into() {
         Ok(config_toml) => {
-            match crate::legacy_core::personality_migration::maybe_migrate_personality(
+            match crate::legacy_core::personality_migration::maybe_migrate_personality_with_sqlite_home(
                 &config.codex_home,
                 &config_toml,
-                state_db.clone(),
+                &config.sqlite_home,
             )
             .await
             {

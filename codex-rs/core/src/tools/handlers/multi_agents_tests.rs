@@ -6,6 +6,7 @@ use crate::function_tool::FunctionCallError;
 use crate::init_state_db;
 use crate::session::tests::make_session_and_context;
 use crate::session_prefix::format_subagent_notification_message;
+use crate::thread_manager::agent_graph_store_from_state_db;
 use crate::thread_manager::thread_store_from_config;
 use crate::tools::context::ToolOutput;
 use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
@@ -3158,15 +3159,18 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
         .features
         .enable(Feature::Sqlite)
         .expect("test config should allow sqlite");
-    let state_db = init_state_db(&config).await;
+    let state_db = init_state_db(&config)
+        .await
+        .expect("test config should initialize state db");
     let manager = ThreadManager::new(
         &config,
         AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
-        thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),
+        thread_store_from_config(&config, state_db.clone()),
+        agent_graph_store_from_state_db(state_db.clone()),
     );
 
     let parent = manager

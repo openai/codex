@@ -43,10 +43,7 @@ pub(crate) struct DeviceKeyRequestProcessor {
 }
 
 impl DeviceKeyRequestProcessor {
-    pub(crate) fn new(
-        outgoing: Arc<OutgoingMessageSender>,
-        state_db: StateDbHandle,
-    ) -> Self {
+    pub(crate) fn new(outgoing: Arc<OutgoingMessageSender>, state_db: StateDbHandle) -> Self {
         Self {
             outgoing,
             store: DeviceKeyStore::new(Arc::new(StateDeviceKeyBindingStore::new(state_db))),

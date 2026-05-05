@@ -25,6 +25,14 @@ pub async fn maybe_migrate_personality(
     codex_home: &Path,
     config_toml: &ConfigToml,
 ) -> io::Result<PersonalityMigrationStatus> {
+    maybe_migrate_personality_with_sqlite_home(codex_home, config_toml, codex_home).await
+}
+
+pub async fn maybe_migrate_personality_with_sqlite_home(
+    codex_home: &Path,
+    config_toml: &ConfigToml,
+    sqlite_home: &Path,
+) -> io::Result<PersonalityMigrationStatus> {
     let marker_path = codex_home.join(PERSONALITY_MIGRATION_FILENAME);
     if tokio::fs::try_exists(&marker_path).await? {
         return Ok(PersonalityMigrationStatus::SkippedMarker);
@@ -43,7 +51,7 @@ pub async fn maybe_migrate_personality(
         .or_else(|| config_toml.model_provider.clone())
         .unwrap_or_else(|| "openai".to_string());
 
-    if !has_recorded_sessions(codex_home, model_provider_id.as_str()).await? {
+    if !has_recorded_sessions(codex_home, sqlite_home, model_provider_id.as_str()).await? {
         create_marker(&marker_path).await?;
         return Ok(PersonalityMigrationStatus::SkippedNoSessions);
     }
@@ -60,13 +68,17 @@ pub async fn maybe_migrate_personality(
     Ok(PersonalityMigrationStatus::Applied)
 }
 
-async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io::Result<bool> {
+async fn has_recorded_sessions(
+    codex_home: &Path,
+    sqlite_home: &Path,
+    default_provider: &str,
+) -> io::Result<bool> {
     let config = LocalThreadStoreConfig {
         codex_home: codex_home.to_path_buf(),
         default_model_provider_id: default_provider.to_string(),
     };
     let state_db = codex_state::StateRuntime::init(
-        config.codex_home.clone(),
+        sqlite_home.to_path_buf(),
         config.default_model_provider_id.clone(),
     )
     .await

@@ -176,16 +176,22 @@ async fn resolve_rollout_path(
         return Ok(Some(path));
     }
 
+    let state_db = store.state_db();
     if include_archived {
-        match find_thread_path_by_id_str(store.config.codex_home.as_path(), &thread_id.to_string())
-            .await
-            .map_err(|err| ThreadStoreError::InvalidRequest {
-                message: format!("failed to locate thread id {thread_id}: {err}"),
-            })? {
+        match find_thread_path_by_id_str(
+            store.config.codex_home.as_path(),
+            &thread_id.to_string(),
+            Some(state_db.as_ref()),
+        )
+        .await
+        .map_err(|err| ThreadStoreError::InvalidRequest {
+            message: format!("failed to locate thread id {thread_id}: {err}"),
+        })? {
             Some(path) => Ok(Some(path)),
             None => find_archived_thread_path_by_id_str(
                 store.config.codex_home.as_path(),
                 &thread_id.to_string(),
+                Some(state_db.as_ref()),
             )
             .await
             .map_err(|err| ThreadStoreError::InvalidRequest {
@@ -193,11 +199,15 @@ async fn resolve_rollout_path(
             }),
         }
     } else {
-        find_thread_path_by_id_str(store.config.codex_home.as_path(), &thread_id.to_string())
-            .await
-            .map_err(|err| ThreadStoreError::InvalidRequest {
-                message: format!("failed to locate thread id {thread_id}: {err}"),
-            })
+        find_thread_path_by_id_str(
+            store.config.codex_home.as_path(),
+            &thread_id.to_string(),
+            Some(state_db.as_ref()),
+        )
+        .await
+        .map_err(|err| ThreadStoreError::InvalidRequest {
+            message: format!("failed to locate thread id {thread_id}: {err}"),
+        })
     }
 }
 

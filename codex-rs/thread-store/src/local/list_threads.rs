@@ -46,7 +46,9 @@ pub(super) async fn list_threads(
         model_provider_id: store.config.default_model_provider_id.clone(),
         generate_memories: false,
     };
+    let state_db_ctx = Some(store.state_db());
     let page = list_rollout_threads(
+        state_db_ctx,
         &rollout_config,
         store.config.default_model_provider_id.as_str(),
         &params,
@@ -105,8 +107,9 @@ pub(super) async fn list_threads(
 }
 
 async fn list_rollout_threads(
+    state_db_ctx: Option<codex_rollout::StateDbHandle>,
     config: &RolloutConfig,
-    default_model_provider_id: &str,
+    default_model_provider: &str,
     params: &ListThreadsParams,
     cursor: Option<&codex_rollout::Cursor>,
     sort_key: codex_rollout::ThreadSortKey,
@@ -114,6 +117,7 @@ async fn list_rollout_threads(
 ) -> ThreadStoreResult<codex_rollout::ThreadsPage> {
     let page = if params.use_state_db_only && params.archived {
         RolloutRecorder::list_archived_threads_from_state_db(
+            state_db_ctx.clone(),
             config,
             params.page_size,
             cursor,
@@ -122,12 +126,13 @@ async fn list_rollout_threads(
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             params.cwd_filters.as_deref(),
-            default_model_provider_id,
+            default_model_provider,
             params.search_term.as_deref(),
         )
         .await
     } else if params.use_state_db_only {
         RolloutRecorder::list_threads_from_state_db(
+            state_db_ctx.clone(),
             config,
             params.page_size,
             cursor,
@@ -136,12 +141,13 @@ async fn list_rollout_threads(
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             params.cwd_filters.as_deref(),
-            default_model_provider_id,
+            default_model_provider,
             params.search_term.as_deref(),
         )
         .await
     } else if params.archived {
         RolloutRecorder::list_archived_threads(
+            state_db_ctx.clone(),
             config,
             params.page_size,
             cursor,
@@ -150,12 +156,13 @@ async fn list_rollout_threads(
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             params.cwd_filters.as_deref(),
-            default_model_provider_id,
+            default_model_provider,
             params.search_term.as_deref(),
         )
         .await
     } else {
         RolloutRecorder::list_threads(
+            state_db_ctx,
             config,
             params.page_size,
             cursor,
@@ -164,7 +171,7 @@ async fn list_rollout_threads(
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             params.cwd_filters.as_deref(),
-            default_model_provider_id,
+            default_model_provider,
             params.search_term.as_deref(),
         )
         .await
