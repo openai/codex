@@ -15,7 +15,6 @@ use anyhow::Result;
 use codex_windows_sandbox::ErrorPayload;
 use codex_windows_sandbox::ExitPayload;
 use codex_windows_sandbox::FramedMessage;
-use codex_windows_sandbox::LaunchDesktop;
 use codex_windows_sandbox::LocalSid;
 use codex_windows_sandbox::Message;
 use codex_windows_sandbox::OutputPayload;
@@ -57,7 +56,6 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows_sys::Win32::System::Console::COORD;
-use windows_sys::Win32::System::Console::ClosePseudoConsole;
 use windows_sys::Win32::System::Console::ResizePseudoConsole;
 use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
 use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
@@ -87,8 +85,8 @@ struct IpcSpawnedProcess {
     stdout_handle: HANDLE,
     stderr_handle: HANDLE,
     stdin_handle: Option<HANDLE>,
+    conpty_owner: Option<codex_windows_sandbox::ConptyInstance>,
     hpc_handle: Option<HANDLE>,
-    _desktop_owner: Option<LaunchDesktop>,
     _pipe_handles: Option<PipeSpawnHandles>,
 }
 
@@ -263,11 +261,11 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
 
     let effective_cwd = effective_cwd(&req.cwd, Some(log_dir.as_path()));
 
+    let mut conpty_owner = None;
     let mut hpc_handle: Option<HANDLE> = None;
-    let mut desktop_owner = None;
     let mut pipe_handles = None;
     let (pi, stdout_handle, stderr_handle, stdin_handle) = if req.tty {
-        let (pi, conpty) = codex_windows_sandbox::spawn_conpty_process_as_user(
+        let (pi, mut conpty) = codex_windows_sandbox::spawn_conpty_process_as_user(
             h_token.raw(),
             &req.command,
             &effective_cwd,
@@ -275,9 +273,10 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
             req.use_private_desktop,
             Some(log_dir.as_path()),
         )?;
-        let (hpc, input_write, output_read, desktop) = conpty.into_raw();
-        hpc_handle = Some(hpc);
-        desktop_owner = desktop;
+        hpc_handle = conpty.raw_handle();
+        let input_write = conpty.take_input_write();
+        let output_read = conpty.take_output_read();
+        conpty_owner = Some(conpty);
         let stdin_handle = if req.stdin_open {
             Some(input_write)
         } else {
@@ -323,8 +322,8 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
         stdout_handle,
         stderr_handle,
         stdin_handle,
+        conpty_owner,
         hpc_handle,
-        _desktop_owner: desktop_owner,
         _pipe_handles: pipe_handles,
     })
 }
@@ -526,6 +525,7 @@ pub fn main() -> Result<()> {
     let pi = ipc_spawn.pi;
     let stdout_handle = ipc_spawn.stdout_handle;
     let stderr_handle = ipc_spawn.stderr_handle;
+    let mut conpty_owner = ipc_spawn.conpty_owner;
     let stdin_handle = ipc_spawn.stdin_handle;
     let hpc_handle = Arc::new(StdMutex::new(ipc_spawn.hpc_handle));
 
@@ -605,13 +605,10 @@ pub fn main() -> Result<()> {
         }
     }
 
-    if let Ok(mut guard) = hpc_handle.lock()
-        && let Some(hpc) = guard.take()
-    {
-        unsafe {
-            ClosePseudoConsole(hpc);
-        }
+    if let Ok(mut guard) = hpc_handle.lock() {
+        let _ = guard.take();
     }
+    drop(conpty_owner.take());
 
     let _ = out_thread.join();
     if let Some(thread) = err_thread {

@@ -117,6 +117,7 @@ pub async fn find_thread_names_by_ids(
 pub async fn find_thread_meta_by_name_str(
     codex_home: &Path,
     name: &str,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
 ) -> std::io::Result<Option<(PathBuf, SessionMetaLine)>> {
     if name.trim().is_empty() {
         return Ok(None);
@@ -135,8 +136,12 @@ pub async fn find_thread_meta_by_name_str(
     while let Some(thread_id) = rx.recv().await {
         // Keep walking until a matching id resolves to a loadable rollout so an unsaved or partial
         // rename cannot shadow an older persisted session with the same name.
-        if let Some(path) =
-            super::list::find_thread_path_by_id_str(codex_home, &thread_id.to_string()).await?
+        if let Some(path) = super::list::find_thread_path_by_id_str(
+            codex_home,
+            &thread_id.to_string(),
+            state_db_ctx,
+        )
+        .await?
             && let Ok(session_meta) = super::list::read_session_meta_line(&path).await
         {
             drop(rx);

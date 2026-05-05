@@ -268,7 +268,7 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
         }
         ResponseItem::Message { role, .. } if role == "assistant" => true,
         ResponseItem::Message { .. } => false,
-        ResponseItem::Compaction { .. } => true,
+        ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
@@ -284,11 +284,11 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
 }
 
 #[derive(Debug)]
-struct CompactRequestLogData {
+pub(crate) struct CompactRequestLogData {
     failing_compaction_request_model_visible_bytes: i64,
 }
 
-fn build_compact_request_log_data(
+pub(crate) fn build_compact_request_log_data(
     input: &[ResponseItem],
     instructions: &str,
 ) -> CompactRequestLogData {
@@ -305,7 +305,7 @@ fn build_compact_request_log_data(
     }
 }
 
-fn log_remote_compact_failure(
+pub(crate) fn log_remote_compact_failure(
     turn_context: &TurnContext,
     log_data: &CompactRequestLogData,
     total_usage_breakdown: TotalTokenUsageBreakdown,
@@ -324,7 +324,7 @@ fn log_remote_compact_failure(
     );
 }
 
-fn trim_function_call_history_to_fit_context_window(
+pub(crate) fn trim_function_call_history_to_fit_context_window(
     history: &mut ContextManager,
     turn_context: &TurnContext,
     base_instructions: &BaseInstructions,

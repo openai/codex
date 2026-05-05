@@ -107,7 +107,7 @@ fn now_unix_timestamp_secs() -> i64 {
     now_unix_timestamp_ms() / 1000
 }
 
-fn now_unix_timestamp_ms() -> i64 {
+pub(crate) fn now_unix_timestamp_ms() -> i64 {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
@@ -186,7 +186,8 @@ fn response_item_records_turn_ttft(item: &ResponseItem) -> bool {
         | ResponseItem::ToolSearchCall { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
-        | ResponseItem::Compaction { .. } => true,
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::ToolSearchOutput { .. }

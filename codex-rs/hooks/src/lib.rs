@@ -2,6 +2,7 @@ mod config_rules;
 mod engine;
 pub(crate) mod events;
 mod legacy_notify;
+mod output_spill;
 mod registry;
 mod schema;
 mod types;

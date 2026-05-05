@@ -23,6 +23,12 @@ struct SystemBwrapLauncher {
     supports_argv0: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SystemBwrapCapabilities {
+    supports_argv0: bool,
+    supports_perms: bool,
+}
+
 pub(crate) fn exec_bwrap(argv: Vec<String>, preserved_files: Vec<File>) -> ! {
     match preferred_bwrap_launcher() {
         BubblewrapLauncher::System(launcher) => {
@@ -43,18 +49,24 @@ fn preferred_bwrap_launcher() -> BubblewrapLauncher {
 }
 
 fn preferred_bwrap_launcher_for_path(system_bwrap_path: &Path) -> BubblewrapLauncher {
-    preferred_bwrap_launcher_for_path_with_probe(system_bwrap_path, system_bwrap_supports_argv0)
+    preferred_bwrap_launcher_for_path_with_probe(system_bwrap_path, system_bwrap_capabilities)
 }
 
 fn preferred_bwrap_launcher_for_path_with_probe(
     system_bwrap_path: &Path,
-    system_bwrap_supports_argv0: impl FnOnce(&Path) -> bool,
+    system_bwrap_capabilities: impl FnOnce(&Path) -> Option<SystemBwrapCapabilities>,
 ) -> BubblewrapLauncher {
     if !system_bwrap_path.is_file() {
         return BubblewrapLauncher::Vendored;
     }
 
-    let supports_argv0 = system_bwrap_supports_argv0(system_bwrap_path);
+    let Some(SystemBwrapCapabilities {
+        supports_argv0,
+        supports_perms: true,
+    }) = system_bwrap_capabilities(system_bwrap_path)
+    else {
+        return BubblewrapLauncher::Vendored;
+    };
     let system_bwrap_path = match AbsolutePathBuf::from_absolute_path(system_bwrap_path) {
         Ok(path) => path,
         Err(err) => panic!(
@@ -75,7 +87,7 @@ pub(crate) fn preferred_bwrap_supports_argv0() -> bool {
     }
 }
 
-fn system_bwrap_supports_argv0(system_bwrap_path: &Path) -> bool {
+fn system_bwrap_capabilities(system_bwrap_path: &Path) -> Option<SystemBwrapCapabilities> {
     // bubblewrap added `--argv0` in v0.9.0:
     // https://github.com/containers/bubblewrap/releases/tag/v0.9.0
     // Older distro packages (for example Ubuntu 20.04/22.04) ship builds that
@@ -83,11 +95,14 @@ fn system_bwrap_supports_argv0(system_bwrap_path: &Path) -> bool {
     // in that case.
     let output = match Command::new(system_bwrap_path).arg("--help").output() {
         Ok(output) => output,
-        Err(_) => return false,
+        Err(_) => return None,
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    stdout.contains("--argv0") || stderr.contains("--argv0")
+    Some(SystemBwrapCapabilities {
+        supports_argv0: stdout.contains("--argv0") || stderr.contains("--argv0"),
+        supports_perms: stdout.contains("--perms") || stderr.contains("--perms"),
+    })
 }
 
 fn exec_system_bwrap(
@@ -164,7 +179,12 @@ mod tests {
         let expected = AbsolutePathBuf::from_absolute_path(fake_bwrap_path).expect("absolute");
 
         assert_eq!(
-            preferred_bwrap_launcher_for_path_with_probe(fake_bwrap_path, |_| true),
+            preferred_bwrap_launcher_for_path_with_probe(fake_bwrap_path, |_| {
+                Some(SystemBwrapCapabilities {
+                    supports_argv0: true,
+                    supports_perms: true,
+                })
+            }),
             BubblewrapLauncher::System(SystemBwrapLauncher {
                 program: expected,
                 supports_argv0: true,
@@ -178,11 +198,31 @@ mod tests {
         let fake_bwrap_path = fake_bwrap.path();
 
         assert_eq!(
-            preferred_bwrap_launcher_for_path_with_probe(fake_bwrap_path, |_| false),
+            preferred_bwrap_launcher_for_path_with_probe(fake_bwrap_path, |_| {
+                Some(SystemBwrapCapabilities {
+                    supports_argv0: false,
+                    supports_perms: true,
+                })
+            }),
             BubblewrapLauncher::System(SystemBwrapLauncher {
                 program: AbsolutePathBuf::from_absolute_path(fake_bwrap_path).expect("absolute"),
                 supports_argv0: false,
             })
+        );
+    }
+
+    #[test]
+    fn falls_back_to_vendored_when_system_bwrap_lacks_perms() {
+        let fake_bwrap = NamedTempFile::new().expect("temp file");
+
+        assert_eq!(
+            preferred_bwrap_launcher_for_path_with_probe(fake_bwrap.path(), |_| {
+                Some(SystemBwrapCapabilities {
+                    supports_argv0: false,
+                    supports_perms: false,
+                })
+            }),
+            BubblewrapLauncher::Vendored
         );
     }
 

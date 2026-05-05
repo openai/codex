@@ -58,7 +58,7 @@ fn make_mcp_tool(
         server_name: server_name.to_string(),
         callable_name: tool_name.to_string(),
         callable_namespace: tool_namespace,
-        server_instructions: None,
+        namespace_description: None,
         tool: Tool {
             name: tool_name.to_string().into(),
             title: None,
@@ -73,7 +73,6 @@ fn make_mcp_tool(
         connector_id: connector_id.map(str::to_string),
         connector_name: connector_name.map(str::to_string),
         plugin_display_names: Vec::new(),
-        connector_description: None,
     }
 }
 

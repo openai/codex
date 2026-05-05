@@ -1085,6 +1085,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         supports_search_tool: false,
         priority: 1,
         additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,

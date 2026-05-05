@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/goal_menu.rs
+expression: "render_bottom_popup(&chat, 100)"
+---
+  Resume paused goal?
+  Goal: Keep improving the bare goal command until it feels calm and useful.
+
+› 1. Resume goal   Mark it active and continue when idle
+  2. Leave paused  Keep it paused; use /goal resume later
+
+  Press enter to confirm or esc to go back

@@ -58,10 +58,7 @@ fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanI
                     tool.callable_namespace.clone(),
                     ToolNamespace {
                         name: tool.callable_namespace.clone(),
-                        description: tool
-                            .connector_description
-                            .clone()
-                            .or_else(|| tool.server_instructions.clone()),
+                        description: tool.namespace_description.clone(),
                     },
                 )
             })
@@ -85,7 +82,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::ExecCommandHandler;
     use crate::tools::handlers::GetGoalHandler;
-    use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::ListMcpResourceTemplatesHandler;
     use crate::tools::handlers::ListMcpResourcesHandler;
     use crate::tools::handlers::LocalShellHandler;
@@ -93,12 +89,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadMcpResourceHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
+    use crate::tools::handlers::RequestPluginInstallHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::ToolSearchHandler;
-    use crate::tools::handlers::ToolSuggestHandler;
     use crate::tools::handlers::UnavailableToolHandler;
     use crate::tools::handlers::UpdateGoalHandler;
     use crate::tools::handlers::ViewImageHandler;
@@ -126,7 +122,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 name: tool.canonical_tool_name(),
                 server_name: tool.server_name.as_str(),
                 connector_name: tool.connector_name.as_deref(),
-                connector_description: tool.connector_description.as_deref(),
+                description: tool.namespace_description.as_deref(),
             })
             .collect::<Vec<_>>()
     });
@@ -222,9 +218,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             ToolHandlerKind::ListAgentsV2 => {
                 builder.register_handler(Arc::new(ListAgentsHandlerV2));
             }
-            ToolHandlerKind::ListDir => {
-                builder.register_handler(Arc::new(ListDirHandler));
-            }
             ToolHandlerKind::ListMcpResources => {
                 builder.register_handler(Arc::new(ListMcpResourcesHandler));
             }
@@ -291,8 +284,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 );
                 builder.register_handler(Arc::new(ToolSearchHandler::new(entries)));
             }
-            ToolHandlerKind::ToolSuggest => {
-                builder.register_handler(Arc::new(ToolSuggestHandler));
+            ToolHandlerKind::RequestPluginInstall => {
+                builder.register_handler(Arc::new(RequestPluginInstallHandler));
             }
             ToolHandlerKind::UpdateGoal => {
                 builder.register_handler(Arc::new(UpdateGoalHandler));

@@ -10,7 +10,9 @@ use crate::AppendThreadItemsParams;
 use crate::CreateThreadParams;
 use crate::LoadThreadHistoryParams;
 use crate::LocalThreadStore;
+use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
+use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadMetadataPatch;
 use crate::ThreadStore;
@@ -139,6 +141,20 @@ impl LiveThread {
             .await
     }
 
+    pub async fn read_thread(
+        &self,
+        include_archived: bool,
+        include_history: bool,
+    ) -> ThreadStoreResult<StoredThread> {
+        self.thread_store
+            .read_thread(ReadThreadParams {
+                thread_id: self.thread_id,
+                include_archived,
+                include_history,
+            })
+            .await
+    }
+
     pub async fn update_memory_mode(
         &self,
         mode: ThreadMemoryMode,
@@ -155,6 +171,20 @@ impl LiveThread {
             })
             .await?;
         Ok(())
+    }
+
+    pub async fn update_metadata(
+        &self,
+        patch: ThreadMetadataPatch,
+        include_archived: bool,
+    ) -> ThreadStoreResult<StoredThread> {
+        self.thread_store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id: self.thread_id,
+                patch,
+                include_archived,
+            })
+            .await
     }
 
     /// Returns the live local rollout path for legacy local-only callers.

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use codex_core::compact::SUMMARY_PREFIX;
+use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::TurnItem;
@@ -406,6 +407,203 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
                 ("Remote Post-Compaction History Layout", follow_up_request),
             ]
         )
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_reuses_context_compaction_for_followups() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::RemoteCompactionV2);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "context_compaction",
+                        "encrypted_content": "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY",
+                    }
+                }),
+                responses::ev_completed("resp-compact"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_COMPACT_REPLY"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "after compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    let response_requests = responses_mock.requests();
+    let compact_request = &response_requests[1];
+    assert!(
+        compact_request
+            .header("x-codex-beta-features")
+            .as_deref()
+            .is_some_and(|value| value
+                .split(',')
+                .any(|feature| feature == "remote_compaction_v2")),
+        "expected compact request to advertise the remote_compaction_v2 beta feature"
+    );
+    assert_eq!(compact_request.path(), "/v1/responses");
+    let compact_body = compact_request.body_json().to_string();
+    assert!(
+        compact_body.contains("\"type\":\"context_compaction\""),
+        "expected v2 compaction request to include the context_compaction trigger item"
+    );
+    assert!(
+        !compact_body.contains("ENCRYPTED_CONTEXT_COMPACTION_SUMMARY"),
+        "expected v2 compaction trigger item to omit encrypted_content"
+    );
+
+    let follow_up_request = response_requests.last().expect("follow-up request missing");
+    let follow_up_body = follow_up_request.body_json().to_string();
+    assert!(
+        follow_up_body.contains("\"type\":\"context_compaction\""),
+        "expected follow-up request to preserve the v2 context_compaction item"
+    );
+    assert!(
+        follow_up_body.contains("ENCRYPTED_CONTEXT_COMPACTION_SUMMARY"),
+        "expected follow-up request to include the context compaction payload"
+    );
+    assert!(
+        follow_up_body.contains("hello remote compact"),
+        "expected v2 follow-up request to preserve retained original user messages"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_accepts_additional_output_items_before_context_compaction() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::RemoteCompactionV2);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m-compact-noise", "IGNORED_COMPACT_REPLY"),
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "context_compaction",
+                        "encrypted_content": "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY",
+                    }
+                }),
+                responses::ev_completed("resp-compact"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_COMPACT_REPLY"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "after compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    let response_requests = responses_mock.requests();
+    let follow_up_request = response_requests.last().expect("follow-up request missing");
+    let follow_up_body = follow_up_request.body_json().to_string();
+    assert!(
+        follow_up_body.contains("\"type\":\"context_compaction\""),
+        "expected follow-up request to preserve the v2 context_compaction item"
+    );
+    assert!(
+        follow_up_body.contains("ENCRYPTED_CONTEXT_COMPACTION_SUMMARY"),
+        "expected follow-up request to include the context compaction payload"
+    );
+    assert!(
+        !follow_up_body.contains("IGNORED_COMPACT_REPLY"),
+        "expected follow-up request to ignore unrelated output items from the compaction stream"
     );
 
     Ok(())

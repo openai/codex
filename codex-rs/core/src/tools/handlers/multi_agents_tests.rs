@@ -3,8 +3,10 @@ use crate::ThreadManager;
 use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
 use crate::function_tool::FunctionCallError;
+use crate::init_state_db;
 use crate::session::tests::make_session_and_context;
 use crate::session_prefix::format_subagent_notification_message;
+use crate::thread_manager::thread_store_from_config;
 use crate::tools::context::ToolOutput;
 use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
@@ -3149,13 +3151,22 @@ async fn close_agent_submits_shutdown_and_returns_previous_status() {
 #[tokio::test]
 async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtrees_closed() {
     let (_session, turn) = make_session_and_context().await;
-    let manager = thread_manager();
     let mut config = turn.config.as_ref().clone();
     config.agent_max_depth = 3;
     config
         .features
         .enable(Feature::Sqlite)
         .expect("test config should allow sqlite");
+    let state_db = init_state_db(&config).await;
+    let manager = ThreadManager::new(
+        &config,
+        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, state_db.clone()),
+        state_db.clone(),
+    );
 
     let parent = manager
         .start_thread(config.clone())

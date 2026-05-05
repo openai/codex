@@ -33,6 +33,7 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test]
 async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() -> Result<()> {
@@ -165,6 +166,57 @@ async fn thread_metadata_update_rejects_empty_git_info_patch() -> Result<()> {
     assert_eq!(
         update_err.error.message,
         "gitInfo must include at least one field"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_metadata_update_rejects_ephemeral_thread() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ephemeral: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let update_id = mcp
+        .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
+            thread_id: thread.id.clone(),
+            git_info: Some(ThreadMetadataGitInfoUpdateParams {
+                sha: None,
+                branch: Some(Some("feature/ephemeral".to_string())),
+                origin_url: None,
+            }),
+        })
+        .await?;
+    let update_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(update_id)),
+    )
+    .await??;
+
+    assert_eq!(update_err.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert_eq!(
+        update_err.error.message,
+        format!(
+            "ephemeral thread does not support metadata updates: {}",
+            thread.id
+        )
     );
 
     Ok(())

@@ -22,7 +22,6 @@ pub enum ToolHandlerKind {
     FollowupTaskV2,
     GetGoal,
     ListAgentsV2,
-    ListDir,
     ListMcpResourceTemplates,
     ListMcpResources,
     LocalShell,
@@ -30,6 +29,7 @@ pub enum ToolHandlerKind {
     Plan,
     ReadMcpResource,
     ReportAgentJobResult,
+    RequestPluginInstall,
     RequestPermissions,
     RequestUserInput,
     ResumeAgentV1,
@@ -42,7 +42,6 @@ pub enum ToolHandlerKind {
     SpawnAgentV2,
     TestSync,
     ToolSearch,
-    ToolSuggest,
     UpdateGoal,
     ViewImage,
     WaitAgentV1,
@@ -93,7 +92,7 @@ pub struct ToolRegistryPlanDeferredTool<'a> {
     pub name: ToolName,
     pub server_name: &'a str,
     pub connector_name: Option<&'a str>,
-    pub connector_description: Option<&'a str>,
+    pub description: Option<&'a str>,
 }
 
 impl ToolRegistryPlan {

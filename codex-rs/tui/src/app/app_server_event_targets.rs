@@ -153,6 +153,8 @@ pub(super) fn server_notification_thread_target(
         | ServerNotification::FuzzyFileSearchSessionUpdated(_)
         | ServerNotification::FuzzyFileSearchSessionCompleted(_)
         | ServerNotification::CommandExecOutputDelta(_)
+        | ServerNotification::ProcessOutputDelta(_)
+        | ServerNotification::ProcessExited(_)
         | ServerNotification::FsChanged(_)
         | ServerNotification::WindowsWorldWritableWarning(_)
         | ServerNotification::WindowsSandboxSetupCompleted(_)

@@ -88,7 +88,7 @@ pub struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub shell_command_backend: ShellCommandBackendConfig,
     pub unified_exec_shell_mode: UnifiedExecShellMode,
-    pub has_environment: bool,
+    pub environment_mode: ToolEnvironmentMode,
     pub allow_login_shell: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
@@ -127,6 +127,27 @@ pub struct ToolsConfigParams<'a> {
     pub session_source: SessionSource,
     pub permission_profile: &'a PermissionProfile,
     pub windows_sandbox_level: WindowsSandboxLevel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolEnvironmentMode {
+    None,
+    Single,
+    Multiple,
+}
+
+impl ToolEnvironmentMode {
+    pub fn from_count(count: usize) -> Self {
+        match count {
+            0 => Self::None,
+            1 => Self::Single,
+            _ => Self::Multiple,
+        }
+    }
+
+    pub fn has_environment(self) -> bool {
+        !matches!(self, Self::None)
+    }
 }
 
 impl ToolsConfig {
@@ -205,7 +226,7 @@ impl ToolsConfig {
             shell_type,
             shell_command_backend,
             unified_exec_shell_mode: UnifiedExecShellMode::Direct,
-            has_environment: true,
+            environment_mode: ToolEnvironmentMode::Single,
             allow_login_shell: true,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
@@ -306,8 +327,8 @@ impl ToolsConfig {
         self
     }
 
-    pub fn with_has_environment(mut self, has_environment: bool) -> Self {
-        self.has_environment = has_environment;
+    pub fn with_environment_mode(mut self, environment_mode: ToolEnvironmentMode) -> Self {
+        self.environment_mode = environment_mode;
         self
     }
 
