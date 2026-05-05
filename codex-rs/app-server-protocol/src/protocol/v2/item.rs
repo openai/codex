@@ -387,6 +387,16 @@ pub enum ImageGenerationContent {
     },
 }
 
+pub(crate) fn image_generation_byte_length(data_base64: &str) -> u64 {
+    let padding_len = data_base64
+        .as_bytes()
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'=')
+        .count();
+    ((data_base64.len() / 4) * 3).saturating_sub(padding_len) as u64
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
@@ -848,7 +858,13 @@ impl From<CoreTurnItem> for ThreadItem {
                 id: image.id,
                 status: image.status,
                 revised_prompt: image.revised_prompt,
-                content: None,
+                content: Some(ImageGenerationContent::Inline {
+                    mime_type: "image/png".to_string(),
+                    data_base64: image.result.clone(),
+                    byte_length: image_generation_byte_length(&image.result),
+                    width: None,
+                    height: None,
+                }),
                 result: image.result,
                 saved_path: image.saved_path,
             },

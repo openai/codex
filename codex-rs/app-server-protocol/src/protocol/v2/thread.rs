@@ -293,6 +293,11 @@ pub struct ThreadResumeParams {
     #[experimental("thread/resume.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
+    /// Controls whether large item payloads are embedded in returned turns or
+    /// replaced with deferred-content metadata.
+    #[experimental("thread/resume.largeContent")]
+    #[ts(optional = nullable)]
+    pub large_content: Option<LargeContentMode>,
     /// Deprecated and ignored by app-server. Kept only so older clients can
     /// continue sending the field while rollout persistence always uses the
     /// limited history policy.
@@ -901,6 +906,15 @@ pub enum SortDirection {
     Desc,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum LargeContentMode {
+    #[default]
+    Inline,
+    Deferred,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -1010,6 +1024,10 @@ pub struct ThreadTurnsListParams {
     /// How much item detail to include for each returned turn; defaults to summary.
     #[ts(optional = nullable)]
     pub items_view: Option<TurnItemsView>,
+    /// Controls whether large item payloads are embedded in returned turns or
+    /// replaced with deferred-content metadata.
+    #[ts(optional = nullable)]
+    pub large_content: Option<LargeContentMode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1042,6 +1060,10 @@ pub struct ThreadTurnsItemsListParams {
     /// Optional item pagination direction; defaults to ascending.
     #[ts(optional = nullable)]
     pub sort_direction: Option<SortDirection>,
+    /// Controls whether large item payloads are embedded in returned items or
+    /// replaced with deferred-content metadata.
+    #[ts(optional = nullable)]
+    pub large_content: Option<LargeContentMode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1055,6 +1077,25 @@ pub struct ThreadTurnsItemsListResponse {
     /// Opaque cursor to pass as `cursor` when reversing `sortDirection`.
     /// This is only populated when the page contains at least one item.
     pub backwards_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadItemContentReadParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub content_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadItemContentReadResponse {
+    pub mime_type: String,
+    pub data_base64: String,
+    pub byte_length: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

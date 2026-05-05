@@ -118,6 +118,7 @@ fn thread_turns_items_list_round_trips() {
         cursor: Some("cursor_1".to_string()),
         limit: Some(50),
         sort_direction: Some(SortDirection::Asc),
+        large_content: None,
     };
 
     assert_eq!(
@@ -128,6 +129,7 @@ fn thread_turns_items_list_round_trips() {
             "cursor": "cursor_1",
             "limit": 50,
             "sortDirection": "asc",
+            "largeContent": null,
         })
     );
     let response = ThreadTurnsItemsListResponse {

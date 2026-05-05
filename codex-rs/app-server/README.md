@@ -143,14 +143,15 @@ Example with notification opt-out:
 ## API Overview
 
 - `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread. When the request includes a `cwd` and the resolved sandbox is `workspace-write` or full access, app-server also marks that project as trusted in the user `config.toml`. Pass `sessionStartSource: "clear"` when starting a replacement thread after clearing the current session so `SessionStart` hooks receive `source: "clear"` instead of the default `"startup"`. For permissions, prefer experimental `permissions` profile selection; the legacy `sandbox` shorthand is still accepted but cannot be combined with `permissions`. Experimental `environments` selects the sticky execution environments for turns on the thread; omit it to use the server default, pass `[]` to disable environments, or pass explicit environment ids with per-environment `cwd`.
-- `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it. Accepts the same permission override rules as `thread/start`.
+- `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it. Accepts the same permission override rules as `thread/start`. Experimental clients can pass `largeContent: "deferred"` to replace large item payloads such as generated-image bytes with metadata placeholders.
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; if the source thread is currently mid-turn, the fork records the same interruption marker as `turn/interrupt` instead of inheriting an unmarked partial turn suffix. The returned `thread.forkedFromId` points at the source thread when known. Accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread. Experimental clients can pass `excludeTurns: true` when they plan to page fork history via `thread/turns/list` instead of receiving the full turn array immediately. Accepts the same permission override rules as `thread/start`.
 - `thread/start`, `thread/resume`, and `thread/fork` responses include the legacy `sandbox` compatibility projection. Experimental clients can read response `permissionProfile` for the exact active runtime permissions and `activePermissionProfile` for the named or implicit built-in profile identity/provenance when known.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
-- `thread/turns/list` — experimental; page through a stored thread’s turn history without resuming it; supports cursor-based pagination with `sortDirection`, `itemsView`, `nextCursor`, and `backwardsCursor`.
-- `thread/turns/items/list` — experimental; page through one stored turn’s items with the same cursor model.
+- `thread/turns/list` — experimental; page through a stored thread’s turn history without resuming it; supports cursor-based pagination with `sortDirection`, `itemsView`, `nextCursor`, and `backwardsCursor`, plus `largeContent: "deferred"` for generated-image payloads.
+- `thread/turns/items/list` — experimental; page through one stored turn’s items with the same cursor model and optional `largeContent: "deferred"` handling.
+- `thread/item/content/read` — experimental; fetch deferred large-content bytes for one stored item.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
 - `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
@@ -442,18 +443,50 @@ Every returned `Turn` includes `itemsView`, which tells clients whether the `ite
 } }
 ```
 
-`thread/turns/items/list` is the planned hydration API for fetching full items for one turn:
+### Example: Defer generated-image content (experimental)
+
+Pass `largeContent: "deferred"` when listing a turn's items to keep generated-image bytes out of the page response. Deferred `imageGeneration` items retain the legacy `result` field as an empty string and expose a structured `content` descriptor that can be loaded separately. For a just-completed live turn, callers may need to retry a content read briefly while rollout persistence catches up with the live turn view.
 
 ```json
 { "method": "thread/turns/items/list", "id": 25, "params": {
     "threadId": "thr_123",
     "turnId": "turn_456",
     "limit": 100,
-    "sortDirection": "asc"
+    "sortDirection": "asc",
+    "largeContent": "deferred"
+} }
+{ "id": 25, "result": {
+    "data": [{
+        "type": "imageGeneration",
+        "id": "ig_789",
+        "status": "completed",
+        "revisedPrompt": null,
+        "content": {
+            "type": "deferred",
+            "contentId": "result",
+            "mimeType": "image/png",
+            "byteLength": 1234567,
+            "width": null,
+            "height": null
+        },
+        "result": "",
+        "savedPath": null
+    }],
+    "nextCursor": null,
+    "backwardsCursor": "newer-items-cursor-or-null"
+} }
+{ "method": "thread/item/content/read", "id": 26, "params": {
+    "threadId": "thr_123",
+    "turnId": "turn_456",
+    "itemId": "ig_789",
+    "contentId": "result"
+} }
+{ "id": 26, "result": {
+    "mimeType": "image/png",
+    "dataBase64": "...",
+    "byteLength": 1234567
 } }
 ```
-
-This method currently returns JSON-RPC `-32601` with message `thread/turns/items/list is not supported yet`.
 
 ### Example: Update stored thread metadata
 

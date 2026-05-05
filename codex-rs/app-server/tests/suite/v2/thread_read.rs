@@ -9,16 +9,20 @@ use codex_app_server::in_process;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ImageGenerationContent;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::LargeContentMode;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemContentReadParams;
+use codex_app_server_protocol::ThreadItemContentReadResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
@@ -32,6 +36,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadTurnsItemsListParams;
+use codex_app_server_protocol::ThreadTurnsItemsListResponse;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::TurnItemsView;
@@ -226,6 +231,7 @@ async fn thread_turns_list_can_page_backward_and_forward() -> Result<()> {
             limit: Some(2),
             sort_direction: Some(SortDirection::Desc),
             items_view: None,
+            large_content: None,
         })
         .await?;
     let read_resp: JSONRPCResponse = timeout(
@@ -253,6 +259,7 @@ async fn thread_turns_list_can_page_backward_and_forward() -> Result<()> {
             limit: Some(10),
             sort_direction: Some(SortDirection::Desc),
             items_view: None,
+            large_content: None,
         })
         .await?;
     let read_resp: JSONRPCResponse = timeout(
@@ -272,6 +279,7 @@ async fn thread_turns_list_can_page_backward_and_forward() -> Result<()> {
             limit: Some(10),
             sort_direction: Some(SortDirection::Asc),
             items_view: None,
+            large_content: None,
         })
         .await?;
     let read_resp: JSONRPCResponse = timeout(
@@ -354,6 +362,120 @@ async fn thread_turns_list_supports_requested_items_view() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_turn_items_list_defers_image_generation_content_and_reads_it_back() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let filename_ts = "2025-01-05T12-00-00";
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        filename_ts,
+        "2025-01-05T12:00:00Z",
+        "make an image",
+        vec![],
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let rollout_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    append_image_generation_end(
+        rollout_path.as_path(),
+        "2025-01-05T12:00:01Z",
+        "ig_123",
+        "Zm9v",
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let turns_list_id = mcp
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: conversation_id.clone(),
+            cursor: None,
+            limit: Some(10),
+            sort_direction: Some(SortDirection::Asc),
+            items_view: Some(TurnItemsView::Full),
+            large_content: Some(LargeContentMode::Deferred),
+        })
+        .await?;
+    let turns_list_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turns_list_id)),
+    )
+    .await??;
+    let ThreadTurnsListResponse { data, .. } =
+        to_response::<ThreadTurnsListResponse>(turns_list_resp)?;
+    let turn = data.first().expect("expected one turn");
+    let turn_id = turn.id.clone();
+    let deferred_item = turn
+        .items
+        .iter()
+        .find(|item| item.id() == "ig_123")
+        .expect("expected deferred image generation item");
+    assert_eq!(
+        deferred_item,
+        &ThreadItem::ImageGeneration {
+            id: "ig_123".to_string(),
+            status: "completed".to_string(),
+            revised_prompt: None,
+            content: Some(ImageGenerationContent::Deferred {
+                content_id: "result".to_string(),
+                mime_type: "image/png".to_string(),
+                byte_length: 3,
+                width: None,
+                height: None,
+            }),
+            result: String::new(),
+            saved_path: None,
+        }
+    );
+
+    let items_list_id = mcp
+        .send_thread_turns_items_list_request(ThreadTurnsItemsListParams {
+            thread_id: conversation_id.clone(),
+            turn_id: turn_id.clone(),
+            cursor: None,
+            limit: Some(10),
+            sort_direction: Some(SortDirection::Asc),
+            large_content: Some(LargeContentMode::Deferred),
+        })
+        .await?;
+    let items_list_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(items_list_id)),
+    )
+    .await??;
+    let ThreadTurnsItemsListResponse { data, .. } =
+        to_response::<ThreadTurnsItemsListResponse>(items_list_resp)?;
+    assert!(data.contains(deferred_item));
+
+    let content_read_id = mcp
+        .send_thread_item_content_read_request(ThreadItemContentReadParams {
+            thread_id: conversation_id,
+            turn_id,
+            item_id: "ig_123".to_string(),
+            content_id: "result".to_string(),
+        })
+        .await?;
+    let content_read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(content_read_id)),
+    )
+    .await??;
+    let content = to_response::<ThreadItemContentReadResponse>(content_read_resp)?;
+    assert_eq!(
+        content,
+        ThreadItemContentReadResponse {
+            mime_type: "image/png".to_string(),
+            data_base64: "Zm9v".to_string(),
+            byte_length: 3,
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_turns_list_reads_store_history_without_rollout_path() -> Result<()> {
     let codex_home = TempDir::new()?;
     let thread_id = codex_protocol::ThreadId::from_string("00000000-0000-4000-8000-000000000123")?;
@@ -408,6 +530,7 @@ async fn thread_turns_list_reads_store_history_without_rollout_path() -> Result<
                 limit: Some(10),
                 sort_direction: Some(SortDirection::Asc),
                 items_view: None,
+                large_content: None,
             },
         })
         .await?
@@ -658,6 +781,7 @@ async fn thread_turns_list_rejects_cursor_when_anchor_turn_is_rolled_back() -> R
             limit: Some(2),
             sort_direction: Some(SortDirection::Desc),
             items_view: None,
+            large_content: None,
         })
         .await?;
     let read_resp: JSONRPCResponse = timeout(
@@ -683,6 +807,7 @@ async fn thread_turns_list_rejects_cursor_when_anchor_turn_is_rolled_back() -> R
             limit: Some(10),
             sort_direction: Some(SortDirection::Asc),
             items_view: None,
+            large_content: None,
         })
         .await?;
     let read_err: JSONRPCError = timeout(
@@ -1040,6 +1165,7 @@ async fn thread_turns_list_rejects_unmaterialized_loaded_thread() -> Result<()> 
             limit: None,
             sort_direction: None,
             items_view: None,
+            large_content: None,
         })
         .await?;
     let read_err: JSONRPCError = timeout(
@@ -1055,39 +1181,6 @@ async fn thread_turns_list_rejects_unmaterialized_loaded_thread() -> Result<()> 
             .contains("thread/turns/list is unavailable before first user message"),
         "unexpected error: {}",
         read_err.error.message
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn thread_turns_items_list_returns_unsupported() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let read_id = mcp
-        .send_thread_turns_items_list_request(ThreadTurnsItemsListParams {
-            thread_id: "thr_123".to_string(),
-            turn_id: "turn_456".to_string(),
-            cursor: None,
-            limit: None,
-            sort_direction: None,
-        })
-        .await?;
-    let read_err: JSONRPCError = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(read_id)),
-    )
-    .await??;
-
-    assert_eq!(read_err.error.code, -32601);
-    assert_eq!(
-        read_err.error.message,
-        "thread/turns/items/list is not supported yet"
     );
 
     Ok(())
@@ -1196,6 +1289,29 @@ fn append_agent_message(path: &Path, timestamp: &str, text: &str) -> anyhow::Res
     Ok(())
 }
 
+fn append_image_generation_end(
+    path: &Path,
+    timestamp: &str,
+    call_id: &str,
+    result: &str,
+) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
+    writeln!(
+        file,
+        "{}",
+        json!({
+            "timestamp": timestamp,
+            "type":"event_msg",
+            "payload": {
+                "type":"image_generation_end",
+                "call_id": call_id,
+                "status": "completed",
+                "result": result
+            }
+        })
+    )
+}
+
 fn append_thread_rollback(path: &Path, timestamp: &str, num_turns: u32) -> std::io::Result<()> {
     let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
     writeln!(
@@ -1224,6 +1340,7 @@ async fn read_single_turn_items_view(
             limit: Some(10),
             sort_direction: Some(SortDirection::Asc),
             items_view,
+            large_content: None,
         })
         .await?;
     let read_resp: JSONRPCResponse = timeout(

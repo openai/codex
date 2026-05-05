@@ -215,6 +215,13 @@
       ],
       "type": "string"
     },
+    "LargeContentMode": {
+      "enum": [
+        "inline",
+        "deferred"
+      ],
+      "type": "string"
+    },
     "LocalShellAction": {
       "oneOf": [
         {

@@ -547,6 +547,7 @@ pub(super) async fn handle_pending_thread_resume_request(
             active_turn.as_ref(),
         );
     }
+    super::thread_processor::apply_large_content_mode_to_thread(&mut thread, pending.large_content);
 
     let thread_status = thread_watch_manager
         .loaded_status_for_thread(&thread.id)
