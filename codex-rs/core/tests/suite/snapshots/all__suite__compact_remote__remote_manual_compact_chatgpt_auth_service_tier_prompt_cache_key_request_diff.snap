@@ -40,3 +40,4 @@ Scenario: After five varied ChatGPT-auth turns, remote manual compaction reuses 
 +      "type": "message"
 -  "store": false,
 -  "stream": true,
+-  "tool_choice": "auto",
