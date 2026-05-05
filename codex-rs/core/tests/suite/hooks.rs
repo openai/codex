@@ -3,8 +3,6 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_config::CONFIG_TOML_FILE;
-use codex_config::TomlValue;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_features::Feature;
@@ -22,6 +20,8 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::hooks::trust_discovered_hooks;
+use core_test_support::hooks::trust_hooks;
 use core_test_support::managed_network_requirements_loader;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
@@ -71,62 +71,6 @@ fn network_workspace_write_profile() -> PermissionProfile {
         /*exclude_tmpdir_env_var*/ false,
         /*exclude_slash_tmp*/ false,
     )
-}
-
-fn trust_discovered_hooks(config: &mut Config) {
-    if let Err(err) = config.features.enable(Feature::CodexHooks) {
-        panic!("test config should allow feature update: {err}");
-    }
-
-    let listed = codex_hooks::list_hooks(codex_hooks::HooksConfig {
-        feature_enabled: true,
-        config_layer_stack: Some(config.config_layer_stack.clone()),
-        ..codex_hooks::HooksConfig::default()
-    });
-    assert!(
-        !listed.hooks.is_empty(),
-        "trusted hook fixture should discover at least one hook"
-    );
-    trust_hooks(config, listed.hooks);
-}
-
-fn trust_hooks(config: &mut Config, hooks: Vec<codex_hooks::HookListEntry>) {
-    let mut user_config = config
-        .config_layer_stack
-        .get_user_layer()
-        .map(|layer| layer.config.clone())
-        .unwrap_or_else(|| TomlValue::Table(Default::default()));
-    let Some(user_table) = user_config.as_table_mut() else {
-        panic!("user config should be a table");
-    };
-    let Some(hooks_table) = user_table
-        .entry("hooks")
-        .or_insert_with(|| TomlValue::Table(Default::default()))
-        .as_table_mut()
-    else {
-        panic!("hooks config should be a table");
-    };
-    let Some(state_table) = hooks_table
-        .entry("state")
-        .or_insert_with(|| TomlValue::Table(Default::default()))
-        .as_table_mut()
-    else {
-        panic!("hook state config should be a table");
-    };
-    for hook in hooks {
-        state_table.insert(
-            hook.key,
-            TomlValue::Table(toml::map::Map::from_iter([(
-                "trusted_hash".to_string(),
-                TomlValue::String(hook.current_hash),
-            )])),
-        );
-    }
-
-    let config_toml_path = config.codex_home.join(CONFIG_TOML_FILE);
-    config.config_layer_stack = config
-        .config_layer_stack
-        .with_user_config(&config_toml_path, user_config);
 }
 
 fn trust_plugin_hooks(config: &mut Config, plugin_hook_sources: Vec<PluginHookSource>) {

@@ -5,13 +5,11 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_config::CONFIG_TOML_FILE;
-use codex_config::TomlValue;
 use codex_config::types::AppToolApproval;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
-use codex_features::Feature;
+use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
@@ -165,50 +163,7 @@ fn enable_hooks_and_rmcp_server(
     rmcp_test_server_bin: String,
     approval_mode: AppToolApproval,
 ) {
-    if let Err(err) = config.features.enable(Feature::CodexHooks) {
-        panic!("test config should allow feature update: {err}");
-    }
-    let listed = codex_hooks::list_hooks(codex_hooks::HooksConfig {
-        feature_enabled: true,
-        config_layer_stack: Some(config.config_layer_stack.clone()),
-        ..codex_hooks::HooksConfig::default()
-    });
-    assert_eq!(listed.hooks.len(), 1);
-
-    let mut user_config = config
-        .config_layer_stack
-        .get_user_layer()
-        .map(|layer| layer.config.clone())
-        .unwrap_or_else(|| TomlValue::Table(Default::default()));
-    let Some(user_table) = user_config.as_table_mut() else {
-        panic!("user config should be a table");
-    };
-    let Some(hooks_table) = user_table
-        .entry("hooks")
-        .or_insert_with(|| TomlValue::Table(Default::default()))
-        .as_table_mut()
-    else {
-        panic!("hooks config should be a table");
-    };
-    let Some(state_table) = hooks_table
-        .entry("state")
-        .or_insert_with(|| TomlValue::Table(Default::default()))
-        .as_table_mut()
-    else {
-        panic!("hook state config should be a table");
-    };
-    state_table.insert(
-        listed.hooks[0].key.clone(),
-        TomlValue::Table(toml::map::Map::from_iter([(
-            "trusted_hash".to_string(),
-            TomlValue::String(listed.hooks[0].current_hash.clone()),
-        )])),
-    );
-    let config_toml_path = config.codex_home.join(CONFIG_TOML_FILE);
-    config.config_layer_stack = config
-        .config_layer_stack
-        .with_user_config(&config_toml_path, user_config);
-
+    trust_discovered_hooks(config);
     insert_rmcp_test_server(config, rmcp_test_server_bin, approval_mode);
 }
 

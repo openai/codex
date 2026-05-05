@@ -20,6 +20,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GranularApprovalConfig;
 use core_test_support::PathExt;
+use core_test_support::hooks::trusted_config_layer_stack;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -169,21 +170,10 @@ print({hook_output:?})
         ..HooksConfig::default()
     });
     assert_eq!(hook_list.hooks.len(), 1);
-    let trusted_config_layer_stack = turn_context.config.config_layer_stack.with_user_config(
-        &turn_context
-            .config
-            .codex_home
-            .join(codex_config::CONFIG_TOML_FILE),
-        serde_json::from_value(serde_json::json!({
-            "hooks": {
-                "state": {
-                    hook_list.hooks[0].key.clone(): {
-                        "trusted_hash": hook_list.hooks[0].current_hash.clone(),
-                    },
-                },
-            },
-        }))
-        .expect("build trusted hook state"),
+    let trusted_config_layer_stack = trusted_config_layer_stack(
+        &turn_context.config.config_layer_stack,
+        &turn_context.config.codex_home,
+        hook_list.hooks,
     );
 
     session
