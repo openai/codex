@@ -15,12 +15,24 @@ const REGULAR_FILE_MODE: &str = "100644";
 
 /// Tracks the net text diff for the current turn from successful apply_patch
 /// operations, without rereading the workspace filesystem.
-#[derive(Default)]
 pub struct TurnDiffTracker {
+    valid: bool,
     display_root: Option<PathBuf>,
     baseline_by_path: HashMap<PathBuf, String>,
     current_by_path: HashMap<PathBuf, String>,
     origin_by_current_path: HashMap<PathBuf, PathBuf>,
+}
+
+impl Default for TurnDiffTracker {
+    fn default() -> Self {
+        Self {
+            valid: true,
+            display_root: None,
+            baseline_by_path: HashMap::new(),
+            current_by_path: HashMap::new(),
+            origin_by_current_path: HashMap::new(),
+        }
+    }
 }
 
 impl TurnDiffTracker {
@@ -40,7 +52,15 @@ impl TurnDiffTracker {
         }
     }
 
+    pub fn invalidate(&mut self) {
+        self.valid = false;
+    }
+
     pub fn get_unified_diff(&self) -> Option<String> {
+        if !self.valid {
+            return None;
+        }
+
         let rename_pairs = self.rename_pairs();
         let paired_destinations = rename_pairs.values().cloned().collect::<HashSet<_>>();
         let mut handled = HashSet::new();

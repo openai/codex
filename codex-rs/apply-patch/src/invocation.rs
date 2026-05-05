@@ -21,6 +21,7 @@ use crate::parser::Hunk;
 use crate::parser::ParseError;
 use crate::parser::parse_patch;
 use crate::unified_diff_from_chunks;
+use std::io;
 use std::str::Utf8Error;
 use tree_sitter::LanguageError;
 
@@ -161,11 +162,18 @@ pub async fn maybe_parse_apply_patch_verified(
                 .map(|dir| cwd.join(Path::new(dir)))
                 .unwrap_or_else(|| cwd.clone());
             let mut changes = Vec::new();
+            let mut turn_diff_supported = true;
             for hunk in hunks {
                 let path = hunk.resolve_path(&effective_cwd);
                 match hunk {
                     Hunk::AddFile { contents, .. } => {
-                        let overwritten_content = fs.read_file_text(&path, sandbox).await.ok();
+                        let overwritten_content = read_optional_file_text_for_turn_diff(
+                            &path,
+                            fs,
+                            sandbox,
+                            &mut turn_diff_supported,
+                        )
+                        .await;
                         changes.push(ApplyPatchChange {
                             path: path.into_path_buf(),
                             change: ApplyPatchFileChange::Add {
@@ -175,6 +183,13 @@ pub async fn maybe_parse_apply_patch_verified(
                         });
                     }
                     Hunk::DeleteFile { .. } => {
+                        note_existing_path_turn_diff_support(
+                            &path,
+                            fs,
+                            sandbox,
+                            &mut turn_diff_supported,
+                        )
+                        .await;
                         let content = match fs.read_file_text(&path, sandbox).await {
                             Ok(content) => content,
                             Err(e) => {
@@ -194,6 +209,13 @@ pub async fn maybe_parse_apply_patch_verified(
                     Hunk::UpdateFile {
                         move_path, chunks, ..
                     } => {
+                        note_existing_path_turn_diff_support(
+                            &path,
+                            fs,
+                            sandbox,
+                            &mut turn_diff_supported,
+                        )
+                        .await;
                         let resolved_move_path = move_path.as_ref().map(|p| effective_cwd.join(p));
                         let ApplyPatchFileUpdate {
                             unified_diff,
@@ -206,7 +228,15 @@ pub async fn maybe_parse_apply_patch_verified(
                             }
                         };
                         let overwritten_move_content = match &resolved_move_path {
-                            Some(move_path) => fs.read_file_text(move_path, sandbox).await.ok(),
+                            Some(move_path) => {
+                                read_optional_file_text_for_turn_diff(
+                                    move_path,
+                                    fs,
+                                    sandbox,
+                                    &mut turn_diff_supported,
+                                )
+                                .await
+                            }
                             None => None,
                         };
                         changes.push(ApplyPatchChange {
@@ -225,6 +255,7 @@ pub async fn maybe_parse_apply_patch_verified(
             }
             MaybeApplyPatchVerified::Body(ApplyPatchAction {
                 changes,
+                turn_diff_supported,
                 patch,
                 cwd: effective_cwd,
             })
@@ -232,6 +263,37 @@ pub async fn maybe_parse_apply_patch_verified(
         MaybeApplyPatch::ShellParseError(e) => MaybeApplyPatchVerified::ShellParseError(e),
         MaybeApplyPatch::PatchParseError(e) => MaybeApplyPatchVerified::CorrectnessError(e.into()),
         MaybeApplyPatch::NotApplyPatch => MaybeApplyPatchVerified::NotApplyPatch,
+    }
+}
+
+async fn read_optional_file_text_for_turn_diff(
+    path: &AbsolutePathBuf,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
+    turn_diff_supported: &mut bool,
+) -> Option<String> {
+    note_existing_path_turn_diff_support(path, fs, sandbox, turn_diff_supported).await;
+    match fs.read_file_text(path, sandbox).await {
+        Ok(content) => Some(content),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => None,
+        Err(_) => {
+            *turn_diff_supported = false;
+            None
+        }
+    }
+}
+
+async fn note_existing_path_turn_diff_support(
+    path: &AbsolutePathBuf,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
+    turn_diff_supported: &mut bool,
+) {
+    match fs.get_metadata(path, sandbox).await {
+        Ok(metadata) if metadata.is_file && !metadata.is_symlink => {}
+        Ok(_) => *turn_diff_supported = false,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => *turn_diff_supported = false,
     }
 }
 
@@ -813,6 +875,7 @@ PATCH"#,
                         new_content: "updated session directory content\n".to_string(),
                     },
                 }],
+                turn_diff_supported: true,
                 patch: argv[1].clone(),
                 cwd: AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
             })
@@ -871,5 +934,89 @@ PATCH"#,
             }
             other => panic!("expected update change, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_add_over_unreadable_destination_disables_turn_diff_tracking() {
+        let session_dir = tempdir().unwrap();
+        fs::write(session_dir.path().join("binary.dat"), [0xff, 0xfe, 0xfd]).unwrap();
+        let argv = vec![
+            "apply_patch".to_string(),
+            "*** Begin Patch\n*** Add File: binary.dat\n+text\n*** End Patch".to_string(),
+        ];
+
+        let result = maybe_parse_apply_patch_verified(
+            &argv,
+            &AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await;
+
+        let action = match result {
+            MaybeApplyPatchVerified::Body(action) => action,
+            other => panic!("expected verified body, got {other:?}"),
+        };
+
+        assert!(!action.supports_turn_diff_tracking());
+    }
+
+    #[tokio::test]
+    async fn test_move_over_unreadable_destination_disables_turn_diff_tracking() {
+        let session_dir = tempdir().unwrap();
+        fs::write(session_dir.path().join("source.txt"), "before\n").unwrap();
+        fs::write(session_dir.path().join("binary.dat"), [0xff, 0xfe, 0xfd]).unwrap();
+        let argv = vec![
+            "apply_patch".to_string(),
+            "*** Begin Patch\n*** Update File: source.txt\n*** Move to: binary.dat\n@@\n-before\n+after\n*** End Patch".to_string(),
+        ];
+
+        let result = maybe_parse_apply_patch_verified(
+            &argv,
+            &AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await;
+
+        let action = match result {
+            MaybeApplyPatchVerified::Body(action) => action,
+            other => panic!("expected verified body, got {other:?}"),
+        };
+
+        assert!(!action.supports_turn_diff_tracking());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_delete_symlink_disables_turn_diff_tracking() {
+        use std::os::unix::fs::symlink;
+
+        let session_dir = tempdir().unwrap();
+        fs::write(session_dir.path().join("target.txt"), "target\n").unwrap();
+        symlink(
+            session_dir.path().join("target.txt"),
+            session_dir.path().join("link.txt"),
+        )
+        .unwrap();
+        let argv = vec![
+            "apply_patch".to_string(),
+            "*** Begin Patch\n*** Delete File: link.txt\n*** End Patch".to_string(),
+        ];
+
+        let result = maybe_parse_apply_patch_verified(
+            &argv,
+            &AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await;
+
+        let action = match result {
+            MaybeApplyPatchVerified::Body(action) => action,
+            other => panic!("expected verified body, got {other:?}"),
+        };
+
+        assert!(!action.supports_turn_diff_tracking());
     }
 }

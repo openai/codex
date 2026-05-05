@@ -145,6 +145,7 @@ pub enum MaybeApplyPatchVerified {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ApplyPatchAction {
     changes: Vec<ApplyPatchChange>,
+    turn_diff_supported: bool,
 
     /// The raw patch argument that can be used to apply the patch. i.e., if the
     /// original arg was parsed in "lenient" mode with a
@@ -173,6 +174,12 @@ impl ApplyPatchAction {
             .map(|change| (change.path.as_path(), &change.change))
     }
 
+    /// Returns whether this action carries enough regular UTF-8 text metadata
+    /// for the operation-backed turn diff tracker to render it exactly.
+    pub fn supports_turn_diff_tracking(&self) -> bool {
+        self.turn_diff_supported
+    }
+
     /// Should be used exclusively for testing. (Not worth the overhead of
     /// creating a feature flag for this.)
     pub fn new_add_for_test(path: &AbsolutePathBuf, content: String) -> Self {
@@ -198,6 +205,7 @@ impl ApplyPatchAction {
         #[expect(clippy::expect_used)]
         Self {
             changes,
+            turn_diff_supported: true,
             cwd: path.parent().expect("path should have parent"),
             patch,
         }

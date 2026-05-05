@@ -63,6 +63,12 @@ pub(crate) enum ToolEventFailure {
     Rejected(String),
 }
 
+enum TurnDiffTrackerUpdate<'a> {
+    Track(&'a ApplyPatchAction),
+    Invalidate,
+    None,
+}
+
 pub(crate) async fn emit_exec_command_begin(
     ctx: ToolEventCtx<'_>,
     command: &[String],
@@ -208,17 +214,27 @@ impl ToolEmitter {
                 },
                 ToolEventStage::Success(output),
             ) => {
+                let status = if output.exit_code == 0 {
+                    PatchApplyStatus::Completed
+                } else {
+                    PatchApplyStatus::Failed
+                };
+                let tracker_update = if output.exit_code == 0 {
+                    if action.supports_turn_diff_tracking() {
+                        TurnDiffTrackerUpdate::Track(action)
+                    } else {
+                        TurnDiffTrackerUpdate::Invalidate
+                    }
+                } else {
+                    TurnDiffTrackerUpdate::Invalidate
+                };
                 emit_patch_end(
                     ctx,
                     changes.clone(),
                     output.stdout.text.clone(),
                     output.stderr.text.clone(),
-                    if output.exit_code == 0 {
-                        PatchApplyStatus::Completed
-                    } else {
-                        PatchApplyStatus::Failed
-                    },
-                    Some(action),
+                    status,
+                    tracker_update,
                 )
                 .await;
             }
@@ -236,7 +252,7 @@ impl ToolEmitter {
                     } else {
                         PatchApplyStatus::Failed
                     },
-                    /*action*/ None,
+                    TurnDiffTrackerUpdate::Invalidate,
                 )
                 .await;
             }
@@ -250,7 +266,7 @@ impl ToolEmitter {
                     String::new(),
                     (*message).to_string(),
                     PatchApplyStatus::Failed,
-                    /*action*/ None,
+                    TurnDiffTrackerUpdate::None,
                 )
                 .await;
             }
@@ -264,7 +280,7 @@ impl ToolEmitter {
                     String::new(),
                     (*message).to_string(),
                     PatchApplyStatus::Declined,
-                    /*action*/ None,
+                    TurnDiffTrackerUpdate::None,
                 )
                 .await;
             }
@@ -511,9 +527,8 @@ async fn emit_patch_end(
     stdout: String,
     stderr: String,
     status: PatchApplyStatus,
-    action: Option<&ApplyPatchAction>,
+    tracker_update: TurnDiffTrackerUpdate<'_>,
 ) {
-    let patch_completed = status == PatchApplyStatus::Completed;
     ctx.session
         .emit_turn_item_completed(
             ctx.turn,
@@ -529,9 +544,13 @@ async fn emit_patch_end(
         .await;
 
     if let Some(tracker) = ctx.turn_diff_tracker {
-        if patch_completed && let Some(action) = action {
+        {
             let mut guard = tracker.lock().await;
-            guard.track_successful_patch(action);
+            match tracker_update {
+                TurnDiffTrackerUpdate::Track(action) => guard.track_successful_patch(action),
+                TurnDiffTrackerUpdate::Invalidate => guard.invalidate(),
+                TurnDiffTrackerUpdate::None => {}
+            }
         }
 
         let unified_diff = {

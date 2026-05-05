@@ -78,6 +78,23 @@ index {ZERO_OID}..{right_oid}
 }
 
 #[tokio::test]
+async fn invalidated_tracker_suppresses_existing_diff() {
+    let dir = tempdir().expect("tempdir");
+    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+
+    let add = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Add File: a.txt\n+foo\n*** End Patch",
+    )
+    .await;
+    tracker.track_successful_patch(&add);
+
+    tracker.invalidate();
+
+    assert_eq!(tracker.get_unified_diff(), None);
+}
+
+#[tokio::test]
 async fn accumulates_delete() {
     let dir = tempdir().expect("tempdir");
     fs::write(dir.path().join("b.txt"), "x\n").expect("seed file");
