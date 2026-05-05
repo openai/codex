@@ -390,6 +390,35 @@ fn cleanup_inactive_versions_removes_versions_except_active_marker_version() {
 }
 
 #[test]
+fn cleanup_inactive_versions_skips_when_active_marker_lock_is_held() {
+    let tmp = tempdir().unwrap();
+    let plugin_base_root = tmp.path().join("plugins/cache/debug/sample-plugin");
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/1.0.0",
+        "sample-plugin",
+    );
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/2.0.0",
+        "sample-plugin",
+    );
+    fs::write(plugin_base_root.join(".active-version"), "1.0.0\n").unwrap();
+    let _lock_file = lock_active_plugin_version_marker(
+        &plugin_base_root,
+        ActivePluginVersionLockKind::Exclusive,
+    )
+    .unwrap();
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
+
+    store.cleanup_inactive_versions(&plugin_id);
+
+    assert!(plugin_base_root.join("1.0.0").is_dir());
+    assert!(plugin_base_root.join("2.0.0").is_dir());
+}
+
+#[test]
 fn cleanup_inactive_versions_logs_and_continues_after_remove_failures() {
     let tmp = tempdir().unwrap();
     let plugin_base_root = tmp.path().join("plugins/cache/debug/sample-plugin");

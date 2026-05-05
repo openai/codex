@@ -148,7 +148,19 @@ impl PluginStore {
                 &plugin_version,
             )?;
         } else {
-            self.cleanup_inactive_versions(&plugin_id);
+            fs::create_dir_all(plugin_base_root.as_path()).map_err(|err| {
+                PluginStoreError::io("failed to create plugin cache directory", err)
+            })?;
+            let _lock_file = lock_active_plugin_version_marker(
+                plugin_base_root.as_path(),
+                ActivePluginVersionLockKind::Exclusive,
+            )
+            .map_err(|err| {
+                PluginStoreError::io("failed to lock active plugin version marker", err)
+            })?;
+            cleanup_inactive_versions_locked(&plugin_id, plugin_base_root.as_path(), |path| {
+                fs::remove_dir_all(path)
+            });
             if !installed_path.as_path().is_dir() {
                 install_plugin_version_into_existing_base(
                     source_path.as_path(),
@@ -156,7 +168,10 @@ impl PluginStore {
                     &plugin_version,
                 )?;
             }
-            write_active_plugin_version_marker(plugin_base_root.as_path(), &plugin_version)?;
+            write_active_plugin_version_marker_unlocked(
+                plugin_base_root.as_path(),
+                &plugin_version,
+            )?;
         }
 
         Ok(PluginInstallResult {
@@ -204,6 +219,10 @@ fn active_plugin_version_marker(plugin_base_root: &Path) -> io::Result<Option<St
 
     let _lock_file =
         lock_active_plugin_version_marker(plugin_base_root, ActivePluginVersionLockKind::Shared)?;
+    active_plugin_version_marker_unlocked(plugin_base_root)
+}
+
+fn active_plugin_version_marker_unlocked(plugin_base_root: &Path) -> io::Result<Option<String>> {
     let marker_path = plugin_base_root.join(ACTIVE_PLUGIN_VERSION_FILE);
     let version = match fs::read_to_string(&marker_path) {
         Ok(version) => version,
@@ -337,18 +356,10 @@ fn remove_existing_target(path: &Path) -> Result<(), PluginStoreError> {
     }
 }
 
-fn write_active_plugin_version_marker(
+fn write_active_plugin_version_marker_unlocked(
     plugin_base_root: &Path,
     plugin_version: &str,
 ) -> Result<(), PluginStoreError> {
-    fs::create_dir_all(plugin_base_root)
-        .map_err(|err| PluginStoreError::io("failed to create plugin cache directory", err))?;
-    let _lock_file =
-        lock_active_plugin_version_marker(plugin_base_root, ActivePluginVersionLockKind::Exclusive)
-            .map_err(|err| {
-                PluginStoreError::io("failed to lock active plugin version marker", err)
-            })?;
-
     let marker_path = plugin_base_root.join(ACTIVE_PLUGIN_VERSION_FILE);
     let mut marker_file = fs::OpenOptions::new()
         .create(true)
@@ -439,11 +450,40 @@ fn install_plugin_version_into_existing_base(
 fn cleanup_inactive_versions_with_remover<F>(
     plugin_id: &PluginId,
     plugin_base_root: &Path,
+    remove_dir_all: F,
+) where
+    F: FnMut(&Path) -> io::Result<()>,
+{
+    if !plugin_base_root.is_dir() {
+        return;
+    }
+
+    let _lock_file = match lock_active_plugin_version_marker(
+        plugin_base_root,
+        ActivePluginVersionLockKind::Exclusive,
+    ) {
+        Ok(lock_file) => lock_file,
+        Err(err) => {
+            warn!(
+                plugin = %plugin_id.as_key(),
+                path = %plugin_base_root.display(),
+                error = %err,
+                "failed to lock active plugin version marker while cleaning inactive versions"
+            );
+            return;
+        }
+    };
+    cleanup_inactive_versions_locked(plugin_id, plugin_base_root, remove_dir_all);
+}
+
+fn cleanup_inactive_versions_locked<F>(
+    plugin_id: &PluginId,
+    plugin_base_root: &Path,
     mut remove_dir_all: F,
 ) where
     F: FnMut(&Path) -> io::Result<()>,
 {
-    let active_version = match active_plugin_version_marker(plugin_base_root) {
+    let active_version = match active_plugin_version_marker_unlocked(plugin_base_root) {
         Ok(Some(active_version)) => Some(active_version),
         Ok(None) => legacy_active_plugin_version(plugin_base_root),
         Err(err) => {
