@@ -121,12 +121,6 @@ fn collect_resume_override_mismatches(
             "developerInstructions override was provided and ignored while running".to_string(),
         );
     }
-    if request.persist_extended_history {
-        mismatch_details.push(
-            "persistExtendedHistory override was provided and ignored while running".to_string(),
-        );
-    }
-
     mismatch_details
 }
 
@@ -743,7 +737,7 @@ impl ThreadRequestProcessor {
             ephemeral,
             session_start_source,
             environments,
-            persist_extended_history,
+            persist_extended_history: _persist_extended_history,
         } = params;
         if sandbox.is_some() && permissions.is_some() {
             return Err(invalid_request(
@@ -792,7 +786,6 @@ impl ThreadRequestProcessor {
                 dynamic_tools,
                 session_start_source,
                 environment_selections,
-                persist_extended_history,
                 service_name,
                 experimental_raw_events,
                 request_trace,
@@ -864,7 +857,6 @@ impl ThreadRequestProcessor {
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
-        persist_extended_history: bool,
         service_name: Option<String>,
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
@@ -981,7 +973,7 @@ impl ThreadRequestProcessor {
                 },
                 session_source: None,
                 dynamic_tools: core_dynamic_tools,
-                persist_extended_history,
+                persist_extended_history: false,
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
                 environments,
@@ -990,7 +982,7 @@ impl ThreadRequestProcessor {
                 "app_server.thread_start.create_thread",
                 otel.name = "app_server.thread_start.create_thread",
                 thread_start.dynamic_tool_count = core_dynamic_tool_count,
-                thread_start.persist_extended_history = persist_extended_history,
+                thread_start.persist_extended_history = false,
             ))
             .await
             .map_err(|err| match err {
@@ -2236,7 +2228,7 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
             exclude_turns,
-            persist_extended_history,
+            persist_extended_history: _persist_extended_history,
         } = params;
         let include_turns = !exclude_turns;
 
@@ -2300,7 +2292,7 @@ impl ThreadRequestProcessor {
                 config.clone(),
                 thread_history,
                 self.auth_manager.clone(),
-                persist_extended_history,
+                /*persist_extended_history*/ false,
                 self.request_trace_context(&request_id).await,
             )
             .await
@@ -2828,7 +2820,7 @@ impl ThreadRequestProcessor {
             developer_instructions,
             ephemeral,
             exclude_turns,
-            persist_extended_history,
+            persist_extended_history: _persist_extended_history,
         } = params;
         let include_turns = !exclude_turns;
         if sandbox.is_some() && permissions.is_some() {
@@ -2913,7 +2905,7 @@ impl ThreadRequestProcessor {
                     history: history_items.clone(),
                     rollout_path: source_thread.rollout_path.clone(),
                 }),
-                persist_extended_history,
+                /*persist_extended_history*/ false,
                 self.request_trace_context(&request_id).await,
             )
             .await
