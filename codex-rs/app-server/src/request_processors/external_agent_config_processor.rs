@@ -36,7 +36,7 @@ use codex_external_agent_sessions::prepare_validated_session_imports;
 use codex_external_agent_sessions::record_imported_session;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::InitialHistory;
-use codex_protocol::protocol::Op;
+use codex_thread_store::ThreadMetadataPatch;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tokio::sync::Semaphore;
@@ -320,7 +320,13 @@ impl ExternalAgentConfigRequestProcessor {
         {
             imported_thread
                 .thread
-                .submit(Op::SetThreadName { name })
+                .update_thread_metadata(
+                    ThreadMetadataPatch {
+                        name: Some(name),
+                        ..Default::default()
+                    },
+                    /*include_archived*/ false,
+                )
                 .await
                 .map_err(|err| internal_error(format!("failed to name imported session: {err}")))?;
         }

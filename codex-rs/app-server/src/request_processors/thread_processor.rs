@@ -405,10 +405,7 @@ impl ThreadRequestProcessor {
         request_id: ConnectionRequestId,
         params: ThreadSetNameParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        match self
-            .thread_set_name_response_inner(&request_id, params)
-            .await
-        {
+        match self.thread_set_name_response_inner(params).await {
             Ok((response, notification)) => {
                 self.outgoing
                     .send_response(request_id.clone(), response)
@@ -1335,7 +1332,6 @@ impl ThreadRequestProcessor {
 
     async fn thread_set_name_response_inner(
         &self,
-        request_id: &ConnectionRequestId,
         params: ThreadSetNameParams,
     ) -> Result<(ThreadSetNameResponse, Option<ThreadNameUpdatedNotification>), JSONRPCErrorError>
     {
@@ -1347,13 +1343,6 @@ impl ThreadRequestProcessor {
         };
 
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
-            self.submit_core_op(request_id, thread.as_ref(), Op::SetThreadName { name })
-                .await
-                .map_err(|err| internal_error(format!("failed to set thread name: {err}")))?;
-            return Ok((ThreadSetNameResponse {}, None));
-        }
-
         self.thread_store
             .update_thread_metadata(StoreUpdateThreadMetadataParams {
                 thread_id,
