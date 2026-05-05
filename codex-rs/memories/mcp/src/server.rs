@@ -74,6 +74,7 @@ struct SearchArgs {
     #[schemars(range(min = 0))]
     context_lines: Option<usize>,
     case_sensitive: Option<bool>,
+    normalized: Option<bool>,
     #[schemars(range(min = 1))]
     max_results: Option<usize>,
 }
@@ -227,7 +228,7 @@ fn search_tool() -> Tool {
     let mut tool = Tool::new(
         Cow::Borrowed(SEARCH_TOOL_NAME),
         Cow::Borrowed(
-            "Search Codex memory files for substring matches, optionally requiring all query substrings on the same line or within a line window.",
+            "Search Codex memory files for substring matches, optionally normalizing separators or requiring all query substrings on the same line or within a line window.",
         ),
         Arc::new(schema::input_schema_for::<SearchArgs>()),
     );
@@ -251,6 +252,7 @@ impl SearchArgs {
             cursor: self.cursor,
             context_lines: self.context_lines.unwrap_or(0),
             case_sensitive: self.case_sensitive.unwrap_or(true),
+            normalized: self.normalized.unwrap_or(false),
             max_results: clamp_max_results(
                 self.max_results,
                 DEFAULT_SEARCH_MAX_RESULTS,
@@ -306,6 +308,7 @@ mod tests {
                 cursor: None,
                 context_lines: 0,
                 case_sensitive: false,
+                normalized: false,
                 max_results: DEFAULT_SEARCH_MAX_RESULTS,
             }
         );
@@ -333,6 +336,33 @@ mod tests {
                 cursor: None,
                 context_lines: 0,
                 case_sensitive: true,
+                normalized: false,
+                max_results: DEFAULT_SEARCH_MAX_RESULTS,
+            }
+        );
+    }
+
+    #[test]
+    fn search_args_accept_normalized_matching() {
+        let args: SearchArgs = parse_args(json!({
+            "queries": ["multi agent v2"],
+            "case_sensitive": false,
+            "normalized": true
+        }))
+        .expect("normalized args should parse");
+
+        let request = args.into_request();
+
+        assert_eq!(
+            request,
+            SearchMemoriesRequest {
+                queries: vec!["multi agent v2".to_string()],
+                match_mode: SearchMatchMode::Any,
+                path: None,
+                cursor: None,
+                context_lines: 0,
+                case_sensitive: false,
+                normalized: true,
                 max_results: DEFAULT_SEARCH_MAX_RESULTS,
             }
         );

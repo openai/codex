@@ -16,6 +16,7 @@ fn search_request(queries: &[&str]) -> SearchMemoriesRequest {
         cursor: None,
         context_lines: 0,
         case_sensitive: true,
+        normalized: false,
         max_results: DEFAULT_SEARCH_MAX_RESULTS,
     }
 }
@@ -749,6 +750,67 @@ async fn search_supports_case_insensitive_matching() {
             },
         ]
     );
+}
+
+#[tokio::test]
+async fn search_supports_normalized_matching() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::write(
+        tempdir.path().join("MEMORY.md"),
+        "MultiAgentV2\ncold-resume\n",
+    )
+    .await
+    .expect("write memory file");
+
+    let literal_response = backend(&tempdir)
+        .search(search_request(&["multi agent v2", "cold resume"]))
+        .await
+        .expect("search without normalization");
+    assert_eq!(literal_response.matches, Vec::new());
+
+    let mut request = search_request(&["multi agent v2", "cold resume"]);
+    request.case_sensitive = false;
+    request.normalized = true;
+    let normalized_response = backend(&tempdir)
+        .search(request)
+        .await
+        .expect("search with normalization");
+    assert_eq!(
+        normalized_response.matches,
+        vec![
+            MemorySearchMatch {
+                path: "MEMORY.md".to_string(),
+                match_line_number: 1,
+                content_start_line_number: 1,
+                content: "MultiAgentV2".to_string(),
+                matched_queries: vec!["multi agent v2".to_string()],
+            },
+            MemorySearchMatch {
+                path: "MEMORY.md".to_string(),
+                match_line_number: 2,
+                content_start_line_number: 2,
+                content: "cold-resume".to_string(),
+                matched_queries: vec!["cold resume".to_string()],
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn search_rejects_queries_that_normalize_to_empty_strings() {
+    let tempdir = TempDir::new().expect("tempdir");
+    tokio::fs::write(tempdir.path().join("MEMORY.md"), "needle\n")
+        .await
+        .expect("write memory file");
+
+    let mut request = search_request(&["-"]);
+    request.normalized = true;
+    let err = backend(&tempdir)
+        .search(request)
+        .await
+        .expect_err("separator-only normalized queries should be rejected");
+
+    assert!(matches!(err, MemoriesBackendError::EmptyQuery));
 }
 
 #[tokio::test]

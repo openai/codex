@@ -250,7 +250,8 @@ impl MemoriesBackend for LocalMemoriesBackend {
             queries.clone(),
             request.match_mode.clone(),
             request.case_sensitive,
-        );
+            request.normalized,
+        )?;
         let mut matches = Vec::new();
         search_entries(
             &self.root,
@@ -450,32 +451,38 @@ fn build_search_match(
 
 struct SearchMatcher {
     queries: Vec<String>,
-    normalized_queries: Option<Vec<String>>,
+    prepared_queries: Vec<String>,
+    comparison: SearchComparison,
     match_mode: SearchMatchMode,
 }
 
 impl SearchMatcher {
-    fn new(queries: Vec<String>, match_mode: SearchMatchMode, case_sensitive: bool) -> Self {
-        let normalized_queries = (!case_sensitive).then(|| {
-            queries
-                .iter()
-                .map(|query| query.to_lowercase())
-                .collect::<Vec<_>>()
-        });
-        Self {
-            queries,
-            normalized_queries,
-            match_mode,
+    fn new(
+        queries: Vec<String>,
+        match_mode: SearchMatchMode,
+        case_sensitive: bool,
+        normalized: bool,
+    ) -> Result<Self, MemoriesBackendError> {
+        let comparison = SearchComparison::new(case_sensitive, normalized);
+        let prepared_queries = queries
+            .iter()
+            .map(|query| comparison.prepare(query))
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        if prepared_queries.iter().any(std::string::String::is_empty) {
+            return Err(MemoriesBackendError::EmptyQuery);
         }
+        Ok(Self {
+            queries,
+            prepared_queries,
+            comparison,
+            match_mode,
+        })
     }
 
     fn matched_query_flags(&self, line: &str) -> Vec<bool> {
-        let line = match self.normalized_queries.as_ref() {
-            Some(_) => Cow::Owned(line.to_lowercase()),
-            None => Cow::Borrowed(line),
-        };
-        let queries = self.normalized_queries.as_deref().unwrap_or(&self.queries);
-        queries
+        let line = self.comparison.prepare(line);
+        self.prepared_queries
             .iter()
             .map(|query| line.as_ref().contains(query))
             .collect()
@@ -487,6 +494,43 @@ impl SearchMatcher {
             .zip(matched_query_flags)
             .filter_map(|(query, matched)| matched.then_some(query.clone()))
             .collect()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SearchComparison {
+    case_sensitive: bool,
+    normalized: bool,
+}
+
+impl SearchComparison {
+    fn new(case_sensitive: bool, normalized: bool) -> Self {
+        Self {
+            case_sensitive,
+            normalized,
+        }
+    }
+
+    fn prepare<'a>(self, value: &'a str) -> Cow<'a, str> {
+        if self.case_sensitive && !self.normalized {
+            return Cow::Borrowed(value);
+        }
+
+        let value = if self.case_sensitive {
+            Cow::Borrowed(value)
+        } else {
+            Cow::Owned(value.to_lowercase())
+        };
+        if !self.normalized {
+            return value;
+        }
+
+        Cow::Owned(
+            value
+                .chars()
+                .filter(|ch| ch.is_alphanumeric())
+                .collect::<String>(),
+        )
     }
 }
 
