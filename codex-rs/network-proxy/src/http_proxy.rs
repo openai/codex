@@ -425,7 +425,7 @@ async fn forward_connect_tunnel(
         }
         Err(err) => {
             warn!(
-                "CONNECT upstream dial failed (target={authority}, elapsed_ms={}, error={err})",
+                "CONNECT upstream dial failed (target={authority}, elapsed_ms={})",
                 connect_started_at.elapsed().as_millis()
             );
             return Err(OpaqueError::from_boxed(err)
@@ -451,7 +451,7 @@ async fn forward_connect_tunnel(
         })
         .map_err(|err| {
             warn!(
-                "CONNECT tunnel forwarding failed (target={authority}, elapsed_ms={}, error={err})",
+                "CONNECT tunnel forwarding failed (target={authority}, elapsed_ms={})",
                 forward_started_at.elapsed().as_millis()
             );
             OpaqueError::from_boxed(err.into())

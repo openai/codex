@@ -299,8 +299,8 @@ async fn handle_socks5_tcp(
             "SOCKS upstream dial established (host={host}, port={port}, elapsed_ms={})",
             connect_started_at.elapsed().as_millis()
         ),
-        Err(err) => warn!(
-            "SOCKS upstream dial failed (host={host}, port={port}, elapsed_ms={}, error={err})",
+        Err(_) => warn!(
+            "SOCKS upstream dial failed (host={host}, port={port}, elapsed_ms={})",
             connect_started_at.elapsed().as_millis()
         ),
     }

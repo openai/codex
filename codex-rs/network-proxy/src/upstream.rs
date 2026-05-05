@@ -187,7 +187,7 @@ impl Service<Request<Body>> for UpstreamClient {
             }
             Err(err) => {
                 warn!(
-                    "HTTP upstream connection failed (target={authority}, elapsed_ms={}, error={err})",
+                    "HTTP upstream connection failed (target={authority}, elapsed_ms={})",
                     connect_started_at.elapsed().as_millis()
                 );
                 return Err(OpaqueError::from_boxed(err));
@@ -208,7 +208,7 @@ impl Service<Request<Body>> for UpstreamClient {
             }
             Err(err) => {
                 warn!(
-                    "HTTP upstream response headers failed (target={authority}, elapsed_ms={}, error={err})",
+                    "HTTP upstream response headers failed (target={authority}, elapsed_ms={})",
                     request_started_at.elapsed().as_millis()
                 );
                 Err(OpaqueError::from_boxed(err)
