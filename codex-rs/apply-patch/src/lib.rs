@@ -1464,9 +1464,7 @@ g
 
         for patch in [
             wrap_patch("*** Add File: binary.dat\n+text"),
-            wrap_patch(
-                "*** Update File: source.txt\n*** Move to: binary.dat\n@@\n-before\n+after",
-            ),
+            wrap_patch("*** Update File: source.txt\n*** Move to: binary.dat\n@@\n-before\n+after"),
         ] {
             fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
             let mut stdout = Vec::new();
