@@ -45,6 +45,7 @@ struct TomlEnvironmentProvider {
 }
 
 impl TomlEnvironmentProvider {
+    #[cfg(test)]
     fn new(config: EnvironmentsToml) -> Result<Self, ExecServerError> {
         Self::new_with_config_dir(config, /*config_dir*/ None)
     }
