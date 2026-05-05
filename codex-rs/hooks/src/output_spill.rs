@@ -19,8 +19,7 @@ pub(crate) struct HookOutputSpiller {
 impl HookOutputSpiller {
     pub(crate) fn new() -> Self {
         Self {
-            output_dir: AbsolutePathBuf::from_absolute_path(std::env::temp_dir())
-                .expect("temp dir should be absolute")
+            output_dir: AbsolutePathBuf::resolve_path_against_base(std::env::temp_dir(), "/")
                 .join(HOOK_OUTPUTS_DIR),
         }
     }
