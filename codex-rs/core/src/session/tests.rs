@@ -1313,7 +1313,10 @@ disabled_tools = [
     assert_eq!(config.notify, original.notify);
     assert_eq!(
         config.tool_suggest.disabled_tools,
-        vec![ToolSuggestDisabledTool::connector("calendar")]
+        vec![
+            ToolSuggestDisabledTool::connector("calendar"),
+            ToolSuggestDisabledTool::plugin("slack@openai-curated"),
+        ]
     );
 }
 
