@@ -3,12 +3,16 @@ use crate::events::AppServerRpcTransport;
 use crate::events::CodexAppMentionedEventRequest;
 use crate::events::CodexAppServerClientMetadata;
 use crate::events::CodexAppUsedEventRequest;
+use crate::events::CodexCommandExecutionEventParams;
+use crate::events::CodexCommandExecutionEventRequest;
 use crate::events::CodexCompactionEventRequest;
 use crate::events::CodexHookRunEventRequest;
 use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
+use crate::events::CodexToolItemEventBase;
 use crate::events::CodexTurnEventRequest;
+use crate::events::CommandExecutionSource;
 use crate::events::GuardianApprovalRequestSource;
 use crate::events::GuardianReviewDecision;
 use crate::events::GuardianReviewEventParams;
@@ -17,6 +21,8 @@ use crate::events::GuardianReviewTerminalStatus;
 use crate::events::GuardianReviewedAction;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
+use crate::events::ToolItemFinalApprovalOutcome;
+use crate::events::ToolItemTerminalStatus;
 use crate::events::TrackEventRequest;
 use crate::events::codex_app_metadata;
 use crate::events::codex_hook_run_metadata;
@@ -879,6 +885,103 @@ fn thread_initialized_event_serializes_expected_shape() {
                 "subagent_source": null,
                 "parent_thread_id": null,
                 "created_at": 1
+            }
+        })
+    );
+}
+
+#[test]
+fn command_execution_event_serializes_expected_shape() {
+    let event = TrackEventRequest::CommandExecution(CodexCommandExecutionEventRequest {
+        event_type: "codex_command_execution_event",
+        event_params: CodexCommandExecutionEventParams {
+            base: CodexToolItemEventBase {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "item-1".to_string(),
+                app_server_client: CodexAppServerClientMetadata {
+                    product_client_id: "codex_tui".to_string(),
+                    client_name: Some("codex-tui".to_string()),
+                    client_version: Some("1.2.3".to_string()),
+                    rpc_transport: AppServerRpcTransport::Websocket,
+                    experimental_api_enabled: Some(true),
+                },
+                runtime: CodexRuntimeMetadata {
+                    codex_rs_version: "0.99.0".to_string(),
+                    runtime_os: "macos".to_string(),
+                    runtime_os_version: "15.3.1".to_string(),
+                    runtime_arch: "aarch64".to_string(),
+                },
+                thread_source: Some("user"),
+                subagent_source: None,
+                parent_thread_id: None,
+                tool_name: "shell".to_string(),
+                started_at_ms: 123_000,
+                completed_at_ms: 125_000,
+                duration_ms: Some(2000),
+                review_count: 0,
+                guardian_review_count: 0,
+                user_review_count: 0,
+                final_approval_outcome: ToolItemFinalApprovalOutcome::NotNeeded,
+                terminal_status: ToolItemTerminalStatus::Completed,
+                failure_kind: None,
+                requested_additional_permissions: false,
+                requested_network_access: false,
+            },
+            command_execution_source: CommandExecutionSource::Agent,
+            exit_code: Some(0),
+            command_total_action_count: 4,
+            command_read_action_count: 1,
+            command_list_files_action_count: 1,
+            command_search_action_count: 1,
+            command_unknown_action_count: 1,
+        },
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize command execution event");
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_command_execution_event",
+            "event_params": {
+                "thread_id": "thread-1",
+                "turn_id": "turn-1",
+                "item_id": "item-1",
+                "app_server_client": {
+                    "product_client_id": "codex_tui",
+                    "client_name": "codex-tui",
+                    "client_version": "1.2.3",
+                    "rpc_transport": "websocket",
+                    "experimental_api_enabled": true
+                },
+                "runtime": {
+                    "codex_rs_version": "0.99.0",
+                    "runtime_os": "macos",
+                    "runtime_os_version": "15.3.1",
+                    "runtime_arch": "aarch64"
+                },
+                "thread_source": "user",
+                "subagent_source": null,
+                "parent_thread_id": null,
+                "tool_name": "shell",
+                "started_at_ms": 123000,
+                "completed_at_ms": 125000,
+                "duration_ms": 2000,
+                "review_count": 0,
+                "guardian_review_count": 0,
+                "user_review_count": 0,
+                "final_approval_outcome": "not_needed",
+                "terminal_status": "completed",
+                "failure_kind": null,
+                "requested_additional_permissions": false,
+                "requested_network_access": false,
+                "command_execution_source": "agent",
+                "exit_code": 0,
+                "command_total_action_count": 4,
+                "command_read_action_count": 1,
+                "command_list_files_action_count": 1,
+                "command_search_action_count": 1,
+                "command_unknown_action_count": 1
             }
         })
     );
