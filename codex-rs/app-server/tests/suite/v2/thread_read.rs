@@ -32,6 +32,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadTurnsItemsListParams;
+use codex_app_server_protocol::ThreadTurnsItemsListResponse;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::TurnItemsView;
@@ -1061,34 +1062,57 @@ async fn thread_turns_list_rejects_unmaterialized_loaded_thread() -> Result<()> 
 }
 
 #[tokio::test]
-async fn thread_turns_items_list_returns_unsupported() -> Result<()> {
+async fn thread_turns_items_list_returns_turn_items() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
+    let filename_ts = "2025-01-05T12-00-00";
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        filename_ts,
+        "2025-01-05T12:00:00Z",
+        "first",
+        vec![],
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let rollout_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    append_agent_message(rollout_path.as_path(), "2025-01-05T12:01:00Z", "draft")?;
+    append_agent_message(rollout_path.as_path(), "2025-01-05T12:02:00Z", "final")?;
+
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let turn = read_single_turn_items_view(
+        &mut mcp,
+        conversation_id.as_str(),
+        Some(TurnItemsView::Full),
+    )
+    .await?;
 
     let read_id = mcp
         .send_thread_turns_items_list_request(ThreadTurnsItemsListParams {
-            thread_id: "thr_123".to_string(),
-            turn_id: "turn_456".to_string(),
+            thread_id: conversation_id,
+            turn_id: turn.id,
             cursor: None,
             limit: None,
             sort_direction: None,
         })
         .await?;
-    let read_err: JSONRPCError = timeout(
+    let read_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(read_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
+    let ThreadTurnsItemsListResponse {
+        data,
+        next_cursor,
+        backwards_cursor,
+    } = to_response::<ThreadTurnsItemsListResponse>(read_resp)?;
 
-    assert_eq!(read_err.error.code, -32601);
-    assert_eq!(
-        read_err.error.message,
-        "thread/turns/items/list is not supported yet"
-    );
+    assert_eq!(data, turn.items);
+    assert_eq!(next_cursor, None);
+    assert!(backwards_cursor.is_some());
 
     Ok(())
 }
