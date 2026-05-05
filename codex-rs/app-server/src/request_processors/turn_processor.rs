@@ -819,13 +819,13 @@ impl TurnRequestProcessor {
         Ok(Some(ThreadRealtimeStopResponse::default()))
     }
 
-    fn build_review_turn(turn_id: String, display_text: String) -> Turn {
+    fn build_review_turn(turn_id: String, display_text: &str) -> Turn {
         Turn {
             id: turn_id.clone(),
             items: vec![ThreadItem::UserMessage {
                 id: turn_id,
                 content: vec![V2UserInput::Text {
-                    text: display_text,
+                    text: display_text.to_string(),
                     text_elements: Vec::new(),
                 }],
             }],
@@ -858,7 +858,7 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         parent_thread: Arc<CodexThread>,
         review_request: ReviewRequest,
-        display_text: String,
+        display_text: &str,
         parent_thread_id: String,
     ) -> std::result::Result<(), JSONRPCErrorError> {
         let turn_id = self
@@ -881,7 +881,7 @@ impl TurnRequestProcessor {
         parent_thread_id: ThreadId,
         parent_thread: Arc<CodexThread>,
         review_request: ReviewRequest,
-        display_text: String,
+        display_text: &str,
     ) -> std::result::Result<(), JSONRPCErrorError> {
         let rollout_path = if let Some(path) = parent_thread.rollout_path() {
             path
@@ -1006,7 +1006,7 @@ impl TurnRequestProcessor {
                     request_id,
                     parent_thread,
                     review_request,
-                    display_text,
+                    &display_text,
                     thread_id,
                 )
                 .await?;
@@ -1017,7 +1017,7 @@ impl TurnRequestProcessor {
                     parent_thread_id,
                     parent_thread,
                     review_request,
-                    display_text,
+                    &display_text,
                 )
                 .await?;
             }
