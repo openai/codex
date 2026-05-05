@@ -5,9 +5,9 @@ use std::path::PathBuf;
 
 use sha1::digest::Output;
 
-use codex_apply_patch::ApplyPatchAction;
-use codex_apply_patch::ApplyPatchChange;
-use codex_apply_patch::ApplyPatchFileChange;
+use codex_apply_patch::AppliedPatchChange;
+use codex_apply_patch::AppliedPatchDelta;
+use codex_apply_patch::AppliedPatchFileChange;
 
 const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 const DEV_NULL: &str = "/dev/null";
@@ -46,8 +46,13 @@ impl TurnDiffTracker {
         tracker
     }
 
-    pub fn track_successful_patch(&mut self, action: &ApplyPatchAction) {
-        for change in action.changes() {
+    pub fn track_successful_patch(&mut self, delta: &AppliedPatchDelta) {
+        if !delta.is_exact() {
+            self.invalidate();
+            return;
+        }
+
+        for change in delta.changes() {
             self.apply_change(change);
         }
     }
@@ -101,20 +106,19 @@ impl TurnDiffTracker {
         (!aggregated.is_empty()).then_some(aggregated)
     }
 
-    fn apply_change(&mut self, change: &ApplyPatchChange) {
+    fn apply_change(&mut self, change: &AppliedPatchChange) {
         let source_path = change.path.as_path();
         match &change.change {
-            ApplyPatchFileChange::Add {
+            AppliedPatchFileChange::Add {
                 content,
                 overwritten_content,
             } => self.apply_add(source_path, content, overwritten_content.as_deref()),
-            ApplyPatchFileChange::Delete { content } => self.apply_delete(source_path, content),
-            ApplyPatchFileChange::Update {
+            AppliedPatchFileChange::Delete { content } => self.apply_delete(source_path, content),
+            AppliedPatchFileChange::Update {
                 move_path,
                 old_content,
                 overwritten_move_content,
                 new_content,
-                unified_diff: _unified_diff,
             } => self.apply_update(
                 source_path,
                 move_path.as_deref(),

@@ -188,7 +188,7 @@ fn file_paths_for_action(action: &ApplyPatchAction) -> Vec<AbsolutePathBuf> {
     let mut keys = Vec::new();
     let cwd = &action.cwd;
 
-    for (path, change) in action.iter_changes() {
+    for (path, change) in action.changes() {
         if let Some(key) = to_abs_path(cwd, path) {
             keys.push(key);
         }
@@ -393,11 +393,8 @@ impl ToolHandler for ApplyPatchHandler {
                     }
                     InternalApplyPatchInvocation::DelegateToRuntime(apply) => {
                         let changes = convert_apply_patch_to_protocol(&apply.action);
-                        let emitter = ToolEmitter::apply_patch(
-                            changes.clone(),
-                            apply.action.clone(),
-                            apply.auto_approved,
-                        );
+                        let emitter =
+                            ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                         let event_ctx = ToolEventCtx::new(
                             session.as_ref(),
                             turn.as_ref(),
@@ -435,13 +432,17 @@ impl ToolHandler for ApplyPatchHandler {
                             )
                             .await
                             .map(|result| result.output);
+                        let (out, delta) = match out {
+                            Ok(output) => (Ok(output.exec_output), output.delta),
+                            Err(error) => (Err(error), None),
+                        };
                         let event_ctx = ToolEventCtx::new(
                             session.as_ref(),
                             turn.as_ref(),
                             &call_id,
                             Some(&tracker),
                         );
-                        let content = emitter.finish(event_ctx, out).await?;
+                        let content = emitter.finish(event_ctx, out, delta.as_ref()).await?;
                         Ok(ApplyPatchToolOutput::from_text(content))
                     }
                 }
@@ -505,11 +506,7 @@ pub(crate) async fn intercept_apply_patch(
                 }
                 InternalApplyPatchInvocation::DelegateToRuntime(apply) => {
                     let changes = convert_apply_patch_to_protocol(&apply.action);
-                    let emitter = ToolEmitter::apply_patch(
-                        changes.clone(),
-                        apply.action.clone(),
-                        apply.auto_approved,
-                    );
+                    let emitter = ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                     let event_ctx = ToolEventCtx::new(
                         session.as_ref(),
                         turn.as_ref(),
@@ -547,13 +544,17 @@ pub(crate) async fn intercept_apply_patch(
                         )
                         .await
                         .map(|result| result.output);
+                    let (out, delta) = match out {
+                        Ok(output) => (Ok(output.exec_output), output.delta),
+                        Err(error) => (Err(error), None),
+                    };
                     let event_ctx = ToolEventCtx::new(
                         session.as_ref(),
                         turn.as_ref(),
                         call_id,
                         tracker.as_ref().copied(),
                     );
-                    let content = emitter.finish(event_ctx, out).await?;
+                    let content = emitter.finish(event_ctx, out, delta.as_ref()).await?;
                     Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
                 }
             }

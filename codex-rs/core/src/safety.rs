@@ -169,7 +169,7 @@ fn is_write_patch_constrained_to_writable_paths(
         file_system_sandbox_policy.can_write_path_with_cwd(&abs, cwd)
     };
 
-    for (path, change) in action.iter_changes() {
+    for (path, change) in action.changes() {
         match change {
             ApplyPatchFileChange::Add { .. } | ApplyPatchFileChange::Delete { .. } => {
                 if !is_path_writable(path) {

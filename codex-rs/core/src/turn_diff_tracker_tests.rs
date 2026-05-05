@@ -1,5 +1,5 @@
 use super::*;
-use codex_apply_patch::ApplyPatchAction;
+use codex_apply_patch::AppliedPatchDelta;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_exec_server::LOCAL_FS;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -12,10 +12,10 @@ fn git_blob_sha1_hex(data: &str) -> String {
     format!("{:x}", git_blob_sha1_hex_bytes(data.as_bytes()))
 }
 
-async fn apply_verified_patch(root: &Path, patch: &str) -> ApplyPatchAction {
+async fn apply_verified_patch(root: &Path, patch: &str) -> AppliedPatchDelta {
     let cwd = AbsolutePathBuf::from_absolute_path(root).expect("absolute tempdir path");
     let argv = vec!["apply_patch".to_string(), patch.to_string()];
-    let action = match codex_apply_patch::maybe_parse_apply_patch_verified(
+    match codex_apply_patch::maybe_parse_apply_patch_verified(
         &argv,
         &cwd,
         LOCAL_FS.as_ref(),
@@ -23,9 +23,9 @@ async fn apply_verified_patch(root: &Path, patch: &str) -> ApplyPatchAction {
     )
     .await
     {
-        MaybeApplyPatchVerified::Body(action) => action,
+        MaybeApplyPatchVerified::Body(_) => {}
         other => panic!("expected verified patch action, got {other:?}"),
-    };
+    }
 
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
@@ -38,9 +38,7 @@ async fn apply_verified_patch(root: &Path, patch: &str) -> ApplyPatchAction {
         /*sandbox*/ None,
     )
     .await
-    .expect("patch should apply");
-
-    action
+    .expect("patch should apply")
 }
 
 #[tokio::test]
@@ -295,7 +293,7 @@ index {left_oid_b}..{right_oid_b}
 }
 
 #[tokio::test]
-async fn preserves_verified_change_order_with_delete_then_move_overwrite() {
+async fn preserves_committed_change_order_with_delete_then_move_overwrite() {
     let dir = tempdir().expect("tempdir");
     fs::write(dir.path().join("a.txt"), "from\n").expect("seed source");
     fs::write(dir.path().join("b.txt"), "existing\n").expect("seed destination");

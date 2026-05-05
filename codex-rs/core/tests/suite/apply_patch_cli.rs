@@ -12,6 +12,7 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -1115,11 +1116,26 @@ async fn apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nest
             .with_config(|config| {
                 config.cwd = config.cwd.join("subdir");
             })
-            .with_workspace_setup(|cwd, _fs| async move {
-                std::fs::create_dir_all(cwd.as_path())?;
+            .with_workspace_setup(|cwd, fs| async move {
+                fs.create_directory(
+                    &cwd,
+                    CreateDirectoryOptions { recursive: true },
+                    /*sandbox*/ None,
+                )
+                .await?;
                 let repo_root = cwd.parent().expect("nested cwd should have parent");
-                std::fs::write(repo_root.join(".git"), "gitdir: /tmp/fake-worktree\n")?;
-                std::fs::write(repo_root.join("repo.txt"), "before\n")?;
+                fs.write_file(
+                    &repo_root.join(".git"),
+                    b"gitdir: /tmp/fake-worktree\n".to_vec(),
+                    /*sandbox*/ None,
+                )
+                .await?;
+                fs.write_file(
+                    &repo_root.join("repo.txt"),
+                    b"before\n".to_vec(),
+                    /*sandbox*/ None,
+                )
+                .await?;
                 Ok(())
             })
     })
@@ -1515,6 +1531,75 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
     );
 
     assert_eq!(harness.read_file_text("partial/success.txt").await?, "ok\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_clears_aggregated_diff_after_inexact_delta() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_harness_with(|builder| {
+        builder.with_workspace_setup(|cwd, fs| async move {
+            fs.write_file(
+                &cwd.join("binary.dat"),
+                vec![0xff, 0xfe, 0xfd],
+                /*sandbox*/ None,
+            )
+            .await?;
+            Ok(())
+        })
+    })
+    .await?;
+    let test = harness.test();
+    let codex = test.codex.clone();
+
+    let call_success = "agg-success";
+    let call_inexact = "agg-inexact";
+    let patch_success = "*** Begin Patch\n*** Add File: partial/success.txt\n+ok\n*** End Patch";
+    let patch_inexact = "*** Begin Patch\n*** Add File: binary.dat\n+text\n*** End Patch";
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_apply_patch_function_call(call_success, patch_success),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_apply_patch_function_call(call_inexact, patch_inexact),
+            ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-3"),
+        ]),
+    ];
+    mount_sse_sequence(harness.server(), responses).await;
+
+    submit_without_wait(&harness, "apply patch twice with inexact delta").await?;
+
+    let mut last_diff: Option<String> = None;
+    wait_for_event_with_timeout(
+        &codex,
+        |event| match event {
+            EventMsg::TurnDiff(ev) => {
+                last_diff = Some(ev.unified_diff.clone());
+                false
+            }
+            EventMsg::TurnComplete(_) => true,
+            _ => false,
+        },
+        Duration::from_secs(30),
+    )
+    .await;
+
+    assert_eq!(
+        last_diff.as_deref(),
+        Some(""),
+        "inexact delta should clear the aggregate diff"
+    );
+    assert_eq!(harness.read_file_text("partial/success.txt").await?, "ok\n");
+    assert_eq!(harness.read_file_text("binary.dat").await?, "text\n");
     Ok(())
 }
 

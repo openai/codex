@@ -585,7 +585,7 @@ impl ShellHandler {
             .ok()
             .map(|output| crate::tools::format_exec_output_str(output, turn.truncation_policy))
             .map(JsonValue::String);
-        let content = emitter.finish(event_ctx, out).await?;
+        let content = emitter.finish(event_ctx, out, None).await?;
         Ok(FunctionToolOutput {
             body: vec![
                 codex_protocol::models::FunctionCallOutputContentItem::InputText { text: content },

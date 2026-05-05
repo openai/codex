@@ -17,6 +17,7 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
+use codex_apply_patch::AppliedPatchDelta;
 use codex_apply_patch::ApplyPatchAction;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_protocol::error::CodexErr;
@@ -47,6 +48,12 @@ pub struct ApplyPatchRequest {
 
 #[derive(Default)]
 pub struct ApplyPatchRuntime;
+
+#[derive(Debug)]
+pub struct ApplyPatchRuntimeOutput {
+    pub exec_output: ExecToolCallOutput,
+    pub delta: Option<AppliedPatchDelta>,
+}
 
 impl ApplyPatchRuntime {
     pub fn new() -> Self {
@@ -184,13 +191,13 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
     }
 }
 
-impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
+impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRuntime {
     async fn run(
         &mut self,
         req: &ApplyPatchRequest,
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
-    ) -> Result<ExecToolCallOutput, ToolError> {
+    ) -> Result<ApplyPatchRuntimeOutput, ToolError> {
         let turn_environment = ctx.turn.environments.primary().ok_or_else(|| {
             ToolError::Rejected("apply_patch is unavailable in this session".to_string())
         })?;
@@ -225,7 +232,10 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
                 network_policy_decision: None,
             })));
         }
-        Ok(output)
+        Ok(ApplyPatchRuntimeOutput {
+            exec_output: output,
+            delta: result.ok(),
+        })
     }
 }
 
