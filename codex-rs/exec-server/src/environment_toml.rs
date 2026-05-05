@@ -46,7 +46,7 @@ struct TomlEnvironmentProvider {
 
 impl TomlEnvironmentProvider {
     fn new(config: EnvironmentsToml) -> Result<Self, ExecServerError> {
-        Self::new_with_config_dir(config, None)
+        Self::new_with_config_dir(config, /*config_dir*/ None)
     }
 
     fn new_with_config_dir(
@@ -669,5 +669,19 @@ default = "none"
 
         assert!(environments.contains_key(LOCAL_ENVIRONMENT_ID));
         assert_eq!(provider.default_environment_id(), None);
+    }
+
+    #[tokio::test]
+    async fn environment_provider_from_codex_home_falls_back_when_file_is_missing() {
+        let codex_home = tempdir().expect("tempdir");
+
+        let provider =
+            environment_provider_from_codex_home(codex_home.path()).expect("environment provider");
+
+        let environments = provider
+            .get_environments(&test_runtime_paths())
+            .expect("environments");
+
+        assert!(environments.contains_key(LOCAL_ENVIRONMENT_ID));
     }
 }
