@@ -74,6 +74,7 @@ pub struct RemotePluginSummary {
     pub auth_policy: PluginAuthPolicy,
     pub availability: PluginAvailability,
     pub interface: Option<PluginInterface>,
+    pub keywords: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -321,6 +322,8 @@ struct RemotePluginReleaseResponse {
     bundle_download_url: Option<String>,
     #[serde(default)]
     app_ids: Vec<String>,
+    #[serde(default)]
+    keywords: Vec<String>,
     interface: RemotePluginReleaseInterfaceResponse,
     #[serde(default)]
     skills: Vec<RemotePluginSkillResponse>,
@@ -771,6 +774,7 @@ fn build_remote_plugin_summary(
         auth_policy: plugin.authentication_policy,
         availability: plugin.availability,
         interface: remote_plugin_interface_to_info(plugin),
+        keywords: plugin.release.keywords.clone(),
     }
 }
 

@@ -446,6 +446,8 @@ pub struct PluginSummary {
     #[serde(default)]
     pub availability: PluginAvailability,
     pub interface: Option<PluginInterface>,
+    #[serde(default)]
+    pub keywords: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

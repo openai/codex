@@ -1448,6 +1448,7 @@ pub(super) fn plugins_test_summary(
             description,
             /*long_description*/ None,
         )),
+        keywords: Vec::new(),
     }
 }
 

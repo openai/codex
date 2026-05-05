@@ -310,6 +310,7 @@ impl PluginRequestProcessor {
                                 auth_policy: plugin.policy.authentication.into(),
                                 availability: PluginAvailability::Available,
                                 interface: plugin.interface.map(local_plugin_interface_to_info),
+                                keywords: plugin.keywords,
                             })
                             .collect(),
                     })
@@ -465,6 +466,7 @@ impl PluginRequestProcessor {
                         auth_policy: outcome.plugin.policy.authentication.into(),
                         availability: PluginAvailability::Available,
                         interface: outcome.plugin.interface.map(local_plugin_interface_to_info),
+                        keywords: outcome.plugin.keywords,
                     },
                     description: outcome.plugin.description,
                     skills: plugin_skills_to_info(
@@ -1270,6 +1272,7 @@ fn remote_plugin_summary_to_info(summary: RemoteCatalogPluginSummary) -> PluginS
         auth_policy: summary.auth_policy,
         availability: summary.availability,
         interface: summary.interface,
+        keywords: summary.keywords,
     }
 }
 
