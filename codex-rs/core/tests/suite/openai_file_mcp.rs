@@ -5,6 +5,8 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::CONFIG_TOML_FILE;
+use codex_config::TomlValue;
 use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -39,6 +41,48 @@ fn configure_apps(config: &mut Config, chatgpt_base_url: &str) {
         panic!("test config should allow feature update: {err}");
     }
     config.chatgpt_base_url = chatgpt_base_url.to_string();
+}
+
+fn enable_trusted_hooks(config: &mut Config) {
+    if let Err(err) = config.features.enable(Feature::CodexHooks) {
+        panic!("test config should allow feature update: {err}");
+    }
+
+    let listed = codex_hooks::list_hooks(codex_hooks::HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(config.config_layer_stack.clone()),
+        ..codex_hooks::HooksConfig::default()
+    });
+    assert_eq!(listed.hooks.len(), 1);
+
+    let mut user_config = config
+        .config_layer_stack
+        .get_user_layer()
+        .map(|layer| layer.config.clone())
+        .unwrap_or_else(|| TomlValue::Table(Default::default()));
+    let state_table = user_config
+        .as_table_mut()
+        .expect("user config should be a table")
+        .entry("hooks")
+        .or_insert_with(|| TomlValue::Table(Default::default()))
+        .as_table_mut()
+        .expect("hooks config should be a table")
+        .entry("state")
+        .or_insert_with(|| TomlValue::Table(Default::default()))
+        .as_table_mut()
+        .expect("hook state config should be a table");
+    state_table.insert(
+        listed.hooks[0].key.clone(),
+        TomlValue::Table(toml::map::Map::from_iter([(
+            "trusted_hash".to_string(),
+            TomlValue::String(listed.hooks[0].current_hash.clone()),
+        )])),
+    );
+
+    let config_toml_path = config.codex_home.join(CONFIG_TOML_FILE);
+    config.config_layer_stack = config
+        .config_layer_stack
+        .with_user_config(&config_toml_path, user_config);
 }
 
 fn write_post_tool_use_hook(home: &Path) -> Result<()> {
@@ -162,9 +206,7 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
         })
         .with_config(move |config| {
             configure_apps(config, apps_server.chatgpt_base_url.as_str());
-            if let Err(err) = config.features.enable(Feature::CodexHooks) {
-                panic!("test config should allow feature update: {err}");
-            }
+            enable_trusted_hooks(config);
         });
     let test = builder.build(&server).await?;
     tokio::fs::write(test.cwd.path().join("report.txt"), b"hello world").await?;
