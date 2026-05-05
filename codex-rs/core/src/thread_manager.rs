@@ -7,6 +7,7 @@ use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::resolve_environment_selections;
 use crate::file_watcher::FileWatcher;
 use crate::mcp::McpManager;
+use crate::resolve_installation_id;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::session::Codex;
@@ -248,6 +249,7 @@ pub(crate) struct ThreadManagerState {
     skills_watcher: Arc<SkillsWatcher>,
     thread_store: Arc<dyn ThreadStore>,
     session_source: SessionSource,
+    codex_home: AbsolutePathBuf,
     installation_id: String,
     analytics_events_client: Option<AnalyticsEventsClient>,
     state_db: Option<StateDbHandle>,
@@ -301,7 +303,7 @@ impl ThreadManager {
         ));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
-            codex_home,
+            codex_home.clone(),
             config.bundled_skills_enabled(),
             restriction_product,
         ));
@@ -319,6 +321,7 @@ impl ThreadManager {
                 thread_store,
                 auth_manager,
                 session_source,
+                codex_home,
                 installation_id,
                 analytics_events_client,
                 state_db,
@@ -390,7 +393,7 @@ impl ThreadManager {
         ));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
-            skills_codex_home,
+            skills_codex_home.clone(),
             /*bundled_skills_enabled*/ true,
             restriction_product,
         ));
@@ -419,6 +422,7 @@ impl ThreadManager {
                 thread_store,
                 auth_manager,
                 session_source: SessionSource::Exec,
+                codex_home: skills_codex_home,
                 installation_id: uuid::Uuid::new_v4().to_string(),
                 analytics_events_client: None,
                 state_db,
@@ -1153,11 +1157,16 @@ impl ThreadManagerState {
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
         let tracked_session_source = session_source.clone();
+        let installation_id = if config.codex_home == self.codex_home {
+            self.installation_id.clone()
+        } else {
+            resolve_installation_id(&config.codex_home).await?
+        };
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
             config,
-            installation_id: self.installation_id.clone(),
+            installation_id,
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
             environment_manager: Arc::clone(&self.environment_manager),
