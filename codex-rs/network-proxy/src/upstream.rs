@@ -43,13 +43,6 @@ impl ProxyConfig {
         Self { http, https, all }
     }
 
-    fn proxy_for_request(&self, req: &Request) -> Option<ProxyAddress> {
-        let is_secure = RequestContext::try_from(req)
-            .map(|ctx| ctx.protocol.is_secure())
-            .unwrap_or(false);
-        self.proxy_for_protocol(is_secure)
-    }
-
     fn proxy_for_protocol(&self, is_secure: bool) -> Option<ProxyAddress> {
         if is_secure {
             self.https
@@ -157,10 +150,17 @@ impl Service<Request<Body>> for UpstreamClient {
     type Error = OpaqueError;
 
     async fn serve(&self, mut req: Request<Body>) -> Result<Self::Output, Self::Error> {
-        let authority = RequestContext::try_from(&req)
+        let request_context = RequestContext::try_from(&req).ok();
+        let authority = request_context
+            .as_ref()
             .map(|ctx| ctx.host_with_port().to_string())
-            .unwrap_or_else(|_| "<unknown>".to_string());
-        let proxy = self.proxy_config.proxy_for_request(&req);
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let proxy = self.proxy_config.proxy_for_protocol(
+            request_context
+                .as_ref()
+                .map(|ctx| ctx.protocol.is_secure())
+                .unwrap_or(false),
+        );
         match proxy.as_ref() {
             Some(proxy) => info!(
                 "HTTP upstream route selected (target={authority}, route=upstream_proxy, proxy={})",
@@ -201,14 +201,14 @@ impl Service<Request<Body>> for UpstreamClient {
         match http_connection.serve(req).await {
             Ok(resp) => {
                 info!(
-                    "HTTP upstream response completed (target={authority}, elapsed_ms={})",
+                    "HTTP upstream response headers received (target={authority}, elapsed_ms={})",
                     request_started_at.elapsed().as_millis()
                 );
                 Ok(resp)
             }
             Err(err) => {
                 warn!(
-                    "HTTP upstream response failed (target={authority}, elapsed_ms={}, error={err})",
+                    "HTTP upstream response headers failed (target={authority}, elapsed_ms={}, error={err})",
                     request_started_at.elapsed().as_millis()
                 );
                 Err(OpaqueError::from_boxed(err)
