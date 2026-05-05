@@ -1149,6 +1149,7 @@ async fn slash_copy_state_tracks_plan_item_completion() {
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: String::new(),
             turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
             item: AppServerThreadItem::Plan {
                 id: "plan-1".to_string(),
                 text: plan_text.clone(),
@@ -1226,6 +1227,103 @@ async fn keymap_capture_can_capture_current_copy_shortcut() {
         drain_insert_history(&mut rx).is_empty(),
         "copy shortcut should not run while key capture is active"
     );
+}
+
+#[tokio::test]
+async fn slash_keymap_capture_can_capture_app_shortcuts() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let runtime_keymap = crate::keymap::RuntimeKeymap::defaults();
+
+    for (key, expected) in [('t', "ctrl-t"), ('l', "ctrl-l"), ('g', "ctrl-g")] {
+        chat.open_keymap_capture(
+            "global".to_string(),
+            "open_transcript".to_string(),
+            crate::app_event::KeymapEditIntent::ReplaceAll,
+            &runtime_keymap,
+        );
+
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(key), KeyModifiers::CONTROL));
+
+        let AppEvent::KeymapCaptured {
+            context,
+            action,
+            key,
+            intent,
+        } = rx.try_recv().expect("captured key event")
+        else {
+            panic!("expected keymap capture event");
+        };
+        assert_eq!(context, "global");
+        assert_eq!(action, "open_transcript");
+        assert_eq!(key, expected);
+        assert_eq!(intent, crate::app_event::KeymapEditIntent::ReplaceAll);
+    }
+}
+
+#[tokio::test]
+async fn slash_keymap_debug_opens_keypress_inspector() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Keymap, "debug".to_string(), Vec::new());
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(popup.contains("Keypress Inspector"));
+    assert!(popup.contains("Waiting for a keypress"));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(popup.contains("global.copy (Copy)"));
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "debug inspector should open without transcript messages"
+    );
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_keymap_debug_can_inspect_app_shortcuts() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Keymap, "debug".to_string(), Vec::new());
+
+    for (key, expected_action) in [
+        ('t', "global.open_transcript (Open Transcript)"),
+        ('l', "global.clear_terminal (Clear Terminal)"),
+        ('g', "global.open_external_editor (Open External Editor)"),
+    ] {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(key), KeyModifiers::CONTROL));
+
+        let popup = render_bottom_popup(&chat, /*width*/ 100);
+        assert!(
+            popup.contains(expected_action),
+            "expected {expected_action:?} in debug popup for ctrl-{key}, got {popup:?}"
+        );
+    }
+
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "debug inspector should not run app shortcut side effects"
+    );
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_keymap_invalid_args_show_usage() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/keymap nope");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Usage: /keymap [debug]"),
+        "expected usage message, got: {rendered:?}"
+    );
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/keymap nope");
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }
 
 #[tokio::test]
@@ -1718,6 +1816,51 @@ async fn fast_slash_command_updates_and_persists_local_service_tier() {
     );
 
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn fast_keybinding_toggle_uses_same_events_as_fast_slash_command() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
+
+    chat.toggle_fast_mode_from_ui();
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                service_tier: Some(Some(ServiceTier::Fast)),
+                ..
+            })
+        )),
+        "expected fast-mode override app event; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistServiceTierSelection {
+                service_tier: Some(ServiceTier::Fast),
+            }
+        )),
+        "expected fast-mode persistence app event; events: {events:?}"
+    );
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn fast_keybinding_toggle_requires_feature_and_idle_surface() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ false);
+
+    assert!(!chat.can_toggle_fast_mode_from_keybinding());
+
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
+    assert!(chat.can_toggle_fast_mode_from_keybinding());
+
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    assert!(!chat.can_toggle_fast_mode_from_keybinding());
 }
 
 #[tokio::test]

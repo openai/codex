@@ -20,7 +20,6 @@ pub enum ToolHandlerKind {
     FollowupTaskV2,
     Goal,
     ListAgentsV2,
-    ListDir,
     Mcp,
     McpResource,
     Plan,
@@ -85,7 +84,7 @@ pub struct ToolRegistryPlanDeferredTool<'a> {
     pub name: ToolName,
     pub server_name: &'a str,
     pub connector_name: Option<&'a str>,
-    pub connector_description: Option<&'a str>,
+    pub description: Option<&'a str>,
 }
 
 impl ToolRegistryPlan {

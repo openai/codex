@@ -259,6 +259,7 @@ pub(crate) struct ThreadRequestProcessor {
     pub(super) thread_watch_manager: ThreadWatchManager,
     pub(super) thread_list_state_permit: Arc<Semaphore>,
     pub(super) thread_goal_processor: ThreadGoalRequestProcessor,
+    pub(super) state_db: Option<StateDbHandle>,
     pub(super) background_tasks: TaskTracker,
 }
 
@@ -278,6 +279,7 @@ impl ThreadRequestProcessor {
         thread_watch_manager: ThreadWatchManager,
         thread_list_state_permit: Arc<Semaphore>,
         thread_goal_processor: ThreadGoalRequestProcessor,
+        state_db: Option<StateDbHandle>,
     ) -> Self {
         Self {
             auth_manager,
@@ -293,6 +295,7 @@ impl ThreadRequestProcessor {
             thread_watch_manager,
             thread_list_state_permit,
             thread_goal_processor,
+            state_db,
             background_tasks: TaskTracker::new(),
         }
     }
@@ -1170,7 +1173,7 @@ impl ThreadRequestProcessor {
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         let mut thread_ids = vec![thread_id];
-        if let Some(state_db_ctx) = get_state_db(&self.config).await {
+        if let Some(state_db_ctx) = self.state_db.as_ref() {
             let descendants = state_db_ctx
                 .list_thread_spawn_descendants(thread_id)
                 .await
@@ -1391,14 +1394,10 @@ impl ThreadRequestProcessor {
     }
 
     async fn memory_reset_response_inner(&self) -> Result<MemoryResetResponse, JSONRPCErrorError> {
-        let state_db = StateRuntime::init(
-            self.config.sqlite_home.clone(),
-            self.config.model_provider_id.clone(),
-        )
-        .await
-        .map_err(|err| {
-            internal_error(format!("failed to open state db for memory reset: {err}"))
-        })?;
+        let state_db = self
+            .state_db
+            .clone()
+            .ok_or_else(|| internal_error("sqlite state db unavailable for memory reset"))?;
 
         state_db.clear_memory_data().await.map_err(|err| {
             internal_error(format!("failed to clear memory rows in state db: {err}"))
@@ -1441,54 +1440,49 @@ impl ThreadRequestProcessor {
             return Err(invalid_request("gitInfo must include at least one field"));
         }
 
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-        let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
-        let mut state_db_ctx = loaded_thread.as_ref().and_then(|thread| thread.state_db());
-        if state_db_ctx.is_none() {
-            state_db_ctx = get_state_db(&self.config).await;
-        }
-        let Some(state_db_ctx) = state_db_ctx else {
-            return Err(internal_error(format!(
-                "sqlite state db unavailable for thread {thread_uuid}"
-            )));
-        };
-
-        self.ensure_thread_metadata_row_exists(thread_uuid, &state_db_ctx, loaded_thread.as_ref())
-            .await?;
-
         let git_sha = Self::normalize_thread_metadata_git_field(sha, "gitInfo.sha")?;
         let git_branch = Self::normalize_thread_metadata_git_field(branch, "gitInfo.branch")?;
         let git_origin_url =
             Self::normalize_thread_metadata_git_field(origin_url, "gitInfo.originUrl")?;
 
-        let updated = state_db_ctx
-            .update_thread_git_info(
-                thread_uuid,
-                git_sha.as_ref().map(|value| value.as_deref()),
-                git_branch.as_ref().map(|value| value.as_deref()),
-                git_origin_url.as_ref().map(|value| value.as_deref()),
-            )
-            .await
-            .map_err(|err| {
-                internal_error(format!(
-                    "failed to update thread metadata for {thread_uuid}: {err}"
-                ))
-            })?;
-        if !updated {
-            return Err(internal_error(format!(
-                "thread metadata disappeared before update completed: {thread_uuid}"
-            )));
-        }
-
-        let Some(summary) =
-            read_summary_from_state_db_context_by_thread_id(Some(&state_db_ctx), thread_uuid).await
-        else {
-            return Err(internal_error(format!(
-                "failed to reload updated thread metadata for {thread_uuid}"
-            )));
+        let patch = StoreThreadMetadataPatch {
+            git_info: Some(StoreGitInfoPatch {
+                sha: git_sha,
+                branch: git_branch,
+                origin_url: git_origin_url,
+            }),
+            ..Default::default()
         };
 
-        let mut thread = summary_to_thread(summary, &self.config.cwd);
+        let updated_thread = {
+            let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+            let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
+            if let Some(loaded_thread) = loaded_thread.as_ref() {
+                if loaded_thread.config_snapshot().await.ephemeral {
+                    return Err(invalid_request(format!(
+                        "ephemeral thread does not support metadata updates: {thread_id}"
+                    )));
+                }
+                loaded_thread
+                    .update_thread_metadata(patch, /*include_archived*/ true)
+                    .await
+            } else {
+                self.thread_store
+                    .update_thread_metadata(StoreUpdateThreadMetadataParams {
+                        thread_id: thread_uuid,
+                        patch,
+                        include_archived: true,
+                    })
+                    .await
+            }
+            .map_err(|err| thread_store_write_error("update thread metadata", err))?
+        };
+
+        let (mut thread, _) = thread_from_stored_thread(
+            updated_thread,
+            self.config.model_provider_id.as_str(),
+            &self.config.cwd,
+        );
         self.attach_thread_name(thread_uuid, &mut thread).await;
         thread.status = resolve_thread_status(
             self.thread_watch_manager
@@ -1514,122 +1508,6 @@ impl ThreadRequestProcessor {
             }
             Some(None) => Ok(Some(None)),
             None => Ok(None),
-        }
-    }
-
-    async fn ensure_thread_metadata_row_exists(
-        &self,
-        thread_uuid: ThreadId,
-        state_db_ctx: &Arc<StateRuntime>,
-        loaded_thread: Option<&Arc<CodexThread>>,
-    ) -> Result<(), JSONRPCErrorError> {
-        match state_db_ctx.get_thread(thread_uuid).await {
-            Ok(Some(_)) => return Ok(()),
-            Ok(None) => {}
-            Err(err) => {
-                return Err(internal_error(format!(
-                    "failed to load thread metadata for {thread_uuid}: {err}"
-                )));
-            }
-        }
-
-        if let Some(thread) = loaded_thread {
-            let Some(rollout_path) = thread.rollout_path() else {
-                return Err(invalid_request(format!(
-                    "ephemeral thread does not support metadata updates: {thread_uuid}"
-                )));
-            };
-
-            reconcile_rollout(
-                Some(state_db_ctx),
-                rollout_path.as_path(),
-                self.config.model_provider_id.as_str(),
-                /*builder*/ None,
-                &[],
-                /*archived_only*/ None,
-                /*new_thread_memory_mode*/ None,
-            )
-            .await;
-
-            match state_db_ctx.get_thread(thread_uuid).await {
-                Ok(Some(_)) => return Ok(()),
-                Ok(None) => {}
-                Err(err) => {
-                    return Err(internal_error(format!(
-                        "failed to load reconciled thread metadata for {thread_uuid}: {err}"
-                    )));
-                }
-            }
-
-            let config_snapshot = thread.config_snapshot().await;
-            let model_provider = config_snapshot.model_provider_id.clone();
-            let mut builder = ThreadMetadataBuilder::new(
-                thread_uuid,
-                rollout_path,
-                Utc::now(),
-                config_snapshot.session_source.clone(),
-            );
-            builder.model_provider = Some(model_provider.clone());
-            builder.cwd = config_snapshot.cwd.to_path_buf();
-            builder.cli_version = Some(env!("CARGO_PKG_VERSION").to_string());
-            builder.sandbox_policy = config_snapshot.sandbox_policy();
-            builder.approval_mode = config_snapshot.approval_policy;
-            let metadata = builder.build(model_provider.as_str());
-            if let Err(err) = state_db_ctx.insert_thread_if_absent(&metadata).await {
-                return Err(internal_error(format!(
-                    "failed to create thread metadata for {thread_uuid}: {err}"
-                )));
-            }
-            return Ok(());
-        }
-
-        let rollout_path =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
-                .await
-            {
-                Ok(Some(path)) => path,
-                Ok(None) => match find_archived_thread_path_by_id_str(
-                    &self.config.codex_home,
-                    &thread_uuid.to_string(),
-                )
-                .await
-                {
-                    Ok(Some(path)) => path,
-                    Ok(None) => {
-                        return Err(invalid_request(format!("thread not found: {thread_uuid}")));
-                    }
-                    Err(err) => {
-                        return Err(internal_error(format!(
-                            "failed to locate archived thread id {thread_uuid}: {err}"
-                        )));
-                    }
-                },
-                Err(err) => {
-                    return Err(internal_error(format!(
-                        "failed to locate thread id {thread_uuid}: {err}"
-                    )));
-                }
-            };
-
-        reconcile_rollout(
-            Some(state_db_ctx),
-            rollout_path.as_path(),
-            self.config.model_provider_id.as_str(),
-            /*builder*/ None,
-            &[],
-            /*archived_only*/ None,
-            /*new_thread_memory_mode*/ None,
-        )
-        .await;
-
-        match state_db_ctx.get_thread(thread_uuid).await {
-            Ok(Some(_)) => Ok(()),
-            Ok(None) => Err(internal_error(format!(
-                "failed to create thread metadata from rollout for {thread_uuid}"
-            ))),
-            Err(err) => Err(internal_error(format!(
-                "failed to load reconciled thread metadata for {thread_uuid}: {err}"
-            ))),
         }
     }
 
@@ -2048,7 +1926,7 @@ impl ThreadRequestProcessor {
                 let (mut thread, history) =
                     thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
                 if include_turns && let Some(history) = history {
-                    thread.turns = build_turns_from_rollout_items(&history.items);
+                    thread.turns = build_api_turns_from_rollout_items(&history.items);
                 }
                 Ok(Some(thread))
             }
@@ -2113,7 +1991,7 @@ impl ThreadRequestProcessor {
                 .load_history(/*include_archived*/ true)
                 .await
                 .map_err(|err| thread_read_history_load_error(thread_id, err))?;
-            thread.turns = build_turns_from_rollout_items(&history.items);
+            thread.turns = build_api_turns_from_rollout_items(&history.items);
         }
 
         Ok(())
@@ -2555,7 +2433,7 @@ impl ThreadRequestProcessor {
         let InitialHistory::Resumed(resumed_history) = thread_history else {
             return None;
         };
-        let state_db_ctx = get_state_db(&self.config).await?;
+        let state_db_ctx = self.state_db.clone()?;
         let persisted_metadata = state_db_ctx
             .get_thread(resumed_history.conversation_id)
             .await
@@ -2662,17 +2540,11 @@ impl ThreadRequestProcessor {
             }
             let mut summary_source_thread = source_thread;
             summary_source_thread.history = None;
-            let thread_summary = match self
-                .stored_thread_to_api_thread(
-                    summary_source_thread,
-                    config_snapshot.model_provider_id.as_str(),
-                    /*include_turns*/ false,
-                )
-                .await
-            {
-                Ok(thread) => thread,
-                Err(message) => return Err(internal_error(message)),
-            };
+            let thread_summary = self.stored_thread_to_api_thread(
+                summary_source_thread,
+                config_snapshot.model_provider_id.as_str(),
+                /*include_turns*/ false,
+            );
             let mut config_for_instruction_sources = self.config.as_ref().clone();
             config_for_instruction_sources.cwd = config_snapshot.cwd.clone();
             let instruction_sources =
@@ -2798,12 +2670,12 @@ impl ThreadRequestProcessor {
         }))
     }
 
-    async fn stored_thread_to_api_thread(
+    fn stored_thread_to_api_thread(
         &self,
         stored_thread: StoredThread,
         fallback_provider: &str,
         include_turns: bool,
-    ) -> std::result::Result<Thread, String> {
+    ) -> Thread {
         let (mut thread, history) =
             thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
         if include_turns && let Some(history) = history {
@@ -2811,9 +2683,9 @@ impl ThreadRequestProcessor {
                 &mut thread,
                 &history.items,
                 /*active_turn*/ None,
-            )?;
+            );
         }
-        Ok(thread)
+        thread
     }
 
     async fn read_stored_thread_for_new_fork(
@@ -2921,14 +2793,16 @@ impl ThreadRequestProcessor {
                 &mut thread,
                 &history_items,
                 /*active_turn*/ None,
-            )?;
+            );
         }
         self.attach_thread_name(thread_id, &mut thread).await;
         Ok(thread)
     }
 
     async fn attach_thread_name(&self, thread_id: ThreadId, thread: &mut Thread) {
-        if let Some(title) = title_from_state_db(&self.config, thread_id).await {
+        if let Some(title) =
+            title_from_state_db(&self.config, self.state_db.as_ref(), thread_id).await
+        {
             set_thread_name_from_title(thread, title);
         }
     }
@@ -3066,7 +2940,7 @@ impl ThreadRequestProcessor {
 
         // Persistent forks materialize their own rollout immediately. Ephemeral forks stay
         // pathless, so they rebuild their visible history from the copied source history instead.
-        let mut thread = if let Some(fork_rollout_path) = session_configured.rollout_path.as_ref() {
+        let mut thread = if session_configured.rollout_path.is_some() {
             let stored_thread = self
                 .read_stored_thread_for_new_fork(thread_id, include_turns)
                 .await?;
@@ -3075,13 +2949,6 @@ impl ThreadRequestProcessor {
                 fallback_model_provider.as_str(),
                 include_turns,
             )
-            .await
-            .map_err(|message| {
-                internal_error(format!(
-                    "failed to load rollout `{}` for thread {thread_id}: {message}",
-                    fork_rollout_path.display()
-                ))
-            })?
         } else {
             let config_snapshot = forked_thread.config_snapshot().await;
             // forked thread names do not inherit the source thread name
@@ -3094,8 +2961,7 @@ impl ThreadRequestProcessor {
                     &mut thread,
                     &history_items,
                     /*active_turn*/ None,
-                )
-                .map_err(internal_error)?;
+                );
             }
             thread
         };
@@ -3140,23 +3006,10 @@ impl ThreadRequestProcessor {
         // `excludeTurns` is the cheap fork path, so skip restored usage replay
         // instead of rebuilding history only to attribute a historical update.
         if let Some(token_usage_thread) = token_usage_thread {
-            let token_usage_turn_id = if let Some(rollout_path) = token_usage_thread.path.as_deref()
-            {
-                read_rollout_items_from_rollout(rollout_path)
-                    .await
-                    .ok()
-                    .and_then(|rollout_items| {
-                        latest_token_usage_turn_id_from_rollout_items(
-                            &rollout_items,
-                            token_usage_thread.turns.as_slice(),
-                        )
-                    })
-            } else {
-                latest_token_usage_turn_id_from_rollout_items(
-                    &history_items,
-                    token_usage_thread.turns.as_slice(),
-                )
-            };
+            let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
+                &history_items,
+                token_usage_thread.turns.as_slice(),
+            );
             // Mirror the resume contract for forks: the new thread is usable as soon
             // as the response arrives, so restored usage must follow immediately.
             send_thread_token_usage_update_to_connection(
@@ -3466,16 +3319,6 @@ fn parse_thread_turns_cursor(cursor: &str) -> Result<ThreadTurnsCursor, JSONRPCE
     })
 }
 
-fn reconstruct_thread_turns_from_rollout_items(
-    items: &[RolloutItem],
-    loaded_status: ThreadStatus,
-    has_live_in_progress_turn: bool,
-) -> Vec<Turn> {
-    let mut turns = build_turns_from_rollout_items(items);
-    normalize_thread_turns_status(&mut turns, loaded_status, has_live_in_progress_turn);
-    turns
-}
-
 fn reconstruct_thread_turns_for_turns_list(
     items: &[RolloutItem],
     loaded_status: ThreadStatus,
@@ -3486,11 +3329,8 @@ fn reconstruct_thread_turns_for_turns_list(
         || active_turn
             .as_ref()
             .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
-    let mut turns = reconstruct_thread_turns_from_rollout_items(
-        items,
-        loaded_status,
-        has_live_in_progress_turn,
-    );
+    let mut turns = build_api_turns_from_rollout_items(items);
+    normalize_thread_turns_status(&mut turns, loaded_status, has_live_in_progress_turn);
     if let Some(active_turn) = active_turn {
         merge_turn_history_with_active_turn(&mut turns, active_turn);
     }
@@ -3697,21 +3537,12 @@ fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPC
     }
 }
 
-async fn read_summary_from_state_db_context_by_thread_id(
+async fn title_from_state_db(
+    config: &Config,
     state_db_ctx: Option<&StateDbHandle>,
     thread_id: ThreadId,
-) -> Option<ConversationSummary> {
-    let state_db_ctx = state_db_ctx?;
-
-    let metadata = match state_db_ctx.get_thread(thread_id).await {
-        Ok(Some(metadata)) => metadata,
-        Ok(None) | Err(_) => return None,
-    };
-    Some(summary_from_thread_metadata(&metadata))
-}
-
-async fn title_from_state_db(config: &Config, thread_id: ThreadId) -> Option<String> {
-    if let Some(state_db_ctx) = open_state_db_for_direct_thread_lookup(config).await
+) -> Option<String> {
+    if let Some(state_db_ctx) = state_db_ctx
         && let Some(metadata) = state_db_ctx.get_thread(thread_id).await.ok().flatten()
         && let Some(title) = distinct_title(&metadata)
     {
@@ -3744,7 +3575,7 @@ fn set_thread_name_from_title(thread: &mut Thread, title: String) {
     thread.name = Some(title);
 }
 
-fn thread_from_stored_thread(
+pub(crate) fn thread_from_stored_thread(
     thread: StoredThread,
     fallback_provider: &str,
     fallback_cwd: &AbsolutePathBuf,
@@ -3838,6 +3669,7 @@ fn summary_from_stored_thread(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn summary_from_state_db_metadata(
     conversation_id: ThreadId,
     path: PathBuf,
@@ -3882,6 +3714,7 @@ fn summary_from_state_db_metadata(
     }
 }
 
+#[cfg(test)]
 fn summary_from_thread_metadata(metadata: &ThreadMetadata) -> ConversationSummary {
     summary_from_state_db_metadata(
         metadata.id,

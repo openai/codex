@@ -1,0 +1,14 @@
+---
+source: tui/src/keymap_setup.rs
+expression: rendered
+---
+Keypress Inspector
+Press any key to see what Codex receives. Esc is inspected; Ctrl+C closes.
+Tip: Codex can only inspect keys your terminal sends.
+
+Detected: ctrl + o
+Config key: ctrl-o
+Raw event: code=Char('o'), modifiers=ctrl, kind=Press
+
+Assigned actions:
+  - global.copy (Copy) - Copy the last agent response to the clipboard. [Default]

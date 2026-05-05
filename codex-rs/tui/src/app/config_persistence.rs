@@ -203,7 +203,7 @@ impl App {
                 let previous_approvals_reviewer = feature_config.approvals_reviewer;
                 if effective_enabled {
                     // Persist the reviewer setting so future sessions keep the
-                    // experiment's matching `/approvals` mode until the user
+                    // experiment's matching `/permissions` mode until the user
                     // changes it explicitly.
                     feature_config.approvals_reviewer = auto_review_preset.approvals_reviewer;
                     feature_edits.push(ConfigEdit::SetPath {
@@ -323,7 +323,7 @@ impl App {
                 .await;
             // This uses `OverrideTurnContext` intentionally: toggling the
             // experiment should update the active thread's effective approval
-            // settings immediately, just like a `/approvals` selection. Without
+            // settings immediately, just like a `/permissions` selection. Without
             // this runtime patch, the config edit would only affect future
             // sessions or turns recreated from disk.
             let op = AppCommand::override_turn_context(

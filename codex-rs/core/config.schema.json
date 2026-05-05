@@ -2444,6 +2444,7 @@
               "insert_newline": null,
               "kill_line_end": null,
               "kill_line_start": null,
+              "kill_whole_line": null,
               "move_down": null,
               "move_left": null,
               "move_line_end": null,
@@ -2461,6 +2462,7 @@
               "open_transcript": null,
               "queue": null,
               "submit": null,
+              "toggle_fast_mode": null,
               "toggle_shortcuts": null,
               "toggle_vim_mode": null
             },
@@ -2814,6 +2816,14 @@
           ],
           "description": "Kill text from cursor to line start."
         },
+        "kill_whole_line": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Kill the current line."
+        },
         "move_down": {
           "allOf": [
             {
@@ -2941,6 +2951,14 @@
           ],
           "description": "Submit the current composer draft."
         },
+        "toggle_fast_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle Fast mode."
+        },
         "toggle_shortcuts": {
           "allOf": [
             {
@@ -3021,6 +3039,7 @@
             "insert_newline": null,
             "kill_line_end": null,
             "kill_line_start": null,
+            "kill_whole_line": null,
             "move_down": null,
             "move_left": null,
             "move_line_end": null,
@@ -3045,6 +3064,7 @@
             "open_transcript": null,
             "queue": null,
             "submit": null,
+            "toggle_fast_mode": null,
             "toggle_shortcuts": null,
             "toggle_vim_mode": null
           }

@@ -80,7 +80,7 @@ fn mcp_tool_search_entry(info: &ToolInfo) -> Result<ToolSearchEntry, serde_json:
             tool_name: info.callable_name.as_str(),
             tool: &info.tool,
             connector_name: info.connector_name.as_deref(),
-            connector_description: info.connector_description.as_deref(),
+            description: info.namespace_description.as_deref(),
         })?,
         limit_bucket: Some(info.server_name.clone()),
     })
@@ -120,10 +120,10 @@ fn build_mcp_search_text(info: &ToolInfo) -> String {
         parts.push(connector_name.to_string());
     }
 
-    if let Some(connector_description) = info.connector_description.as_deref()
-        && !connector_description.trim().is_empty()
+    if let Some(description) = info.namespace_description.as_deref()
+        && !description.trim().is_empty()
     {
-        parts.push(connector_description.to_string());
+        parts.push(description.to_string());
     }
 
     parts.extend(

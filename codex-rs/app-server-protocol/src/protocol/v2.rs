@@ -2521,6 +2521,15 @@ impl From<CoreModelAvailabilityNux> for ModelAvailabilityNux {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ModelServiceTier {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct Model {
     pub id: String,
     pub model: String,
@@ -2536,8 +2545,11 @@ pub struct Model {
     pub input_modalities: Vec<InputModality>,
     #[serde(default)]
     pub supports_personality: bool,
+    /// Deprecated: use `serviceTiers` instead.
     #[serde(default)]
     pub additional_speed_tiers: Vec<String>,
+    #[serde(default)]
+    pub service_tiers: Vec<ModelServiceTier>,
     // Only one model should be marked as default.
     pub is_default: bool,
 }
@@ -3565,6 +3577,204 @@ pub enum CommandExecOutputStream {
     Stderr,
 }
 
+/// PTY size in character cells for `process/spawn` PTY sessions.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessTerminalSize {
+    /// Terminal height in character cells.
+    pub rows: u16,
+    /// Terminal width in character cells.
+    pub cols: u16,
+}
+
+/// Spawn a standalone process (argv vector) without a Codex sandbox on the host
+/// where the app server is running.
+///
+/// `process/spawn` returns after the process has started and the connection-scoped
+/// `processHandle` has been registered. Process output and exit are reported via
+/// `process/outputDelta` and `process/exited` notifications.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessSpawnParams {
+    /// Command argv vector. Empty arrays are rejected.
+    pub command: Vec<String>,
+    /// Client-supplied, connection-scoped process handle.
+    ///
+    /// Duplicate active handles are rejected on the same connection. The same
+    /// handle can be reused after the prior process exits.
+    pub process_handle: String,
+    /// Absolute working directory for the process.
+    pub cwd: AbsolutePathBuf,
+    /// Enable PTY mode.
+    ///
+    /// This implies `streamStdin` and `streamStdoutStderr`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tty: bool,
+    /// Allow follow-up `process/writeStdin` requests to write stdin bytes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stream_stdin: bool,
+    /// Stream stdout/stderr via `process/outputDelta` notifications.
+    ///
+    /// Streamed bytes are not duplicated into the `process/exited` notification.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stream_stdout_stderr: bool,
+    /// Optional per-stream stdout/stderr capture cap in bytes.
+    ///
+    /// When omitted, the server default applies. Set to `null` to disable the
+    /// cap.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(type = "number | null")]
+    #[ts(optional = nullable)]
+    pub output_bytes_cap: Option<Option<usize>>,
+    /// Optional timeout in milliseconds.
+    ///
+    /// When omitted, the server default applies. Set to `null` to disable the
+    /// timeout.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_double_option",
+        serialize_with = "super::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(type = "number | null")]
+    #[ts(optional = nullable)]
+    pub timeout_ms: Option<Option<i64>>,
+    /// Optional environment overrides merged into the app-server process
+    /// environment.
+    ///
+    /// Matching names override inherited values. Set a key to `null` to unset
+    /// an inherited variable.
+    #[ts(optional = nullable)]
+    pub env: Option<HashMap<String, Option<String>>>,
+    /// Optional initial PTY size in character cells. Only valid when `tty` is
+    /// true.
+    #[ts(optional = nullable)]
+    pub size: Option<ProcessTerminalSize>,
+}
+
+/// Successful response for `process/spawn`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessSpawnResponse {}
+
+/// Write stdin bytes to a running `process/spawn` session, close stdin, or
+/// both.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessWriteStdinParams {
+    /// Client-supplied, connection-scoped `processHandle` from `process/spawn`.
+    pub process_handle: String,
+    /// Optional base64-encoded stdin bytes to write.
+    #[ts(optional = nullable)]
+    pub delta_base64: Option<String>,
+    /// Close stdin after writing `deltaBase64`, if present.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub close_stdin: bool,
+}
+
+/// Empty success response for `process/writeStdin`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessWriteStdinResponse {}
+
+/// Terminate a running `process/spawn` session.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessKillParams {
+    /// Client-supplied, connection-scoped `processHandle` from `process/spawn`.
+    pub process_handle: String,
+}
+
+/// Empty success response for `process/kill`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessKillResponse {}
+
+/// Resize a running PTY-backed `process/spawn` session.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessResizePtyParams {
+    /// Client-supplied, connection-scoped `processHandle` from `process/spawn`.
+    pub process_handle: String,
+    /// New PTY size in character cells.
+    pub size: ProcessTerminalSize,
+}
+
+/// Empty success response for `process/resizePty`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessResizePtyResponse {}
+
+/// Stream label for `process/outputDelta` notifications.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ProcessOutputStream {
+    /// stdout stream. PTY mode multiplexes terminal output here.
+    Stdout,
+    /// stderr stream.
+    Stderr,
+}
+
+/// Base64-encoded output chunk emitted for a streaming `process/spawn` request.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessOutputDeltaNotification {
+    /// Client-supplied, connection-scoped `processHandle` from `process/spawn`.
+    pub process_handle: String,
+    /// Output stream this chunk belongs to.
+    pub stream: ProcessOutputStream,
+    /// Base64-encoded output bytes.
+    pub delta_base64: String,
+    /// True on the final streamed chunk for this stream when output was
+    /// truncated by `outputBytesCap`.
+    pub cap_reached: bool,
+}
+
+/// Final process exit notification for `process/spawn`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ProcessExitedNotification {
+    /// Client-supplied, connection-scoped `processHandle` from `process/spawn`.
+    pub process_handle: String,
+    /// Process exit code.
+    pub exit_code: i32,
+    /// Buffered stdout capture.
+    ///
+    /// Empty when stdout was streamed via `process/outputDelta`.
+    pub stdout: String,
+    /// Whether stdout reached `outputBytesCap`.
+    ///
+    /// In streaming mode, stdout is empty and cap state is also reported on the
+    /// final stdout `process/outputDelta` notification.
+    pub stdout_cap_reached: bool,
+    /// Buffered stderr capture.
+    ///
+    /// Empty when stderr was streamed via `process/outputDelta`.
+    pub stderr: String,
+    /// Whether stderr reached `outputBytesCap`.
+    ///
+    /// In streaming mode, stderr is empty and cap state is also reported on the
+    /// final stderr `process/outputDelta` notification.
+    pub stderr_cap_reached: bool,
+}
+
 // === Threads, Turns, and Items ===
 // Thread APIs
 #[derive(
@@ -3638,8 +3848,9 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.experimentalRawEvents")]
     #[serde(default)]
     pub experimental_raw_events: bool,
-    /// If true, persist additional rollout EventMsg variants required to
-    /// reconstruct a richer thread history on resume/fork/read.
+    /// If true, persist additional EventMsg variants to the rollout file.
+    /// However, `thread/read`, `thread/resume`, and `thread/fork` still only
+    /// return the limited form of thread history for scalability reasons.
     #[experimental("thread/start.persistFullHistory")]
     #[serde(default)]
     pub persist_extended_history: bool,
@@ -3769,8 +3980,9 @@ pub struct ThreadResumeParams {
     #[experimental("thread/resume.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
-    /// If true, persist additional rollout EventMsg variants required to
-    /// reconstruct a richer thread history on subsequent resume/fork/read.
+    /// If true, persist additional EventMsg variants to the rollout file.
+    /// However, `thread/read`, `thread/resume`, and `thread/fork` still only
+    /// return the limited form of thread history for scalability reasons.
     #[experimental("thread/resume.persistFullHistory")]
     #[serde(default)]
     pub persist_extended_history: bool,
@@ -3874,8 +4086,9 @@ pub struct ThreadForkParams {
     #[experimental("thread/fork.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
-    /// If true, persist additional rollout EventMsg variants required to
-    /// reconstruct a richer thread history on subsequent resume/fork/read.
+    /// If true, persist additional EventMsg variants to the rollout file.
+    /// However, `thread/read`, `thread/resume`, and `thread/fork` still only
+    /// return the limited form of thread history for scalability reasons.
     #[experimental("thread/fork.persistFullHistory")]
     #[serde(default)]
     pub persist_extended_history: bool,
@@ -6934,6 +7147,9 @@ pub struct ItemStartedNotification {
     pub item: ThreadItem,
     pub thread_id: String,
     pub turn_id: String,
+    /// Unix timestamp (in milliseconds) when this item lifecycle started.
+    #[ts(type = "number")]
+    pub started_at_ms: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -6996,6 +7212,9 @@ pub struct ItemCompletedNotification {
     pub item: ThreadItem,
     pub thread_id: String,
     pub turn_id: String,
+    /// Unix timestamp (in milliseconds) when this item lifecycle completed.
+    #[ts(type = "number")]
+    pub completed_at_ms: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -9148,6 +9367,97 @@ mod tests {
     }
 
     #[test]
+    fn process_spawn_params_round_trips_without_sandbox_policy() {
+        let params = ProcessSpawnParams {
+            command: vec!["sleep".to_string(), "30".to_string()],
+            process_handle: "sleep-1".to_string(),
+            cwd: test_absolute_path(),
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            timeout_ms: None,
+            env: None,
+            size: None,
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize process/spawn params");
+        assert_eq!(
+            value,
+            json!({
+                "command": ["sleep", "30"],
+                "processHandle": "sleep-1",
+                "cwd": absolute_path_string("readable"),
+                "env": null,
+                "size": null,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<ProcessSpawnParams>(value).expect("deserialize round-trip");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn process_spawn_params_distinguish_omitted_null_and_value_limits() {
+        let base = json!({
+            "command": ["sleep", "30"],
+            "processHandle": "sleep-1",
+            "cwd": absolute_path_string("readable"),
+        });
+
+        let expected_omitted = ProcessSpawnParams {
+            command: vec!["sleep".to_string(), "30".to_string()],
+            process_handle: "sleep-1".to_string(),
+            cwd: test_absolute_path(),
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            timeout_ms: None,
+            env: None,
+            size: None,
+        };
+        let decoded =
+            serde_json::from_value::<ProcessSpawnParams>(base).expect("deserialize omitted limits");
+        assert_eq!(decoded, expected_omitted);
+
+        let decoded = serde_json::from_value::<ProcessSpawnParams>(json!({
+            "command": ["sleep", "30"],
+            "processHandle": "sleep-1",
+            "cwd": absolute_path_string("readable"),
+            "outputBytesCap": null,
+            "timeoutMs": null,
+        }))
+        .expect("deserialize disabled limits");
+        assert_eq!(
+            decoded,
+            ProcessSpawnParams {
+                output_bytes_cap: Some(None),
+                timeout_ms: Some(None),
+                ..expected_omitted.clone()
+            }
+        );
+
+        let decoded = serde_json::from_value::<ProcessSpawnParams>(json!({
+            "command": ["sleep", "30"],
+            "processHandle": "sleep-1",
+            "cwd": absolute_path_string("readable"),
+            "outputBytesCap": 123,
+            "timeoutMs": 456,
+        }))
+        .expect("deserialize explicit limits");
+        assert_eq!(
+            decoded,
+            ProcessSpawnParams {
+                output_bytes_cap: Some(Some(123)),
+                timeout_ms: Some(Some(456)),
+                ..expected_omitted
+            }
+        );
+    }
+
+    #[test]
     fn command_exec_params_round_trips_disable_output_cap() {
         let params = CommandExecParams {
             command: vec!["yes".to_string()],
@@ -9377,6 +9687,110 @@ mod tests {
         let decoded = serde_json::from_value::<CommandExecOutputDeltaNotification>(value)
             .expect("deserialize round-trip");
         assert_eq!(decoded, notification);
+    }
+
+    #[test]
+    fn process_control_params_round_trip() {
+        let write = ProcessWriteStdinParams {
+            process_handle: "proc-7".to_string(),
+            delta_base64: None,
+            close_stdin: true,
+        };
+        let value = serde_json::to_value(&write).expect("serialize process/writeStdin params");
+        assert_eq!(
+            value,
+            json!({
+                "processHandle": "proc-7",
+                "deltaBase64": null,
+                "closeStdin": true,
+            })
+        );
+        let decoded = serde_json::from_value::<ProcessWriteStdinParams>(value)
+            .expect("deserialize process/writeStdin params");
+        assert_eq!(decoded, write);
+
+        let resize = ProcessResizePtyParams {
+            process_handle: "proc-7".to_string(),
+            size: ProcessTerminalSize {
+                rows: 50,
+                cols: 160,
+            },
+        };
+        let value = serde_json::to_value(&resize).expect("serialize process/resizePty params");
+        assert_eq!(
+            value,
+            json!({
+                "processHandle": "proc-7",
+                "size": {
+                    "rows": 50,
+                    "cols": 160,
+                },
+            })
+        );
+        let decoded = serde_json::from_value::<ProcessResizePtyParams>(value)
+            .expect("deserialize process/resizePty params");
+        assert_eq!(decoded, resize);
+
+        let kill = ProcessKillParams {
+            process_handle: "proc-7".to_string(),
+        };
+        let value = serde_json::to_value(&kill).expect("serialize process/kill params");
+        assert_eq!(
+            value,
+            json!({
+                "processHandle": "proc-7",
+            })
+        );
+        let decoded =
+            serde_json::from_value::<ProcessKillParams>(value).expect("deserialize process/kill");
+        assert_eq!(decoded, kill);
+    }
+
+    #[test]
+    fn process_notifications_round_trip() {
+        let delta = ProcessOutputDeltaNotification {
+            process_handle: "proc-1".to_string(),
+            stream: ProcessOutputStream::Stdout,
+            delta_base64: "AQI=".to_string(),
+            cap_reached: false,
+        };
+        let value = serde_json::to_value(&delta).expect("serialize process/outputDelta");
+        assert_eq!(
+            value,
+            json!({
+                "processHandle": "proc-1",
+                "stream": "stdout",
+                "deltaBase64": "AQI=",
+                "capReached": false,
+            })
+        );
+        let decoded = serde_json::from_value::<ProcessOutputDeltaNotification>(value)
+            .expect("deserialize process/outputDelta");
+        assert_eq!(decoded, delta);
+
+        let exited = ProcessExitedNotification {
+            process_handle: "proc-1".to_string(),
+            exit_code: 0,
+            stdout: "out".to_string(),
+            stdout_cap_reached: false,
+            stderr: "err".to_string(),
+            stderr_cap_reached: true,
+        };
+        let value = serde_json::to_value(&exited).expect("serialize process/exited");
+        assert_eq!(
+            value,
+            json!({
+                "processHandle": "proc-1",
+                "exitCode": 0,
+                "stdout": "out",
+                "stdoutCapReached": false,
+                "stderr": "err",
+                "stderrCapReached": true,
+            })
+        );
+        let decoded = serde_json::from_value::<ProcessExitedNotification>(value)
+            .expect("deserialize process/exited");
+        assert_eq!(decoded, exited);
     }
 
     #[test]

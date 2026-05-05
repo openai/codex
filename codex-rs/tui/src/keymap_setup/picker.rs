@@ -17,6 +17,7 @@ use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 
 use super::actions::KEYMAP_ACTIONS;
+use super::actions::KeymapActionFilter;
 use super::actions::action_label;
 use super::actions::bindings_for_action;
 use super::actions::format_binding_summary;
@@ -27,6 +28,7 @@ pub(super) const KEYMAP_ALL_TAB_ID: &str = "all-shortcuts";
 pub(super) const KEYMAP_COMMON_TAB_ID: &str = "common-shortcuts";
 pub(super) const KEYMAP_CUSTOM_TAB_ID: &str = "custom-shortcuts";
 pub(super) const KEYMAP_UNBOUND_TAB_ID: &str = "unbound-shortcuts";
+pub(super) const KEYMAP_DEBUG_TAB_ID: &str = "debug-shortcuts";
 const KEYMAP_CONTEXT_LABEL_WIDTH: usize = 12;
 const KEYMAP_ROW_PREFIX_WIDTH: usize = KEYMAP_CONTEXT_LABEL_WIDTH + 3;
 
@@ -58,6 +60,7 @@ const KEYMAP_COMMON_ACTIONS: &[(&str, &str)] = &[
     ("composer", "submit"),
     ("editor", "insert_newline"),
     ("composer", "queue"),
+    ("global", "toggle_fast_mode"),
     ("global", "open_external_editor"),
     ("global", "copy"),
     ("global", "toggle_vim_mode"),
@@ -115,32 +118,69 @@ const KEYMAP_CONTEXT_TABS: &[KeymapContextTab] = &[
     },
 ];
 
+#[cfg(test)]
 pub(crate) fn build_keymap_picker_params(
     runtime_keymap: &RuntimeKeymap,
     keymap_config: &TuiKeymap,
 ) -> SelectionViewParams {
+    build_keymap_picker_params_with_filter(
+        runtime_keymap,
+        keymap_config,
+        KeymapActionFilter::default(),
+    )
+}
+
+pub(crate) fn build_keymap_picker_params_with_filter(
+    runtime_keymap: &RuntimeKeymap,
+    keymap_config: &TuiKeymap,
+    action_filter: KeymapActionFilter,
+) -> SelectionViewParams {
     build_keymap_picker_params_for_action(
         runtime_keymap,
         keymap_config,
+        action_filter,
         /*selected_action*/ None,
     )
 }
 
+#[cfg(test)]
 pub(crate) fn build_keymap_picker_params_for_selected_action(
     runtime_keymap: &RuntimeKeymap,
     keymap_config: &TuiKeymap,
     context: &str,
     action: &str,
 ) -> SelectionViewParams {
-    build_keymap_picker_params_for_action(runtime_keymap, keymap_config, Some((context, action)))
+    build_keymap_picker_params_for_selected_action_with_filter(
+        runtime_keymap,
+        keymap_config,
+        KeymapActionFilter::default(),
+        context,
+        action,
+    )
+}
+
+pub(crate) fn build_keymap_picker_params_for_selected_action_with_filter(
+    runtime_keymap: &RuntimeKeymap,
+    keymap_config: &TuiKeymap,
+    action_filter: KeymapActionFilter,
+    context: &str,
+    action: &str,
+) -> SelectionViewParams {
+    build_keymap_picker_params_for_action(
+        runtime_keymap,
+        keymap_config,
+        action_filter,
+        Some((context, action)),
+    )
 }
 
 fn build_keymap_picker_params_for_action(
     runtime_keymap: &RuntimeKeymap,
     keymap_config: &TuiKeymap,
+    action_filter: KeymapActionFilter,
     selected_action: Option<(&str, &str)>,
 ) -> SelectionViewParams {
-    let rows = build_keymap_rows(runtime_keymap, keymap_config);
+    let rows = build_keymap_rows(runtime_keymap, keymap_config, action_filter);
     let total = rows.len();
     let custom_count = rows.iter().filter(|row| row.custom_binding).count();
     let unbound_count = rows.iter().filter(|row| row.is_unbound()).count();
@@ -237,11 +277,13 @@ fn build_keymap_picker_params_for_action(
             ),
         });
     }
+    tabs.push(keymap_debug_tab());
 
     SelectionViewParams {
         view_id: Some(KEYMAP_PICKER_VIEW_ID),
         header: Box::new(()),
         footer_hint: Some(keymap_picker_hint_line()),
+        tab_footer_hints: vec![(KEYMAP_DEBUG_TAB_ID.to_string(), keymap_debug_hint_line())],
         tabs,
         initial_tab_id: Some(KEYMAP_ALL_TAB_ID.to_string()),
         is_searchable: true,
@@ -254,12 +296,42 @@ fn build_keymap_picker_params_for_action(
     }
 }
 
+fn keymap_debug_tab() -> SelectionTab {
+    SelectionTab {
+        id: KEYMAP_DEBUG_TAB_ID.to_string(),
+        label: "Debug".to_string(),
+        header: keymap_header(
+            "Inspect keypresses from your terminal.".to_string(),
+            "See the key Codex detects and any shortcuts assigned to it.".to_string(),
+        ),
+        items: vec![SelectionItem {
+            name: "Inspect keypresses".to_string(),
+            description: Some(
+                "Press Enter to start. Then press any key to inspect it; Ctrl+C exits."
+                    .to_string(),
+            ),
+            selected_description: Some(
+                "Open a live inspector that shows the detected key, config key, and matching actions."
+                    .to_string(),
+            ),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenKeymapDebug);
+            })],
+            search_value: Some("debug inspect keypress key terminal detected actions".to_string()),
+            ..Default::default()
+        }],
+    }
+}
+
 fn build_keymap_rows(
     runtime_keymap: &RuntimeKeymap,
     keymap_config: &TuiKeymap,
+    action_filter: KeymapActionFilter,
 ) -> Vec<KeymapActionRow> {
     KEYMAP_ACTIONS
         .iter()
+        .copied()
+        .filter(|descriptor| descriptor.is_visible(action_filter))
         .map(|descriptor| {
             let bindings =
                 bindings_for_action(runtime_keymap, descriptor.context, descriptor.action)
@@ -387,6 +459,15 @@ fn keymap_picker_hint_line() -> Line<'static> {
         " custom · ".dim(),
         "-".cyan(),
         " unbound · ".dim(),
+        "esc".cyan(),
+        " close".dim(),
+    ])
+}
+
+fn keymap_debug_hint_line() -> Line<'static> {
+    Line::from(vec![
+        "enter".cyan(),
+        " start inspector · ".dim(),
         "esc".cyan(),
         " close".dim(),
     ])

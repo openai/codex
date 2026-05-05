@@ -435,6 +435,7 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
         config,
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         app_event_tx: app.app_event_tx.clone(),
+        workspace_command_runner: None,
         initial_user_message: create_initial_user_message(
             Some(initial_prompt.clone()),
             Vec::new(),
@@ -2644,6 +2645,7 @@ async fn inactive_thread_file_change_approval_recovers_buffered_changes() {
         ServerNotification::ItemStarted(ItemStartedNotification {
             thread_id: thread_id.to_string(),
             turn_id: "turn-approval".to_string(),
+            started_at_ms: 0,
             item: ThreadItem::FileChange {
                 id: "patch-approval".to_string(),
                 changes: vec![FileUpdateChange {
@@ -3781,7 +3783,9 @@ async fn make_test_app() -> App {
         session_telemetry,
         app_event_tx,
         chat_widget,
+        workspace_command_runner: None,
         config,
+        state_db: None,
         active_profile: None,
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),
@@ -3842,7 +3846,9 @@ async fn make_test_app_with_channels() -> (
             session_telemetry,
             app_event_tx,
             chat_widget,
+            workspace_command_runner: None,
             config,
+            state_db: None,
             active_profile: None,
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),
@@ -4742,6 +4748,7 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         config: app.config.clone(),
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         app_event_tx: app.app_event_tx.clone(),
+        workspace_command_runner: None,
         initial_user_message: None,
         enhanced_keys_supported: app.enhanced_keys_supported,
         has_chatgpt_account: app.chat_widget.has_chatgpt_account(),
@@ -4771,6 +4778,7 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
                     codex_app_server_protocol::ItemStartedNotification {
                         thread_id: "thread-1".to_string(),
                         turn_id: "turn-1".to_string(),
+                        started_at_ms: 0,
                         item: ThreadItem::CollabAgentToolCall {
                             id: "wait-1".to_string(),
                             tool: codex_app_server_protocol::CollabAgentTool::Wait,

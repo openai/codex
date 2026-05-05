@@ -888,20 +888,20 @@ impl TurnRequestProcessor {
         review_request: ReviewRequest,
         display_text: &str,
     ) -> std::result::Result<(), JSONRPCErrorError> {
-        let rollout_path = if let Some(path) = parent_thread.rollout_path() {
-            path
-        } else {
-            find_thread_path_by_id_str(&self.config.codex_home, &parent_thread_id.to_string())
-                .await
-                .map_err(|err| {
-                    internal_error(format!(
-                        "failed to locate thread id {parent_thread_id}: {err}"
-                    ))
-                })?
-                .ok_or_else(|| {
-                    invalid_request(format!("no rollout found for thread id {parent_thread_id}"))
-                })?
-        };
+        parent_thread.ensure_rollout_materialized().await;
+        parent_thread.flush_rollout().await.map_err(|err| {
+            internal_error(format!(
+                "failed to flush parent thread {parent_thread_id}: {err}"
+            ))
+        })?;
+        let parent_history = parent_thread
+            .load_history(/*include_archived*/ true)
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to load parent thread {parent_thread_id}: {err}"
+                ))
+            })?;
 
         let mut config = self.config.as_ref().clone();
         if let Some(review_model) = &config.review_model {
@@ -911,14 +911,17 @@ impl TurnRequestProcessor {
         let NewThread {
             thread_id,
             thread: review_thread,
-            session_configured,
             ..
         } = self
             .thread_manager
-            .fork_thread(
+            .fork_thread_from_history(
                 ForkSnapshot::Interrupted,
                 config.clone(),
-                rollout_path,
+                InitialHistory::Resumed(ResumedHistory {
+                    conversation_id: parent_thread_id,
+                    history: parent_history.items,
+                    rollout_path: parent_thread.rollout_path(),
+                }),
                 /*persist_extended_history*/ false,
                 self.request_trace_context(request_id).await,
             )
@@ -940,37 +943,32 @@ impl TurnRequestProcessor {
         );
 
         let fallback_provider = self.config.model_provider_id.as_str();
-        if let Some(rollout_path) = review_thread.rollout_path() {
-            match read_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
-                Ok(summary) => {
-                    let mut thread = summary_to_thread(summary, &self.config.cwd);
+        match review_thread
+            .read_thread(
+                /*include_archived*/ true, /*include_history*/ false,
+            )
+            .await
+        {
+            Ok(stored_thread) => {
+                let (mut thread, _) =
+                    thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
+                self.thread_watch_manager
+                    .upsert_thread_silently(thread.clone())
+                    .await;
+                thread.status = resolve_thread_status(
                     self.thread_watch_manager
-                        .upsert_thread_silently(thread.clone())
-                        .await;
-                    thread.status = resolve_thread_status(
-                        self.thread_watch_manager
-                            .loaded_status_for_thread(&thread.id)
-                            .await,
-                        /*has_in_progress_turn*/ false,
-                    );
-                    let notif = thread_started_notification(thread);
-                    self.outgoing
-                        .send_server_notification(ServerNotification::ThreadStarted(notif))
-                        .await;
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        "failed to load summary for review thread {}: {}",
-                        session_configured.session_id,
-                        err
-                    );
-                }
+                        .loaded_status_for_thread(&thread.id)
+                        .await,
+                    /*has_in_progress_turn*/ false,
+                );
+                let notif = thread_started_notification(thread);
+                self.outgoing
+                    .send_server_notification(ServerNotification::ThreadStarted(notif))
+                    .await;
             }
-        } else {
-            tracing::warn!(
-                "review thread {} has no rollout path",
-                session_configured.session_id
-            );
+            Err(err) => {
+                tracing::warn!("failed to load summary for review thread {thread_id}: {err}");
+            }
         }
 
         let turn_id = self

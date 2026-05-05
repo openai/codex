@@ -18,9 +18,9 @@ concurrency:
 jobs:
   test:
     # PRs use a fast Windows cross-compiled test leg for pre-merge signal.
-    # Post-merge pushes to main also run the native Windows test job below,
-    # which keeps V8/code-mode coverage without putting PR latency back on the
-    # critical path.
+    # Post-merge pushes to main also run the native Windows test job below for
+    # broader Windows signal without putting PR latency back on the critical
+    # path. Cargo CI owns V8/code-mode test coverage for now.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -46,8 +46,8 @@ jobs:
 
           # Windows fast path: build the windows-gnullvm binaries with Linux
           # RBE, then run the resulting Windows tests on the Windows runner.
-          # The main-only native Windows job below preserves full V8/code-mode
-          # coverage post-merge.
+          # Cargo CI preserves V8/code-mode coverage while Bazel CI keeps broad
+          # non-code-mode signal.
           - os: windows-latest
             target: x86_64-pc-windows-gnullvm
     runs-on: ${{ matrix.os }}
@@ -88,6 +88,11 @@ jobs:
             # path. V8 consumers under `//codex-rs/...` still participate
             # transitively through `//...`.
             -//third_party/v8:all
+            # V8-backed code-mode tests are covered by Cargo CI. Bazel CI
+            # cross-compiles in several legs, and those tests are not stable in
+            # that setup yet.
+            -//codex-rs/code-mode:code-mode-unit-tests
+            -//codex-rs/v8-poc:v8-poc-unit-tests
           )
 
           bazel_wrapper_args=(
@@ -104,15 +109,6 @@ jobs:
             bazel_wrapper_args+=(
               --windows-cross-compile
               --remote-download-toplevel
-            )
-            # Tradeoff: the Linux-RBE-built windows-gnullvm V8 archive
-            # currently crashes during direct V8/code-mode smoke tests on the
-            # Windows runner. Keep the broader fast Windows suite in PR CI and
-            # rely on the main-only native Windows job below for full
-            # V8/code-mode signal while we investigate the cross-built archive.
-            bazel_targets+=(
-              -//codex-rs/code-mode:code-mode-unit-tests
-              -//codex-rs/v8-poc:v8-poc-unit-tests
             )
           fi
 
@@ -144,9 +140,8 @@ jobs:
 
   test-windows-native-main:
     # Native Windows Bazel tests are slower and frequently approach the
-    # 30-minute PR budget, but they provide the full V8/code-mode signal that
-    # the fast cross-compiled PR leg intentionally trades away. Run this only
-    # for post-merge commits to main and give it a larger timeout.
+    # 30-minute PR budget. Run this only for post-merge commits to main and give
+    # it a larger timeout.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     timeout-minutes: 40
     runs-on: windows-latest
@@ -174,6 +169,11 @@ jobs:
             # path. V8 consumers under `//codex-rs/...` still participate
             # transitively through `//...`.
             -//third_party/v8:all
+            # Keep this aligned with the main Bazel job. The native Windows
+            # job preserves broad post-merge coverage, but code-mode/V8 tests
+            # are covered by Cargo CI rather than Bazel for now.
+            -//codex-rs/code-mode:code-mode-unit-tests
+            -//codex-rs/v8-poc:v8-poc-unit-tests
           )
 
           bazel_test_args=(

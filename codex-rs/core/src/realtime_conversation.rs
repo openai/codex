@@ -196,6 +196,12 @@ struct RealtimeInputTask {
     event_parser: RealtimeEventParser,
 }
 
+struct RealtimeInputChannels {
+    user_text_rx: Receiver<String>,
+    handoff_output_rx: Receiver<HandoffOutput>,
+    audio_rx: Receiver<RealtimeAudioFrame>,
+}
+
 impl RealtimeHandoffState {
     fn new(output_tx: Sender<HandoffOutput>, session_kind: RealtimeSessionKind) -> Self {
         Self {
@@ -212,7 +218,6 @@ struct ConversationState {
     audio_tx: Sender<RealtimeAudioFrame>,
     user_text_tx: Sender<String>,
     session_kind: RealtimeSessionKind,
-    writer: RealtimeWebsocketWriter,
     handoff: RealtimeHandoffState,
     input_task: JoinHandle<()>,
     fanout_task: Option<JoinHandle<()>>,
@@ -284,39 +289,6 @@ impl RealtimeConversationManager {
             RealtimeEventParser::RealtimeV2 => RealtimeSessionKind::V2,
         };
 
-        let client = RealtimeWebsocketClient::new(api_provider);
-        let (connection, sdp) = if let Some(sdp) = sdp {
-            let call = model_client
-                .create_realtime_call_with_headers(
-                    sdp,
-                    session_config.clone(),
-                    extra_headers.unwrap_or_default(),
-                )
-                .await?;
-            let connection = client
-                .connect_webrtc_sideband(
-                    session_config,
-                    &call.call_id,
-                    call.sideband_headers,
-                    default_headers(),
-                )
-                .await
-                .map_err(map_api_error)?;
-            (connection, Some(call.sdp))
-        } else {
-            let connection = client
-                .connect(
-                    session_config,
-                    extra_headers.unwrap_or_default(),
-                    default_headers(),
-                )
-                .await
-                .map_err(map_api_error)?;
-            (connection, None)
-        };
-
-        let writer = connection.writer();
-        let events = connection.events();
         let (audio_tx, audio_rx) =
             async_channel::bounded::<RealtimeAudioFrame>(AUDIO_IN_QUEUE_CAPACITY);
         let (user_text_tx, user_text_rx) =
@@ -328,24 +300,62 @@ impl RealtimeConversationManager {
 
         let realtime_active = Arc::new(AtomicBool::new(true));
         let handoff = RealtimeHandoffState::new(handoff_output_tx, session_kind);
-        let task = spawn_realtime_input_task(RealtimeInputTask {
-            writer: writer.clone(),
-            events,
+        let input_channels = RealtimeInputChannels {
             user_text_rx,
             handoff_output_rx,
             audio_rx,
-            events_tx,
-            handoff_state: handoff.clone(),
-            session_kind,
-            event_parser,
-        });
+        };
+
+        let client = RealtimeWebsocketClient::new(api_provider);
+        let (task, sdp) = if let Some(sdp) = sdp {
+            let call = model_client
+                .create_realtime_call_with_headers(
+                    sdp,
+                    session_config.clone(),
+                    extra_headers.unwrap_or_default(),
+                )
+                .await?;
+            let task = spawn_webrtc_sideband_input_task(RealtimeWebrtcSidebandInputTask {
+                client,
+                session_config,
+                call_id: call.call_id,
+                sideband_headers: call.sideband_headers,
+                input_channels,
+                events_tx,
+                handoff_state: handoff.clone(),
+                session_kind,
+                event_parser,
+                realtime_active: Arc::clone(&realtime_active),
+            });
+            (task, Some(call.sdp))
+        } else {
+            let connection = client
+                .connect(
+                    session_config,
+                    extra_headers.unwrap_or_default(),
+                    default_headers(),
+                )
+                .await
+                .map_err(map_api_error)?;
+            let task = spawn_realtime_input_task(RealtimeInputTask {
+                writer: connection.writer(),
+                events: connection.events(),
+                user_text_rx: input_channels.user_text_rx,
+                handoff_output_rx: input_channels.handoff_output_rx,
+                audio_rx: input_channels.audio_rx,
+                events_tx,
+                handoff_state: handoff.clone(),
+                session_kind,
+                event_parser,
+            });
+            (task, None)
+        };
 
         let mut guard = self.state.lock().await;
         *guard = Some(ConversationState {
             audio_tx,
             user_text_tx,
             session_kind,
-            writer,
             handoff,
             input_task: task,
             fanout_task: None,
@@ -1004,6 +1014,83 @@ pub(crate) async fn handle_close(sess: &Arc<Session>, sub_id: String) {
 }
 
 fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
+    tokio::spawn(run_realtime_input_task(input))
+}
+
+struct RealtimeWebrtcSidebandInputTask {
+    client: RealtimeWebsocketClient,
+    session_config: RealtimeSessionConfig,
+    call_id: String,
+    sideband_headers: HeaderMap,
+    input_channels: RealtimeInputChannels,
+    events_tx: Sender<RealtimeEvent>,
+    handoff_state: RealtimeHandoffState,
+    session_kind: RealtimeSessionKind,
+    event_parser: RealtimeEventParser,
+    realtime_active: Arc<AtomicBool>,
+}
+
+fn spawn_webrtc_sideband_input_task(input: RealtimeWebrtcSidebandInputTask) -> JoinHandle<()> {
+    let RealtimeWebrtcSidebandInputTask {
+        client,
+        session_config,
+        call_id,
+        sideband_headers,
+        input_channels,
+        events_tx,
+        handoff_state,
+        session_kind,
+        event_parser,
+        realtime_active,
+    } = input;
+
+    tokio::spawn(async move {
+        if !realtime_active.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let connection = match client
+            .connect_webrtc_sideband(
+                session_config,
+                &call_id,
+                sideband_headers,
+                default_headers(),
+            )
+            .await
+        {
+            Ok(connection) => connection,
+            Err(err) => {
+                if realtime_active.load(Ordering::Relaxed) {
+                    let mapped_error = map_api_error(err);
+                    warn!("failed to connect realtime sideband: {mapped_error}");
+                    let _ = events_tx
+                        .send(RealtimeEvent::Error(mapped_error.to_string()))
+                        .await;
+                }
+                return;
+            }
+        };
+
+        if !realtime_active.load(Ordering::Relaxed) {
+            return;
+        }
+
+        run_realtime_input_task(RealtimeInputTask {
+            writer: connection.writer(),
+            events: connection.events(),
+            user_text_rx: input_channels.user_text_rx,
+            handoff_output_rx: input_channels.handoff_output_rx,
+            audio_rx: input_channels.audio_rx,
+            events_tx,
+            handoff_state,
+            session_kind,
+            event_parser,
+        })
+        .await;
+    })
+}
+
+async fn run_realtime_input_task(input: RealtimeInputTask) {
     let RealtimeInputTask {
         writer,
         events,
@@ -1016,57 +1103,55 @@ fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
         event_parser,
     } = input;
 
-    tokio::spawn(async move {
-        let mut output_audio_state: Option<OutputAudioState> = None;
-        let mut response_create_queue = RealtimeResponseCreateQueue::default();
+    let mut output_audio_state: Option<OutputAudioState> = None;
+    let mut response_create_queue = RealtimeResponseCreateQueue::default();
 
-        loop {
-            let result = tokio::select! {
-                // Text typed by the user that should be sent into realtime.
-                user_text = user_text_rx.recv() => {
-                    handle_user_text_input(
-                        user_text,
-                        &writer,
-                        &events_tx,
-                    )
-                        .await
-                }
-                // Background agent progress or final output that should be sent back to realtime.
-                background_agent_output = handoff_output_rx.recv() => {
-                    handle_handoff_output(
-                        background_agent_output,
-                        &writer,
-                        &events_tx,
-                        &handoff_state,
-                        event_parser,
-                        &mut response_create_queue,
-                    )
-                        .await
-                }
-                // Events received from the realtime server.
-                realtime_event = events.next_event() => {
-                    handle_realtime_server_event(
-                        realtime_event,
-                        &writer,
-                        &events_tx,
-                        &handoff_state,
-                        session_kind,
-                        &mut output_audio_state,
-                        &mut response_create_queue,
-                    )
+    loop {
+        let result = tokio::select! {
+            // Text typed by the user that should be sent into realtime.
+            user_text = user_text_rx.recv() => {
+                handle_user_text_input(
+                    user_text,
+                    &writer,
+                    &events_tx,
+                )
                     .await
-                }
-                // Audio frames captured from the user microphone.
-                user_audio_frame = audio_rx.recv() => {
-                    handle_user_audio_input(user_audio_frame, &writer, &events_tx)
-                        .await
-                }
-            };
-            if result.is_err() {
-                break;
             }
+            // Background agent progress or final output that should be sent back to realtime.
+            background_agent_output = handoff_output_rx.recv() => {
+                handle_handoff_output(
+                    background_agent_output,
+                    &writer,
+                    &events_tx,
+                    &handoff_state,
+                    event_parser,
+                    &mut response_create_queue,
+                )
+                    .await
+            }
+            // Events received from the realtime server.
+            realtime_event = events.next_event() => {
+                handle_realtime_server_event(
+                    realtime_event,
+                    &writer,
+                    &events_tx,
+                    &handoff_state,
+                    session_kind,
+                    &mut output_audio_state,
+                    &mut response_create_queue,
+                )
+                .await
+            }
+            // Audio frames captured from the user microphone.
+            user_audio_frame = audio_rx.recv() => {
+                handle_user_audio_input(user_audio_frame, &writer, &events_tx)
+                    .await
+            }
+        };
+        if result.is_err() {
+            break;
         }
-    })
+    }
 }
 
 async fn handle_user_text_input(

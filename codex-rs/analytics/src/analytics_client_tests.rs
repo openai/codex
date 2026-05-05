@@ -1816,6 +1816,7 @@ async fn reducer_ingests_skill_invoked_fact() {
                     skill_name: "doc".to_string(),
                     skill_scope: codex_protocol::protocol::SkillScope::User,
                     skill_path,
+                    plugin_id: None,
                     invocation_type: InvocationType::Explicit,
                 }],
             })),
@@ -1833,12 +1834,49 @@ async fn reducer_ingests_skill_invoked_fact() {
             "event_params": {
                 "product_client_id": originator().value,
                 "skill_scope": "user",
+                "plugin_id": null,
                 "repo_url": null,
                 "thread_id": "thread-1",
+                "turn_id": "turn-1",
                 "invoke_type": "explicit",
                 "model_slug": "gpt-5"
             }
         }])
+    );
+}
+
+#[tokio::test]
+async fn reducer_includes_plugin_id_for_plugin_skill_invocations() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+    };
+    let skill_path =
+        PathBuf::from("/Users/abc/.codex/plugins/cache/test/sample/skills/doc/SKILL.md");
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::SkillInvoked(SkillInvokedInput {
+                tracking,
+                invocations: vec![SkillInvocation {
+                    skill_name: "sample:doc".to_string(),
+                    skill_scope: codex_protocol::protocol::SkillScope::User,
+                    skill_path,
+                    plugin_id: Some("sample@test".to_string()),
+                    invocation_type: InvocationType::Explicit,
+                }],
+            })),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload[0]["event_params"]["plugin_id"],
+        json!("sample@test")
     );
 }
 
