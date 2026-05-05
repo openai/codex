@@ -255,6 +255,10 @@ impl Session {
         )
         .await;
         {
+            let current_manager = self.services.mcp_connection_manager.read().await;
+            refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
+        }
+        {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             if guard.is_cancelled() {
                 cancel_token.cancel();

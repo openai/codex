@@ -52,14 +52,14 @@ pub fn auth_manager_from_auth_with_home(auth: CodexAuth, codex_home: PathBuf) ->
     AuthManager::from_auth_for_testing_with_home(auth, codex_home)
 }
 
-pub fn thread_manager_with_models_provider(
+pub async fn thread_manager_with_models_provider(
     auth: CodexAuth,
     provider: ModelProviderInfo,
 ) -> ThreadManager {
-    ThreadManager::with_models_provider_for_tests(auth, provider)
+    ThreadManager::with_models_provider_for_tests(auth, provider).await
 }
 
-pub fn thread_manager_with_models_provider_and_home(
+pub async fn thread_manager_with_models_provider_and_home(
     auth: CodexAuth,
     provider: ModelProviderInfo,
     codex_home: PathBuf,
@@ -71,22 +71,7 @@ pub fn thread_manager_with_models_provider_and_home(
         codex_home,
         environment_manager,
     )
-}
-
-pub fn thread_manager_with_models_provider_home_and_state(
-    auth: CodexAuth,
-    provider: ModelProviderInfo,
-    codex_home: PathBuf,
-    environment_manager: Arc<EnvironmentManager>,
-    state_db: Option<crate::StateDbHandle>,
-) -> ThreadManager {
-    ThreadManager::with_models_provider_home_and_state_for_tests(
-        auth,
-        provider,
-        codex_home,
-        environment_manager,
-        state_db,
-    )
+    .await
 }
 
 pub async fn start_thread_with_user_shell_override(

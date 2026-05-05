@@ -47,6 +47,7 @@ use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_tools::ApplyPatchToolArgs;
+use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 const APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL: Duration = Duration::from_millis(500);
@@ -291,6 +292,10 @@ async fn effective_patch_permissions(
 
 impl ToolHandler for ApplyPatchHandler {
     type Output = ApplyPatchToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("apply_patch")
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function

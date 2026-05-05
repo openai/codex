@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-use crate::error_code::INTERNAL_ERROR_CODE;
-use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::error_code::internal_error;
+use crate::error_code::invalid_request;
 use crate::fuzzy_file_search::FuzzyFileSearchSession;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::fuzzy_file_search::start_fuzzy_file_search_session;
@@ -130,21 +130,5 @@ impl SearchRequestProcessor {
         self.fuzzy_search_sessions.lock().await.remove(&session_id);
 
         Ok(FuzzyFileSearchSessionStopResponse {})
-    }
-}
-
-fn invalid_request(message: impl Into<String>) -> JSONRPCErrorError {
-    JSONRPCErrorError {
-        code: INVALID_REQUEST_ERROR_CODE,
-        message: message.into(),
-        data: None,
-    }
-}
-
-fn internal_error(message: impl Into<String>) -> JSONRPCErrorError {
-    JSONRPCErrorError {
-        code: INTERNAL_ERROR_CODE,
-        message: message.into(),
-        data: None,
     }
 }

@@ -26,6 +26,7 @@ use crate::request_processors::InitializeRequestProcessor;
 use crate::request_processors::MarketplaceRequestProcessor;
 use crate::request_processors::McpRequestProcessor;
 use crate::request_processors::PluginRequestProcessor;
+use crate::request_processors::ProcessExecRequestProcessor;
 use crate::request_processors::SearchRequestProcessor;
 use crate::request_processors::ThreadGoalRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
@@ -60,6 +61,7 @@ use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::workspace_settings;
 use codex_core::ThreadManager;
+use codex_core::agent_graph_store_from_state_db;
 use codex_core::config::Config;
 use codex_core::thread_store_from_config;
 use codex_exec_server::EnvironmentManager;
@@ -157,6 +159,7 @@ pub(crate) struct MessageProcessor {
     apps_processor: AppsRequestProcessor,
     catalog_processor: CatalogRequestProcessor,
     command_exec_processor: CommandExecRequestProcessor,
+    process_exec_processor: ProcessExecRequestProcessor,
     config_processor: ConfigRequestProcessor,
     device_key_processor: DeviceKeyRequestProcessor,
     external_agent_config_processor: ExternalAgentConfigRequestProcessor,
@@ -252,7 +255,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
-    pub(crate) state_db: Option<StateDbHandle>,
+    pub(crate) state_db: StateDbHandle,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
@@ -289,14 +292,16 @@ impl MessageProcessor {
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
         let thread_store = thread_store_from_config(config.as_ref(), state_db.clone());
+        let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
             session_source,
             environment_manager,
             Some(analytics_events_client.clone()),
-            Arc::clone(&thread_store),
             state_db.clone(),
+            Arc::clone(&thread_store),
+            agent_graph_store.clone(),
         ));
         thread_manager
             .plugins_manager()
@@ -335,13 +340,14 @@ impl MessageProcessor {
             Arc::clone(&config),
             outgoing.clone(),
         );
+        let process_exec_processor = ProcessExecRequestProcessor::new(outgoing.clone());
         let feedback_processor = FeedbackRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
             Arc::clone(&config),
             feedback,
             log_db,
-            state_db.clone(),
+            Some(state_db.clone()),
         );
         let git_processor = GitRequestProcessor::new();
         let initialize_processor = InitializeRequestProcessor::new(
@@ -392,7 +398,7 @@ impl MessageProcessor {
             thread_watch_manager.clone(),
             Arc::clone(&thread_list_state_permit),
             thread_goal_processor.clone(),
-            state_db.clone(),
+            Some(state_db.clone()),
         );
         let turn_processor = TurnRequestProcessor::new(
             auth_manager.clone(),
@@ -406,7 +412,6 @@ impl MessageProcessor {
             thread_state_manager,
             thread_watch_manager,
             thread_list_state_permit,
-            state_db.clone(),
         );
         if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
             // Keep plugin startup warmups aligned at app-server startup.
@@ -457,6 +462,7 @@ impl MessageProcessor {
             apps_processor,
             catalog_processor,
             command_exec_processor,
+            process_exec_processor,
             config_processor,
             device_key_processor,
             external_agent_config_processor,
@@ -675,6 +681,9 @@ impl MessageProcessor {
         self.command_exec_processor
             .connection_closed(connection_id)
             .await;
+        self.process_exec_processor
+            .connection_closed(connection_id)
+            .await;
         self.thread_processor.connection_closed(connection_id).await;
     }
 
@@ -825,6 +834,11 @@ impl MessageProcessor {
                 .read(params)
                 .await
                 .map(|response| Some(response.into())),
+            ClientRequest::WindowsSandboxReadiness { .. } => self
+                .windows_sandbox_processor
+                .windows_sandbox_readiness()
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::ExternalAgentConfigDetect { params, .. } => self
                 .external_agent_config_processor
                 .detect(params)
@@ -943,12 +957,22 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadResume { params, .. } => {
                 self.thread_processor
-                    .thread_resume(request_id.clone(), params)
+                    .thread_resume(
+                        request_id.clone(),
+                        params,
+                        app_server_client_name.clone(),
+                        client_version.clone(),
+                    )
                     .await
             }
             ClientRequest::ThreadFork { params, .. } => {
                 self.thread_processor
-                    .thread_fork(request_id.clone(), params)
+                    .thread_fork(
+                        request_id.clone(),
+                        params,
+                        app_server_client_name.clone(),
+                        client_version.clone(),
+                    )
                     .await
             }
             ClientRequest::ThreadArchive { params, .. } => {
@@ -1238,6 +1262,26 @@ impl MessageProcessor {
             ClientRequest::CommandExecTerminate { params, .. } => {
                 self.command_exec_processor
                     .command_exec_terminate(request_id.clone(), params)
+                    .await
+            }
+            ClientRequest::ProcessSpawn { params, .. } => self
+                .process_exec_processor
+                .process_spawn(request_id.clone(), params)
+                .await
+                .map(|()| None),
+            ClientRequest::ProcessWriteStdin { params, .. } => {
+                self.process_exec_processor
+                    .process_write_stdin(request_id.clone(), params)
+                    .await
+            }
+            ClientRequest::ProcessKill { params, .. } => {
+                self.process_exec_processor
+                    .process_kill(request_id.clone(), params)
+                    .await
+            }
+            ClientRequest::ProcessResizePty { params, .. } => {
+                self.process_exec_processor
+                    .process_resize_pty(request_id.clone(), params)
                     .await
             }
             ClientRequest::FeedbackUpload { params, .. } => {

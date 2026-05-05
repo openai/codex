@@ -1,6 +1,5 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
-use codex_otel::LEGACY_NOTIFY_CONFIGURED_METRIC;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -344,6 +343,7 @@ impl Session {
         agent_control: AgentControl,
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
+        state_db: Option<state_db::StateDbHandle>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
     ) -> anyhow::Result<Arc<Self>> {
@@ -442,22 +442,7 @@ impl Session {
             otel.name = "session_init.thread_persistence",
             session_init.ephemeral = config.ephemeral,
         ));
-        let state_db_fut = async {
-            if config.ephemeral {
-                None
-            } else if let Some(local_store) =
-                thread_store.as_any().downcast_ref::<LocalThreadStore>()
-            {
-                local_store.state_db().await
-            } else {
-                None
-            }
-        }
-        .instrument(info_span!(
-            "session_init.state_db",
-            otel.name = "session_init.state_db",
-            session_init.ephemeral = config.ephemeral,
-        ));
+        let state_db_ctx = if config.ephemeral { None } else { state_db };
 
         let is_subagent = session_configuration.session_source.is_non_root_agent();
         let history_meta_fut = async {
@@ -496,15 +481,9 @@ impl Session {
         // Join all independent futures.
         let (
             thread_persistence_result,
-            state_db_ctx,
             (history_log_id, history_entry_count),
             (auth, mcp_servers, auth_statuses),
-        ) = tokio::join!(
-            thread_persistence_fut,
-            state_db_fut,
-            history_meta_fut,
-            auth_and_mcp_fut
-        );
+        ) = tokio::join!(thread_persistence_fut, history_meta_fut, auth_and_mcp_fut);
 
         let mut live_thread_init =
             LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {
@@ -573,24 +552,6 @@ impl Session {
                     }),
                 });
             }
-            let legacy_notify_configured = config
-                .notify
-                .as_ref()
-                .is_some_and(|argv| !argv.is_empty() && !argv[0].is_empty());
-            if legacy_notify_configured {
-                post_session_configured_events.push(Event {
-                    id: INITIAL_SUBMIT_ID.to_owned(),
-                    msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
-                        summary:
-                            "`notify` is deprecated and will be removed in a future release."
-                                .to_string(),
-                        details: Some(
-                            "Switch to a `Stop` hook for end-of-turn automation. See https://developers.openai.com/codex/hooks."
-                                .to_string(),
-                        ),
-                    }),
-                });
-            }
             for message in &config.startup_warnings {
                 post_session_configured_events.push(Event {
                     id: "".to_owned(),
@@ -647,9 +608,6 @@ impl Session {
             .with_auth_env(auth_env_telemetry.to_otel_metadata());
             if let Some(service_name) = session_configuration.metrics_service_name.as_deref() {
                 session_telemetry = session_telemetry.with_metrics_service_name(service_name);
-            }
-            if legacy_notify_configured {
-                session_telemetry.counter(LEGACY_NOTIFY_CONFIGURED_METRIC, /*inc*/ 1, &[]);
             }
             let network_proxy_audit_metadata = NetworkProxyAuditMetadata {
                 conversation_id: Some(conversation_id.to_string()),

@@ -52,6 +52,7 @@ mod thread_processor_behavior_tests {
     use chrono::DateTime;
     use chrono::Utc;
     use codex_app_server_protocol::ServerRequestPayload;
+    use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_config::CloudRequirementsLoader;
     use codex_config::LoaderOverrides;
@@ -70,6 +71,7 @@ mod thread_processor_behavior_tests {
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
+    use codex_state::ThreadMetadataBuilder;
     use codex_thread_store::StoredThread;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
@@ -204,6 +206,7 @@ mod thread_processor_behavior_tests {
                     text_elements: Vec::new(),
                 }],
             }],
+            items_view: TurnItemsView::Full,
             error: None,
             status: TurnStatus::InProgress,
             started_at: None,

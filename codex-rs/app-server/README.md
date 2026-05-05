@@ -181,6 +181,12 @@ Example with notification opt-out:
 - `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
 - `command/exec/terminate` — terminate a running `command/exec` session by `processId`; returns `{}`.
 - `command/exec/outputDelta` — notification emitted for base64-encoded stdout/stderr chunks from a streaming `command/exec` session.
+- `process/spawn` — experimental; spawn a standalone process without the Codex sandbox on the host where the app server is running; returns after the process starts and emits `process/outputDelta` and `process/exited` notifications.
+- `process/writeStdin` — experimental; write base64-decoded stdin bytes to a running `process/spawn` session or close stdin; returns `{}`.
+- `process/resizePty` — experimental; resize a running PTY-backed `process/spawn` session by `processHandle`; returns `{}`.
+- `process/kill` — experimental; terminate a running `process/spawn` session by `processHandle`; returns `{}`.
+- `process/outputDelta` — experimental; notification emitted for base64-encoded stdout/stderr chunks from a streaming `process/spawn` session.
+- `process/exited` — experimental; notification emitted when a `process/spawn` session exits.
 - `fs/readFile` — read an absolute file path and return `{ dataBase64 }`.
 - `fs/writeFile` — write an absolute file path from base64-encoded `{ dataBase64 }`; returns `{}`.
 - `fs/createDirectory` — create an absolute directory path; `recursive` defaults to `true`.
@@ -420,6 +426,8 @@ Use `thread/read` to fetch a stored thread by id without resuming it. Pass `incl
 ### Example: List thread turns (experimental)
 
 Use `thread/turns/list` with `capabilities.experimentalApi = true` to page a stored thread’s turn history without resuming it. By default, results are sorted descending so clients can start at the present and fetch older turns with `nextCursor`. The response also includes `backwardsCursor`; pass it as `cursor` on a later request with `sortDirection: "asc"` to fetch turns newer than the first item from the earlier page.
+
+Every returned `Turn` includes `itemsView`, which tells clients whether the `items` array was omitted intentionally (`notLoaded`), contains only summary items (`summary`), or contains every item available from persisted app-server history (`full`). Current `thread/turns/list` responses return `full` turns.
 
 ```json
 { "method": "thread/turns/list", "id": 24, "params": {
@@ -930,6 +938,7 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
 } }
 ```
 
+- Prefer using `process/spawn` when you want an explicitly unsandboxed process execution API with immediate spawn acknowledgement, handle-based control, output notifications, and an exit notification.
 - For clients that are already sandboxed externally, set the legacy `sandboxPolicy` to `{"type":"externalSandbox","networkAccess":"enabled"}` (or omit `networkAccess` to keep it restricted). Codex will not enforce its own sandbox in this mode; it tells the model it has full file-system access and passes the `networkAccess` state through `environment_context`.
 
 Notes:
@@ -1000,6 +1009,83 @@ Streaming stdin/stdout uses base64 so PTY sessions can carry arbitrary bytes:
 - `command/exec/outputDelta.capReached` is `true` on the final streamed chunk for a stream when `outputBytesCap` truncates that stream; later output on that stream is dropped.
 - `command/exec.params.env` overrides the server-computed environment per key; set a key to `null` to unset an inherited variable.
 - `command/exec/resize` is only supported for PTY-backed `command/exec` sessions.
+
+### Example: Process lifecycle execution
+
+Use `process/spawn` to start a standalone argv-based process without the Codex sandbox on the host where the app server is running. The `process/*` API is experimental and requires `initialize.params.capabilities.experimentalApi: true`. The spawn response means the process has started and the `processHandle` is registered; completion is reported later through `process/exited`.
+
+```json
+{ "method": "process/spawn", "id": 40, "params": {
+    "command": ["cargo", "check"],
+    "processHandle": "cargo-check-1",
+    "cwd": "/Users/me/project",                    // required absolute path
+    "env": { "RUST_LOG": null },                    // optional; override or unset app-server env vars
+    "outputBytesCap": 1048576,                     // optional; omit for default, null disables
+    "timeoutMs": 10000                             // optional; omit for default, null disables
+} }
+{ "id": 40, "result": {} }
+{ "method": "process/exited", "params": {
+    "processHandle": "cargo-check-1",
+    "exitCode": 0,
+    "stdout": "...",
+    "stdoutCapReached": false,
+    "stderr": "",
+    "stderrCapReached": false
+} }
+```
+
+For interactive or streaming processes, set `tty: true` or `streamStdoutStderr: true` and route output notifications by `processHandle`:
+
+```json
+{ "method": "process/spawn", "id": 41, "params": {
+    "command": ["bash", "-i"],
+    "processHandle": "bash-1",
+    "cwd": "/Users/me/project",
+    "tty": true,
+    "size": { "rows": 40, "cols": 120 },
+    "outputBytesCap": null,
+    "timeoutMs": null
+} }
+{ "id": 41, "result": {} }
+{ "method": "process/outputDelta", "params": {
+    "processHandle": "bash-1",
+    "stream": "stdout",
+    "deltaBase64": "YmFzaC00LjQkIA==",
+    "capReached": false
+} }
+{ "method": "process/writeStdin", "id": 42, "params": {
+    "processHandle": "bash-1",
+    "deltaBase64": "cHdkCg=="
+} }
+{ "id": 42, "result": {} }
+{ "method": "process/resizePty", "id": 43, "params": {
+    "processHandle": "bash-1",
+    "size": { "rows": 48, "cols": 160 }
+} }
+{ "id": 43, "result": {} }
+{ "method": "process/kill", "id": 44, "params": {
+    "processHandle": "bash-1"
+} }
+{ "id": 44, "result": {} }
+{ "method": "process/exited", "params": {
+    "processHandle": "bash-1",
+    "exitCode": 137,
+    "stdout": "",
+    "stdoutCapReached": false,
+    "stderr": "",
+    "stderrCapReached": false
+} }
+```
+
+- Empty `command` arrays and empty `processHandle` strings are rejected.
+- `cwd` is required and must be absolute.
+- `process/spawn` is intentionally unsandboxed and does not define sandbox-selection fields such as `sandboxPolicy` or `permissionProfile`.
+- Duplicate active `processHandle` values are rejected on the same connection; the same handle can be reused after the prior process exits.
+- `tty: true` implies PTY mode plus `streamStdin: true` and `streamStdoutStderr: true`.
+- `process/writeStdin` accepts either `deltaBase64`, `closeStdin`, or both.
+- When omitted, `timeoutMs` and `outputBytesCap` fall back to server defaults. Set either field to `null` to disable that limit for terminal-style sessions.
+- `outputBytesCap` applies independently to `stdout` and `stderr`; `process/exited.stdoutCapReached` and `stderrCapReached` report whether each stream reached the cap. Streamed bytes are not duplicated into `process/exited`.
+- `process/outputDelta` and `process/exited` notifications are connection-scoped. If the originating connection closes, the server terminates the process.
 
 ### Example: Filesystem utilities
 
@@ -1455,7 +1541,11 @@ To enable or disable a skill by name:
 }
 ```
 
-Use `hooks/list` to fetch the discovered hooks for one or more `cwds`. Each entry is evaluated using that `cwd`'s effective config, so feature gating and discovered config layers can differ across entries in the same request. Disabled hooks are still returned with `"enabled": false` so clients can render and re-enable them. Hook state is stored under `hooks.state`; clients should treat hooks from managed sources as non-configurable, and user config entries for those keys are ignored during loading. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
+Use `hooks/list` to fetch discovered hooks for one or more `cwds`. Each result is evaluated with that `cwd`'s effective config, so feature gates and discovered config layers can differ within a single response.
+
+Hooks are returned even when disabled so clients can render and re-enable them. User-controlled state lives under `hooks.state`. Managed hooks are non-configurable, and user entries for managed hook keys are ignored during loading.
+
+For unmanaged hooks, `currentHash` and `trustStatus` describe whether the current definition is first-seen, approved, or changed since approval. Only trusted unmanaged hooks become runnable. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
 
 ```json
 {
@@ -1486,7 +1576,9 @@ Use `hooks/list` to fetch the discovered hooks for one or more `cwds`. Each entr
         "source": "user",
         "pluginId": null,
         "displayOrder": 0,
-        "enabled": true
+        "enabled": true,
+        "currentHash": "sha256:...",
+        "trustStatus": "untrusted"
       }],
       "warnings": [],
       "errors": []

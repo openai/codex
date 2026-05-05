@@ -1,4 +1,5 @@
 use super::*;
+use crate::turn_timing::now_unix_timestamp_ms;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -8,6 +9,10 @@ pub(crate) struct Handler;
 
 impl ToolHandler for Handler {
     type Output = WaitAgentResult;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("wait_agent")
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -48,6 +53,7 @@ impl ToolHandler for Handler {
             .send_event(
                 &turn,
                 CollabWaitingBeginEvent {
+                    started_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_ids: Vec::new(),
                     receiver_agents: Vec::new(),
@@ -71,6 +77,7 @@ impl ToolHandler for Handler {
                 CollabWaitingEndEvent {
                     sender_thread_id: session.conversation_id,
                     call_id,
+                    completed_at_ms: now_unix_timestamp_ms(),
                     agent_statuses: Vec::new(),
                     statuses: HashMap::new(),
                 }

@@ -16,6 +16,10 @@ fn complete_turn_with_message(chat: &mut ChatWidget, turn_id: &str, message: Opt
 fn submit_composer_text(chat: &mut ChatWidget, text: &str) {
     chat.bottom_pane
         .set_composer_text(text.to_string(), Vec::new(), Vec::new());
+    submit_current_composer(chat);
+}
+
+fn submit_current_composer(chat: &mut ChatWidget) {
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -1149,6 +1153,7 @@ async fn slash_copy_state_tracks_plan_item_completion() {
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: String::new(),
             turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
             item: AppServerThreadItem::Plan {
                 id: "plan-1".to_string(),
                 text: plan_text.clone(),
@@ -1968,6 +1973,57 @@ async fn user_turn_sends_standard_override_after_fast_is_turned_off() {
         } => {}
         other => panic!("expected Op::UserTurn with standard service tier override, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn raw_slash_command_toggles_and_accepts_on_off_args() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Raw);
+    assert!(chat.raw_output_mode());
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::RawOutputModeChanged { enabled: true }))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Raw, "off".to_string(), Vec::new());
+    assert!(!chat.raw_output_mode());
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::RawOutputModeChanged { enabled: false }))
+    );
+
+    chat.dispatch_command_with_args(SlashCommand::Raw, "on".to_string(), Vec::new());
+    assert!(chat.raw_output_mode());
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::RawOutputModeChanged { enabled: true }))
+    );
+}
+
+#[tokio::test]
+async fn raw_slash_command_reports_usage_for_invalid_arg() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Raw, "status".to_string(), Vec::new());
+
+    assert!(!chat.raw_output_mode());
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Usage: /raw [on|off]"),
+        "expected raw usage error, got {rendered:?}"
+    );
 }
 
 #[tokio::test]

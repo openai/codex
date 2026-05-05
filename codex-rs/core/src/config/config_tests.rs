@@ -44,6 +44,7 @@ use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
 use codex_config::types::SandboxWorkspaceWrite;
+use codex_config::types::SessionPickerViewMode;
 use codex_config::types::SkillsConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
@@ -550,11 +551,13 @@ fn config_toml_deserializes_model_availability_nux() {
             animations: true,
             show_tooltips: true,
             vim_mode_default: false,
+            raw_output_mode: false,
             alternate_screen: AltScreenMode::default(),
             status_line: None,
             status_line_use_colors: true,
             terminal_title: None,
             theme: None,
+            session_picker_view: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig {
                 shown_count: HashMap::from([
@@ -658,6 +661,53 @@ fn test_tui_vim_mode_default_true() {
             .expect("config should include tui section")
             .vim_mode_default
     );
+}
+
+#[test]
+fn test_tui_raw_output_mode_defaults_to_false() {
+    let toml = r#"
+        [tui]
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize empty [tui] table");
+    assert!(
+        !parsed
+            .tui
+            .expect("config should include tui section")
+            .raw_output_mode
+    );
+}
+
+#[test]
+fn test_tui_raw_output_mode_true() {
+    let toml = r#"
+        [tui]
+        raw_output_mode = true
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize raw_output_mode=true");
+    assert!(
+        parsed
+            .tui
+            .expect("config should include tui section")
+            .raw_output_mode
+    );
+}
+
+#[tokio::test]
+async fn runtime_config_uses_tui_raw_output_mode() {
+    let toml = r#"
+        [tui]
+        raw_output_mode = true
+    "#;
+    let cfg_toml: ConfigToml = toml::from_str(toml).expect("deserialize raw_output_mode=true");
+    let cfg = Config::load_from_base_config_with_overrides(
+        cfg_toml,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert!(cfg.tui_raw_output_mode);
 }
 
 #[test]
@@ -2109,6 +2159,31 @@ fn tui_theme_defaults_to_none() {
 }
 
 #[test]
+fn tui_session_picker_view_deserializes_from_toml() {
+    let cfg = r#"
+[tui]
+session_picker_view = "dense"
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().and_then(|t| t.session_picker_view),
+        Some(SessionPickerViewMode::Dense),
+    );
+}
+
+#[test]
+fn tui_session_picker_view_defaults_to_none() {
+    let cfg = r#"
+[tui]
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().and_then(|t| t.session_picker_view),
+        None,
+    );
+}
+
+#[test]
 fn tui_config_missing_notifications_field_defaults_to_enabled() {
     let cfg = r#"
 [tui]
@@ -2125,11 +2200,13 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             animations: true,
             show_tooltips: true,
             vim_mode_default: false,
+            raw_output_mode: false,
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
             status_line_use_colors: true,
             terminal_title: None,
             theme: None,
+            session_picker_view: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow_max_rows: None,
@@ -2192,6 +2269,78 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
     assert_eq!(
         cfg.terminal_resize_reflow.max_rows,
         TerminalResizeReflowMaxRows::Disabled
+    );
+}
+
+#[test]
+fn profile_tui_rejects_unsupported_settings() {
+    let err = toml::from_str::<ConfigToml>(
+        r#"profile = "work"
+
+[profiles.work.tui]
+theme = "dark"
+"#,
+    )
+    .expect_err("profile TUI config should only accept supported fields");
+
+    assert!(err.to_string().contains("unknown field"));
+    assert!(err.to_string().contains("theme"));
+}
+
+#[tokio::test]
+async fn runtime_config_resolves_session_picker_view_default_and_override() {
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load default config");
+
+    assert_eq!(cfg.tui_session_picker_view, SessionPickerViewMode::Dense);
+
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            tui: Some(Tui {
+                session_picker_view: Some(SessionPickerViewMode::Comfortable),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load root override config");
+
+    assert_eq!(
+        cfg.tui_session_picker_view,
+        SessionPickerViewMode::Comfortable
+    );
+
+    let cfg_toml = toml::from_str::<ConfigToml>(
+        r#"profile = "work"
+
+[tui]
+session_picker_view = "dense"
+
+[profiles.work.tui]
+session_picker_view = "comfortable"
+"#,
+    )
+    .expect("parse profile scoped tui config");
+
+    let cfg = Config::load_from_base_config_with_overrides(
+        cfg_toml,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load profile override config");
+
+    assert_eq!(
+        cfg.tui_session_picker_view,
+        SessionPickerViewMode::Comfortable
     );
 }
 
@@ -6450,6 +6599,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             animations: true,
             show_tooltips: true,
             tui_vim_mode_default: false,
+            tui_raw_output_mode: false,
             tui_keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow: TerminalResizeReflowConfig::default(),
@@ -6461,6 +6611,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tui_status_line_use_colors: true,
             tui_terminal_title: None,
             tui_theme: None,
+            tui_session_picker_view: SessionPickerViewMode::Dense,
             otel: OtelConfig::default(),
         },
         o3_profile_config
@@ -6652,6 +6803,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
         tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
@@ -6663,6 +6815,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
 
@@ -6808,6 +6961,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
         tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
@@ -6819,6 +6973,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
 
@@ -6949,6 +7104,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
         tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
@@ -6960,6 +7116,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
 

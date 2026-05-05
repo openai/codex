@@ -72,6 +72,8 @@ fn hooks_to_info(hooks: &[codex_hooks::HookListEntry]) -> Vec<HookMetadata> {
             display_order: hook.display_order,
             enabled: hook.enabled,
             is_managed: hook.is_managed,
+            current_hash: hook.current_hash.clone(),
+            trust_status: hook.trust_status.into(),
         })
         .collect()
 }
@@ -190,11 +192,7 @@ impl CatalogRequestProcessor {
         self.config_manager
             .load_latest_config(fallback_cwd)
             .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to reload config: {err}"),
-                data: None,
-            })
+            .map_err(|err| internal_error(format!("failed to reload config: {err}")))
     }
 
     async fn workspace_codex_plugins_enabled(

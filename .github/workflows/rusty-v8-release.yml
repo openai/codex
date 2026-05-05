@@ -111,6 +111,7 @@ jobs:
             -c
             opt
             "--platforms=@llvm//platforms:${PLATFORM}"
+            --config=v8-release-compat
             "${pair_target}"
             "${extra_targets[@]}"
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
@@ -134,6 +135,7 @@ jobs:
             --platform "${PLATFORM}" \
             --target "${TARGET}" \
             --compilation-mode opt \
+            --bazel-config v8-release-compat \
             --output-dir "dist/${TARGET}"
 
       - name: Upload staged musl artifacts

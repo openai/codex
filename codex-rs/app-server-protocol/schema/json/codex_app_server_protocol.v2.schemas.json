@@ -2343,6 +2343,29 @@
             },
             "method": {
               "enum": [
+                "windowsSandbox/readiness"
+              ],
+              "title": "WindowsSandbox/readinessRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "WindowsSandbox/readinessRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "account/login/start"
               ],
               "title": "Account/login/startRequestMethod",
@@ -6377,6 +6400,9 @@
             "null"
           ]
         },
+        "currentHash": {
+          "type": "string"
+        },
         "displayOrder": {
           "format": "int64",
           "type": "integer"
@@ -6424,9 +6450,13 @@
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
+        },
+        "trustStatus": {
+          "$ref": "#/definitions/HookTrustStatus"
         }
       },
       "required": [
+        "currentHash",
         "displayOrder",
         "enabled",
         "eventName",
@@ -6435,7 +6465,8 @@
         "key",
         "source",
         "sourcePath",
-        "timeoutSec"
+        "timeoutSec",
+        "trustStatus"
       ],
       "type": "object"
     },
@@ -6625,6 +6656,15 @@
       "title": "HookStartedNotification",
       "type": "object"
     },
+    "HookTrustStatus": {
+      "enum": [
+        "managed",
+        "untrusted",
+        "trusted",
+        "modified"
+      ],
+      "type": "string"
+    },
     "HooksListEntry": {
       "properties": {
         "cwd": {
@@ -6762,6 +6802,11 @@
     "ItemCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "completedAtMs": {
+          "description": "Unix timestamp (in milliseconds) when this item lifecycle completed.",
+          "format": "int64",
+          "type": "integer"
+        },
         "item": {
           "$ref": "#/definitions/ThreadItem"
         },
@@ -6773,6 +6818,7 @@
         }
       },
       "required": [
+        "completedAtMs",
         "item",
         "threadId",
         "turnId"
@@ -6866,6 +6912,11 @@
         "item": {
           "$ref": "#/definitions/ThreadItem"
         },
+        "startedAtMs": {
+          "description": "Unix timestamp (in milliseconds) when this item lifecycle started.",
+          "format": "int64",
+          "type": "integer"
+        },
         "threadId": {
           "type": "string"
         },
@@ -6875,6 +6926,7 @@
       },
       "required": [
         "item",
+        "startedAtMs",
         "threadId",
         "turnId"
       ],
@@ -7865,6 +7917,7 @@
       "properties": {
         "additionalSpeedTiers": {
           "default": [],
+          "description": "Deprecated: use `serviceTiers` instead.",
           "items": {
             "type": "string"
           },
@@ -7910,6 +7963,13 @@
         },
         "model": {
           "type": "string"
+        },
+        "serviceTiers": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelServiceTier"
+          },
+          "type": "array"
         },
         "supportedReasoningEfforts": {
           "items": {
@@ -8073,6 +8133,25 @@
         "turnId"
       ],
       "title": "ModelReroutedNotification",
+      "type": "object"
+    },
+    "ModelServiceTier": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "id",
+        "name"
+      ],
       "type": "object"
     },
     "ModelUpgradeInfo": {
@@ -9293,6 +9372,122 @@
       "required": [
         "marketplaceName",
         "pluginNames"
+      ],
+      "type": "object"
+    },
+    "ProcessExitedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Final process exit notification for `process/spawn`.",
+      "properties": {
+        "exitCode": {
+          "description": "Process exit code.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "processHandle": {
+          "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+          "type": "string"
+        },
+        "stderr": {
+          "description": "Buffered stderr capture.\n\nEmpty when stderr was streamed via `process/outputDelta`.",
+          "type": "string"
+        },
+        "stderrCapReached": {
+          "description": "Whether stderr reached `outputBytesCap`.\n\nIn streaming mode, stderr is empty and cap state is also reported on the final stderr `process/outputDelta` notification.",
+          "type": "boolean"
+        },
+        "stdout": {
+          "description": "Buffered stdout capture.\n\nEmpty when stdout was streamed via `process/outputDelta`.",
+          "type": "string"
+        },
+        "stdoutCapReached": {
+          "description": "Whether stdout reached `outputBytesCap`.\n\nIn streaming mode, stdout is empty and cap state is also reported on the final stdout `process/outputDelta` notification.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "exitCode",
+        "processHandle",
+        "stderr",
+        "stderrCapReached",
+        "stdout",
+        "stdoutCapReached"
+      ],
+      "title": "ProcessExitedNotification",
+      "type": "object"
+    },
+    "ProcessOutputDeltaNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Base64-encoded output chunk emitted for a streaming `process/spawn` request.",
+      "properties": {
+        "capReached": {
+          "description": "True on the final streamed chunk for this stream when output was truncated by `outputBytesCap`.",
+          "type": "boolean"
+        },
+        "deltaBase64": {
+          "description": "Base64-encoded output bytes.",
+          "type": "string"
+        },
+        "processHandle": {
+          "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+          "type": "string"
+        },
+        "stream": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProcessOutputStream"
+            }
+          ],
+          "description": "Output stream this chunk belongs to."
+        }
+      },
+      "required": [
+        "capReached",
+        "deltaBase64",
+        "processHandle",
+        "stream"
+      ],
+      "title": "ProcessOutputDeltaNotification",
+      "type": "object"
+    },
+    "ProcessOutputStream": {
+      "description": "Stream label for `process/outputDelta` notifications.",
+      "oneOf": [
+        {
+          "description": "stdout stream. PTY mode multiplexes terminal output here.",
+          "enum": [
+            "stdout"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "stderr stream.",
+          "enum": [
+            "stderr"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ProcessTerminalSize": {
+      "description": "PTY size in character cells for `process/spawn` PTY sessions.",
+      "properties": {
+        "cols": {
+          "description": "Terminal width in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "rows": {
+          "description": "Terminal height in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
       ],
       "type": "object"
     },
@@ -11372,6 +11567,48 @@
             "params"
           ],
           "title": "Command/exec/outputDeltaNotification",
+          "type": "object"
+        },
+        {
+          "description": "Stream base64-encoded stdout/stderr chunks for a running `process/spawn` session.",
+          "properties": {
+            "method": {
+              "enum": [
+                "process/outputDelta"
+              ],
+              "title": "Process/outputDeltaNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ProcessOutputDeltaNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Process/outputDeltaNotification",
+          "type": "object"
+        },
+        {
+          "description": "Final exit notification for a `process/spawn` session.",
+          "properties": {
+            "method": {
+              "enum": [
+                "process/exited"
+              ],
+              "title": "Process/exitedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ProcessExitedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Process/exitedNotification",
           "type": "object"
         },
         {
@@ -15332,11 +15569,20 @@
           "type": "string"
         },
         "items": {
-          "description": "Only populated on a `thread/resume` or `thread/fork` response. For all other responses and notifications returning a Turn, the items field will be an empty list.",
+          "description": "Thread items currently included in this turn payload.",
           "items": {
             "$ref": "#/definitions/ThreadItem"
           },
           "type": "array"
+        },
+        "itemsView": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TurnItemsView"
+            }
+          ],
+          "default": "full",
+          "description": "Describes how much of `items` has been loaded for this turn."
         },
         "startedAt": {
           "description": "Unix timestamp (in seconds) when the turn started.",
@@ -15460,6 +15706,31 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "TurnInterruptResponse",
       "type": "object"
+    },
+    "TurnItemsView": {
+      "oneOf": [
+        {
+          "description": "`items` was not loaded for this turn. The field is intentionally empty.",
+          "enum": [
+            "notLoaded"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "`items` contains only a display summary for this turn.",
+          "enum": [
+            "summary"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "`items` contains every ThreadItem available from persisted app-server history for this turn.",
+          "enum": [
+            "full"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "TurnPlanStep": {
       "properties": {
@@ -16042,6 +16313,27 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "WindowsSandboxReadiness": {
+      "enum": [
+        "ready",
+        "notConfigured",
+        "updateRequired"
+      ],
+      "type": "string"
+    },
+    "WindowsSandboxReadinessResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/WindowsSandboxReadiness"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "WindowsSandboxReadinessResponse",
       "type": "object"
     },
     "WindowsSandboxSetupCompletedNotification": {
