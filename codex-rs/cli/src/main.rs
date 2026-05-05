@@ -451,12 +451,12 @@ struct ExecServerCommand {
     listen: Option<String>,
 
     /// Register this exec-server as a remote executor using the given base URL.
-    #[arg(long = "remote", value_name = "URL")]
+    #[arg(long = "remote", value_name = "URL", requires = "executor_id")]
     remote: Option<String>,
 
-    /// Existing environment id to attach to. Omit to let the service create one.
-    #[arg(long = "environment-id", value_name = "ID")]
-    environment_id: Option<String>,
+    /// Executor id to attach to when registering remotely.
+    #[arg(long = "executor-id", value_name = "ID")]
+    executor_id: Option<String>,
 
     /// Human-readable executor name.
     #[arg(long = "name", value_name = "NAME")]
@@ -1188,7 +1188,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "exec-server",
             )?;
-            run_exec_server_command(cmd, &arg0_paths, root_config_overrides.clone()).await?;
+            run_exec_server_command(cmd, &arg0_paths).await?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
@@ -1263,7 +1263,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
 async fn run_exec_server_command(
     cmd: ExecServerCommand,
     arg0_paths: &Arg0DispatchPaths,
-    root_config_overrides: CliConfigOverrides,
 ) -> anyhow::Result<()> {
     let codex_self_exe = arg0_paths
         .codex_self_exe
@@ -1274,21 +1273,15 @@ async fn run_exec_server_command(
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
     if let Some(base_url) = cmd.remote {
-        // `-c` overrides can affect auth loading (for example ChatGPT base URL
-        // or credential store settings), so load config before constructing the
-        // auth manager for remote registration.
-        let cli_overrides = root_config_overrides
-            .parse_overrides()
-            .map_err(anyhow::Error::msg)?;
-        let config = Config::load_with_cli_overrides(cli_overrides).await?;
-        let auth_manager =
-            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
-        let mut remote_config = codex_exec_server::RemoteExecutorConfig::new(base_url);
-        remote_config.environment_id = cmd.environment_id;
+        let executor_id = cmd
+            .executor_id
+            .ok_or_else(|| anyhow::anyhow!("--executor-id is required when --remote is set"))?;
+        let mut remote_config =
+            codex_exec_server::RemoteExecutorConfig::new(base_url, executor_id)?;
         if let Some(name) = cmd.name {
             remote_config.name = name;
         }
-        codex_exec_server::run_remote_executor(remote_config, auth_manager, runtime_paths).await?;
+        codex_exec_server::run_remote_executor(remote_config, runtime_paths).await?;
         return Ok(());
     }
     let listen_url = cmd
