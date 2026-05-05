@@ -234,12 +234,9 @@ impl AmbientPet {
         let size = self.image_size();
         let notification = self.visible_notification(Instant::now());
         let notification_height = notification.map_or(0, notification_height);
-        let notification_width = notification.map_or(0, notification_width);
         let required_height = size.rows.saturating_add(notification_height);
         let sprite_bottom_y = composer_bottom_y.saturating_sub(composer_gap_rows());
-        if sprite_bottom_y < area.y.saturating_add(required_height)
-            || area.width < size.columns.max(notification_width)
-        {
+        if sprite_bottom_y < area.y.saturating_add(required_height) || area.width < size.columns {
             return None;
         }
 
@@ -287,18 +284,16 @@ impl AmbientPet {
         let notification = self.visible_notification(Instant::now());
         let size = self.support.protocol().map(|_| self.image_size());
         let notification_height = notification.map_or(0, notification_height);
-        let notification_width = notification.map_or(0, notification_width);
         let image_columns = size.map_or(0, |size| size.columns);
         let image_rows = size.map_or(0, |size| size.rows);
         let required_height = image_rows.saturating_add(notification_height);
         let sprite_bottom_y = composer_bottom_y.saturating_sub(composer_gap_rows());
-        if sprite_bottom_y < area.y.saturating_add(required_height)
-            || area.width < image_columns.max(notification_width)
-        {
+        if sprite_bottom_y < area.y.saturating_add(required_height) || area.width < image_columns {
             return;
         }
 
         if let Some(notification) = notification {
+            let notification_width = notification_width(notification).min(area.width);
             let x = area.x
                 + area
                     .width
