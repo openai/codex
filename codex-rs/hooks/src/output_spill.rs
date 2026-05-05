@@ -17,15 +17,18 @@ pub(crate) struct HookOutputSpiller {
 }
 
 impl HookOutputSpiller {
-    pub(crate) fn new(codex_home: AbsolutePathBuf) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            output_dir: codex_home.join(HOOK_OUTPUTS_DIR),
+            output_dir: AbsolutePathBuf::from_absolute_path(std::env::temp_dir())
+                .expect("temp dir should be absolute")
+                .join(HOOK_OUTPUTS_DIR),
         }
     }
 
     /// Keeps hook text within the model-visible hook-output budget.
     ///
-    /// Oversized text is written in full under `$CODEX_HOME/hook_outputs/<thread_id>/`
+    /// Oversized text is written in full under the OS temp directory at
+    /// `<temp_dir>/hook_outputs/<thread_id>/`
     /// and replaced with the same head/tail preview style used for other truncated
     /// output, plus a path back to the preserved full text.
     pub(crate) async fn maybe_spill_text(&self, thread_id: ThreadId, text: String) -> String {

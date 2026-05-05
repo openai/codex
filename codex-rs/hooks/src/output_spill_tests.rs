@@ -6,10 +6,11 @@ use tempfile::tempdir;
 #[tokio::test]
 async fn small_hook_output_remains_inline() -> Result<()> {
     let dir = tempdir()?;
-    let codex_home = AbsolutePathBuf::from_absolute_path(dir.path())?;
-    let output_dir = codex_home.join(HOOK_OUTPUTS_DIR);
+    let output_dir = AbsolutePathBuf::from_absolute_path(dir.path())?.join(HOOK_OUTPUTS_DIR);
     let thread_id = ThreadId::new();
-    let spiller = HookOutputSpiller::new(codex_home);
+    let spiller = HookOutputSpiller {
+        output_dir: output_dir.clone(),
+    };
 
     let output = spiller
         .maybe_spill_text(thread_id, "short".to_string())
@@ -23,9 +24,9 @@ async fn small_hook_output_remains_inline() -> Result<()> {
 #[tokio::test]
 async fn large_hook_output_spills_to_file() -> Result<()> {
     let dir = tempdir()?;
-    let codex_home = AbsolutePathBuf::from_absolute_path(dir.path())?;
     let text = "hook output ".repeat(1_000);
-    let spiller = HookOutputSpiller::new(codex_home);
+    let output_dir = AbsolutePathBuf::from_absolute_path(dir.path())?.join(HOOK_OUTPUTS_DIR);
+    let spiller = HookOutputSpiller { output_dir };
 
     let output = spiller
         .maybe_spill_text(ThreadId::new(), text.clone())

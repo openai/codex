@@ -117,7 +117,6 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
             program: String::new(),
             args: Vec::new(),
         },
-        /*codex_home*/ None,
     );
 
     assert!(engine.warnings().is_empty());
@@ -131,7 +130,6 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
-        codex_home: None,
     });
     assert!(listed.hooks[0].is_managed);
     let cwd = cwd();
@@ -227,7 +225,6 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
             program: String::new(),
             args: Vec::new(),
         },
-        /*codex_home*/ None,
     );
 
     assert_eq!(engine.handlers.len(), 1);
@@ -281,7 +278,6 @@ fn user_disablement_does_not_filter_managed_layer_hooks() {
             program: String::new(),
             args: Vec::new(),
         },
-        /*codex_home*/ None,
     );
 
     assert_eq!(engine.handlers.len(), 1);
@@ -387,7 +383,6 @@ fn requirements_managed_hooks_warn_when_managed_dir_is_missing() {
             program: String::new(),
             args: Vec::new(),
         },
-        /*codex_home*/ None,
     );
 
     assert!(engine.warnings().iter().any(|warning| {
@@ -497,7 +492,6 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
             program: String::new(),
             args: Vec::new(),
         },
-        /*codex_home*/ None,
     );
 
     assert!(engine.warnings().iter().any(|warning| {
@@ -582,7 +576,6 @@ print(json.dumps({
             program: String::new(),
             args: Vec::new(),
         },
-        /*codex_home*/ None,
     );
 
     let preview = engine.preview_pre_tool_use(&PreToolUseRequest {
@@ -608,7 +601,6 @@ print(json.dumps({
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
-        codex_home: None,
     });
     assert_eq!(
         listed.hooks[0].plugin_id.as_deref(),
@@ -688,7 +680,6 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
             program: String::new(),
             args: Vec::new(),
         },
-        /*codex_home*/ None,
     );
 
     assert_eq!(
@@ -732,7 +723,6 @@ fn plugin_hook_load_warnings_are_startup_warnings() {
             program: String::new(),
             args: Vec::new(),
         },
-        /*codex_home*/ None,
     );
 
     assert_eq!(engine.warnings(), &["failed plugin hook".to_string()]);

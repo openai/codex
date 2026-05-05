@@ -6,15 +6,6 @@ pub(crate) mod schema_loader;
 
 use std::collections::HashMap;
 
-use codex_config::ConfigLayerStack;
-use codex_plugin::PluginHookSource;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::HookEventName;
-use codex_protocol::protocol::HookHandlerType;
-use codex_protocol::protocol::HookRunSummary;
-use codex_protocol::protocol::HookSource;
-use codex_utils_absolute_path::AbsolutePathBuf;
-
 use crate::events::permission_request::PermissionRequestOutcome;
 use crate::events::permission_request::PermissionRequestRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
@@ -28,6 +19,14 @@ use crate::events::stop::StopRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::output_spill::HookOutputSpiller;
+use codex_config::ConfigLayerStack;
+use codex_plugin::PluginHookSource;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookHandlerType;
+use codex_protocol::protocol::HookRunSummary;
+use codex_protocol::protocol::HookSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CommandShell {
@@ -92,7 +91,7 @@ pub(crate) struct ClaudeHooksEngine {
     handlers: Vec<ConfiguredHandler>,
     warnings: Vec<String>,
     shell: CommandShell,
-    output_spiller: Option<HookOutputSpiller>,
+    output_spiller: HookOutputSpiller,
 }
 
 impl ClaudeHooksEngine {
@@ -102,14 +101,13 @@ impl ClaudeHooksEngine {
         plugin_hook_sources: Vec<PluginHookSource>,
         plugin_hook_load_warnings: Vec<String>,
         shell: CommandShell,
-        codex_home: Option<AbsolutePathBuf>,
     ) -> Self {
         if !enabled {
             return Self {
                 handlers: Vec::new(),
                 warnings: Vec::new(),
                 shell,
-                output_spiller: None,
+                output_spiller: HookOutputSpiller::new(),
             };
         }
 
@@ -123,7 +121,7 @@ impl ClaudeHooksEngine {
             handlers: discovered.handlers,
             warnings: discovered.warnings,
             shell,
-            output_spiller: codex_home.map(HookOutputSpiller::new),
+            output_spiller: HookOutputSpiller::new(),
         }
     }
 
@@ -231,20 +229,15 @@ impl ClaudeHooksEngine {
     }
 
     async fn maybe_spill_texts(&self, session_id: ThreadId, texts: Vec<String>) -> Vec<String> {
-        if let Some(output_spiller) = &self.output_spiller {
-            output_spiller.maybe_spill_texts(session_id, texts).await
-        } else {
-            texts
-        }
+        self.output_spiller
+            .maybe_spill_texts(session_id, texts)
+            .await
     }
 
     async fn maybe_spill_text(&self, session_id: ThreadId, text: Option<String>) -> Option<String> {
-        if let Some(output_spiller) = &self.output_spiller
-            && let Some(text) = text
-        {
-            Some(output_spiller.maybe_spill_text(session_id, text).await)
-        } else {
-            text
+        match text {
+            Some(text) => Some(self.output_spiller.maybe_spill_text(session_id, text).await),
+            None => None,
         }
     }
 
@@ -253,13 +246,9 @@ impl ClaudeHooksEngine {
         session_id: ThreadId,
         fragments: Vec<codex_protocol::items::HookPromptFragment>,
     ) -> Vec<codex_protocol::items::HookPromptFragment> {
-        if let Some(output_spiller) = &self.output_spiller {
-            output_spiller
-                .maybe_spill_prompt_fragments(session_id, fragments)
-                .await
-        } else {
-            fragments
-        }
+        self.output_spiller
+            .maybe_spill_prompt_fragments(session_id, fragments)
+            .await
     }
 }
 

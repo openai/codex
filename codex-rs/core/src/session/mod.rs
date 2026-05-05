@@ -3377,7 +3377,6 @@ async fn build_hooks_for_config(
         plugin_hook_load_warnings,
         shell_program: Some(hook_shell_program),
         shell_args: hook_shell_argv,
-        codex_home: Some(config.codex_home.clone()),
     })
 }
 
