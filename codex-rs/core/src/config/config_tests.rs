@@ -193,12 +193,13 @@ async fn load_config_loads_global_agents_instructions() -> std::io::Result<()> {
         "\n  global instructions  \n",
     )?;
 
-    let config = Config::load_from_base_config_with_overrides(
+    let mut config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
         codex_home.abs(),
     )
     .await?;
+    let _ = config.features.enable(Feature::MemoryTool);
 
     assert_eq!(
         config.user_instructions.as_deref(),
@@ -3711,6 +3712,30 @@ async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<(
     let _ = config.features.enable(Feature::Apps);
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(mcp_config.apps_enabled);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_mcp_config_preserves_builtin_mcp_inputs_from_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let codex_self_exe = PathBuf::from("/tmp/codex");
+    let mut config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            codex_self_exe: Some(codex_self_exe.clone()),
+            ..ConfigOverrides::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    let _ = config.features.enable(Feature::MemoryTool);
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+
+    assert_eq!(mcp_config.codex_self_exe, Some(codex_self_exe));
+    assert!(mcp_config.memories_enabled);
 
     Ok(())
 }

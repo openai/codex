@@ -14,6 +14,7 @@ pub use codex_apps::codex_apps_tools_cache_key;
 pub use mcp::configured_mcp_servers;
 pub use mcp::effective_mcp_servers;
 pub use mcp::tool_plugin_provenance;
+pub use mcp::with_builtin_mcp_servers;
 pub use mcp::with_codex_apps_mcp;
 
 pub use mcp::McpServerStatusSnapshot;
