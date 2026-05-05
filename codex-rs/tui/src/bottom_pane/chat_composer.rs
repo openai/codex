@@ -1120,12 +1120,13 @@ impl ChatComposer {
     }
 
     pub(crate) fn current_text_with_pending(&self) -> String {
-        let mut text = self.current_text();
-        for (placeholder, actual) in &self.pending_pastes {
-            if text.contains(placeholder) {
-                text = text.replace(placeholder, actual);
-            }
+        let text = self.current_text();
+        if self.pending_pastes.is_empty() {
+            return text;
         }
+
+        let (text, _) =
+            Self::expand_pending_pastes(&text, self.current_text_elements(), &self.pending_pastes);
         text
     }
 
@@ -10132,6 +10133,33 @@ mod tests {
             composer.current_text_with_pending(),
             "hello".to_string(),
             "placeholder should expand to actual text"
+        );
+    }
+
+    #[test]
+    fn current_text_with_pending_expands_overlapping_placeholders() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        let first_paste = "a".repeat(LARGE_PASTE_CHAR_THRESHOLD + 4);
+        let second_paste = "b".repeat(LARGE_PASTE_CHAR_THRESHOLD + 4);
+        let base = format!("[Pasted Content {} chars]", first_paste.chars().count());
+        let second = format!("{base} #2");
+
+        composer.handle_paste(first_paste.clone());
+        composer.handle_paste(second_paste.clone());
+
+        assert_eq!(composer.current_text(), format!("{base}{second}"));
+        assert_eq!(
+            composer.current_text_with_pending(),
+            format!("{first_paste}{second_paste}")
         );
     }
 
