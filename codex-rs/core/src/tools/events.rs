@@ -4,6 +4,7 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::sandboxing::ToolError;
 use crate::turn_timing::now_unix_timestamp_ms;
+use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -99,6 +100,7 @@ pub(crate) enum ToolEmitter {
     },
     ApplyPatch {
         changes: HashMap<PathBuf, FileChange>,
+        action: ApplyPatchAction,
         auto_approved: bool,
     },
     UnifiedExec {
@@ -127,9 +129,14 @@ impl ToolEmitter {
         }
     }
 
-    pub fn apply_patch(changes: HashMap<PathBuf, FileChange>, auto_approved: bool) -> Self {
+    pub fn apply_patch(
+        changes: HashMap<PathBuf, FileChange>,
+        action: ApplyPatchAction,
+        auto_approved: bool,
+    ) -> Self {
         Self::ApplyPatch {
             changes,
+            action,
             auto_approved,
         }
     }
@@ -177,13 +184,10 @@ impl ToolEmitter {
                 Self::ApplyPatch {
                     changes,
                     auto_approved,
+                    ..
                 },
                 ToolEventStage::Begin,
             ) => {
-                if let Some(tracker) = ctx.turn_diff_tracker {
-                    let mut guard = tracker.lock().await;
-                    guard.on_patch_begin(changes);
-                }
                 ctx.session
                     .emit_turn_item_started(
                         ctx.turn,
@@ -198,7 +202,12 @@ impl ToolEmitter {
                     )
                     .await;
             }
-            (Self::ApplyPatch { changes, .. }, ToolEventStage::Success(output)) => {
+            (
+                Self::ApplyPatch {
+                    changes, action, ..
+                },
+                ToolEventStage::Success(output),
+            ) => {
                 emit_patch_end(
                     ctx,
                     changes.clone(),
@@ -209,6 +218,7 @@ impl ToolEmitter {
                     } else {
                         PatchApplyStatus::Failed
                     },
+                    Some(action),
                 )
                 .await;
             }
@@ -226,6 +236,7 @@ impl ToolEmitter {
                     } else {
                         PatchApplyStatus::Failed
                     },
+                    None,
                 )
                 .await;
             }
@@ -239,6 +250,7 @@ impl ToolEmitter {
                     String::new(),
                     (*message).to_string(),
                     PatchApplyStatus::Failed,
+                    None,
                 )
                 .await;
             }
@@ -252,6 +264,7 @@ impl ToolEmitter {
                     String::new(),
                     (*message).to_string(),
                     PatchApplyStatus::Declined,
+                    None,
                 )
                 .await;
             }
@@ -498,7 +511,9 @@ async fn emit_patch_end(
     stdout: String,
     stderr: String,
     status: PatchApplyStatus,
+    action: Option<&ApplyPatchAction>,
 ) {
+    let patch_completed = status == PatchApplyStatus::Completed;
     ctx.session
         .emit_turn_item_completed(
             ctx.turn,
@@ -514,11 +529,16 @@ async fn emit_patch_end(
         .await;
 
     if let Some(tracker) = ctx.turn_diff_tracker {
-        let unified_diff = {
+        if patch_completed && let Some(action) = action {
             let mut guard = tracker.lock().await;
+            guard.track_successful_patch(action);
+        }
+
+        let unified_diff = {
+            let guard = tracker.lock().await;
             guard.get_unified_diff()
         };
-        if let Ok(Some(unified_diff)) = unified_diff {
+        if let Some(unified_diff) = unified_diff {
             ctx.session
                 .send_event(ctx.turn, EventMsg::TurnDiff(TurnDiffEvent { unified_diff }))
                 .await;

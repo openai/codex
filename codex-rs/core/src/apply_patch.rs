@@ -80,7 +80,7 @@ pub(crate) fn convert_apply_patch_to_protocol(
     let mut result = HashMap::with_capacity(changes.len());
     for (path, change) in changes {
         let protocol_change = match change {
-            ApplyPatchFileChange::Add { content } => FileChange::Add {
+            ApplyPatchFileChange::Add { content, .. } => FileChange::Add {
                 content: content.clone(),
             },
             ApplyPatchFileChange::Delete { content } => FileChange::Delete {
@@ -89,6 +89,8 @@ pub(crate) fn convert_apply_patch_to_protocol(
             ApplyPatchFileChange::Update {
                 unified_diff,
                 move_path,
+                old_content: _old_content,
+                overwritten_move_content: _overwritten_move_content,
                 new_content: _new_content,
             } => FileChange::Update {
                 unified_diff: unified_diff.clone(),

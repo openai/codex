@@ -165,9 +165,13 @@ pub async fn maybe_parse_apply_patch_verified(
                 let path = hunk.resolve_path(&effective_cwd);
                 match hunk {
                     Hunk::AddFile { contents, .. } => {
+                        let overwritten_content = fs.read_file_text(&path, sandbox).await.ok();
                         changes.insert(
                             path.into_path_buf(),
-                            ApplyPatchFileChange::Add { content: contents },
+                            ApplyPatchFileChange::Add {
+                                content: contents,
+                                overwritten_content,
+                            },
                         );
                     }
                     Hunk::DeleteFile { .. } => {
@@ -190,8 +194,10 @@ pub async fn maybe_parse_apply_patch_verified(
                     Hunk::UpdateFile {
                         move_path, chunks, ..
                     } => {
+                        let resolved_move_path = move_path.as_ref().map(|p| effective_cwd.join(p));
                         let ApplyPatchFileUpdate {
                             unified_diff,
+                            original_content,
                             content: contents,
                         } = match unified_diff_from_chunks(&path, &chunks, fs, sandbox).await {
                             Ok(diff) => diff,
@@ -199,11 +205,18 @@ pub async fn maybe_parse_apply_patch_verified(
                                 return MaybeApplyPatchVerified::CorrectnessError(e);
                             }
                         };
+                        let overwritten_move_content = match &resolved_move_path {
+                            Some(move_path) => fs.read_file_text(move_path, sandbox).await.ok(),
+                            None => None,
+                        };
                         changes.insert(
                             path.into_path_buf(),
                             ApplyPatchFileChange::Update {
                                 unified_diff,
-                                move_path: move_path.map(|p| effective_cwd.join(p).into_path_buf()),
+                                move_path: resolved_move_path
+                                    .map(codex_utils_absolute_path::AbsolutePathBuf::into_path_buf),
+                                old_content: original_content,
+                                overwritten_move_content,
                                 new_content: contents,
                             },
                         );
@@ -707,6 +720,7 @@ PATCH"#,
 "#;
         let expected = ApplyPatchFileUpdate {
             unified_diff: expected_diff.to_string(),
+            original_content: "foo\nbar\nbaz\n".to_string(),
             content: "foo\nbar\nBAZ\n".to_string(),
         };
         assert_eq!(expected, diff);
@@ -745,6 +759,7 @@ PATCH"#,
 "#;
         let expected = ApplyPatchFileUpdate {
             unified_diff: expected_diff.to_string(),
+            original_content: "foo\nbar\nbaz\n".to_string(),
             content: "foo\nbar\nbaz\nquux\n".to_string(),
         };
         assert_eq!(expected, diff);
@@ -793,6 +808,8 @@ PATCH"#,
 "#
                         .to_string(),
                         move_path: None,
+                        old_content: "session directory content\n".to_string(),
+                        overwritten_move_content: None,
                         new_content: "updated session directory content\n".to_string(),
                     },
                 )]),

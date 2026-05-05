@@ -377,10 +377,6 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
     model_output: ApplyPatchModelOutput,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
-    skip_if_remote!(
-        Ok(()),
-        "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
-    );
 
     let harness = apply_patch_harness().await?;
     let test = harness.test();
@@ -1050,10 +1046,6 @@ async fn apply_patch_custom_tool_streaming_emits_updated_changes() -> Result<()>
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    skip_if_remote!(
-        Ok(()),
-        "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
-    );
 
     let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
     let test = harness.test();
@@ -1116,10 +1108,6 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    skip_if_remote!(
-        Ok(()),
-        "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
-    );
 
     let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
     let test = harness.test();
@@ -1265,10 +1253,6 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff(
     model_output: ApplyPatchModelOutput,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
-    skip_if_remote!(
-        Ok(()),
-        "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
-    );
 
     let harness = apply_patch_harness().await?;
     let test = harness.test();
@@ -1310,10 +1294,6 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
     model_output: ApplyPatchModelOutput,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
-    skip_if_remote!(
-        Ok(()),
-        "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
-    );
 
     let harness = apply_patch_harness().await?;
     let test = harness.test();
@@ -1354,10 +1334,6 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    skip_if_remote!(
-        Ok(()),
-        "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
-    );
 
     let harness = apply_patch_harness().await?;
     let test = harness.test();
@@ -1408,10 +1384,6 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    skip_if_remote!(
-        Ok(()),
-        "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
-    );
 
     let harness = apply_patch_harness().await?;
     let test = harness.test();
