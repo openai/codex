@@ -65,7 +65,7 @@ pub(crate) async fn read_summary_from_rollout(
         conversation_id: session_meta.id,
         timestamp,
         updated_at,
-        path: path.to_path_buf(),
+        path: Some(path.to_path_buf()),
         preview: String::new(),
         model_provider,
         cwd: session_meta.cwd,
@@ -114,7 +114,7 @@ fn extract_conversation_summary(
         conversation_id,
         timestamp,
         updated_at,
-        path,
+        path: Some(path),
         preview: preview.to_string(),
         model_provider,
         cwd: session_meta.cwd.clone(),
@@ -257,7 +257,8 @@ pub(crate) fn summary_to_thread(
         AbsolutePathBuf::relative_to_current_dir(path_utils::normalize_for_native_workdir(cwd))
             .unwrap_or_else(|err| {
                 warn!(
-                    path = %path.display(),
+                    conversation_id = %conversation_id,
+                    path = path.as_ref().map(|path| path.display().to_string()).as_deref(),
                     "failed to normalize thread cwd while summarizing thread: {err}"
                 );
                 fallback_cwd.clone()
@@ -274,7 +275,7 @@ pub(crate) fn summary_to_thread(
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
         updated_at: updated_at.map(|dt| dt.timestamp()).unwrap_or(0),
         status: ThreadStatus::NotLoaded,
-        path: Some(path),
+        path,
         cwd,
         cli_version,
         agent_nickname: source.get_nickname(),

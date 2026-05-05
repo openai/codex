@@ -54,7 +54,7 @@ fn extract_conversation_summary_prefers_plain_user_messages() -> Result<()> {
         conversation_id,
         timestamp: timestamp.clone(),
         updated_at: timestamp,
-        path,
+        path: Some(path),
         preview: "Count to 5".to_string(),
         model_provider: "test-provider".to_string(),
         cwd: PathBuf::from("/"),
