@@ -820,15 +820,22 @@ impl TurnRequestProcessor {
     }
 
     fn build_review_turn(turn_id: String, display_text: &str) -> Turn {
-        Turn {
-            id: turn_id.clone(),
-            items: vec![ThreadItem::UserMessage {
-                id: turn_id,
+        let items = if display_text.is_empty() {
+            Vec::new()
+        } else {
+            vec![ThreadItem::UserMessage {
+                id: turn_id.clone(),
                 content: vec![V2UserInput::Text {
                     text: display_text.to_string(),
+                    // Review prompt display text is synthesized; no UI element ranges to preserve.
                     text_elements: Vec::new(),
                 }],
-            }],
+            }]
+        };
+
+        Turn {
+            id: turn_id,
+            items,
             items_view: TurnItemsView::NotLoaded,
             error: None,
             status: TurnStatus::InProgress,
