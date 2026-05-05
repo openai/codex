@@ -22,7 +22,7 @@ pub(crate) struct PidBackend {
     codex_bin: PathBuf,
     pid_file: PathBuf,
     lock_file: PathBuf,
-    remote_control_enabled: bool,
+    command_kind: PidCommandKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +39,12 @@ enum PidFileState {
     Running(PidRecord),
 }
 
+#[derive(Debug, Clone, Copy)]
+enum PidCommandKind {
+    AppServer { remote_control_enabled: bool },
+    UpdateLoop,
+}
+
 impl PidBackend {
     pub(crate) fn new(codex_bin: PathBuf, pid_file: PathBuf, remote_control_enabled: bool) -> Self {
         let lock_file = pid_file.with_extension("pid.lock");
@@ -46,7 +52,19 @@ impl PidBackend {
             codex_bin,
             pid_file,
             lock_file,
-            remote_control_enabled,
+            command_kind: PidCommandKind::AppServer {
+                remote_control_enabled,
+            },
+        }
+    }
+
+    pub(crate) fn new_update_loop(codex_bin: PathBuf, pid_file: PathBuf) -> Self {
+        let lock_file = pid_file.with_extension("pid.lock");
+        Self {
+            codex_bin,
+            pid_file,
+            lock_file,
+            command_kind: PidCommandKind::UpdateLoop,
         }
     }
 
@@ -111,11 +129,8 @@ impl PidBackend {
             }
         };
         let mut command = Command::new(&self.codex_bin);
-        if self.remote_control_enabled {
-            command.args(["--enable", "remote_control"]);
-        }
         command
-            .args(["app-server", "--listen", "unix://"])
+            .args(self.command_args())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -153,7 +168,7 @@ impl PidBackend {
                 process_start_time,
             },
             Err(err) => {
-                let _ = terminate_process(pid);
+                let _ = self.terminate_process(pid);
                 let _ = fs::remove_file(&self.pid_file).await;
                 return Err(err);
             }
@@ -161,14 +176,14 @@ impl PidBackend {
         let contents = serde_json::to_vec(&record).context("failed to serialize pid record")?;
         let temp_pid_file = self.pid_file.with_extension("pid.tmp");
         if let Err(err) = fs::write(&temp_pid_file, &contents).await {
-            let _ = terminate_process(pid);
+            let _ = self.terminate_process(pid);
             let _ = fs::remove_file(&self.pid_file).await;
             return Err(err).with_context(|| {
                 format!("failed to write pid temp file {}", temp_pid_file.display())
             });
         }
         if let Err(err) = fs::rename(&temp_pid_file, &self.pid_file).await {
-            let _ = terminate_process(pid);
+            let _ = self.terminate_process(pid);
             let _ = fs::remove_file(&temp_pid_file).await;
             let _ = fs::remove_file(&self.pid_file).await;
             return Err(err).with_context(|| {
@@ -192,7 +207,7 @@ impl PidBackend {
             }
 
             let pid = record.pid;
-            terminate_process(pid)?;
+            self.terminate_process(pid)?;
             let started_at = tokio::time::Instant::now();
             let deadline = tokio::time::Instant::now() + STOP_TIMEOUT;
             let mut forced = false;
@@ -204,7 +219,7 @@ impl PidBackend {
                     }
                 }
                 if !forced && started_at.elapsed() >= STOP_GRACE_PERIOD {
-                    terminate_process(pid)?;
+                    self.terminate_process(pid)?;
                     forced = true;
                 }
                 sleep(STOP_POLL_INTERVAL).await;
@@ -323,6 +338,31 @@ impl PidBackend {
         }
         Ok(reservation_lock)
     }
+
+    fn command_args(&self) -> Vec<&'static str> {
+        match self.command_kind {
+            PidCommandKind::AppServer {
+                remote_control_enabled: true,
+            } => vec![
+                "--enable",
+                "remote_control",
+                "app-server",
+                "--listen",
+                "unix://",
+            ],
+            PidCommandKind::AppServer {
+                remote_control_enabled: false,
+            } => vec!["app-server", "--listen", "unix://"],
+            PidCommandKind::UpdateLoop => vec!["app-server", "pid-update-loop"],
+        }
+    }
+
+    fn terminate_process(&self, pid: u32) -> Result<()> {
+        match self.command_kind {
+            PidCommandKind::AppServer { .. } => terminate_process(pid),
+            PidCommandKind::UpdateLoop => terminate_process_group(pid),
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -354,9 +394,29 @@ fn terminate_process(pid: u32) -> Result<()> {
     Err(err).with_context(|| format!("failed to terminate pid-managed app server {pid}"))
 }
 
+#[cfg(unix)]
+fn terminate_process_group(pid: u32) -> Result<()> {
+    let raw_pid = libc::pid_t::try_from(pid)
+        .with_context(|| format!("pid-managed updater pid {pid} is out of range"))?;
+    let result = unsafe { libc::kill(-raw_pid, libc::SIGTERM) };
+    if result == 0 {
+        return Ok(());
+    }
+    let err = std::io::Error::last_os_error();
+    if err.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+    Err(err).with_context(|| format!("failed to terminate pid-managed updater group {pid}"))
+}
+
 #[cfg(not(unix))]
 fn terminate_process(_pid: u32) -> Result<()> {
     bail!("pid-managed app-server shutdown is unsupported on this platform")
+}
+
+#[cfg(not(unix))]
+fn terminate_process_group(_pid: u32) -> Result<()> {
+    bail!("pid-managed updater shutdown is unsupported on this platform")
 }
 
 #[cfg(unix)]
@@ -515,6 +575,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::PidBackend;
+    use super::PidCommandKind;
     use super::PidFileState;
     use super::PidRecord;
     use super::try_lock_file;
@@ -629,6 +690,21 @@ mod tests {
                 .await
                 .expect("cleanup"),
             PidFileState::Running(replacement)
+        );
+    }
+
+    #[test]
+    fn update_loop_uses_hidden_app_server_subcommand() {
+        let backend = PidBackend {
+            codex_bin: "codex".into(),
+            pid_file: "updater.pid".into(),
+            lock_file: "updater.pid.lock".into(),
+            command_kind: PidCommandKind::UpdateLoop,
+        };
+
+        assert_eq!(
+            backend.command_args(),
+            vec!["app-server", "pid-update-loop"]
         );
     }
 }

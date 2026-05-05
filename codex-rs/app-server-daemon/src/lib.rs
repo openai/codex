@@ -2,6 +2,7 @@ mod backend;
 mod client;
 mod managed_install;
 mod settings;
+mod update_loop;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -24,6 +25,7 @@ const START_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 const OPERATION_LOCK_TIMEOUT: Duration = Duration::from_secs(75);
 const PID_FILE_NAME: &str = "app-server.pid";
+const UPDATE_PID_FILE_NAME: &str = "app-server-updater.pid";
 const OPERATION_LOCK_FILE_NAME: &str = "daemon.lock";
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const STATE_DIR_NAME: &str = "app-server-daemon";
@@ -94,11 +96,16 @@ pub async fn bootstrap(options: BootstrapOptions) -> Result<BootstrapOutput> {
     Daemon::from_environment()?.bootstrap(options).await
 }
 
+pub async fn run_pid_update_loop() -> Result<()> {
+    update_loop::run().await
+}
+
 struct Daemon {
     codex_home: PathBuf,
     socket_path: PathBuf,
     current_exe: PathBuf,
     pid_file: PathBuf,
+    update_pid_file: PathBuf,
     operation_lock_file: PathBuf,
     settings_file: PathBuf,
     managed_codex_bin: PathBuf,
@@ -118,6 +125,7 @@ impl Daemon {
             socket_path,
             current_exe,
             pid_file: state_dir.join(PID_FILE_NAME),
+            update_pid_file: state_dir.join(UPDATE_PID_FILE_NAME),
             operation_lock_file: state_dir.join(OPERATION_LOCK_FILE_NAME),
             settings_file: state_dir.join(SETTINGS_FILE_NAME),
             managed_codex_bin: managed_codex_bin(codex_home.as_path()),
@@ -195,6 +203,25 @@ impl Daemon {
             pid,
             Some(info.app_server_version),
         ))
+    }
+
+    async fn restart_if_running(&self) -> Result<()> {
+        let _operation_lock = self.acquire_operation_lock().await?;
+        let settings = self.load_settings().await?;
+        if let Some(backend) = self.running_backend_instance(&settings).await? {
+            backend.stop().await?;
+            let _ = self.start_managed_backend(&settings).await?;
+            self.wait_until_ready().await?;
+            return Ok(());
+        }
+
+        if client::probe(&self.socket_path).await.is_ok() {
+            return Err(anyhow!(
+                "app server is running but is not managed by codex app-server daemon"
+            ));
+        }
+
+        Ok(())
     }
 
     async fn stop(&self) -> Result<LifecycleOutput> {
@@ -276,6 +303,10 @@ impl Daemon {
         }
 
         let (backend, auto_update_enabled) = if backend::SystemdBackend::is_available().await {
+            let updater = backend::pid_update_loop_backend(self.backend_paths(&settings));
+            if updater.is_starting_or_running().await? {
+                updater.stop().await?;
+            }
             backend::SystemdBackend::bootstrap(
                 &self.codex_home,
                 &self.managed_codex_bin,
@@ -293,7 +324,12 @@ impl Daemon {
         } else {
             let fallback = backend::pid_backend(self.backend_paths(&settings));
             fallback.start().await?;
-            (fallback, false)
+            let updater = backend::pid_update_loop_backend(self.backend_paths(&settings));
+            if updater.is_starting_or_running().await? {
+                updater.stop().await?;
+            }
+            updater.start().await?;
+            (fallback, true)
         };
 
         let info = self.wait_until_ready().await?;
@@ -354,6 +390,7 @@ impl Daemon {
             codex_home: self.codex_home.clone(),
             codex_bin: preferred_codex_bin(&self.codex_home, self.current_exe.clone()),
             pid_file: self.pid_file.clone(),
+            update_pid_file: self.update_pid_file.clone(),
             remote_control_enabled: settings.remote_control_enabled,
         }
     }

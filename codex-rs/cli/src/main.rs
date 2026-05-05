@@ -486,6 +486,10 @@ enum AppServerSubcommand {
     /// Print local CLI and running app-server versions as JSON.
     Version,
 
+    /// [internal] Run the detached pid-backed standalone updater loop.
+    #[clap(hide = true)]
+    PidUpdateLoop,
+
     /// Proxy stdio bytes to the running app-server control socket.
     Proxy(AppServerProxyCommand),
 
@@ -917,6 +921,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 }
                 Some(AppServerSubcommand::Version) => {
                     print_app_server_daemon_output(AppServerLifecycleCommand::Version).await?;
+                }
+                Some(AppServerSubcommand::PidUpdateLoop) => {
+                    codex_app_server_daemon::run_pid_update_loop().await?;
                 }
                 Some(AppServerSubcommand::Proxy(proxy_cli)) => {
                     let socket_path = match proxy_cli.socket_path {
@@ -1595,6 +1602,7 @@ fn reject_remote_mode_for_app_server_subcommand(
         Some(AppServerSubcommand::Restart) => "app-server restart",
         Some(AppServerSubcommand::Stop) => "app-server stop",
         Some(AppServerSubcommand::Version) => "app-server version",
+        Some(AppServerSubcommand::PidUpdateLoop) => "app-server pid-update-loop",
         Some(AppServerSubcommand::Proxy(_)) => "app-server proxy",
         Some(AppServerSubcommand::GenerateTs(_)) => "app-server generate-ts",
         Some(AppServerSubcommand::GenerateJsonSchema(_)) => "app-server generate-json-schema",

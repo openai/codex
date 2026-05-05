@@ -128,8 +128,9 @@ user-scoped `systemd`, it installs home-scoped app-server and hourly update
 timer units that refresh the standalone install and then reload the service.
 Reloads keep an unbounded app-server graceful drain, while ordinary systemd
 restarts wait up to one minute for active work before forcing completion. Without
-user-scoped `systemd`, `bootstrap` falls back to the pidfile backend; that keeps
-the launch settings but does not provide periodic auto-update.
+user-scoped `systemd`, `bootstrap` falls back to the pidfile backend and starts a
+detached updater loop that periodically refreshes the standalone install while
+the machine remains up.
 
 For backend selection details, persisted state, and reload versus restart
 semantics, including how `brew`/`npm`, standalone installs, and out-of-band
