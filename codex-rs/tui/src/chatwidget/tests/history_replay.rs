@@ -400,7 +400,7 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
 }
 
 #[tokio::test]
-async fn replayed_user_message_with_only_local_images_does_not_render_history_cell() {
+async fn replayed_user_message_with_only_local_images_renders_history_cell() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
     let local_images = [PathBuf::from("/tmp/replay-local-only.png")];
@@ -438,17 +438,20 @@ async fn replayed_user_message_with_only_local_images_does_not_render_history_ce
         ReplayKind::ResumeInitialMessages,
     );
 
-    let mut found_user_history_cell = false;
+    let mut user_cell = None;
     while let Ok(ev) = rx.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = ev
-            && cell.as_any().downcast_ref::<UserHistoryCell>().is_some()
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
         {
-            found_user_history_cell = true;
+            user_cell = Some((cell.message.clone(), cell.local_image_paths.clone()));
             break;
         }
     }
 
-    assert!(!found_user_history_cell);
+    let (stored_message, stored_local_images) =
+        user_cell.expect("expected a replayed local-image-only user history cell");
+    assert!(stored_message.is_empty());
+    assert_eq!(stored_local_images, local_images);
 }
 
 #[tokio::test]
@@ -620,6 +623,7 @@ async fn replayed_retryable_app_server_error_keeps_turn_running() {
             thread_id: "thread-1".to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,
                 error: None,
@@ -771,6 +775,7 @@ async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
             thread_id: "thread-1".to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,
                 error: None,
@@ -798,6 +803,7 @@ async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
             item: AppServerThreadItem::Reasoning {
                 id: "reasoning-1".to_string(),
                 summary: vec!["Summary only".to_string()],
@@ -838,6 +844,7 @@ async fn replayed_in_progress_turn_marks_task_running() {
     chat.replay_thread_turns(
         vec![AppServerTurn {
             id: "turn-1".to_string(),
+            items_view: codex_app_server_protocol::TurnItemsView::Full,
             items: Vec::new(),
             status: AppServerTurnStatus::InProgress,
             error: None,

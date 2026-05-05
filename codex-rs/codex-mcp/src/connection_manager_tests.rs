@@ -26,7 +26,6 @@ use pretty_assertions::assert_eq;
 use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::ElicitationAction;
 use rmcp::model::ElicitationCapability;
-use rmcp::model::FormElicitationCapability;
 use rmcp::model::JsonObject;
 use rmcp::model::Meta;
 use rmcp::model::NumberOrString;
@@ -41,7 +40,7 @@ fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
         server_name: server_name.to_string(),
         callable_name: tool_name.to_string(),
         callable_namespace: tool_namespace,
-        server_instructions: None,
+        namespace_description: None,
         tool: Tool {
             name: tool_name.to_string().into(),
             title: None,
@@ -56,7 +55,6 @@ fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),
-        connector_description: None,
     }
 }
 
@@ -801,18 +799,14 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
 }
 
 #[test]
-fn elicitation_capability_enabled_for_custom_servers() {
+fn elicitation_capability_uses_2025_06_18_shape_for_all_servers() {
     for server_name in [CODEX_APPS_MCP_SERVER_NAME, "custom_mcp"] {
         let capability = elicitation_capability_for_server(server_name);
-        assert!(matches!(
-            capability,
-            Some(ElicitationCapability {
-                form: Some(FormElicitationCapability {
-                    schema_validation: None
-                }),
-                url: None,
-            })
-        ));
+        assert_eq!(capability, Some(ElicitationCapability::default()));
+        assert_eq!(
+            serde_json::to_value(capability).expect("serialize elicitation capability"),
+            serde_json::json!({})
+        );
     }
 }
 

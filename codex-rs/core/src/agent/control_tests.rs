@@ -7,7 +7,6 @@ use crate::config::Config;
 use crate::config::ConfigBuilder;
 use crate::context::ContextualUserFragment;
 use crate::context::SubagentNotification;
-use crate::thread_manager::thread_store_from_config;
 use assert_matches::assert_matches;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -27,6 +26,7 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_thread_store::ArchiveThreadParams;
 use codex_thread_store::LocalThreadStore;
+use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::ThreadStore;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -96,7 +96,8 @@ impl AgentControlHarness {
             config.model_provider.clone(),
             config.codex_home.to_path_buf(),
             std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        );
+        )
+        .await;
         let control = manager.agent_control();
         Self {
             _home: home,
@@ -109,7 +110,7 @@ impl AgentControlHarness {
     async fn start_thread(&self) -> (ThreadId, Arc<CodexThread>) {
         let new_thread = self
             .manager
-            .start_thread(self.config.clone(), thread_store_from_config(&self.config))
+            .start_thread(self.config.clone())
             .await
             .expect("start thread");
         (new_thread.thread_id, new_thread.thread)
@@ -610,10 +611,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         Some("Child subagent guidance.".to_string());
     let new_thread = harness
         .manager
-        .start_thread(
-            parent_config.clone(),
-            thread_store_from_config(&parent_config),
-        )
+        .start_thread(parent_config.clone())
         .await
         .expect("start parent thread");
     let parent_thread_id = new_thread.thread_id;
@@ -952,11 +950,12 @@ async fn spawn_agent_respects_max_threads_limit() {
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-    );
+    )
+    .await;
     let control = manager.agent_control();
 
     let _ = manager
-        .start_thread(config.clone(), thread_store_from_config(&config))
+        .start_thread(config.clone())
         .await
         .expect("start thread");
 
@@ -1004,7 +1003,8 @@ async fn spawn_agent_releases_slot_after_shutdown() {
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-    );
+    )
+    .await;
     let control = manager.agent_control();
 
     let first_agent_id = control
@@ -1047,7 +1047,8 @@ async fn spawn_agent_limit_shared_across_clones() {
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-    );
+    )
+    .await;
     let control = manager.agent_control();
     let cloned = control.clone();
 
@@ -1092,7 +1093,8 @@ async fn resume_agent_respects_max_threads_limit() {
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-    );
+    )
+    .await;
     let control = manager.agent_control();
 
     let resumable_id = control
@@ -1148,7 +1150,8 @@ async fn resume_agent_releases_slot_after_resume_failure() {
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-    );
+    )
+    .await;
     let control = manager.agent_control();
 
     let _ = control
@@ -1313,10 +1316,7 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
     let _ = tester_config.features.enable(Feature::MultiAgentV2);
     let tester_thread_id = harness
         .manager
-        .start_thread(
-            tester_config.clone(),
-            thread_store_from_config(&tester_config),
-        )
+        .start_thread(tester_config.clone())
         .await
         .expect("tester thread should start")
         .thread_id;
@@ -1548,7 +1548,8 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-    );
+    )
+    .await;
     let control = manager.agent_control();
     let harness = AgentControlHarness {
         _home: home,
@@ -1701,7 +1702,15 @@ async fn resume_agent_from_rollout_reads_archived_rollout_path() {
         .shutdown_live_agent(child_thread_id)
         .await
         .expect("child shutdown should succeed");
-    let store = LocalThreadStore::new(codex_rollout::RolloutConfig::from_view(&harness.config));
+    let store = LocalThreadStore::new(
+        LocalThreadStoreConfig::from_config(&harness.config),
+        codex_state::StateRuntime::init(
+            harness.config.sqlite_home.clone(),
+            harness.config.model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize"),
+    );
     store
         .archive_thread(ArchiveThreadParams {
             thread_id: child_thread_id,

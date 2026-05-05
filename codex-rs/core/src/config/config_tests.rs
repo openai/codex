@@ -44,6 +44,7 @@ use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
 use codex_config::types::SandboxWorkspaceWrite;
+use codex_config::types::SessionPickerViewMode;
 use codex_config::types::SkillsConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
@@ -549,10 +550,14 @@ fn config_toml_deserializes_model_availability_nux() {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
             show_tooltips: true,
+            vim_mode_default: false,
+            raw_output_mode: false,
             alternate_screen: AltScreenMode::default(),
             status_line: None,
+            status_line_use_colors: true,
             terminal_title: None,
             theme: None,
+            session_picker_view: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig {
                 shown_count: HashMap::from([
@@ -562,6 +567,37 @@ fn config_toml_deserializes_model_availability_nux() {
             },
             terminal_resize_reflow_max_rows: None,
         }
+    );
+}
+
+#[test]
+fn config_toml_status_line_use_colors_defaults_to_enabled() {
+    let toml = r#"
+[tui]
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for TUI config");
+
+    assert!(
+        cfg.tui
+            .expect("tui config should deserialize")
+            .status_line_use_colors
+    );
+}
+
+#[test]
+fn config_toml_deserializes_status_line_use_colors_disabled() {
+    let toml = r#"
+[tui]
+status_line_use_colors = false
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for TUI config");
+
+    assert!(
+        !cfg.tui
+            .expect("tui config should deserialize")
+            .status_line_use_colors
     );
 }
 
@@ -596,6 +632,82 @@ async fn runtime_config_defaults_model_availability_nux() {
         cfg.model_availability_nux,
         ModelAvailabilityNuxConfig::default()
     );
+}
+
+#[test]
+fn test_tui_vim_mode_default_defaults_to_false() {
+    let toml = r#"
+        [tui]
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize empty [tui] table");
+    assert!(
+        !parsed
+            .tui
+            .expect("config should include tui section")
+            .vim_mode_default
+    );
+}
+
+#[test]
+fn test_tui_vim_mode_default_true() {
+    let toml = r#"
+        [tui]
+        vim_mode_default = true
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize vim_mode_default=true");
+    assert!(
+        parsed
+            .tui
+            .expect("config should include tui section")
+            .vim_mode_default
+    );
+}
+
+#[test]
+fn test_tui_raw_output_mode_defaults_to_false() {
+    let toml = r#"
+        [tui]
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize empty [tui] table");
+    assert!(
+        !parsed
+            .tui
+            .expect("config should include tui section")
+            .raw_output_mode
+    );
+}
+
+#[test]
+fn test_tui_raw_output_mode_true() {
+    let toml = r#"
+        [tui]
+        raw_output_mode = true
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize raw_output_mode=true");
+    assert!(
+        parsed
+            .tui
+            .expect("config should include tui section")
+            .raw_output_mode
+    );
+}
+
+#[tokio::test]
+async fn runtime_config_uses_tui_raw_output_mode() {
+    let toml = r#"
+        [tui]
+        raw_output_mode = true
+    "#;
+    let cfg_toml: ConfigToml = toml::from_str(toml).expect("deserialize raw_output_mode=true");
+    let cfg = Config::load_from_base_config_with_overrides(
+        cfg_toml,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert!(cfg.tui_raw_output_mode);
 }
 
 #[test]
@@ -2047,6 +2159,31 @@ fn tui_theme_defaults_to_none() {
 }
 
 #[test]
+fn tui_session_picker_view_deserializes_from_toml() {
+    let cfg = r#"
+[tui]
+session_picker_view = "dense"
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().and_then(|t| t.session_picker_view),
+        Some(SessionPickerViewMode::Dense),
+    );
+}
+
+#[test]
+fn tui_session_picker_view_defaults_to_none() {
+    let cfg = r#"
+[tui]
+"#;
+    let parsed = toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+    assert_eq!(
+        parsed.tui.as_ref().and_then(|t| t.session_picker_view),
+        None,
+    );
+}
+
+#[test]
 fn tui_config_missing_notifications_field_defaults_to_enabled() {
     let cfg = r#"
 [tui]
@@ -2062,10 +2199,14 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
             show_tooltips: true,
+            vim_mode_default: false,
+            raw_output_mode: false,
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
+            status_line_use_colors: true,
             terminal_title: None,
             theme: None,
+            session_picker_view: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow_max_rows: None,
@@ -2128,6 +2269,78 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
     assert_eq!(
         cfg.terminal_resize_reflow.max_rows,
         TerminalResizeReflowMaxRows::Disabled
+    );
+}
+
+#[test]
+fn profile_tui_rejects_unsupported_settings() {
+    let err = toml::from_str::<ConfigToml>(
+        r#"profile = "work"
+
+[profiles.work.tui]
+theme = "dark"
+"#,
+    )
+    .expect_err("profile TUI config should only accept supported fields");
+
+    assert!(err.to_string().contains("unknown field"));
+    assert!(err.to_string().contains("theme"));
+}
+
+#[tokio::test]
+async fn runtime_config_resolves_session_picker_view_default_and_override() {
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load default config");
+
+    assert_eq!(cfg.tui_session_picker_view, SessionPickerViewMode::Dense);
+
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            tui: Some(Tui {
+                session_picker_view: Some(SessionPickerViewMode::Comfortable),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load root override config");
+
+    assert_eq!(
+        cfg.tui_session_picker_view,
+        SessionPickerViewMode::Comfortable
+    );
+
+    let cfg_toml = toml::from_str::<ConfigToml>(
+        r#"profile = "work"
+
+[tui]
+session_picker_view = "dense"
+
+[profiles.work.tui]
+session_picker_view = "comfortable"
+"#,
+    )
+    .expect("parse profile scoped tui config");
+
+    let cfg = Config::load_from_base_config_with_overrides(
+        cfg_toml,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load profile override config");
+
+    assert_eq!(
+        cfg.tui_session_picker_view,
+        SessionPickerViewMode::Comfortable
     );
 }
 
@@ -6323,6 +6536,10 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             codex_home: fixture.codex_home(),
             sqlite_home: fixture.codex_home().to_path_buf(),
             log_dir: fixture.codex_home().join("log").to_path_buf(),
+            config_lock_export_dir: None,
+            config_lock_allow_codex_version_mismatch: false,
+            config_lock_save_fields_resolved_from_model_catalog: true,
+            config_lock_toml: None,
             config_layer_stack: Default::default(),
             startup_warnings: Vec::new(),
             history: History::default(),
@@ -6381,6 +6598,9 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_vim_mode_default: false,
+            tui_raw_output_mode: false,
+            tui_keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow: TerminalResizeReflowConfig::default(),
             analytics_enabled: Some(true),
@@ -6388,9 +6608,10 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tool_suggest: ToolSuggestConfig::default(),
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_status_line_use_colors: true,
             tui_terminal_title: None,
             tui_theme: None,
-            tui_keymap: TuiKeymap::default(),
+            tui_session_picker_view: SessionPickerViewMode::Dense,
             otel: OtelConfig::default(),
         },
         o3_profile_config
@@ -6519,6 +6740,10 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
+        config_lock_export_dir: None,
+        config_lock_allow_codex_version_mismatch: false,
+        config_lock_save_fields_resolved_from_model_catalog: true,
+        config_lock_toml: None,
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
@@ -6577,6 +6802,9 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
+        tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(true),
@@ -6584,9 +6812,10 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
-        tui_keymap: TuiKeymap::default(),
+        tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
 
@@ -6669,6 +6898,10 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
+        config_lock_export_dir: None,
+        config_lock_allow_codex_version_mismatch: false,
+        config_lock_save_fields_resolved_from_model_catalog: true,
+        config_lock_toml: None,
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
@@ -6727,6 +6960,9 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
+        tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(false),
@@ -6734,9 +6970,10 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
-        tui_keymap: TuiKeymap::default(),
+        tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
 
@@ -6804,6 +7041,10 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
+        config_lock_export_dir: None,
+        config_lock_allow_codex_version_mismatch: false,
+        config_lock_save_fields_resolved_from_model_catalog: true,
+        config_lock_toml: None,
         config_layer_stack: Default::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
@@ -6862,6 +7103,9 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        tui_vim_mode_default: false,
+        tui_raw_output_mode: false,
+        tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(true),
@@ -6869,9 +7113,10 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
-        tui_keymap: TuiKeymap::default(),
+        tui_session_picker_view: SessionPickerViewMode::Dense,
         otel: OtelConfig::default(),
     };
 
@@ -7933,6 +8178,77 @@ async fn browser_feature_requirements_are_valid() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn debug_config_lockfile_export_settings_load_from_nested_table() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[debug.config_lockfile]
+export_dir = "locks"
+allow_codex_version_mismatch = true
+save_fields_resolved_from_model_catalog = false
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.config_lock_export_dir,
+        Some(AbsolutePathBuf::resolve_path_against_base(
+            "locks",
+            codex_home.path()
+        ))
+    );
+    assert!(config.config_lock_allow_codex_version_mismatch);
+    assert!(!config.config_lock_save_fields_resolved_from_model_catalog);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn debug_config_lockfile_load_path_loads_lock_from_nested_table() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let lock_path = codex_home.path().join("session.config.lock.toml");
+    std::fs::write(
+        &lock_path,
+        format!(
+            r#"version = {}
+codex_version = "older-version"
+
+[config]
+"#,
+            crate::config_lock::CONFIG_LOCK_VERSION
+        ),
+    )?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"[debug.config_lockfile]
+load_path = '{}'
+allow_codex_version_mismatch = true
+save_fields_resolved_from_model_catalog = false
+"#,
+            lock_path.display()
+        ),
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(config.config_lock_toml.is_some());
+    assert!(config.config_lock_allow_codex_version_mismatch);
+    assert!(!config.config_lock_save_fields_resolved_from_model_catalog);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn explicit_feature_config_is_normalized_by_requirements() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
@@ -8307,6 +8623,68 @@ hide_spawn_agent_metadata = true
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
 
     Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_usage_hint_templates_use_materialized_config_values() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+usage_hint_text = "Limit {{ features.multi_agent_v2.max_concurrent_threads_per_session }}"
+root_agent_usage_hint_text = "Root {{ features.multi_agent_v2.max_concurrent_threads_per_session }}"
+subagent_usage_hint_text = "Subagent {{ features.multi_agent_v2.max_concurrent_threads_per_session }}"
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.multi_agent_v2.usage_hint_text.as_deref(),
+        Some("Limit 4")
+    );
+    assert_eq!(
+        config.multi_agent_v2.root_agent_usage_hint_text.as_deref(),
+        Some("Root 4")
+    );
+    assert_eq!(
+        config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
+        Some("Subagent 4")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_usage_hint_templates_fail_when_placeholder_is_missing() {
+    let codex_home = TempDir::new().expect("create codex home");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+usage_hint_text = "{{ features.multi_agent_v2.does_not_exist }}"
+"#,
+    )
+    .expect("write config");
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+        .expect_err("config load should fail");
+
+    assert!(
+        err.to_string()
+            .contains("features.multi_agent_v2.does_not_exist"),
+        "unexpected error: {err}",
+    );
 }
 
 #[tokio::test]

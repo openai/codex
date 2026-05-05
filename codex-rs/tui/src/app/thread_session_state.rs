@@ -87,7 +87,7 @@ impl App {
         session.instruction_source_paths = Vec::new();
         session.rollout_path = thread.path.clone();
         if let Some(model) =
-            read_session_model(&self.config, thread_id, thread.path.as_deref()).await
+            read_session_model(self.state_db.as_deref(), thread_id, thread.path.as_deref()).await
         {
             session.model = model;
         } else if thread.path.is_some() {

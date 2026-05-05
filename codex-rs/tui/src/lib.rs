@@ -49,7 +49,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_rollout::state_db::get_state_db;
+use codex_rollout::StateDbHandle;
+use codex_rollout::state_db;
 use codex_state::log_db;
 use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -102,6 +103,7 @@ mod audio_device {
     }
 }
 mod bottom_pane;
+mod branch_summary;
 mod chatwidget;
 mod cli;
 mod clipboard_copy;
@@ -125,6 +127,7 @@ mod frames;
 mod get_git_diff;
 mod goal_display;
 mod history_cell;
+mod ide_context;
 pub(crate) mod insert_history;
 pub use insert_history::insert_history_lines;
 mod key_hint;
@@ -140,6 +143,7 @@ mod markdown_stream;
 mod mention_codec;
 mod model_catalog;
 mod model_migration;
+mod motion;
 mod multi_agents;
 mod notifications;
 #[cfg(any(not(debug_assertions), test))]
@@ -164,6 +168,7 @@ mod status_indicator_widget;
 mod streaming;
 mod style;
 mod terminal_palette;
+mod terminal_probe;
 mod terminal_title;
 mod text_formatting;
 mod theme_picker;
@@ -184,6 +189,7 @@ mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;
 mod width;
+mod workspace_command;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod voice {
@@ -268,6 +274,7 @@ async fn start_embedded_app_server(
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
+    state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<InProcessAppServerClient> {
     start_embedded_app_server_with(
@@ -278,6 +285,7 @@ async fn start_embedded_app_server(
         cloud_requirements,
         feedback,
         log_db,
+        state_db,
         environment_manager,
         InProcessAppServerClient::start,
     )
@@ -395,6 +403,7 @@ async fn start_app_server(
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
+    state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppServerClient> {
     match target {
@@ -406,6 +415,7 @@ async fn start_app_server(
             cloud_requirements,
             feedback,
             log_db,
+            state_db,
             environment_manager,
         )
         .await
@@ -420,6 +430,7 @@ async fn start_app_server(
 pub(crate) async fn start_app_server_for_picker(
     config: &Config,
     target: &AppServerTarget,
+    state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppServerSession> {
     let app_server = start_app_server(
@@ -431,6 +442,7 @@ pub(crate) async fn start_app_server_for_picker(
         CloudRequirementsLoader::default(),
         codex_feedback::CodexFeedback::new(),
         /*log_db*/ None,
+        state_db,
         environment_manager,
     )
     .await?;
@@ -441,9 +453,11 @@ pub(crate) async fn start_app_server_for_picker(
 pub(crate) async fn start_embedded_app_server_for_picker(
     config: &Config,
 ) -> color_eyre::Result<AppServerSession> {
+    let state_db = state_db::init(config).await;
     start_app_server_for_picker(
         config,
         &AppServerTarget::Embedded,
+        state_db,
         Arc::new(EnvironmentManager::default_for_tests()),
     )
     .await
@@ -458,6 +472,7 @@ async fn start_embedded_app_server_with<F, Fut>(
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
+    state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
     start_client: F,
 ) -> color_eyre::Result<InProcessAppServerClient>
@@ -483,6 +498,7 @@ where
         cloud_requirements,
         feedback,
         log_db,
+        state_db,
         environment_manager,
         config_warnings,
         session_source: serde_json::from_value(serde_json::json!("cli"))
@@ -784,15 +800,6 @@ pub async fn run_main(
         }
     };
 
-    if let Err(err) = crate::legacy_core::personality_migration::maybe_migrate_personality(
-        &codex_home,
-        &config_toml,
-    )
-    .await
-    {
-        tracing::warn!(error = %err, "failed to run personality migration");
-    }
-
     let chatgpt_base_url = config_toml
         .chatgpt_base_url
         .clone()
@@ -862,12 +869,54 @@ pub async fn run_main(
         ..Default::default()
     };
 
-    let config = load_config_or_exit(
+    let mut config = load_config_or_exit(
         cli_kv_overrides.clone(),
         overrides.clone(),
         cloud_requirements.clone(),
     )
     .await;
+
+    let state_db = match &app_server_target {
+        AppServerTarget::Embedded => state_db::init(&config).await,
+        AppServerTarget::Remote { .. } => state_db::get_state_db(&config).await,
+    };
+
+    if let Some(state_db) = state_db.clone() {
+        let effective_toml = config.config_layer_stack.effective_config();
+        match effective_toml.try_into() {
+            Ok(config_toml) => {
+                match crate::legacy_core::personality_migration::maybe_migrate_personality(
+                    &config.codex_home,
+                    &config_toml,
+                    state_db,
+                )
+                .await
+                {
+                    Ok(
+                        crate::legacy_core::personality_migration::PersonalityMigrationStatus::Applied,
+                    ) => {
+                        config = load_config_or_exit(
+                            cli_kv_overrides.clone(),
+                            overrides.clone(),
+                            cloud_requirements.clone(),
+                        )
+                        .await;
+                    }
+                    Ok(
+                        crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedMarker
+                        | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedExplicitPersonality
+                        | crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedNoSessions,
+                    ) => {}
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to run personality migration");
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to deserialize config for personality migration");
+            }
+        }
+    }
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
@@ -1000,7 +1049,7 @@ pub async fn run_main(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db = get_state_db(&config).await.map(log_db::start);
+    let log_db = state_db.clone().map(log_db::start);
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
@@ -1026,6 +1075,7 @@ pub async fn run_main(
         cloud_requirements,
         feedback,
         log_db,
+        state_db,
         remote_url,
         remote_auth_token,
         environment_manager,
@@ -1047,6 +1097,7 @@ async fn run_ratatui_app(
     mut cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
+    state_db: Option<StateDbHandle>,
     remote_url: Option<String>,
     remote_auth_token: Option<String>,
     environment_manager: Arc<EnvironmentManager>,
@@ -1106,6 +1157,7 @@ async fn run_ratatui_app(
             cloud_requirements.clone(),
             feedback.clone(),
             log_db.clone(),
+            state_db.clone(),
             environment_manager.clone(),
         )
         .await
@@ -1228,16 +1280,12 @@ async fn run_ratatui_app(
                 }
             }
         } else if cli.fork_last {
-            let filter_cwd = if remote_mode {
-                latest_session_cwd_filter(
-                    remote_mode,
-                    remote_cwd_override.as_deref(),
-                    &config,
-                    cli.fork_show_all,
-                )
-            } else {
-                None
-            };
+            let filter_cwd = latest_session_cwd_filter(
+                remote_mode,
+                remote_cwd_override.as_deref(),
+                &config,
+                cli.fork_show_all,
+            );
             let Some(app_server) = app_server.as_mut() else {
                 unreachable!("app server should be initialized for --fork --last");
             };
@@ -1357,7 +1405,7 @@ async fn run_ratatui_app(
             } else {
                 match resolve_cwd_for_resume_or_fork(
                     &mut tui,
-                    &config,
+                    state_db.as_deref(),
                     &current_cwd,
                     target_session.thread_id,
                     target_session.path.as_deref(),
@@ -1384,6 +1432,11 @@ async fn run_ratatui_app(
         None => None,
     };
 
+    let picker_cancelled_without_selection = matches!(
+        session_selection,
+        resume_picker::SessionSelection::StartFresh
+    ) && (cli.resume_picker || cli.fork_picker);
+
     let mut config = match &session_selection {
         resume_picker::SessionSelection::Resume(_) | resume_picker::SessionSelection::Fork(_) => {
             load_config_or_exit_with_fallback_cwd(
@@ -1391,6 +1444,14 @@ async fn run_ratatui_app(
                 overrides.clone(),
                 cloud_requirements.clone(),
                 fallback_cwd,
+            )
+            .await
+        }
+        resume_picker::SessionSelection::StartFresh if picker_cancelled_without_selection => {
+            load_config_or_exit(
+                cli_kv_overrides.clone(),
+                overrides.clone(),
+                cloud_requirements.clone(),
             )
             .await
         }
@@ -1435,6 +1496,7 @@ async fn run_ratatui_app(
             cloud_requirements.clone(),
             feedback.clone(),
             log_db.clone(),
+            state_db.clone(),
             environment_manager.clone(),
         )
         .await
@@ -1465,6 +1527,7 @@ async fn run_ratatui_app(
         should_prompt_windows_sandbox_nux_at_startup,
         remote_url,
         remote_auth_token,
+        state_db,
         environment_manager,
     )
     .await;
@@ -1669,6 +1732,7 @@ mod tests {
     async fn start_test_embedded_app_server(
         config: Config,
     ) -> color_eyre::Result<InProcessAppServerClient> {
+        let state_db = state_db::init(&config).await;
         start_embedded_app_server(
             Arg0DispatchPaths::default(),
             config,
@@ -1677,6 +1741,7 @@ mod tests {
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
+            state_db,
             Arc::new(EnvironmentManager::default_for_tests()),
         )
         .await
@@ -1828,6 +1893,181 @@ mod tests {
             params.cwd,
             Some(ThreadListCwdFilter::One(String::from("repo/on/server")))
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn latest_session_cwd_filter_respects_scope_options() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let remote_cwd = Path::new("repo/on/server");
+
+        let local_filter = latest_session_cwd_filter(
+            /*remote_mode*/ false, /*remote_cwd_override*/ None, &config,
+            /*show_all*/ false,
+        );
+        let show_all_filter = latest_session_cwd_filter(
+            /*remote_mode*/ false, /*remote_cwd_override*/ None, &config,
+            /*show_all*/ true,
+        );
+        let remote_filter = latest_session_cwd_filter(
+            /*remote_mode*/ true,
+            Some(remote_cwd),
+            &config,
+            /*show_all*/ false,
+        );
+
+        assert_eq!(local_filter, Some(config.cwd.as_path()));
+        assert_eq!(show_all_filter, None);
+        assert_eq!(remote_filter, Some(remote_cwd));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fork_last_filters_latest_session_by_cwd_unless_show_all() -> color_eyre::Result<()> {
+        fn write_session_rollout(
+            codex_home: &Path,
+            filename_ts: &str,
+            meta_rfc3339: &str,
+            preview: &str,
+            model_provider: &str,
+            cwd: &Path,
+        ) -> color_eyre::Result<ThreadId> {
+            let uuid = Uuid::new_v4();
+            let uuid_str = uuid.to_string();
+            let thread_id = ThreadId::from_string(&uuid_str)?;
+            let year = &filename_ts[0..4];
+            let month = &filename_ts[5..7];
+            let day = &filename_ts[8..10];
+            let rollout_path = codex_home
+                .join("sessions")
+                .join(year)
+                .join(month)
+                .join(day)
+                .join(format!("rollout-{filename_ts}-{uuid_str}.jsonl"));
+            let parent = rollout_path.parent().ok_or_else(|| {
+                color_eyre::eyre::eyre!("rollout path is missing a parent directory")
+            })?;
+            std::fs::create_dir_all(parent)?;
+
+            let session_meta = codex_protocol::protocol::SessionMeta {
+                id: thread_id,
+                timestamp: meta_rfc3339.to_string(),
+                cwd: cwd.to_path_buf(),
+                originator: "codex".to_string(),
+                cli_version: "0.0.0".to_string(),
+                source: codex_protocol::protocol::SessionSource::Cli,
+                model_provider: Some(model_provider.to_string()),
+                ..Default::default()
+            };
+            let session_meta = serde_json::to_value(codex_protocol::protocol::SessionMetaLine {
+                meta: session_meta,
+                git: None,
+            })?;
+            let lines = [
+                serde_json::json!({
+                    "timestamp": meta_rfc3339,
+                    "type": "session_meta",
+                    "payload": session_meta,
+                })
+                .to_string(),
+                serde_json::json!({
+                    "timestamp": meta_rfc3339,
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": preview}],
+                    },
+                })
+                .to_string(),
+                serde_json::json!({
+                    "timestamp": meta_rfc3339,
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "user_message",
+                        "message": preview,
+                        "kind": "plain",
+                    },
+                })
+                .to_string(),
+            ];
+            std::fs::write(&rollout_path, lines.join("\n") + "\n")?;
+            let updated_at =
+                chrono::DateTime::parse_from_rfc3339(meta_rfc3339)?.with_timezone(&chrono::Utc);
+            let times = std::fs::FileTimes::new().set_modified(updated_at.into());
+            OpenOptions::new()
+                .append(true)
+                .open(rollout_path)?
+                .set_times(times)?;
+
+            Ok(thread_id)
+        }
+
+        let temp_dir = TempDir::new()?;
+        let project_cwd = temp_dir.path().join("project");
+        let other_cwd = temp_dir.path().join("other-project");
+        std::fs::create_dir_all(&project_cwd)?;
+        std::fs::create_dir_all(&other_cwd)?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(temp_dir.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(project_cwd.clone()),
+                ..Default::default()
+            })
+            .build()
+            .await?;
+        let model_provider = config.model_provider_id.as_str();
+        let project_thread_id = write_session_rollout(
+            temp_dir.path(),
+            "2025-01-02T10-00-00",
+            "2025-01-02T10:00:00Z",
+            "older project session",
+            model_provider,
+            &project_cwd,
+        )?;
+        let other_thread_id = write_session_rollout(
+            temp_dir.path(),
+            "2025-01-02T12-00-00",
+            "2025-01-02T12:00:00Z",
+            "newer other project session",
+            model_provider,
+            &other_cwd,
+        )?;
+
+        let mut app_server =
+            AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
+                start_test_embedded_app_server(config.clone()).await?,
+            ));
+        let filter_cwd = latest_session_cwd_filter(
+            /*remote_mode*/ false, /*remote_cwd_override*/ None, &config,
+            /*show_all*/ false,
+        );
+        let scoped_target = lookup_latest_session_target_with_app_server(
+            &mut app_server,
+            &config,
+            filter_cwd,
+            /*include_non_interactive*/ false,
+        )
+        .await?
+        .expect("expected project-scoped fork --last target");
+        let show_all_filter_cwd = latest_session_cwd_filter(
+            /*remote_mode*/ false, /*remote_cwd_override*/ None, &config,
+            /*show_all*/ true,
+        );
+        let show_all_target = lookup_latest_session_target_with_app_server(
+            &mut app_server,
+            &config,
+            show_all_filter_cwd,
+            /*include_non_interactive*/ false,
+        )
+        .await?
+        .expect("expected global fork --last target");
+        app_server.shutdown().await?;
+
+        assert_eq!(scoped_target.thread_id, project_thread_id);
+        assert_eq!(show_all_target.thread_id, other_thread_id);
         Ok(())
     }
 
@@ -2023,6 +2263,7 @@ mod tests {
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
+            /*state_db*/ None,
             Arc::new(EnvironmentManager::default_for_tests()),
             |_args| async { Err(std::io::Error::other("boom")) },
         )

@@ -6,8 +6,13 @@ set -euo pipefail
 # invocation so target-discovery queries can reuse the same Bazel server.
 
 query_args=()
+windows_cross_compile=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --windows-cross-compile)
+      windows_cross_compile=1
+      shift
+      ;;
     --)
       shift
       break
@@ -20,7 +25,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $# -ne 1 ]]; then
-  echo "Usage: $0 [<bazel query args>...] -- <query expression>" >&2
+  echo "Usage: $0 [--windows-cross-compile] [<bazel query args>...] -- <query expression>" >&2
   exit 1
 fi
 
@@ -32,7 +37,11 @@ case "${RUNNER_OS:-}" in
     ci_config=ci-macos
     ;;
   Windows)
-    ci_config=ci-windows
+    if [[ $windows_cross_compile -eq 1 ]]; then
+      ci_config=ci-windows-cross
+    else
+      ci_config=ci-windows
+    fi
     ;;
 esac
 

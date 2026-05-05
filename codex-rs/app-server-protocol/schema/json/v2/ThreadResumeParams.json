@@ -864,6 +864,28 @@
         },
         {
           "properties": {
+            "encrypted_content": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "context_compaction"
+              ],
+              "title": "ContextCompactionResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ContextCompactionResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "type": {
               "enum": [
                 "other"
@@ -1044,10 +1066,6 @@
         "string",
         "null"
       ]
-    },
-    "excludeTurns": {
-      "description": "When true, return only thread metadata and live-resume state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after resuming.",
-      "type": "boolean"
     },
     "model": {
       "description": "Configuration overrides for the resumed thread, if any.",

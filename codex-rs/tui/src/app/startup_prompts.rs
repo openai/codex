@@ -77,6 +77,16 @@ pub(super) fn emit_system_bwrap_warning(app_event_tx: &AppEventSender, config: &
     )));
 }
 
+pub(super) fn hooks_needing_review_warning(count: usize) -> Option<String> {
+    match count {
+        0 => None,
+        1 => Some("1 hook needs review before it can run. Open /hooks to review it.".to_string()),
+        count => Some(format!(
+            "{count} hooks need review before they can run. Open /hooks to review them."
+        )),
+    }
+}
+
 pub(super) fn should_show_model_migration_prompt(
     current_model: &str,
     target_model: &str,

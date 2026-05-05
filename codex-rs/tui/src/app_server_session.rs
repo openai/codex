@@ -111,6 +111,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -119,6 +120,10 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
+    color_eyre::eyre::eyre!("{context}: {err}")
+}
 
 /// Data collected during the TUI bootstrap phase that the main event loop
 /// needs to configure the UI, telemetry, and initial rate-limit prefetch.
@@ -203,7 +208,9 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("model/list failed during TUI bootstrap")?;
+            .map_err(|err| {
+                bootstrap_request_error("model/list failed during TUI bootstrap", err)
+            })?;
         let available_models = models
             .data
             .into_iter()
@@ -287,7 +294,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("account/read failed during TUI bootstrap")
+            .map_err(|err| bootstrap_request_error("account/read failed during TUI bootstrap", err))
     }
 
     pub(crate) async fn external_agent_config_detect(
@@ -342,7 +349,9 @@ impl AppServerSession {
                 ),
             })
             .await
-            .wrap_err("thread/start failed during TUI bootstrap")?;
+            .map_err(|err| {
+                bootstrap_request_error("thread/start failed during TUI bootstrap", err)
+            })?;
         started_thread_from_start_response(response, config, self.thread_params_mode()).await
     }
 
@@ -364,7 +373,9 @@ impl AppServerSession {
                 ),
             })
             .await
-            .wrap_err("thread/resume failed during TUI bootstrap")?;
+            .map_err(|err| {
+                bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
+            })?;
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
             .await;
@@ -393,7 +404,9 @@ impl AppServerSession {
                 ),
             })
             .await
-            .wrap_err("thread/fork failed during TUI bootstrap")?;
+            .map_err(|err| {
+                bootstrap_request_error("thread/fork failed during TUI bootstrap", err)
+            })?;
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
             .await;
@@ -1034,6 +1047,15 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
             .collect(),
         supports_personality: model.supports_personality,
         additional_speed_tiers: model.additional_speed_tiers,
+        service_tiers: model
+            .service_tiers
+            .into_iter()
+            .map(|service_tier| ModelServiceTier {
+                id: service_tier.id,
+                name: service_tier.name,
+                description: service_tier.description,
+            })
+            .collect(),
         is_default: model.is_default,
         upgrade,
         show_in_picker: !model.hidden,
@@ -1810,6 +1832,7 @@ mod tests {
                 name: None,
                 turns: vec![Turn {
                     id: "turn-1".to_string(),
+                    items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: vec![
                         codex_app_server_protocol::ThreadItem::UserMessage {
                             id: "user-1".to_string(),

@@ -570,30 +570,6 @@
           "type": "object"
         },
         {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "thread/turns/list"
-              ],
-              "title": "Thread/turns/listRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadTurnsListParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Thread/turns/listRequest",
-          "type": "object"
-        },
-        {
           "description": "Append raw Responses API items to the thread history without starting a user turn.",
           "properties": {
             "id": {
@@ -784,6 +760,30 @@
             "params"
           ],
           "title": "Plugin/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "plugin/skill/read"
+              ],
+              "title": "Plugin/skill/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginSkillReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/skill/readRequest",
           "type": "object"
         },
         {
@@ -1575,6 +1575,29 @@
             "params"
           ],
           "title": "WindowsSandbox/setupStartRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "windowsSandbox/readiness"
+              ],
+              "title": "WindowsSandbox/readinessRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "WindowsSandbox/readinessRequest",
           "type": "object"
         },
         {
@@ -4246,6 +4269,48 @@
             "params"
           ],
           "title": "Command/exec/outputDeltaNotification",
+          "type": "object"
+        },
+        {
+          "description": "Stream base64-encoded stdout/stderr chunks for a running `process/spawn` session.",
+          "properties": {
+            "method": {
+              "enum": [
+                "process/outputDelta"
+              ],
+              "title": "Process/outputDeltaNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ProcessOutputDeltaNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Process/outputDeltaNotification",
+          "type": "object"
+        },
+        {
+          "description": "Final exit notification for a `process/spawn` session.",
+          "properties": {
+            "method": {
+              "enum": [
+                "process/exited"
+              ],
+              "title": "Process/exitedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ProcessExitedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Process/exitedNotification",
           "type": "object"
         },
         {
@@ -9768,6 +9833,9 @@
               "null"
             ]
           },
+          "currentHash": {
+            "type": "string"
+          },
           "displayOrder": {
             "format": "int64",
             "type": "integer"
@@ -9815,9 +9883,13 @@
             "format": "uint64",
             "minimum": 0.0,
             "type": "integer"
+          },
+          "trustStatus": {
+            "$ref": "#/definitions/v2/HookTrustStatus"
           }
         },
         "required": [
+          "currentHash",
           "displayOrder",
           "enabled",
           "eventName",
@@ -9826,7 +9898,8 @@
           "key",
           "source",
           "sourcePath",
-          "timeoutSec"
+          "timeoutSec",
+          "trustStatus"
         ],
         "type": "object"
       },
@@ -10016,6 +10089,15 @@
         "title": "HookStartedNotification",
         "type": "object"
       },
+      "HookTrustStatus": {
+        "enum": [
+          "managed",
+          "untrusted",
+          "trusted",
+          "modified"
+        ],
+        "type": "string"
+      },
       "HooksListEntry": {
         "properties": {
           "cwd": {
@@ -10109,6 +10191,11 @@
       "ItemCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "completedAtMs": {
+            "description": "Unix timestamp (in milliseconds) when this item lifecycle completed.",
+            "format": "int64",
+            "type": "integer"
+          },
           "item": {
             "$ref": "#/definitions/v2/ThreadItem"
           },
@@ -10120,6 +10207,7 @@
           }
         },
         "required": [
+          "completedAtMs",
           "item",
           "threadId",
           "turnId"
@@ -10213,6 +10301,11 @@
           "item": {
             "$ref": "#/definitions/v2/ThreadItem"
           },
+          "startedAtMs": {
+            "description": "Unix timestamp (in milliseconds) when this item lifecycle started.",
+            "format": "int64",
+            "type": "integer"
+          },
           "threadId": {
             "type": "string"
           },
@@ -10222,6 +10315,7 @@
         },
         "required": [
           "item",
+          "startedAtMs",
           "threadId",
           "turnId"
         ],
@@ -11212,6 +11306,7 @@
         "properties": {
           "additionalSpeedTiers": {
             "default": [],
+            "description": "Deprecated: use `serviceTiers` instead.",
             "items": {
               "type": "string"
             },
@@ -11257,6 +11352,13 @@
           },
           "model": {
             "type": "string"
+          },
+          "serviceTiers": {
+            "default": [],
+            "items": {
+              "$ref": "#/definitions/v2/ModelServiceTier"
+            },
+            "type": "array"
           },
           "supportedReasoningEfforts": {
             "items": {
@@ -11420,6 +11522,25 @@
           "turnId"
         ],
         "title": "ModelReroutedNotification",
+        "type": "object"
+      },
+      "ModelServiceTier": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "id",
+          "name"
+        ],
         "type": "object"
       },
       "ModelUpgradeInfo": {
@@ -11956,6 +12077,23 @@
         ],
         "type": "string"
       },
+      "PluginAvailability": {
+        "oneOf": [
+          {
+            "enum": [
+              "DISABLED_BY_ADMIN"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Plugin-service currently sends `\"ENABLED\"` for available remote plugins. Codex app-server exposes `\"AVAILABLE\"` in its API; the alias keeps decoding compatible with that upstream response.",
+            "enum": [
+              "AVAILABLE"
+            ],
+            "type": "string"
+          }
+        ]
+      },
       "PluginDetail": {
         "properties": {
           "apps": {
@@ -12341,6 +12479,31 @@
         "title": "PluginShareDeleteResponse",
         "type": "object"
       },
+      "PluginShareListItem": {
+        "properties": {
+          "localPluginPath": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plugin": {
+            "$ref": "#/definitions/v2/PluginSummary"
+          },
+          "shareUrl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plugin",
+          "shareUrl"
+        ],
+        "type": "object"
+      },
       "PluginShareListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "PluginShareListParams",
@@ -12351,7 +12514,7 @@
         "properties": {
           "data": {
             "items": {
-              "$ref": "#/definitions/v2/PluginSummary"
+              "$ref": "#/definitions/v2/PluginShareListItem"
             },
             "type": "array"
           }
@@ -12396,6 +12559,40 @@
           "shareUrl"
         ],
         "title": "PluginShareSaveResponse",
+        "type": "object"
+      },
+      "PluginSkillReadParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "remoteMarketplaceName": {
+            "type": "string"
+          },
+          "remotePluginId": {
+            "type": "string"
+          },
+          "skillName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "remoteMarketplaceName",
+          "remotePluginId",
+          "skillName"
+        ],
+        "title": "PluginSkillReadParams",
+        "type": "object"
+      },
+      "PluginSkillReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "contents": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "PluginSkillReadResponse",
         "type": "object"
       },
       "PluginSource": {
@@ -12482,6 +12679,15 @@
           "authPolicy": {
             "$ref": "#/definitions/v2/PluginAuthPolicy"
           },
+          "availability": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/PluginAvailability"
+              }
+            ],
+            "default": "AVAILABLE",
+            "description": "Availability state for installing and using the plugin."
+          },
           "enabled": {
             "type": "boolean"
           },
@@ -12555,6 +12761,122 @@
         "required": [
           "marketplaceName",
           "pluginNames"
+        ],
+        "type": "object"
+      },
+      "ProcessExitedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Final process exit notification for `process/spawn`.",
+        "properties": {
+          "exitCode": {
+            "description": "Process exit code.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "processHandle": {
+            "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+            "type": "string"
+          },
+          "stderr": {
+            "description": "Buffered stderr capture.\n\nEmpty when stderr was streamed via `process/outputDelta`.",
+            "type": "string"
+          },
+          "stderrCapReached": {
+            "description": "Whether stderr reached `outputBytesCap`.\n\nIn streaming mode, stderr is empty and cap state is also reported on the final stderr `process/outputDelta` notification.",
+            "type": "boolean"
+          },
+          "stdout": {
+            "description": "Buffered stdout capture.\n\nEmpty when stdout was streamed via `process/outputDelta`.",
+            "type": "string"
+          },
+          "stdoutCapReached": {
+            "description": "Whether stdout reached `outputBytesCap`.\n\nIn streaming mode, stdout is empty and cap state is also reported on the final stdout `process/outputDelta` notification.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "exitCode",
+          "processHandle",
+          "stderr",
+          "stderrCapReached",
+          "stdout",
+          "stdoutCapReached"
+        ],
+        "title": "ProcessExitedNotification",
+        "type": "object"
+      },
+      "ProcessOutputDeltaNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Base64-encoded output chunk emitted for a streaming `process/spawn` request.",
+        "properties": {
+          "capReached": {
+            "description": "True on the final streamed chunk for this stream when output was truncated by `outputBytesCap`.",
+            "type": "boolean"
+          },
+          "deltaBase64": {
+            "description": "Base64-encoded output bytes.",
+            "type": "string"
+          },
+          "processHandle": {
+            "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
+            "type": "string"
+          },
+          "stream": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/ProcessOutputStream"
+              }
+            ],
+            "description": "Output stream this chunk belongs to."
+          }
+        },
+        "required": [
+          "capReached",
+          "deltaBase64",
+          "processHandle",
+          "stream"
+        ],
+        "title": "ProcessOutputDeltaNotification",
+        "type": "object"
+      },
+      "ProcessOutputStream": {
+        "description": "Stream label for `process/outputDelta` notifications.",
+        "oneOf": [
+          {
+            "description": "stdout stream. PTY mode multiplexes terminal output here.",
+            "enum": [
+              "stdout"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "stderr stream.",
+            "enum": [
+              "stderr"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "ProcessTerminalSize": {
+        "description": "PTY size in character cells for `process/spawn` PTY sessions.",
+        "properties": {
+          "cols": {
+            "description": "Terminal width in character cells.",
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "rows": {
+            "description": "Terminal height in character cells.",
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cols",
+          "rows"
         ],
         "type": "object"
       },
@@ -13704,6 +14026,28 @@
               "type"
             ],
             "title": "CompactionResponseItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "encrypted_content": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "context_compaction"
+                ],
+                "title": "ContextCompactionResponseItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "ContextCompactionResponseItem",
             "type": "object"
           },
           {
@@ -15051,10 +15395,6 @@
             ]
           },
           "ephemeral": {
-            "type": "boolean"
-          },
-          "excludeTurns": {
-            "description": "When true, return only thread metadata and live fork state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after forking.",
             "type": "boolean"
           },
           "model": {
@@ -16554,10 +16894,6 @@
               "null"
             ]
           },
-          "excludeTurns": {
-            "description": "When true, return only thread metadata and live-resume state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after resuming.",
-            "type": "boolean"
-          },
           "model": {
             "description": "Configuration overrides for the resumed thread, if any.",
             "type": [
@@ -17152,76 +17488,6 @@
         "title": "ThreadTokenUsageUpdatedNotification",
         "type": "object"
       },
-      "ThreadTurnsListParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "cursor": {
-            "description": "Opaque cursor to pass to the next call to continue after the last turn.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "limit": {
-            "description": "Optional turn page size.",
-            "format": "uint32",
-            "minimum": 0.0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "sortDirection": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/SortDirection"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Optional turn pagination direction; defaults to descending."
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "threadId"
-        ],
-        "title": "ThreadTurnsListParams",
-        "type": "object"
-      },
-      "ThreadTurnsListResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "backwardsCursor": {
-            "description": "Opaque cursor to pass as `cursor` when reversing `sortDirection`. This is only populated when the page contains at least one turn. Use it with the opposite `sortDirection` to include the anchor turn again and catch updates to that turn.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "data": {
-            "items": {
-              "$ref": "#/definitions/v2/Turn"
-            },
-            "type": "array"
-          },
-          "nextCursor": {
-            "description": "Opaque cursor to pass to the next call to continue after the last turn. if None, there are no more turns to return.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "data"
-        ],
-        "title": "ThreadTurnsListResponse",
-        "type": "object"
-      },
       "ThreadUnarchiveParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -17417,11 +17683,20 @@
             "type": "string"
           },
           "items": {
-            "description": "Only populated on a `thread/resume` or `thread/fork` response. For all other responses and notifications returning a Turn, the items field will be an empty list.",
+            "description": "Thread items currently included in this turn payload.",
             "items": {
               "$ref": "#/definitions/v2/ThreadItem"
             },
             "type": "array"
+          },
+          "itemsView": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/TurnItemsView"
+              }
+            ],
+            "default": "full",
+            "description": "Describes how much of `items` has been loaded for this turn."
           },
           "startedAt": {
             "description": "Unix timestamp (in seconds) when the turn started.",
@@ -17545,6 +17820,31 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "TurnInterruptResponse",
         "type": "object"
+      },
+      "TurnItemsView": {
+        "oneOf": [
+          {
+            "description": "`items` was not loaded for this turn. The field is intentionally empty.",
+            "enum": [
+              "notLoaded"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "`items` contains only a display summary for this turn.",
+            "enum": [
+              "summary"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "`items` contains every ThreadItem available from persisted app-server history for this turn.",
+            "enum": [
+              "full"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "TurnPlanStep": {
         "properties": {
@@ -18127,6 +18427,27 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "WindowsSandboxReadiness": {
+        "enum": [
+          "ready",
+          "notConfigured",
+          "updateRequired"
+        ],
+        "type": "string"
+      },
+      "WindowsSandboxReadinessResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "status": {
+            "$ref": "#/definitions/v2/WindowsSandboxReadiness"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "WindowsSandboxReadinessResponse",
         "type": "object"
       },
       "WindowsSandboxSetupCompletedNotification": {

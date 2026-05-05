@@ -807,6 +807,7 @@ async fn plan_implementation_popup_skips_replayed_turn_complete() {
     chat.replay_thread_turns(
         vec![AppServerTurn {
             id: "turn-1".to_string(),
+            items_view: codex_app_server_protocol::TurnItemsView::Full,
             items: vec![AppServerThreadItem::AgentMessage {
                 id: "msg-plan".to_string(),
                 text: "Plan details".to_string(),
@@ -844,6 +845,7 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
     chat.replay_thread_turns(
         vec![AppServerTurn {
             id: "turn-1".to_string(),
+            items_view: codex_app_server_protocol::TurnItemsView::Full,
             items: vec![AppServerThreadItem::AgentMessage {
                 id: "msg-plan-replay".to_string(),
                 text: "Plan details".to_string(),
@@ -1128,6 +1130,7 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
             thread_id: thread_id.to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,
                 error: None,
@@ -1172,6 +1175,7 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
             thread_id: thread_id.to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: AppServerTurnStatus::Completed,
                 error: None,
@@ -1487,13 +1491,46 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
 
 #[tokio::test]
 async fn collaboration_modes_defaults_to_code_on_startup() {
+    let chat = make_startup_chat_with_cli_overrides(vec![(
+        "features.collaboration_modes".to_string(),
+        TomlValue::Boolean(true),
+    )])
+    .await;
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(
+        chat.current_model(),
+        crate::legacy_core::test_support::get_model_offline(chat.config.model.as_deref())
+    );
+}
+
+#[tokio::test]
+async fn vim_mode_default_disabled_starts_composer_in_insert_mode() {
+    let chat = make_startup_chat_with_cli_overrides(Vec::new()).await;
+    assert!(!chat.bottom_pane.composer_is_vim_enabled());
+}
+
+#[tokio::test]
+async fn vim_mode_default_enabled_starts_composer_in_normal_mode() {
+    let chat = make_startup_chat_with_cli_overrides(vec![(
+        "tui.vim_mode_default".to_string(),
+        TomlValue::Boolean(true),
+    )])
+    .await;
+
+    assert!(chat.bottom_pane.composer_is_vim_enabled());
+    assert!(chat.composer_is_empty());
+    let mut chat = chat;
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+}
+
+async fn make_startup_chat_with_cli_overrides(
+    cli_overrides: Vec<(String, TomlValue)>,
+) -> ChatWidget {
     let codex_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .cli_overrides(vec![(
-            "features.collaboration_modes".to_string(),
-            TomlValue::Boolean(true),
-        )])
+        .cli_overrides(cli_overrides)
         .build()
         .await
         .expect("config");
@@ -1503,6 +1540,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         config: cfg.clone(),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
+        workspace_command_runner: None,
         initial_user_message: None,
         enhanced_keys_supported: false,
         has_chatgpt_account: false,
@@ -1512,16 +1550,14 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         status_account_display: None,
         runtime_model_provider_base_url: None,
         initial_plan_type: None,
-        model: Some(resolved_model.clone()),
+        model: Some(resolved_model),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
 
-    let chat = ChatWidget::new_with_app_event(init);
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
-    assert_eq!(chat.current_model(), resolved_model);
+    ChatWidget::new_with_app_event(init)
 }
 
 #[tokio::test]

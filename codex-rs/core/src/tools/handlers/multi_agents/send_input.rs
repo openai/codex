@@ -1,10 +1,15 @@
 use super::*;
 use crate::agent::control::render_input_preview;
+use crate::turn_timing::now_unix_timestamp_ms;
 
 pub(crate) struct Handler;
 
 impl ToolHandler for Handler {
     type Output = SendInputResult;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("send_input")
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -45,6 +50,7 @@ impl ToolHandler for Handler {
                 &turn,
                 CollabAgentInteractionBeginEvent {
                     call_id: call_id.clone(),
+                    started_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
                     prompt: prompt.clone(),
@@ -67,6 +73,7 @@ impl ToolHandler for Handler {
                 &turn,
                 CollabAgentInteractionEndEvent {
                     call_id,
+                    completed_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
                     receiver_agent_nickname: receiver_agent.agent_nickname,

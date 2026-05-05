@@ -1,8 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
-use codex_core::shell::Shell;
-use codex_core::shell::default_user_shell;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -46,8 +44,7 @@ fn text_user_input_parts(texts: Vec<String>) -> serde_json::Value {
     })
 }
 
-fn assert_default_env_context(text: &str, cwd: &str, shell: &Shell) {
-    let shell_name = shell.name();
+fn assert_default_env_context(text: &str, cwd: &str) {
     assert!(
         text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG),
         "expected environment context fragment: {text}"
@@ -57,7 +54,7 @@ fn assert_default_env_context(text: &str, cwd: &str, shell: &Shell) {
         "expected cwd in environment context: {text}"
     );
     assert!(
-        text.contains(&format!("<shell>{shell_name}</shell>")),
+        text.contains("<shell>bash</shell>"),
         "expected shell in environment context: {text}"
     );
     assert!(
@@ -365,12 +362,11 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
         "expected user instructions in UI message: {ui_text}"
     );
 
-    let shell = default_user_shell();
     let cwd_str = config.cwd.to_string_lossy();
     let env_text = input1[1]["content"][1]["text"]
         .as_str()
         .expect("environment context text");
-    assert_default_env_context(env_text, &cwd_str, &shell);
+    assert_default_env_context(env_text, &cwd_str);
     assert_eq!(
         input1[1]["content"][1]["type"].as_str(),
         Some("input_text"),
@@ -785,9 +781,8 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     let env_text = expected_env_msg_2["content"][0]["text"]
         .as_str()
         .expect("environment context text");
-    let shell = default_user_shell();
     let expected_cwd = new_cwd.path().display().to_string();
-    assert_default_env_context(env_text, &expected_cwd, &shell);
+    assert_default_env_context(env_text, &expected_cwd);
     let mut expected_body2 = body1_input.to_vec();
     expected_body2.push(expected_settings_update_msg);
     expected_body2.push(expected_env_msg_2);
@@ -891,13 +886,12 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let expected_permissions_msg = body1["input"][0].clone();
     let expected_ui_msg = body1["input"][1].clone();
 
-    let shell = default_user_shell();
     let default_cwd_lossy = default_cwd.to_string_lossy();
     let expected_env_text_1 = expected_ui_msg["content"][1]["text"]
         .as_str()
         .expect("cached environment context text")
         .to_string();
-    assert_default_env_context(&expected_env_text_1, &default_cwd_lossy, &shell);
+    assert_default_env_context(&expected_env_text_1, &default_cwd_lossy);
 
     let expected_contextual_user_msg_1 = text_user_input_parts(vec![
         expected_ui_msg["content"][0]["text"]
@@ -1023,12 +1017,11 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     let expected_permissions_msg = body1["input"][0].clone();
     let expected_ui_msg = body1["input"][1].clone();
 
-    let shell = default_user_shell();
     let expected_env_text_1 = expected_ui_msg["content"][1]["text"]
         .as_str()
         .expect("cached environment context text")
         .to_string();
-    assert_default_env_context(&expected_env_text_1, &default_cwd.to_string_lossy(), &shell);
+    assert_default_env_context(&expected_env_text_1, &default_cwd.to_string_lossy());
     let expected_contextual_user_msg_1 = text_user_input_parts(vec![
         expected_ui_msg["content"][0]["text"]
             .as_str()

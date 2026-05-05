@@ -36,6 +36,7 @@ pub(crate) struct ElicitationRequestManager {
     requests: Arc<Mutex<ResponderMap>>,
     pub(crate) approval_policy: Arc<StdMutex<AskForApproval>>,
     pub(crate) permission_profile: Arc<StdMutex<PermissionProfile>>,
+    auto_deny: Arc<StdMutex<bool>>,
 }
 
 impl ElicitationRequestManager {
@@ -47,6 +48,20 @@ impl ElicitationRequestManager {
             requests: Arc::new(Mutex::new(HashMap::new())),
             approval_policy: Arc::new(StdMutex::new(approval_policy)),
             permission_profile: Arc::new(StdMutex::new(permission_profile)),
+            auto_deny: Arc::new(StdMutex::new(false)),
+        }
+    }
+
+    pub(crate) fn auto_deny(&self) -> bool {
+        self.auto_deny
+            .lock()
+            .map(|auto_deny| *auto_deny)
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn set_auto_deny(&self, auto_deny: bool) {
+        if let Ok(mut current) = self.auto_deny.lock() {
+            *current = auto_deny;
         }
     }
 
@@ -73,13 +88,27 @@ impl ElicitationRequestManager {
         let elicitation_requests = self.requests.clone();
         let approval_policy = self.approval_policy.clone();
         let permission_profile = self.permission_profile.clone();
+        let auto_deny = self.auto_deny.clone();
         Box::new(move |id, elicitation| {
             let elicitation_requests = elicitation_requests.clone();
             let tx_event = tx_event.clone();
             let server_name = server_name.clone();
             let approval_policy = approval_policy.clone();
             let permission_profile = permission_profile.clone();
+            let auto_deny = auto_deny.clone();
             async move {
+                let auto_deny = auto_deny
+                    .lock()
+                    .map(|auto_deny| *auto_deny)
+                    .unwrap_or(false);
+                if auto_deny {
+                    return Ok(ElicitationResponse {
+                        action: ElicitationAction::Decline,
+                        content: None,
+                        meta: None,
+                    });
+                }
+
                 let approval_policy = approval_policy
                     .lock()
                     .map(|policy| *policy)

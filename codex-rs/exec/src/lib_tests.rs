@@ -262,6 +262,7 @@ fn turn_items_for_thread_returns_matching_turn_items() {
         turns: vec![
             codex_app_server_protocol::Turn {
                 id: "turn-1".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: vec![AppServerThreadItem::AgentMessage {
                     id: "msg-1".to_string(),
                     text: "hello".to_string(),
@@ -276,6 +277,7 @@ fn turn_items_for_thread_returns_matching_turn_items() {
             },
             codex_app_server_protocol::Turn {
                 id: "turn-2".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: vec![AppServerThreadItem::Plan {
                     id: "plan-1".to_string(),
                     text: "ship it".to_string(),
@@ -308,6 +310,7 @@ fn should_backfill_turn_completed_items_skips_ephemeral_threads() {
             thread_id: "thread-1".to_string(),
             turn: codex_app_server_protocol::Turn {
                 id: "turn-1".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: codex_app_server_protocol::TurnStatus::Completed,
                 error: None,

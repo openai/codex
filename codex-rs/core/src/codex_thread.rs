@@ -1,6 +1,7 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
+use crate::goals::ExternalGoalSet;
 use crate::goals::GoalRuntimeEvent;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
@@ -25,13 +26,16 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
+use codex_thread_store::StoredThread;
 use codex_thread_store::StoredThreadHistory;
+use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -93,6 +97,7 @@ pub struct CodexThreadTurnContextOverrides {
 pub struct CodexThread {
     pub(crate) codex: Codex,
     pub(crate) session_source: SessionSource,
+    session_configured: SessionConfiguredEvent,
     rollout_path: Option<PathBuf>,
     out_of_band_elicitation_count: Mutex<u64>,
     _watch_registration: WatchRegistration,
@@ -103,6 +108,7 @@ pub struct CodexThread {
 impl CodexThread {
     pub(crate) fn new(
         codex: Codex,
+        session_configured: SessionConfiguredEvent,
         rollout_path: Option<PathBuf>,
         session_source: SessionSource,
         watch_registration: WatchRegistration,
@@ -110,6 +116,7 @@ impl CodexThread {
         Self {
             codex,
             session_source,
+            session_configured,
             rollout_path,
             out_of_band_elicitation_count: Mutex::new(0),
             _watch_registration: watch_registration,
@@ -154,11 +161,11 @@ impl CodexThread {
         }
     }
 
-    pub async fn apply_external_goal_set(&self, status: codex_state::ThreadGoalStatus) {
+    pub async fn apply_external_goal_set(&self, external_set: ExternalGoalSet) {
         if let Err(err) = self
             .codex
             .session
-            .goal_runtime_apply(GoalRuntimeEvent::ExternalSet { status })
+            .goal_runtime_apply(GoalRuntimeEvent::ExternalSet { external_set })
             .await
         {
             tracing::warn!("failed to apply external goal status runtime effects: {err}");
@@ -214,9 +221,14 @@ impl CodexThread {
         &self,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_elicitations_auto_deny: bool,
     ) -> ConstraintResult<()> {
         self.codex
-            .set_app_server_client_info(app_server_client_name, app_server_client_version)
+            .set_app_server_client_info(
+                app_server_client_name,
+                app_server_client_version,
+                mcp_elicitations_auto_deny,
+            )
             .await
     }
 
@@ -377,6 +389,14 @@ impl CodexThread {
         self.rollout_path.clone()
     }
 
+    pub(crate) fn session_configured(&self) -> SessionConfiguredEvent {
+        self.session_configured.clone()
+    }
+
+    pub(crate) fn is_running(&self) -> bool {
+        !self.codex.tx_sub.is_closed()
+    }
+
     pub async fn guardian_trunk_rollout_path(&self) -> Option<PathBuf> {
         self.codex
             .session
@@ -397,6 +417,38 @@ impl CodexThread {
                 message: err.to_string(),
             })?;
         live_thread.load_history(include_archived).await
+    }
+
+    pub async fn read_thread(
+        &self,
+        include_archived: bool,
+        include_history: bool,
+    ) -> ThreadStoreResult<StoredThread> {
+        let live_thread = self
+            .codex
+            .session
+            .live_thread_for_persistence("read thread")
+            .map_err(|err| ThreadStoreError::Internal {
+                message: err.to_string(),
+            })?;
+        live_thread
+            .read_thread(include_archived, include_history)
+            .await
+    }
+
+    pub async fn update_thread_metadata(
+        &self,
+        patch: ThreadMetadataPatch,
+        include_archived: bool,
+    ) -> ThreadStoreResult<StoredThread> {
+        let live_thread = self
+            .codex
+            .session
+            .live_thread_for_persistence("update thread metadata")
+            .map_err(|err| ThreadStoreError::Internal {
+                message: err.to_string(),
+            })?;
+        live_thread.update_metadata(patch, include_archived).await
     }
 
     pub fn state_db(&self) -> Option<StateDbHandle> {

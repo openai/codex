@@ -69,6 +69,25 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    pub(super) fn apply_raw_output_mode(
+        &mut self,
+        tui: &mut tui::Tui,
+        enabled: bool,
+        notify: bool,
+    ) {
+        if notify {
+            self.chat_widget.set_raw_output_mode_and_notify(enabled);
+        } else {
+            self.chat_widget.set_raw_output_mode(enabled);
+        }
+        if let Err(err) = self.reflow_transcript_now(tui) {
+            tracing::warn!(error = %err, "failed to reflow transcript after raw output mode toggle");
+            self.chat_widget
+                .add_error_message(format!("Failed to redraw transcript: {err}"));
+        }
+        tui.frame_requester().schedule_frame();
+    }
+
     pub(super) async fn handle_key_event(
         &mut self,
         tui: &mut tui::Tui,
@@ -122,7 +141,29 @@ impl App {
             return;
         }
 
-        if self.keymap.app.open_transcript.is_pressed(key_event) {
+        let app_keymap_shortcuts_available = self.app_keymap_shortcuts_available();
+
+        if app_keymap_shortcuts_available && self.keymap.app.toggle_vim_mode.is_pressed(key_event) {
+            self.chat_widget.toggle_vim_mode_and_notify();
+            return;
+        }
+
+        if app_keymap_shortcuts_available
+            && self.keymap.app.toggle_fast_mode.is_pressed(key_event)
+            && self.chat_widget.can_toggle_fast_mode_from_keybinding()
+        {
+            self.chat_widget.toggle_fast_mode_from_ui();
+            return;
+        }
+
+        if app_keymap_shortcuts_available && self.keymap.app.toggle_raw_output.is_pressed(key_event)
+        {
+            let enabled = !self.chat_widget.raw_output_mode();
+            self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
+            return;
+        }
+
+        if app_keymap_shortcuts_available && self.keymap.app.open_transcript.is_pressed(key_event) {
             // Enter alternate screen and set viewport to full size.
             let _ = tui.enter_alt_screen();
             self.overlay = Some(Overlay::new_transcript(
@@ -133,7 +174,9 @@ impl App {
             return;
         }
 
-        if self.keymap.app.open_external_editor.is_pressed(key_event) {
+        if app_keymap_shortcuts_available
+            && self.keymap.app.open_external_editor.is_pressed(key_event)
+        {
             // Only launch the external editor if there is no overlay and the bottom pane is not in use.
             // Note that it can be launched while a task is running to enable editing while the previous turn is ongoing.
             if self.overlay.is_none()
@@ -152,7 +195,7 @@ impl App {
             // with the composer focused and empty. In any other state, forward
             // Esc so the active UI (e.g. status indicator, modals, popups)
             // handles it.
-            if self.chat_widget.is_normal_backtrack_mode() && self.chat_widget.composer_is_empty() {
+            if self.should_handle_backtrack_esc(key_event) {
                 self.handle_backtrack_esc_key(tui);
             } else {
                 self.chat_widget.handle_key_event(key_event);
@@ -161,7 +204,9 @@ impl App {
         }
 
         match key_event {
-            _ if self.keymap.app.clear_terminal.is_pressed(key_event) => {
+            _ if app_keymap_shortcuts_available
+                && self.keymap.app.clear_terminal.is_pressed(key_event) =>
+            {
                 if !self.chat_widget.can_run_ctrl_l_clear_now() {
                     return;
                 }
@@ -206,7 +251,33 @@ impl App {
         };
     }
 
+    pub(super) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {
+        self.chat_widget.is_normal_backtrack_mode()
+            && self.chat_widget.composer_is_empty()
+            && !self.chat_widget.should_handle_vim_insert_escape(key_event)
+    }
+
+    fn app_keymap_shortcuts_available(&self) -> bool {
+        self.overlay.is_none() && self.chat_widget.no_modal_or_popup_active()
+    }
+
     pub(super) fn refresh_status_line(&mut self) {
         self.chat_widget.refresh_status_line();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_support::make_test_app;
+
+    #[tokio::test]
+    async fn app_keymap_shortcuts_are_disabled_while_keymap_view_is_active() {
+        let mut app = make_test_app().await;
+        assert!(app.app_keymap_shortcuts_available());
+
+        let keymap = app.keymap.clone();
+        app.chat_widget.open_keymap_debug(&keymap);
+
+        assert!(!app.app_keymap_shortcuts_available());
     }
 }

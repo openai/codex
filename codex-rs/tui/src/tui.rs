@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
+use crossterm::cursor::SetCursorStyle;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
@@ -21,6 +22,7 @@ use crossterm::event::EnableFocusChange;
 use crossterm::event::KeyEvent;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
+#[cfg(not(unix))]
 use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::backend::Backend;
 use ratatui::backend::CrosstermBackend;
@@ -38,6 +40,7 @@ use tokio_stream::Stream;
 pub use self::frame_requester::FrameRequester;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
+use crate::insert_history::HistoryLineWrapPolicy;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::detect_backend;
 use crate::tui::event_stream::EventBroker;
@@ -187,7 +190,13 @@ fn restore_common(
     {
         first_error.get_or_insert(err);
     }
-    let _ = execute!(stdout(), crossterm::cursor::Show);
+    if let Err(err) = execute!(
+        stdout(),
+        SetCursorStyle::DefaultUserShape,
+        crossterm::cursor::Show
+    ) {
+        first_error.get_or_insert(err);
+    }
     match first_error {
         Some(err) => Err(err),
         None => Ok(()),
@@ -282,9 +291,55 @@ pub fn init() -> Result<Terminal> {
 
     set_panic_hook();
 
+    #[cfg(unix)]
     let backend = CrosstermBackend::new(stdout());
-    let tui = CustomTerminal::with_options(backend)?;
+
+    #[cfg(unix)]
+    let cursor_pos =
+        match crate::terminal_probe::cursor_position(crate::terminal_probe::DEFAULT_TIMEOUT) {
+            Ok(Some(pos)) => pos,
+            Ok(None) => {
+                tracing::warn!("initial cursor position probe timed out; defaulting to origin");
+                Position { x: 0, y: 0 }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "failed to read initial cursor position; defaulting to origin: {err}"
+                );
+                Position { x: 0, y: 0 }
+            }
+        };
+
+    #[cfg(not(unix))]
+    let mut backend = CrosstermBackend::new(stdout());
+
+    #[cfg(not(unix))]
+    let cursor_pos = cursor_position_with_crossterm(&mut backend);
+
+    let tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
     Ok(tui)
+}
+
+#[cfg(not(unix))]
+fn cursor_position_with_crossterm(backend: &mut CrosstermBackend<Stdout>) -> Position {
+    backend.get_cursor_position().unwrap_or_else(|err| {
+        tracing::warn!("failed to read initial cursor position; defaulting to origin: {err}");
+        Position { x: 0, y: 0 }
+    })
+}
+
+#[cfg(unix)]
+fn detect_keyboard_enhancement_supported() -> bool {
+    crate::terminal_probe::keyboard_enhancement_supported(crate::terminal_probe::DEFAULT_TIMEOUT)
+        .unwrap_or(/*default*/ None)
+        .unwrap_or(/*default*/ false)
+}
+
+#[cfg(not(unix))]
+fn detect_keyboard_enhancement_supported() -> bool {
+    // Non-Unix startup keeps the existing crossterm path because the bounded probe implementation
+    // relies on Unix file descriptors and `/dev/tty` semantics.
+    supports_keyboard_enhancement().unwrap_or(/*default*/ false)
 }
 
 fn set_panic_hook() {
@@ -315,7 +370,7 @@ pub struct Tui {
     draw_tx: broadcast::Sender<()>,
     event_broker: Arc<EventBroker>,
     pub(crate) terminal: Terminal,
-    pending_history_lines: Vec<Line<'static>>,
+    pending_history_lines: Vec<PendingHistoryLines>,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
     suspend_context: SuspendContext,
@@ -331,6 +386,11 @@ pub struct Tui {
     alt_screen_enabled: bool,
 }
 
+struct PendingHistoryLines {
+    lines: Vec<Line<'static>>,
+    wrap_policy: HistoryLineWrapPolicy,
+}
+
 impl Tui {
     pub fn new(terminal: Terminal) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
@@ -339,7 +399,7 @@ impl Tui {
         // Detect keyboard enhancement support before any EventStream is created so the
         // crossterm poller can acquire its lock without contention.
         let enhanced_keys_supported = !keyboard_modes::keyboard_enhancement_disabled()
-            && supports_keyboard_enhancement().unwrap_or(false);
+            && detect_keyboard_enhancement_supported();
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
         let _ = crate::terminal_palette::default_colors();
@@ -528,7 +588,25 @@ impl Tui {
     }
 
     pub fn insert_history_lines(&mut self, lines: Vec<Line<'static>>) {
-        self.pending_history_lines.extend(lines);
+        self.insert_history_lines_with_wrap_policy(lines, HistoryLineWrapPolicy::PreWrap);
+    }
+
+    pub fn insert_history_lines_with_wrap_policy(
+        &mut self,
+        lines: Vec<Line<'static>>,
+        wrap_policy: HistoryLineWrapPolicy,
+    ) {
+        if lines.is_empty() {
+            return;
+        }
+        if let Some(last) = self.pending_history_lines.last_mut()
+            && last.wrap_policy == wrap_policy
+        {
+            last.lines.extend(lines);
+        } else {
+            self.pending_history_lines
+                .push(PendingHistoryLines { lines, wrap_policy });
+        }
         self.frame_requester().schedule_frame();
     }
 
@@ -644,18 +722,21 @@ impl Tui {
     /// invalidate the diff buffer for a full repaint.
     fn flush_pending_history_lines(
         terminal: &mut Terminal,
-        pending_history_lines: &mut Vec<Line<'static>>,
+        pending_history_lines: &mut Vec<PendingHistoryLines>,
         is_zellij: bool,
     ) -> Result<bool> {
         if pending_history_lines.is_empty() {
             return Ok(false);
         }
 
-        crate::insert_history::insert_history_lines_with_mode(
-            terminal,
-            pending_history_lines.clone(),
-            crate::insert_history::InsertHistoryMode::new(is_zellij),
-        )?;
+        for batch in pending_history_lines.iter() {
+            crate::insert_history::insert_history_lines_with_mode_and_wrap_policy(
+                terminal,
+                batch.lines.clone(),
+                crate::insert_history::InsertHistoryMode::new(is_zellij),
+                batch.wrap_policy,
+            )?;
+        }
         pending_history_lines.clear();
         Ok(is_zellij)
     }

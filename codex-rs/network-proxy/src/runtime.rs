@@ -25,6 +25,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::net::IpAddr;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -401,7 +402,18 @@ impl NetworkProxyState {
                 if !is_explicit_local_allowlisted(&allowed_domains, &host) {
                     return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
                 }
-            } else if host_resolves_to_non_public_ip(host_str, port).await {
+            } else if host_resolves_to_non_public_ip(
+                host_str,
+                port,
+                DNS_LOOKUP_TIMEOUT,
+                |host, port| async move {
+                    lookup_host((host.as_str(), port))
+                        .await
+                        .map(Iterator::collect)
+                },
+            )
+            .await
+            {
                 return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
             }
         }
@@ -714,14 +726,23 @@ pub(crate) fn unix_socket_permissions_supported() -> bool {
     cfg!(target_os = "macos")
 }
 
-async fn host_resolves_to_non_public_ip(host: &str, port: u16) -> bool {
+async fn host_resolves_to_non_public_ip<F, Fut>(
+    host: &str,
+    port: u16,
+    lookup_timeout: Duration,
+    lookup: F,
+) -> bool
+where
+    F: FnOnce(String, u16) -> Fut,
+    Fut: Future<Output = std::io::Result<Vec<SocketAddr>>>,
+{
     if let Ok(ip) = host.parse::<IpAddr>() {
         return is_non_public_ip(ip);
     }
 
     // Block the request if this DNS lookup fails. We resolve the hostname again when we connect,
     // so a failed check here does not prove the destination is public.
-    let addrs = match timeout(DNS_LOOKUP_TIMEOUT, lookup_host((host, port))).await {
+    let addrs = match timeout(lookup_timeout, lookup(host.to_string(), port)).await {
         Ok(Ok(addrs)) => addrs,
         Ok(Err(err)) => {
             debug!(
@@ -1358,6 +1379,65 @@ mod tests {
                 .unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
+    }
+
+    #[tokio::test]
+    async fn host_resolves_to_non_public_ip_blocks_on_dns_lookup_timeout() {
+        let blocked = host_resolves_to_non_public_ip(
+            "slow.example",
+            /*port*/ 80,
+            Duration::from_millis(1),
+            |_host, _port| async {
+                std::future::pending::<std::io::Result<Vec<SocketAddr>>>().await
+            },
+        )
+        .await;
+
+        assert!(blocked);
+    }
+
+    #[tokio::test]
+    async fn host_resolves_to_non_public_ip_blocks_on_dns_lookup_error() {
+        let blocked = host_resolves_to_non_public_ip(
+            "error.example",
+            /*port*/ 80,
+            Duration::from_millis(10),
+            |_host, _port| async {
+                Err::<Vec<SocketAddr>, std::io::Error>(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "forced failure",
+                ))
+            },
+        )
+        .await;
+
+        assert!(blocked);
+    }
+
+    #[tokio::test]
+    async fn host_resolves_to_non_public_ip_blocks_private_resolution() {
+        let blocked = host_resolves_to_non_public_ip(
+            "local.example",
+            /*port*/ 80,
+            Duration::from_millis(10),
+            |_host, _port| async { Ok(vec!["127.0.0.1:80".parse().unwrap()]) },
+        )
+        .await;
+
+        assert!(blocked);
+    }
+
+    #[tokio::test]
+    async fn host_resolves_to_non_public_ip_allows_public_resolution() {
+        let blocked = host_resolves_to_non_public_ip(
+            "public.example",
+            /*port*/ 80,
+            Duration::from_millis(10),
+            |_host, _port| async { Ok(vec!["8.8.8.8:80".parse().unwrap()]) },
+        )
+        .await;
+
+        assert!(!blocked);
     }
 
     #[test]

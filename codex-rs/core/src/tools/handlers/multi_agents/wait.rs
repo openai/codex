@@ -1,5 +1,6 @@
 use super::*;
 use crate::agent::status::is_final;
+use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::error::CodexErr;
 use futures::FutureExt;
 use futures::StreamExt;
@@ -16,6 +17,10 @@ pub(crate) struct Handler;
 
 impl ToolHandler for Handler {
     type Output = WaitAgentResult;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("wait_agent")
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -73,6 +78,7 @@ impl ToolHandler for Handler {
             .send_event(
                 &turn,
                 CollabWaitingBeginEvent {
+                    started_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_ids: receiver_thread_ids.clone(),
                     receiver_agents: receiver_agents.clone(),
@@ -105,6 +111,7 @@ impl ToolHandler for Handler {
                             CollabWaitingEndEvent {
                                 sender_thread_id: session.conversation_id,
                                 call_id: call_id.clone(),
+                                completed_at_ms: now_unix_timestamp_ms(),
                                 agent_statuses: build_wait_agent_statuses(
                                     &statuses,
                                     &receiver_agents,
@@ -173,6 +180,7 @@ impl ToolHandler for Handler {
                 CollabWaitingEndEvent {
                     sender_thread_id: session.conversation_id,
                     call_id,
+                    completed_at_ms: now_unix_timestamp_ms(),
                     agent_statuses,
                     statuses: statuses_by_id,
                 }

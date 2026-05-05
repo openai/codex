@@ -154,6 +154,7 @@ async fn live_app_server_review_prompt_item_is_not_rendered() {
         ServerNotification::ItemStarted(ItemStartedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
             item: review_mode_item.clone(),
         }),
         /*replay_kind*/ None,
@@ -166,6 +167,7 @@ async fn live_app_server_review_prompt_item_is_not_rendered() {
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
             item: review_mode_item,
         }),
         /*replay_kind*/ None,
@@ -176,6 +178,7 @@ async fn live_app_server_review_prompt_item_is_not_rendered() {
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
             item: AppServerThreadItem::UserMessage {
                 id: "review-prompt".to_string(),
                 content: vec![AppServerUserInput::Text {
@@ -333,6 +336,12 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let mut pending_steers = VecDeque::new();
     pending_steers.push_back(UserMessage::from("pending steer"));
+    let expected_compare_key = PendingSteerCompareKey {
+        message: "hidden IDE context\npending steer".to_string(),
+        image_count: 0,
+    };
+    let mut pending_steer_compare_keys = VecDeque::new();
+    pending_steer_compare_keys.push_back(expected_compare_key.clone());
     let mut rejected_steers_queue = VecDeque::new();
     rejected_steers_queue.push_back(UserMessage::from("already rejected"));
     let mut queued_user_messages = VecDeque::new();
@@ -342,6 +351,7 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
         composer: None,
         pending_steers,
         pending_steer_history_records: VecDeque::new(),
+        pending_steer_compare_keys,
         rejected_steers_queue,
         rejected_steer_history_records: VecDeque::new(),
         queued_user_messages,
@@ -361,6 +371,10 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
     assert_eq!(
         chat.pending_steers.front().unwrap().user_message.text,
         "pending steer"
+    );
+    assert_eq!(
+        chat.pending_steers.front().unwrap().compare_key,
+        expected_compare_key
     );
 }
 
@@ -1149,6 +1163,7 @@ async fn interrupted_turn_after_goal_budget_limited_uses_budget_message_snapshot
                 thread_id: "thread-1".to_string(),
                 turn: codex_app_server_protocol::Turn {
                     id: "turn-1".to_string(),
+                    items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: Vec::new(),
                     status: codex_app_server_protocol::TurnStatus::InProgress,
                     error: None,
@@ -1185,6 +1200,7 @@ async fn interrupted_turn_after_goal_budget_limited_uses_budget_message_snapshot
                 thread_id: "thread-1".to_string(),
                 turn: codex_app_server_protocol::Turn {
                     id: "turn-1".to_string(),
+                    items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: Vec::new(),
                     status: codex_app_server_protocol::TurnStatus::Interrupted,
                     error: None,

@@ -50,6 +50,7 @@ use codex_config::TextRange as CoreTextRange;
 use codex_core::ExecPolicyError;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::find_codex_home;
+use codex_core::init_state_db_from_config;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
@@ -73,25 +74,21 @@ use tracing_subscriber::util::SubscriberInitExt;
 mod analytics_utils;
 mod app_server_tracing;
 mod bespoke_event_handling;
-mod codex_message_processor;
 mod command_exec;
 mod config;
-mod config_api;
 mod config_manager;
 mod config_manager_service;
 mod connection_rpc_gate;
-mod device_key_api;
 mod dynamic_tools;
 mod error_code;
-mod external_agent_config_api;
 mod filters;
-mod fs_api;
 mod fs_watch;
 mod fuzzy_file_search;
 pub mod in_process;
 mod message_processor;
 mod models;
 mod outgoing_message;
+mod request_processors;
 mod request_serialization;
 mod server_request_error;
 mod thread_state;
@@ -457,23 +454,6 @@ pub async fn run_main_with_transport_options(
         .await
     {
         Ok(config) => {
-            let effective_toml = config.config_layer_stack.effective_config();
-            match effective_toml.try_into() {
-                Ok(config_toml) => {
-                    if let Err(err) = codex_core::personality_migration::maybe_migrate_personality(
-                        &config.codex_home,
-                        &config_toml,
-                    )
-                    .await
-                    {
-                        warn!(error = %err, "Failed to run personality migration");
-                    }
-                }
-                Err(err) => {
-                    warn!(error = %err, "Failed to deserialize config for personality migration");
-                }
-            }
-
             let discovered_thread_config_loader = configured_thread_config_loader(&config);
             config_manager
                 .replace_thread_config_loader(Arc::clone(&discovered_thread_config_loader));
@@ -487,22 +467,69 @@ pub async fn run_main_with_transport_options(
         }
     };
     let mut config_warnings = Vec::new();
-    let config = match config_manager
+    let (mut config, should_run_personality_migration) = match config_manager
         .load_latest_config(/*fallback_cwd*/ None)
         .await
     {
-        Ok(config) => config,
+        Ok(config) => (config, true),
         Err(err) => {
             let message = config_warning_from_error("Invalid configuration; using defaults.", &err);
             config_warnings.push(message);
-            config_manager.load_default_config().await.map_err(|e| {
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    format!("error loading default config after config error: {e}"),
-                )
-            })?
+            (
+                config_manager.load_default_config().await.map_err(|e| {
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("error loading default config after config error: {e}"),
+                    )
+                })?,
+                false,
+            )
         }
     };
+
+    let state_db = init_state_db_from_config(&config)
+        .await
+        .ok_or_else(|| std::io::Error::other("failed to initialize sqlite state db"))?;
+
+    if should_run_personality_migration {
+        let effective_toml = config.config_layer_stack.effective_config();
+        match effective_toml.try_into() {
+            Ok(config_toml) => {
+                match codex_core::personality_migration::maybe_migrate_personality(
+                    &config.codex_home,
+                    &config_toml,
+                    state_db.clone(),
+                )
+                .await
+                {
+                    Ok(codex_core::personality_migration::PersonalityMigrationStatus::Applied) => {
+                        config = config_manager
+                            .load_latest_config(/*fallback_cwd*/ None)
+                            .await
+                            .map_err(|err| {
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    format!(
+                                        "error reloading config after personality migration: {err}"
+                                    ),
+                                )
+                            })?;
+                    }
+                    Ok(
+                        codex_core::personality_migration::PersonalityMigrationStatus::SkippedMarker
+                        | codex_core::personality_migration::PersonalityMigrationStatus::SkippedExplicitPersonality
+                        | codex_core::personality_migration::PersonalityMigrationStatus::SkippedNoSessions,
+                    ) => {}
+                    Err(err) => {
+                        warn!(error = %err, "Failed to run personality migration");
+                    }
+                }
+            }
+            Err(err) => {
+                warn!(error = %err, "Failed to deserialize config for personality migration");
+            }
+        }
+    }
 
     if let Ok(Some(err)) = check_execpolicy_for_warnings(&config.config_layer_stack).await {
         let (path, range) = exec_policy_warning_location(&err);
@@ -571,17 +598,12 @@ pub async fn run_main_with_transport_options(
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-    let state_db_result = codex_state::StateRuntime::init(
-        config.sqlite_home.clone(),
-        config.model_provider_id.clone(),
-    )
-    .await;
-    let state_db_init_error = state_db_result.as_ref().err().map(ToString::to_string);
-    let state_db = state_db_result.ok();
-    let log_db = state_db.clone().map(log_db::start);
-    let log_db_layer = log_db
-        .clone()
-        .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
+    let log_db = log_db::start(state_db.clone());
+    let log_db_layer = Some(
+        log_db
+            .clone()
+            .with_filter(Targets::new().with_default(Level::TRACE)),
+    );
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
     let _ = tracing_subscriber::registry()
@@ -598,10 +620,6 @@ pub async fn run_main_with_transport_options(
             None => error!("{}", warning.summary),
         }
     }
-    if let Some(err) = &state_db_init_error {
-        error!("failed to initialize sqlite state db: {err}");
-    }
-
     let transport_shutdown_token = CancellationToken::new();
     let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
 
@@ -646,25 +664,17 @@ pub async fn run_main_with_transport_options(
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
-    let remote_control_config_enabled = config.features.enabled(Feature::RemoteControl);
-    let remote_control_enabled = remote_control_config_enabled && state_db.is_some();
-    if remote_control_config_enabled && state_db.is_none() {
-        error!("remote control disabled because sqlite state db is unavailable");
-    }
+    let remote_control_enabled = config.features.enabled(Feature::RemoteControl);
     if transport_accept_handles.is_empty() && !remote_control_enabled {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
-            if remote_control_config_enabled && state_db.is_none() {
-                "no transport configured; remote control disabled because sqlite state db is unavailable"
-            } else {
-                "no transport configured; use --listen or enable remote control"
-            },
+            "no transport configured; use --listen or enable remote control",
         ));
     }
 
     let (remote_control_accept_handle, remote_control_handle) = start_remote_control(
         config.chatgpt_base_url.clone(),
-        state_db.clone(),
+        Some(state_db.clone()),
         auth_manager.clone(),
         transport_event_tx.clone(),
         transport_shutdown_token.clone(),
@@ -748,7 +758,8 @@ pub async fn run_main_with_transport_options(
             config_manager,
             environment_manager,
             feedback: feedback.clone(),
-            log_db,
+            log_db: Some(log_db),
+            state_db: state_db.clone(),
             config_warnings,
             session_source,
             auth_manager,

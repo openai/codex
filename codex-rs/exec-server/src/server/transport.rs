@@ -1,5 +1,8 @@
 use std::io::Write as _;
 use std::net::SocketAddr;
+use tokio::io;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 use tracing::warn;
@@ -9,6 +12,12 @@ use crate::connection::JsonRpcConnection;
 use crate::server::processor::ConnectionProcessor;
 
 pub const DEFAULT_LISTEN_URL: &str = "ws://127.0.0.1:0";
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) enum ExecServerListenTransport {
+    WebSocket(SocketAddr),
+    Stdio,
+}
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ExecServerListenUrlParseError {
@@ -21,7 +30,7 @@ impl std::fmt::Display for ExecServerListenUrlParseError {
         match self {
             ExecServerListenUrlParseError::UnsupportedListenUrl(listen_url) => write!(
                 f,
-                "unsupported --listen URL `{listen_url}`; expected `ws://IP:PORT`"
+                "unsupported --listen URL `{listen_url}`; expected `ws://IP:PORT` or `stdio`"
             ),
             ExecServerListenUrlParseError::InvalidWebSocketListenUrl(listen_url) => write!(
                 f,
@@ -35,11 +44,18 @@ impl std::error::Error for ExecServerListenUrlParseError {}
 
 pub(crate) fn parse_listen_url(
     listen_url: &str,
-) -> Result<SocketAddr, ExecServerListenUrlParseError> {
+) -> Result<ExecServerListenTransport, ExecServerListenUrlParseError> {
+    if matches!(listen_url, "stdio" | "stdio://") {
+        return Ok(ExecServerListenTransport::Stdio);
+    }
+
     if let Some(socket_addr) = listen_url.strip_prefix("ws://") {
-        return socket_addr.parse::<SocketAddr>().map_err(|_| {
-            ExecServerListenUrlParseError::InvalidWebSocketListenUrl(listen_url.to_string())
-        });
+        return socket_addr
+            .parse::<SocketAddr>()
+            .map(ExecServerListenTransport::WebSocket)
+            .map_err(|_| {
+                ExecServerListenUrlParseError::InvalidWebSocketListenUrl(listen_url.to_string())
+            });
     }
 
     Err(ExecServerListenUrlParseError::UnsupportedListenUrl(
@@ -51,8 +67,39 @@ pub(crate) async fn run_transport(
     listen_url: &str,
     runtime_paths: ExecServerRuntimePaths,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let bind_address = parse_listen_url(listen_url)?;
-    run_websocket_listener(bind_address, runtime_paths).await
+    match parse_listen_url(listen_url)? {
+        ExecServerListenTransport::WebSocket(bind_address) => {
+            run_websocket_listener(bind_address, runtime_paths).await
+        }
+        ExecServerListenTransport::Stdio => run_stdio_connection(runtime_paths).await,
+    }
+}
+
+async fn run_stdio_connection(
+    runtime_paths: ExecServerRuntimePaths,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    run_stdio_connection_with_io(io::stdin(), io::stdout(), runtime_paths).await
+}
+
+async fn run_stdio_connection_with_io<R, W>(
+    reader: R,
+    writer: W,
+    runtime_paths: ExecServerRuntimePaths,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
+    let processor = ConnectionProcessor::new(runtime_paths);
+    tracing::info!("codex-exec-server listening on stdio");
+    processor
+        .run_connection(JsonRpcConnection::from_stdio(
+            reader,
+            writer,
+            "exec-server stdio".to_string(),
+        ))
+        .await;
+    Ok(())
 }
 
 async fn run_websocket_listener(

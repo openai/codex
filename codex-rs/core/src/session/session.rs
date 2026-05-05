@@ -2,6 +2,7 @@ use super::*;
 use crate::goals::GoalRuntimeState;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
@@ -206,12 +207,7 @@ impl SessionConfiguration {
             .unwrap_or_else(|| self.cwd.clone());
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
-        next_configuration.cwd = absolute_cwd.clone();
-        if cwd_changed
-            && let Some(primary_environment) = next_configuration.environments.first_mut()
-        {
-            primary_environment.cwd = absolute_cwd;
-        }
+        next_configuration.cwd = absolute_cwd;
 
         if let Some(permission_profile) = updates.permission_profile.clone() {
             let active_permission_profile =
@@ -347,6 +343,7 @@ impl Session {
         agent_control: AgentControl,
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
+        state_db: Option<state_db::StateDbHandle>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
     ) -> anyhow::Result<Arc<Self>> {
@@ -400,6 +397,15 @@ impl Session {
                                     text: session_configuration.base_instructions.clone(),
                                 },
                                 dynamic_tools: session_configuration.dynamic_tools.clone(),
+                                metadata: ThreadPersistenceMetadata {
+                                    cwd: Some(config.cwd.to_path_buf()),
+                                    model_provider: config.model_provider_id.clone(),
+                                    memory_mode: if config.memories.generate_memories {
+                                        ThreadMemoryMode::Enabled
+                                    } else {
+                                        ThreadMemoryMode::Disabled
+                                    },
+                                },
                                 event_persistence_mode,
                             },
                         )
@@ -413,6 +419,15 @@ impl Session {
                                 rollout_path: resumed_history.rollout_path.clone(),
                                 history: Some(resumed_history.history.clone()),
                                 include_archived: true,
+                                metadata: ThreadPersistenceMetadata {
+                                    cwd: Some(config.cwd.to_path_buf()),
+                                    model_provider: config.model_provider_id.clone(),
+                                    memory_mode: if config.memories.generate_memories {
+                                        ThreadMemoryMode::Enabled
+                                    } else {
+                                        ThreadMemoryMode::Disabled
+                                    },
+                                },
                                 event_persistence_mode,
                             },
                         )
@@ -427,22 +442,7 @@ impl Session {
             otel.name = "session_init.thread_persistence",
             session_init.ephemeral = config.ephemeral,
         ));
-        let state_db_fut = async {
-            if config.ephemeral {
-                None
-            } else if let Some(local_store) =
-                thread_store.as_any().downcast_ref::<LocalThreadStore>()
-            {
-                local_store.state_db().await
-            } else {
-                None
-            }
-        }
-        .instrument(info_span!(
-            "session_init.state_db",
-            otel.name = "session_init.state_db",
-            session_init.ephemeral = config.ephemeral,
-        ));
+        let state_db_ctx = if config.ephemeral { None } else { state_db };
 
         let is_subagent = session_configuration.session_source.is_non_root_agent();
         let history_meta_fut = async {
@@ -481,15 +481,9 @@ impl Session {
         // Join all independent futures.
         let (
             thread_persistence_result,
-            state_db_ctx,
             (history_log_id, history_entry_count),
             (auth, mcp_servers, auth_statuses),
-        ) = tokio::join!(
-            thread_persistence_fut,
-            state_db_fut,
-            history_meta_fut,
-            auth_and_mcp_fut
-        );
+        ) = tokio::join!(thread_persistence_fut, history_meta_fut, auth_and_mcp_fut);
 
         let mut live_thread_init =
             LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {
@@ -690,6 +684,7 @@ impl Session {
                         session_configuration.cwd.clone(),
                         &mut default_shell,
                         session_telemetry.clone(),
+                        state_db_ctx.clone(),
                     )
                 }
             } else {
@@ -705,6 +700,8 @@ impl Session {
                     ))
                     .await;
             session_configuration.thread_name = thread_name.clone();
+            validate_config_lock_if_configured(&session_configuration).await?;
+            export_config_lock_if_configured(&session_configuration, conversation_id).await?;
             let state = SessionState::new(session_configuration.clone());
             let managed_network_requirements_configured = config
                 .config_layer_stack
@@ -915,11 +912,39 @@ impl Session {
             let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
             let required_mcp_server_count = required_mcp_servers.len();
             let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref()).await;
+            let host_owned_codex_apps_enabled = config
+                .features
+                .apps_enabled_for_auth(auth.as_ref().is_some_and(|auth| auth.uses_codex_backend()));
             {
                 let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
                 cancel_guard.cancel();
                 *cancel_guard = CancellationToken::new();
             }
+            let turn_environment = crate::environment_selection::resolve_environment_selections(
+                sess.services.environment_manager.as_ref(),
+                &session_configuration.environments,
+            )
+            .map_err(|err| {
+                CodexErr::InvalidRequest(err.to_string().replace(
+                    "unknown turn environment id",
+                    "unknown stored MCP environment id",
+                ))
+            })?
+            .primary()
+            .cloned();
+            let mcp_runtime_environment = match turn_environment {
+                Some(turn_environment) => McpRuntimeEnvironment::new(
+                    Arc::clone(&turn_environment.environment),
+                    turn_environment.cwd.to_path_buf(),
+                ),
+                None => McpRuntimeEnvironment::new(
+                    sess.services
+                        .environment_manager
+                        .default_environment()
+                        .unwrap_or_else(|| sess.services.environment_manager.local_environment()),
+                    session_configuration.cwd.to_path_buf(),
+                ),
+            };
             let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
                 &mcp_servers,
                 config.mcp_oauth_credentials_store_mode,
@@ -928,15 +953,10 @@ impl Session {
                 INITIAL_SUBMIT_ID.to_owned(),
                 tx_event.clone(),
                 session_configuration.permission_profile(),
-                McpRuntimeEnvironment::new(
-                    sess.services
-                        .environment_manager
-                        .default_environment()
-                        .unwrap_or_else(|| sess.services.environment_manager.local_environment()),
-                    session_configuration.cwd.to_path_buf(),
-                ),
+                mcp_runtime_environment,
                 config.codex_home.to_path_buf(),
                 codex_apps_tools_cache_key(auth),
+                host_owned_codex_apps_enabled,
                 tool_plugin_provenance,
                 auth,
             )

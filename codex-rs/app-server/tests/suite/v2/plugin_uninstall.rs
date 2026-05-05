@@ -454,7 +454,7 @@ async fn plugin_uninstall_rejects_before_post_when_remote_detail_fetch_fails() -
 }
 
 #[tokio::test]
-async fn plugin_uninstall_rejects_invalid_plugin_id_before_remote_path() -> Result<()> {
+async fn plugin_uninstall_rejects_remote_plugin_id_with_spaces_before_network_call() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     write_remote_plugin_catalog_config(
@@ -477,7 +477,7 @@ async fn plugin_uninstall_rejects_invalid_plugin_id_before_remote_path() -> Resu
     .await??;
 
     assert_eq!(err.error.code, -32600);
-    assert!(err.error.message.contains("invalid plugin id"));
+    assert!(err.error.message.contains("invalid remote plugin id"));
     wait_for_remote_plugin_request_count(
         &server,
         "POST",
@@ -512,7 +512,7 @@ async fn plugin_uninstall_rejects_invalid_remote_plugin_id_before_network_call()
     .await??;
 
     assert_eq!(err.error.code, -32600);
-    assert!(err.error.message.contains("invalid plugin id"));
+    assert!(err.error.message.contains("invalid remote plugin id"));
     wait_for_remote_plugin_request_count(
         &server,
         "POST",
@@ -546,7 +546,7 @@ async fn plugin_uninstall_rejects_empty_remote_plugin_id() -> Result<()> {
     .await??;
 
     assert_eq!(err.error.code, -32600);
-    assert!(err.error.message.contains("invalid plugin id"));
+    assert!(err.error.message.contains("invalid remote plugin id"));
 
     Ok(())
 }

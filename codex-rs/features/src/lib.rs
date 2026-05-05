@@ -229,6 +229,8 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
     ResponsesWebsocketsV2,
+    /// Enable remote compaction v2 over the normal Responses API.
+    RemoteCompactionV2,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
 }
@@ -595,6 +597,37 @@ impl FeaturesToml {
         }
         entries
     }
+
+    pub fn materialize_resolved_enabled(&mut self, features: &Features) {
+        let Self {
+            multi_agent_v2,
+            apps_mcp_path_override,
+            entries,
+        } = self;
+        for key in legacy::legacy_feature_keys() {
+            entries.remove(key);
+        }
+        for spec in FEATURES {
+            let enabled = features.enabled(spec.id);
+            if spec.id == Feature::MultiAgentV2 {
+                materialize_resolved_feature_enabled(multi_agent_v2, enabled);
+            } else if spec.id == Feature::AppsMcpPathOverride {
+                materialize_resolved_feature_enabled(apps_mcp_path_override, enabled);
+            } else {
+                entries.insert(spec.key.to_string(), enabled);
+            }
+        }
+    }
+}
+
+fn materialize_resolved_feature_enabled<T: FeatureConfig>(
+    feature: &mut Option<FeatureToml<T>>,
+    enabled: bool,
+) {
+    match feature {
+        Some(feature) => feature.set_enabled(enabled),
+        None => *feature = Some(FeatureToml::Enabled(enabled)),
+    }
 }
 
 impl From<BTreeMap<String, bool>> for FeaturesToml {
@@ -622,12 +655,20 @@ impl<T: FeatureConfig> FeatureToml<T> {
             Self::Config(config) => config.enabled(),
         }
     }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        match self {
+            Self::Enabled(value) => *value = enabled,
+            Self::Config(config) => config.set_enabled(enabled),
+        }
+    }
 }
 
 // A trait to be implemented by custom feature config structs when defining a feature that needs more configuration than
 // just enabled/disabled.
 pub trait FeatureConfig {
     fn enabled(&self) -> Option<bool>;
+    fn set_enabled(&mut self, enabled: bool);
 }
 
 /// Single, easy-to-read registry of all feature definitions.
@@ -748,7 +789,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Experimental {
             name: "Memories",
             menu_description: "Allow Codex to create new memories from conversations and bring relevant memories into new conversations.",
-            announcement: "NEW: Codex can now generate and uses memories. Try is now with `/memories`",
+            announcement: "NEW: Codex can now generate and use memories. Try it now with `/memories`",
         },
         default_enabled: false,
     },
@@ -784,7 +825,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::CodexHooks,
-        key: "codex_hooks",
+        key: "hooks",
         stage: Stage::Stable,
         default_enabled: true,
     },
@@ -1088,6 +1129,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ResponsesWebsocketsV2,
         key: "responses_websockets_v2",
         stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RemoteCompactionV2,
+        key: "remote_compaction_v2",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

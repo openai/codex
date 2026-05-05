@@ -136,14 +136,6 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             }
         };
 
-        sess.notify_background_event(
-            turn_context,
-            format!(
-                "Authenticating MCP {name}... Follow instructions in your browser if prompted."
-            ),
-        )
-        .await;
-
         let resolved_scopes = resolve_oauth_scopes(
             /*explicit_scopes*/ None,
             server_config.scopes.clone(),
@@ -164,14 +156,6 @@ pub(crate) async fn maybe_install_mcp_dependencies(
 
         if let Err(err) = first_attempt {
             if should_retry_without_scopes(&resolved_scopes, &err) {
-                sess.notify_background_event(
-                    turn_context,
-                    format!(
-                        "Retrying MCP {name} authentication without scopes after provider rejection."
-                    ),
-                )
-                .await;
-
                 if let Err(err) = perform_oauth_login(
                     &name,
                     &oauth_config.url,

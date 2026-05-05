@@ -1,3 +1,13 @@
+//! Key binding primitives and input matching for the TUI.
+//!
+//! This module provides `KeyBinding`, the runtime representation of a single
+//! keybinding (key code + modifier set), along with matching logic that handles
+//! cross-terminal inconsistencies in how shifted letters and raw C0 control
+//! characters are reported.
+//!
+//! It also supplies rendering helpers that convert bindings into styled
+//! `ratatui::text::Span` values for UI hint display.
+
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -17,10 +27,13 @@ const SHIFT_PREFIX: &str = "shift + ";
 
 /// One concrete key event that can trigger a TUI action.
 ///
-/// The binding stores the terminal key code plus the exact modifier set that
-/// must be present on an incoming press or repeat event. It does not model
-/// multi-key chords or partial matches; callers that need sequences must keep
-/// that state outside this type.
+/// Matching via `is_press` handles exact equality plus compatibility fallbacks
+/// for terminals that report uppercase letters without SHIFT and Ctrl keys as
+/// raw C0 control characters. This means a binding defined as `shift-a` will
+/// match either `Shift+a` or plain `A`, and `ctrl-j` will match raw LF.
+///
+/// This does not model multi-key chords or partial matches; callers that need
+/// sequences must keep that state outside this type.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct KeyBinding {
     key: KeyCode,
@@ -32,18 +45,39 @@ impl KeyBinding {
         Self { key, modifiers }
     }
 
+    pub(crate) fn from_event(event: KeyEvent) -> Self {
+        let (key, modifiers) = normalize_key_parts(event.code, event.modifiers);
+        Self { key, modifiers }
+    }
+
     pub fn is_press(&self, event: KeyEvent) -> bool {
-        normalize_shifted_ascii_char(self.key, self.modifiers)
-            == normalize_shifted_ascii_char(event.code, event.modifiers)
+        normalize_key_parts(self.key, self.modifiers)
+            == normalize_key_parts(event.code, event.modifiers)
             && (event.kind == KeyEventKind::Press || event.kind == KeyEventKind::Repeat)
     }
 
     pub(crate) const fn parts(&self) -> (KeyCode, KeyModifiers) {
         (self.key, self.modifiers)
     }
+
+    pub(crate) fn display_label(&self) -> String {
+        let modifiers = modifiers_to_string(self.modifiers);
+        let key = match self.key {
+            KeyCode::Enter => "enter".to_string(),
+            KeyCode::Char(' ') => "space".to_string(),
+            KeyCode::Up => "↑".to_string(),
+            KeyCode::Down => "↓".to_string(),
+            KeyCode::Left => "←".to_string(),
+            KeyCode::Right => "→".to_string(),
+            KeyCode::PageUp => "pgup".to_string(),
+            KeyCode::PageDown => "pgdn".to_string(),
+            _ => self.key.to_string().to_ascii_lowercase(),
+        };
+        format!("{modifiers}{key}")
+    }
 }
 
-fn normalize_shifted_ascii_char(
+pub(crate) fn normalize_key_parts(
     key: KeyCode,
     mut modifiers: KeyModifiers,
 ) -> (KeyCode, KeyModifiers) {
@@ -63,13 +97,11 @@ fn normalize_shifted_ascii_char(
 }
 
 fn c0_control_char_to_ctrl_char(ch: char) -> Option<char> {
-    match ch {
-        '\u{0002}' => Some('b'),
-        '\u{0006}' => Some('f'),
-        '\u{000e}' => Some('n'),
-        '\u{0010}' => Some('p'),
-        '\u{0012}' => Some('r'),
-        '\u{0013}' => Some('s'),
+    let code = u32::from(ch);
+    match code {
+        0x00 => Some(' '),
+        0x01..=0x1a => char::from_u32(code - 0x01 + u32::from('a')),
+        0x1c..=0x1f => char::from_u32(code - 0x1c + u32::from('4')),
         _ => None,
     }
 }
@@ -131,20 +163,7 @@ impl From<KeyBinding> for Span<'static> {
 }
 impl From<&KeyBinding> for Span<'static> {
     fn from(binding: &KeyBinding) -> Self {
-        let KeyBinding { key, modifiers } = binding;
-        let modifiers = modifiers_to_string(*modifiers);
-        let key = match key {
-            KeyCode::Enter => "enter".to_string(),
-            KeyCode::Char(' ') => "space".to_string(),
-            KeyCode::Up => "↑".to_string(),
-            KeyCode::Down => "↓".to_string(),
-            KeyCode::Left => "←".to_string(),
-            KeyCode::Right => "→".to_string(),
-            KeyCode::PageUp => "pgup".to_string(),
-            KeyCode::PageDown => "pgdn".to_string(),
-            _ => format!("{key}").to_ascii_lowercase(),
-        };
-        Span::styled(format!("{modifiers}{key}"), key_hint_style())
+        Span::styled(binding.display_label(), key_hint_style())
     }
 }
 
@@ -205,8 +224,27 @@ mod tests {
     fn shifted_letter_binding_matches_uppercase_char_events() {
         let binding = shift(KeyCode::Char('a'));
 
+        assert!(binding.is_press(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SHIFT)));
         assert!(binding.is_press(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE)));
         assert!(binding.is_press(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT)));
+    }
+
+    #[test]
+    fn shift_letter_binding_preserves_other_modifiers_with_uppercase_compat() {
+        let binding = KeyBinding::new(
+            KeyCode::Char('i'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+
+        assert!(binding.is_press(KeyEvent::new(KeyCode::Char('I'), KeyModifiers::CONTROL)));
+    }
+
+    #[test]
+    fn shift_letter_binding_does_not_match_plain_lowercase_or_other_uppercase() {
+        let binding = shift(KeyCode::Char('o'));
+
+        assert!(!binding.is_press(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)));
+        assert!(!binding.is_press(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE)));
     }
 
     #[test]
@@ -215,6 +253,68 @@ mod tests {
 
         assert!(binding.is_press(KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::NONE)));
         assert!(!binding.is_press(KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::ALT)));
+    }
+
+    #[test]
+    fn ctrl_bindings_match_all_supported_c0_control_char_events() {
+        let cases = [
+            (' ', '\u{0000}'),
+            ('a', '\u{0001}'),
+            ('b', '\u{0002}'),
+            ('c', '\u{0003}'),
+            ('d', '\u{0004}'),
+            ('e', '\u{0005}'),
+            ('f', '\u{0006}'),
+            ('g', '\u{0007}'),
+            ('h', '\u{0008}'),
+            ('i', '\u{0009}'),
+            ('j', '\u{000a}'),
+            ('k', '\u{000b}'),
+            ('l', '\u{000c}'),
+            ('m', '\u{000d}'),
+            ('n', '\u{000e}'),
+            ('o', '\u{000f}'),
+            ('p', '\u{0010}'),
+            ('q', '\u{0011}'),
+            ('r', '\u{0012}'),
+            ('s', '\u{0013}'),
+            ('t', '\u{0014}'),
+            ('u', '\u{0015}'),
+            ('v', '\u{0016}'),
+            ('w', '\u{0017}'),
+            ('x', '\u{0018}'),
+            ('y', '\u{0019}'),
+            ('z', '\u{001a}'),
+            ('4', '\u{001c}'),
+            ('5', '\u{001d}'),
+            ('6', '\u{001e}'),
+            ('7', '\u{001f}'),
+        ];
+
+        for (ctrl_char, c0_char) in cases {
+            assert!(
+                ctrl(KeyCode::Char(ctrl_char))
+                    .is_press(KeyEvent::new(KeyCode::Char(c0_char), KeyModifiers::NONE)),
+                "expected raw C0 {c0_char:?} to match ctrl-{ctrl_char}"
+            );
+            assert!(
+                !ctrl(KeyCode::Char(ctrl_char))
+                    .is_press(KeyEvent::new(KeyCode::Char(c0_char), KeyModifiers::ALT)),
+                "expected modified raw C0 {c0_char:?} not to match ctrl-{ctrl_char}"
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_binding_does_not_match_ambiguous_c0_escape_or_delete() {
+        assert!(
+            !ctrl(KeyCode::Char('['))
+                .is_press(KeyEvent::new(KeyCode::Char('\u{001b}'), KeyModifiers::NONE,))
+        );
+        assert!(
+            !ctrl(KeyCode::Char('?'))
+                .is_press(KeyEvent::new(KeyCode::Char('\u{007f}'), KeyModifiers::NONE,))
+        );
     }
 
     #[test]

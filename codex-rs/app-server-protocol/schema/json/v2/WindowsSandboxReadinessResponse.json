@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WindowsSandboxReadiness": {
+      "enum": [
+        "ready",
+        "notConfigured",
+        "updateRequired"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "status": {
+      "$ref": "#/definitions/WindowsSandboxReadiness"
+    }
+  },
+  "required": [
+    "status"
+  ],
+  "title": "WindowsSandboxReadinessResponse",
+  "type": "object"
+}

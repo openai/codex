@@ -12,7 +12,7 @@ futures = { workspace = true }
 http = { workspace = true }
 opentelemetry = { workspace = true }
 rand = { workspace = true }
-reqwest = { workspace = true, features = ["json", "stream"] }
+reqwest = { workspace = true, features = ["json", "rustls-tls-native-roots", "stream"] }
 rustls = { workspace = true }
 rustls-native-certs = { workspace = true }
 rustls-pki-types = { workspace = true }
@@ -32,5 +32,6 @@ workspace = true
 codex-utils-cargo-bin = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
+rcgen = { workspace = true }
 tempfile = { workspace = true }
 tracing-subscriber = { workspace = true }

@@ -13,6 +13,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::ThreadItem;
 use codex_state::ThreadMetadata;
 
@@ -49,6 +50,13 @@ pub(super) fn scoped_rollout_path(
             ),
         })
     }
+}
+
+pub(super) fn rollout_path_is_archived(codex_home: &Path, path: &Path) -> bool {
+    path.starts_with(codex_home.join(ARCHIVED_SESSIONS_SUBDIR))
+        || path
+            .components()
+            .any(|component| component.as_os_str() == OsStr::new(ARCHIVED_SESSIONS_SUBDIR))
 }
 
 pub(super) fn matching_rollout_file_name(

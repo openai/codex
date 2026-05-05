@@ -523,6 +523,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             policy: None,
             path_to_skills_md: repo_skill_path,
             scope: crate::test_support::skill_scope_repo(),
+            plugin_id: None,
         },
         SkillMetadata {
             name: "figma".to_string(),
@@ -533,6 +534,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             policy: None,
             path_to_skills_md: user_skill_path.clone(),
             scope: crate::test_support::skill_scope_user(),
+            plugin_id: None,
         },
     ]));
 
@@ -896,6 +898,33 @@ async fn empty_enter_during_task_does_not_queue() {
 }
 
 #[tokio::test]
+async fn pending_steer_esc_does_not_steal_vim_insert_escape() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.pending_steers.push_back(pending_steer("queued steer"));
+    chat.toggle_vim_mode_and_notify();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+
+    assert!(chat.should_handle_vim_insert_escape(esc));
+    chat.handle_key_event(esc);
+
+    assert!(!chat.should_handle_vim_insert_escape(esc));
+    assert_eq!(chat.pending_steers.len(), 1);
+    assert!(!chat.submit_pending_steers_after_interrupt);
+    assert!(op_rx.try_recv().is_err());
+
+    chat.handle_key_event(esc);
+
+    match op_rx.try_recv() {
+        Ok(Op::Interrupt) => {}
+        other => panic!("expected Op::Interrupt, got {other:?}"),
+    }
+    assert!(chat.submit_pending_steers_after_interrupt);
+}
+
+#[tokio::test]
 async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::PreventIdleSleep, /*enabled*/ true);
@@ -904,6 +933,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         composer: None,
         pending_steers: VecDeque::new(),
         pending_steer_history_records: VecDeque::new(),
+        pending_steer_compare_keys: VecDeque::new(),
         rejected_steers_queue: VecDeque::new(),
         rejected_steer_history_records: VecDeque::new(),
         queued_user_messages: VecDeque::new(),
@@ -1151,6 +1181,68 @@ fn user_message_display_from_inputs_matches_flattened_user_message_shape() {
             vec!["https://example.com/remote.png".to_string()],
         )
     );
+}
+
+#[test]
+fn user_message_display_from_inputs_hides_prompt_context() {
+    let raw_message = "# Context from my IDE setup:\n\n## Active file: src/lib.rs\n\n## My request for Codex:\nAsk $figma";
+    let mention_start = raw_message.find("$figma").expect("mention in raw message");
+    let rendered = ChatWidget::user_message_display_from_inputs(&[UserInput::Text {
+        text: raw_message.to_string(),
+        text_elements: vec![
+            TextElement::new(
+                (mention_start..mention_start + "$figma".len()).into(),
+                Some("$figma".to_string()),
+            )
+            .into(),
+        ],
+    }]);
+
+    assert_eq!(
+        rendered,
+        ChatWidget::user_message_display_from_parts(
+            "Ask $figma".to_string(),
+            vec![TextElement::new((4..10).into(), Some("$figma".to_string()))],
+            Vec::new(),
+            Vec::new(),
+        )
+    );
+}
+
+#[tokio::test]
+async fn committed_user_message_with_hidden_prompt_context_renders_local_images() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let local_image = PathBuf::from("/tmp/context-image.png");
+    let raw_message =
+        "# Context from my IDE setup:\n\n## Active file: src/lib.rs\n\n## My request for Codex:\n";
+
+    complete_user_message_for_inputs(
+        &mut chat,
+        "user-1",
+        vec![
+            UserInput::Text {
+                text: raw_message.to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::LocalImage {
+                path: local_image.clone(),
+            },
+        ],
+    );
+
+    let mut user_cell = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_cell = Some((cell.message.clone(), cell.local_image_paths.clone()));
+            break;
+        }
+    }
+
+    let (message, local_images) = user_cell.expect("expected user history cell");
+    assert_eq!(message, "");
+    assert_eq!(local_images, vec![local_image]);
 }
 
 #[tokio::test]

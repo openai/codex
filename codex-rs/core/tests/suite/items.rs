@@ -303,6 +303,15 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
         })
         .await?;
 
+    let started = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::WebSearch(item),
+            started_at_ms,
+            ..
+        }) => Some((item.clone(), *started_at_ms)),
+        _ => None,
+    })
+    .await;
     let begin = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::WebSearchBegin(event) => Some(event.clone()),
         _ => None,
@@ -311,16 +320,20 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
     let completed = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ItemCompleted(ItemCompletedEvent {
             item: TurnItem::WebSearch(item),
+            completed_at_ms,
             ..
-        }) => Some(item.clone()),
+        }) => Some((item.clone(), *completed_at_ms)),
         _ => None,
     })
     .await;
 
     assert_eq!(begin.call_id, "web-search-1");
-    assert_eq!(completed.id, begin.call_id);
+    assert_eq!(started.0.id, begin.call_id);
+    assert!(started.1 > 0);
+    assert_eq!(completed.0.id, begin.call_id);
+    assert!(completed.1 > 0);
     assert_eq!(
-        completed.action,
+        completed.0.action,
         WebSearchAction::Search {
             query: Some("weather seattle".to_string()),
             queries: None,
@@ -369,8 +382,26 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
         })
         .await?;
 
+    let started = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::ImageGeneration(item),
+            started_at_ms,
+            ..
+        }) => Some((item.clone(), *started_at_ms)),
+        _ => None,
+    })
+    .await;
     let begin = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ImageGenerationBegin(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    let completed = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::ImageGeneration(item),
+            completed_at_ms,
+            ..
+        }) => Some((item.clone(), *completed_at_ms)),
         _ => None,
     })
     .await;
@@ -381,6 +412,10 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
     .await;
 
     assert_eq!(begin.call_id, call_id);
+    assert_eq!(started.0.id, call_id);
+    assert!(started.1 > 0);
+    assert_eq!(completed.0.id, call_id);
+    assert!(completed.1 > 0);
     assert_eq!(end.call_id, call_id);
     assert_eq!(end.status, "completed");
     assert_eq!(end.revised_prompt, Some("A tiny blue square".to_string()));
@@ -503,11 +538,6 @@ async fn agent_message_content_delta_has_item_metadata() -> anyhow::Result<()> {
         _ => None,
     })
     .await;
-    let legacy_delta = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::AgentMessageDelta(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
     let completed_item = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ItemCompleted(ItemCompletedEvent {
             item: TurnItem::AgentMessage(item),
@@ -522,7 +552,6 @@ async fn agent_message_content_delta_has_item_metadata() -> anyhow::Result<()> {
     assert_eq!(delta_event.turn_id, started_turn_id);
     assert_eq!(delta_event.item_id, started_item.id);
     assert_eq!(delta_event.delta, "streamed response");
-    assert_eq!(legacy_delta.delta, "streamed response");
     assert_eq!(completed_item.id, started_item.id);
 
     Ok(())
@@ -1091,15 +1120,8 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
         _ => None,
     })
     .await;
-    let legacy_delta = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::AgentReasoningDelta(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
-
     assert_eq!(delta_event.item_id, reasoning_item.id);
     assert_eq!(delta_event.delta, "step one");
-    assert_eq!(legacy_delta.delta, "step one");
 
     Ok(())
 }
@@ -1152,15 +1174,8 @@ async fn reasoning_raw_content_delta_respects_flag() -> anyhow::Result<()> {
         _ => None,
     })
     .await;
-    let legacy_delta = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::AgentReasoningRawContentDelta(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
-
     assert_eq!(delta_event.item_id, reasoning_item.id);
     assert_eq!(delta_event.delta, "raw detail");
-    assert_eq!(legacy_delta.delta, "raw detail");
 
     Ok(())
 }

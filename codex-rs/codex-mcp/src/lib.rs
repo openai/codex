@@ -22,6 +22,7 @@ pub use codex_apps::codex_apps_tools_cache_key;
 
 pub use mcp::configured_mcp_servers;
 pub use mcp::effective_mcp_servers;
+pub use mcp::host_owned_codex_apps_enabled;
 pub use mcp::tool_plugin_provenance;
 pub use mcp::with_codex_apps_mcp;
 

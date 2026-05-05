@@ -1,6 +1,7 @@
 use codex_core::config::Constrained;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -595,8 +596,9 @@ async fn turn_and_completed_response_spans_record_token_usage() {
     )
     .await;
 
-    let TestCodex { codex, .. } = test_codex()
+    let test = test_codex()
         .with_config(|config| {
+            config.model_reasoning_effort = Some(ReasoningEffort::High);
             config
                 .features
                 .disable(Feature::GhostCommit)
@@ -605,6 +607,8 @@ async fn turn_and_completed_response_spans_record_token_usage() {
         .build(&server)
         .await
         .unwrap();
+
+    let TestCodex { codex, .. } = test;
 
     codex
         .submit(Op::UserInput {
@@ -625,7 +629,9 @@ async fn turn_and_completed_response_spans_record_token_usage() {
 
     assert!(
         logs.lines().any(|line| {
-            line.contains("handle_responses{otel.name=\"completed\"")
+            line.contains("handle_responses{")
+                && line.contains("otel.name=\"completed\"")
+                && line.contains("codex.request.reasoning_effort=high")
                 && line.contains("gen_ai.usage.input_tokens=3")
                 && line.contains("gen_ai.usage.cache_read.input_tokens=1")
                 && line.contains("gen_ai.usage.output_tokens=5")
@@ -637,6 +643,7 @@ async fn turn_and_completed_response_spans_record_token_usage() {
     assert!(
         logs.lines().any(|line| {
             line.contains("turn{otel.name=\"session_task.turn\"")
+                && line.contains("codex.turn.reasoning_effort=high")
                 && line.contains("codex.turn.token_usage.input_tokens=3")
                 && line.contains("codex.turn.token_usage.cached_input_tokens=1")
                 && line.contains("codex.turn.token_usage.non_cached_input_tokens=2")
@@ -708,13 +715,18 @@ async fn handle_responses_span_records_response_kind_and_tool_name() {
     let logs = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
 
     assert!(
-        logs.contains("handle_responses{otel.name=\"function_call\"")
-            && logs.contains("tool_name=\"nonexistent\"")
-            && logs.contains("from=\"output_item_done\""),
+        logs.lines().any(|line| {
+            line.contains("handle_responses{")
+                && line.contains("otel.name=\"function_call\"")
+                && line.contains("tool_name=\"nonexistent\"")
+                && line.contains("from=\"output_item_done\"")
+        }),
         "missing handle_responses span with function call metadata\nlogs:\n{logs}"
     );
     assert!(
-        logs.contains("handle_responses{otel.name=\"completed\""),
+        logs.lines().any(|line| {
+            line.contains("handle_responses{") && line.contains("otel.name=\"completed\"")
+        }),
         "missing handle_responses span for completion\nlogs:\n{logs}"
     );
 }
@@ -766,7 +778,9 @@ async fn record_responses_sets_span_fields_for_response_events() {
     .await;
 
     let TestCodex { codex, .. } = test_codex()
+        .with_model("gpt-5.4")
         .with_config(|config| {
+            config.model_reasoning_effort = Some(ReasoningEffort::High);
             config
                 .features
                 .disable(Feature::GhostCommit)
@@ -806,22 +820,24 @@ async fn record_responses_sets_span_fields_for_response_events() {
     ];
 
     for (name, from, tool_name) in expected {
+        let otel_name = format!("otel.name=\"{name}\"");
+        let from_field = from.map(|from| format!("from=\"{from}\""));
+        let tool_name_field = tool_name.map(|tool_name| format!("tool_name=\"{tool_name}\""));
+
         assert!(
-            logs.contains(&format!("handle_responses{{otel.name=\"{name}\"")),
-            "missing otel.name={name}\nlogs:\n{logs}"
+            logs.lines().any(|line| {
+                line.contains("handle_responses{")
+                    && line.contains(&otel_name)
+                    && line.contains("codex.request.reasoning_effort=high")
+                    && from_field
+                        .as_ref()
+                        .is_none_or(|from_field| line.contains(from_field))
+                    && tool_name_field
+                        .as_ref()
+                        .is_none_or(|tool_name_field| line.contains(tool_name_field))
+            }),
+            "missing span fields for {name}\nlogs:\n{logs}"
         );
-        if let Some(from) = from {
-            assert!(
-                logs.contains(&format!("from=\"{from}\"")),
-                "missing from={from} for {name}\nlogs:\n{logs}"
-            );
-        }
-        if let Some(tool_name) = tool_name {
-            assert!(
-                logs.contains(&format!("tool_name=\"{tool_name}\"")),
-                "missing tool_name={tool_name} for {name}\nlogs:\n{logs}"
-            );
-        }
     }
 }
 

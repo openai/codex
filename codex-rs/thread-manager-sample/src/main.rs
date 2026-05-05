@@ -40,6 +40,7 @@ use codex_core_api::Permissions;
 use codex_core_api::ProjectConfig;
 use codex_core_api::RealtimeAudioConfig;
 use codex_core_api::RealtimeConfig;
+use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
 use codex_core_api::ShellEnvironmentPolicy;
 use codex_core_api::TerminalResizeReflowConfig;
@@ -51,9 +52,11 @@ use codex_core_api::TuiNotificationSettings;
 use codex_core_api::UriBasedFileOpener;
 use codex_core_api::UserInput;
 use codex_core_api::WebSearchMode;
+use codex_core_api::agent_graph_store_from_state_db;
 use codex_core_api::arg0_dispatch_or_else;
 use codex_core_api::built_in_model_providers;
 use codex_core_api::find_codex_home;
+use codex_core_api::init_state_db_from_config;
 use codex_core_api::item_event_to_server_notification;
 use codex_core_api::set_default_originator;
 use codex_core_api::thread_store_from_config;
@@ -109,7 +112,11 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         config.codex_self_exe.clone(),
         config.codex_linux_sandbox_exe.clone(),
     )?;
-    let thread_store = thread_store_from_config(&config);
+    let Some(state_db) = init_state_db_from_config(&config).await else {
+        bail!("thread manager sample requires state db");
+    };
+    let thread_store = thread_store_from_config(&config, state_db.clone());
+    let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
     let environment_manager =
         Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await);
     let thread_manager = ThreadManager::new(
@@ -118,12 +125,15 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         SessionSource::Exec,
         environment_manager,
         /*analytics_events_client*/ None,
+        state_db,
+        Arc::clone(&thread_store),
+        agent_graph_store,
     );
 
     let NewThread {
         thread_id, thread, ..
     } = thread_manager
-        .start_thread(config, thread_store)
+        .start_thread(config)
         .await
         .context("start Codex thread")?;
 
@@ -190,10 +200,14 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_raw_output_mode: false,
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         tui_keymap: TuiKeymap::default(),
+        tui_session_picker_view: SessionPickerViewMode::Dense,
+        tui_vim_mode_default: false,
         cwd,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -212,6 +226,10 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         memories: MemoriesConfig::default(),
         sqlite_home: codex_home.to_path_buf(),
         log_dir: codex_home.join("log").to_path_buf(),
+        config_lock_export_dir: None,
+        config_lock_allow_codex_version_mismatch: false,
+        config_lock_save_fields_resolved_from_model_catalog: true,
+        config_lock_toml: None,
         codex_home,
         history: History::default(),
         ephemeral: true,

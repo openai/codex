@@ -20,7 +20,6 @@ use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
-use codex_thread_store::ThreadStore;
 use once_cell::sync::Lazy;
 
 use crate::ThreadManager;
@@ -53,14 +52,14 @@ pub fn auth_manager_from_auth_with_home(auth: CodexAuth, codex_home: PathBuf) ->
     AuthManager::from_auth_for_testing_with_home(auth, codex_home)
 }
 
-pub fn thread_manager_with_models_provider(
+pub async fn thread_manager_with_models_provider(
     auth: CodexAuth,
     provider: ModelProviderInfo,
 ) -> ThreadManager {
-    ThreadManager::with_models_provider_for_tests(auth, provider)
+    ThreadManager::with_models_provider_for_tests(auth, provider).await
 }
 
-pub fn thread_manager_with_models_provider_and_home(
+pub async fn thread_manager_with_models_provider_and_home(
     auth: CodexAuth,
     provider: ModelProviderInfo,
     codex_home: PathBuf,
@@ -72,23 +71,22 @@ pub fn thread_manager_with_models_provider_and_home(
         codex_home,
         environment_manager,
     )
+    .await
 }
 
 pub async fn start_thread_with_user_shell_override(
     thread_manager: &ThreadManager,
     config: Config,
-    thread_store: Arc<dyn ThreadStore>,
     user_shell_override: crate::shell::Shell,
 ) -> codex_protocol::error::Result<crate::NewThread> {
     thread_manager
-        .start_thread_with_user_shell_override_for_tests(config, thread_store, user_shell_override)
+        .start_thread_with_user_shell_override_for_tests(config, user_shell_override)
         .await
 }
 
 pub async fn resume_thread_from_rollout_with_user_shell_override(
     thread_manager: &ThreadManager,
     config: Config,
-    thread_store: Arc<dyn ThreadStore>,
     rollout_path: PathBuf,
     auth_manager: Arc<AuthManager>,
     user_shell_override: crate::shell::Shell,
@@ -96,7 +94,6 @@ pub async fn resume_thread_from_rollout_with_user_shell_override(
     thread_manager
         .resume_thread_from_rollout_with_user_shell_override_for_tests(
             config,
-            thread_store,
             rollout_path,
             auth_manager,
             user_shell_override,

@@ -3,6 +3,7 @@ use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInterface;
 use codex_login::CodexAuth;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -49,6 +50,25 @@ fn write_test_plugin(root: &Path, plugin_name: &str) -> PathBuf {
     plugin_path
 }
 
+fn write_plugin_share_local_path_mapping(
+    codex_home: &Path,
+    remote_plugin_id: &str,
+    plugin_path: &AbsolutePathBuf,
+) {
+    write_file(
+        &codex_home.join(".tmp/plugin-share-local-paths-v1.json"),
+        &format!(
+            "{}\n",
+            serde_json::to_string_pretty(&json!({
+                "localPluginPathsByRemotePluginId": {
+                    remote_plugin_id: plugin_path,
+                },
+            }))
+            .unwrap()
+        ),
+    );
+}
+
 fn archive_file_entries(archive_bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
     let decoder = flate2::read::GzDecoder::new(archive_bytes);
     let mut archive = tar::Archive::new(decoder);
@@ -85,6 +105,18 @@ fn remote_plugin_json(plugin_id: &str) -> serde_json::Value {
             "skills": []
         }
     })
+}
+
+fn remote_plugin_json_with_share_url(
+    plugin_id: &str,
+    share_url: Option<&str>,
+) -> serde_json::Value {
+    let mut plugin = remote_plugin_json(plugin_id);
+    let serde_json::Value::Object(fields) = &mut plugin else {
+        unreachable!("plugin json should be an object");
+    };
+    fields.insert("share_url".to_string(), json!(share_url));
+    plugin
 }
 
 fn installed_remote_plugin_json(plugin_id: &str) -> serde_json::Value {
@@ -127,9 +159,13 @@ fn expected_plugin_interface() -> PluginInterface {
 
 #[tokio::test]
 async fn save_remote_plugin_share_creates_workspace_plugin() {
+    let codex_home = TempDir::new().unwrap();
     let temp_dir = TempDir::new().unwrap();
-    let plugin_path = write_test_plugin(temp_dir.path(), "demo-plugin");
-    let archive_size = archive_plugin_for_upload(&plugin_path).unwrap().len();
+    let plugin_path =
+        AbsolutePathBuf::try_from(write_test_plugin(temp_dir.path(), "demo-plugin")).unwrap();
+    let archive_size = archive_plugin_for_upload(plugin_path.as_path())
+        .unwrap()
+        .len();
     let server = MockServer::start().await;
     let config = test_config(&server);
     let auth = test_auth();
@@ -178,6 +214,7 @@ async fn save_remote_plugin_share_creates_workspace_plugin() {
     let result = save_remote_plugin_share(
         &config,
         Some(&auth),
+        codex_home.path(),
         &plugin_path,
         /*remote_plugin_id*/ None,
     )
@@ -190,6 +227,10 @@ async fn save_remote_plugin_share_creates_workspace_plugin() {
             remote_plugin_id: "plugins_123".to_string(),
             share_url: Some("https://chatgpt.example/plugins/share/share-key-1".to_string()),
         }
+    );
+    assert_eq!(
+        local_paths::load_plugin_share_local_paths(codex_home.path()).unwrap(),
+        BTreeMap::from([("plugins_123".to_string(), plugin_path)])
     );
 
     let requests = server.received_requests().await.unwrap_or_default();
@@ -261,9 +302,13 @@ fn archive_plugin_for_upload_places_manifest_at_archive_root() {
 
 #[tokio::test]
 async fn save_remote_plugin_share_updates_existing_workspace_plugin() {
+    let codex_home = TempDir::new().unwrap();
     let temp_dir = TempDir::new().unwrap();
-    let plugin_path = write_test_plugin(temp_dir.path(), "demo-plugin");
-    let archive_size = archive_plugin_for_upload(&plugin_path).unwrap().len();
+    let plugin_path =
+        AbsolutePathBuf::try_from(write_test_plugin(temp_dir.path(), "demo-plugin")).unwrap();
+    let archive_size = archive_plugin_for_upload(plugin_path.as_path())
+        .unwrap()
+        .len();
     let server = MockServer::start().await;
     let config = test_config(&server);
     let auth = test_auth();
@@ -303,9 +348,15 @@ async fn save_remote_plugin_share_updates_existing_workspace_plugin() {
         .mount(&server)
         .await;
 
-    let result = save_remote_plugin_share(&config, Some(&auth), &plugin_path, Some("plugins_123"))
-        .await
-        .unwrap();
+    let result = save_remote_plugin_share(
+        &config,
+        Some(&auth),
+        codex_home.path(),
+        &plugin_path,
+        Some("plugins_123"),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         result,
@@ -318,6 +369,10 @@ async fn save_remote_plugin_share_updates_existing_workspace_plugin() {
 
 #[tokio::test]
 async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
+    let codex_home = TempDir::new().unwrap();
+    let local_plugin_path =
+        AbsolutePathBuf::try_from(codex_home.path().join("local-plugin")).unwrap();
+    write_plugin_share_local_path_mapping(codex_home.path(), "plugins_123", &local_plugin_path);
     let server = MockServer::start().await;
     let config = test_config(&server);
     let auth = test_auth();
@@ -332,7 +387,10 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
         ))
         .and(query_param_is_missing("pageToken"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "plugins": [remote_plugin_json("plugins_123")],
+            "plugins": [remote_plugin_json_with_share_url(
+                "plugins_123",
+                Some("https://chatgpt.example/plugins/share/share-key-1"),
+            )],
             "pagination": {
                 "next_page_token": "page-2"
             },
@@ -350,7 +408,7 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
         ))
         .and(query_param("pageToken", "page-2"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "plugins": [remote_plugin_json("plugins_456")],
+            "plugins": [remote_plugin_json_with_share_url("plugins_456", /*share_url*/ None)],
             "pagination": empty_pagination_json(),
         })))
         .expect(1)
@@ -367,30 +425,40 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
         .mount(&server)
         .await;
 
-    let result = list_remote_plugin_shares(&config, Some(&auth))
+    let result = list_remote_plugin_shares(&config, Some(&auth), codex_home.path())
         .await
         .unwrap();
 
     assert_eq!(
         result,
         vec![
-            RemotePluginSummary {
-                id: "plugins_123".to_string(),
-                name: "demo-plugin".to_string(),
-                installed: false,
-                enabled: false,
-                install_policy: PluginInstallPolicy::Available,
-                auth_policy: PluginAuthPolicy::OnUse,
-                interface: Some(expected_plugin_interface()),
+            RemotePluginShareSummary {
+                summary: RemotePluginSummary {
+                    id: "plugins_123".to_string(),
+                    name: "demo-plugin".to_string(),
+                    installed: false,
+                    enabled: false,
+                    install_policy: PluginInstallPolicy::Available,
+                    auth_policy: PluginAuthPolicy::OnUse,
+                    availability: PluginAvailability::Available,
+                    interface: Some(expected_plugin_interface()),
+                },
+                share_url: Some("https://chatgpt.example/plugins/share/share-key-1".to_string()),
+                local_plugin_path: Some(local_plugin_path),
             },
-            RemotePluginSummary {
-                id: "plugins_456".to_string(),
-                name: "demo-plugin".to_string(),
-                installed: true,
-                enabled: true,
-                install_policy: PluginInstallPolicy::Available,
-                auth_policy: PluginAuthPolicy::OnUse,
-                interface: Some(expected_plugin_interface()),
+            RemotePluginShareSummary {
+                summary: RemotePluginSummary {
+                    id: "plugins_456".to_string(),
+                    name: "demo-plugin".to_string(),
+                    installed: true,
+                    enabled: true,
+                    install_policy: PluginInstallPolicy::Available,
+                    auth_policy: PluginAuthPolicy::OnUse,
+                    availability: PluginAvailability::Available,
+                    interface: Some(expected_plugin_interface()),
+                },
+                share_url: None,
+                local_plugin_path: None,
             }
         ]
     );
@@ -398,6 +466,10 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
 
 #[tokio::test]
 async fn delete_remote_plugin_share_deletes_workspace_plugin() {
+    let codex_home = TempDir::new().unwrap();
+    let local_plugin_path =
+        AbsolutePathBuf::try_from(codex_home.path().join("local-plugin")).unwrap();
+    write_plugin_share_local_path_mapping(codex_home.path(), "plugins_123", &local_plugin_path);
     let server = MockServer::start().await;
     let config = test_config(&server);
     let auth = test_auth();
@@ -411,7 +483,11 @@ async fn delete_remote_plugin_share_deletes_workspace_plugin() {
         .mount(&server)
         .await;
 
-    delete_remote_plugin_share(&config, Some(&auth), "plugins_123")
+    delete_remote_plugin_share(&config, Some(&auth), codex_home.path(), "plugins_123")
         .await
         .unwrap();
+    assert_eq!(
+        local_paths::load_plugin_share_local_paths(codex_home.path()).unwrap(),
+        BTreeMap::new()
+    );
 }

@@ -17,6 +17,7 @@ use crate::protocol::v2::ThreadItem;
 use crate::protocol::v2::Turn;
 use crate::protocol::v2::TurnError as V2TurnError;
 use crate::protocol::v2::TurnError;
+use crate::protocol::v2::TurnItemsView;
 use crate::protocol::v2::TurnStatus;
 use crate::protocol::v2::UserInput;
 use crate::protocol::v2::WebSearchAction;
@@ -217,7 +218,6 @@ impl ThreadHistoryBuilder {
             EventMsg::Error(payload) => self.handle_error(payload),
             EventMsg::TokenCount(_) => {}
             EventMsg::ThreadRolledBack(payload) => self.handle_thread_rollback(payload),
-            EventMsg::UndoCompleted(_) => {}
             EventMsg::TurnAborted(payload) => self.handle_turn_aborted(payload),
             EventMsg::TurnStarted(payload) => self.handle_turn_started(payload),
             EventMsg::TurnComplete(payload) => self.handle_turn_complete(payload),
@@ -357,7 +357,10 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::AgentMessage(_)
             | codex_protocol::items::TurnItem::Reasoning(_)
             | codex_protocol::items::TurnItem::WebSearch(_)
+            | codex_protocol::items::TurnItem::ImageView(_)
             | codex_protocol::items::TurnItem::ImageGeneration(_)
+            | codex_protocol::items::TurnItem::FileChange(_)
+            | codex_protocol::items::TurnItem::McpToolCall(_)
             | codex_protocol::items::TurnItem::ContextCompaction(_) => {}
         }
     }
@@ -378,7 +381,10 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::AgentMessage(_)
             | codex_protocol::items::TurnItem::Reasoning(_)
             | codex_protocol::items::TurnItem::WebSearch(_)
+            | codex_protocol::items::TurnItem::ImageView(_)
             | codex_protocol::items::TurnItem::ImageGeneration(_)
+            | codex_protocol::items::TurnItem::FileChange(_)
+            | codex_protocol::items::TurnItem::McpToolCall(_)
             | codex_protocol::items::TurnItem::ContextCompaction(_) => {}
         }
     }
@@ -1161,6 +1167,7 @@ impl From<PendingTurn> for Turn {
         Self {
             id: value.id,
             items: value.items,
+            items_view: TurnItemsView::Full,
             error: value.error,
             status: value.status,
             started_at: value.started_at,
@@ -1175,6 +1182,7 @@ impl From<&PendingTurn> for Turn {
         Self {
             id: value.id.clone(),
             items: value.items.clone(),
+            items_view: TurnItemsView::Full,
             error: value.error.clone(),
             status: value.status.clone(),
             started_at: value.started_at,
@@ -1351,6 +1359,7 @@ mod tests {
                     id: "user-item-id".to_string(),
                     content: Vec::new(),
                 }),
+                started_at_ms: 0,
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: turn_id.to_string(),
@@ -1447,6 +1456,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
+                items_view: TurnItemsView::Full,
                 items: vec![
                     ThreadItem::UserMessage {
                         id: "item-1".into(),
@@ -1815,6 +1825,7 @@ mod tests {
                 call_id: "exec-1".into(),
                 process_id: Some("pid-1".into()),
                 turn_id: "turn-1".into(),
+                completed_at_ms: 0,
                 command: vec!["echo".into(), "hello world".into()],
                 cwd: test_path_buf("/tmp").abs(),
                 parsed_cmd: vec![ParsedCommand::Unknown {
@@ -1978,6 +1989,7 @@ mod tests {
                 codex_protocol::dynamic_tools::DynamicToolCallRequest {
                     call_id: "dyn-1".into(),
                     turn_id: "turn-1".into(),
+                    started_at_ms: 0,
                     namespace: Some("codex_app".into()),
                     tool: "lookup_ticket".into(),
                     arguments: serde_json::json!({"id":"ABC-123"}),
@@ -1986,6 +1998,7 @@ mod tests {
             EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
                 call_id: "dyn-1".into(),
                 turn_id: "turn-1".into(),
+                completed_at_ms: 0,
                 namespace: Some("codex_app".into()),
                 tool: "lookup_ticket".into(),
                 arguments: serde_json::json!({"id":"ABC-123"}),
@@ -2041,6 +2054,7 @@ mod tests {
                 call_id: "exec-declined".into(),
                 process_id: Some("pid-2".into()),
                 turn_id: "turn-1".into(),
+                completed_at_ms: 0,
                 command: vec!["ls".into()],
                 cwd: test_path_buf("/tmp").abs(),
                 parsed_cmd: vec![ParsedCommand::Unknown { cmd: "ls".into() }],
@@ -2288,6 +2302,7 @@ mod tests {
                 call_id: "exec-late".into(),
                 process_id: Some("pid-42".into()),
                 turn_id: "turn-a".into(),
+                completed_at_ms: 0,
                 command: vec!["echo".into(), "done".into()],
                 cwd: test_path_buf("/tmp").abs(),
                 parsed_cmd: vec![ParsedCommand::Unknown {
@@ -2379,6 +2394,7 @@ mod tests {
                 call_id: "exec-unknown-turn".into(),
                 process_id: Some("pid-42".into()),
                 turn_id: "turn-missing".into(),
+                completed_at_ms: 0,
                 command: vec!["echo".into(), "done".into()],
                 cwd: test_path_buf("/tmp").abs(),
                 parsed_cmd: vec![ParsedCommand::Unknown {
@@ -2711,6 +2727,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
+                items_view: TurnItemsView::Full,
                 items: Vec::new(),
             }]
         );
@@ -2727,6 +2744,7 @@ mod tests {
             }),
             EventMsg::CollabResumeEnd(codex_protocol::protocol::CollabResumeEndEvent {
                 call_id: "resume-1".into(),
+                completed_at_ms: 0,
                 sender_thread_id: ThreadId::try_from("00000000-0000-0000-0000-000000000001")
                     .expect("valid sender thread id"),
                 receiver_thread_id: ThreadId::try_from("00000000-0000-0000-0000-000000000002")
@@ -2783,6 +2801,7 @@ mod tests {
             }),
             EventMsg::CollabAgentSpawnEnd(codex_protocol::protocol::CollabAgentSpawnEndEvent {
                 call_id: "spawn-1".into(),
+                completed_at_ms: 0,
                 sender_thread_id,
                 new_thread_id: Some(spawned_thread_id),
                 new_agent_nickname: Some("Scout".into()),
@@ -2844,6 +2863,7 @@ mod tests {
             EventMsg::CollabAgentInteractionBegin(
                 codex_protocol::protocol::CollabAgentInteractionBeginEvent {
                     call_id: "send-1".into(),
+                    started_at_ms: 0,
                     sender_thread_id: sender,
                     receiver_thread_id: receiver,
                     prompt: "new task".into(),
@@ -2852,6 +2872,7 @@ mod tests {
             EventMsg::CollabAgentInteractionEnd(
                 codex_protocol::protocol::CollabAgentInteractionEndEvent {
                     call_id: "send-1".into(),
+                    completed_at_ms: 0,
                     sender_thread_id: sender,
                     receiver_thread_id: receiver,
                     receiver_agent_nickname: None,
@@ -2966,6 +2987,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
+                items_view: TurnItemsView::Full,
                 items: vec![ThreadItem::UserMessage {
                     id: "item-1".into(),
                     content: vec![UserInput::Text {

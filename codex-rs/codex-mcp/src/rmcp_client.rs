@@ -55,7 +55,6 @@ use futures::future::FutureExt;
 use futures::future::Shared;
 use rmcp::model::ClientCapabilities;
 use rmcp::model::ElicitationCapability;
-use rmcp::model::FormElicitationCapability;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::ProtocolVersion;
@@ -323,12 +322,7 @@ pub(crate) fn elicitation_capability_for_server(
 ) -> Option<ElicitationCapability> {
     // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
     // indicates this should be an empty object.
-    Some(ElicitationCapability {
-        form: Some(FormElicitationCapability {
-            schema_validation: None,
-        }),
-        url: None,
-    })
+    Some(ElicitationCapability::default())
 }
 
 pub(crate) async fn list_tools_for_client_uncached(
@@ -368,16 +362,23 @@ pub(crate) async fn list_tools_for_client_uncached(
                     tool_def.title = Some(normalized_title);
                 }
             }
+            let has_connector_metadata = connector_id.is_some()
+                || connector_name.is_some()
+                || connector_description.is_some();
+            let namespace_description = if has_connector_metadata {
+                connector_description
+            } else {
+                server_instructions.map(str::to_string)
+            };
             ToolInfo {
                 server_name: server_name.to_owned(),
                 callable_name,
                 callable_namespace,
-                server_instructions: server_instructions.map(str::to_string),
+                namespace_description,
                 tool: tool_def,
                 connector_id,
                 connector_name,
                 plugin_display_names: Vec::new(),
-                connector_description,
             }
         })
         .collect();

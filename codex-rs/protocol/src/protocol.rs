@@ -777,12 +777,6 @@ pub enum Op {
     /// model.
     SetThreadMemoryMode { mode: ThreadMemoryMode },
 
-    /// Legacy request to undo a turn.
-    ///
-    /// The op is still accepted for compatibility, but ghost snapshots are no
-    /// longer produced so the request reports unavailable.
-    Undo,
-
     /// Request Codex to drop the last N user turns from in-memory context.
     ///
     /// This does not attempt to revert local filesystem changes. Clients are
@@ -911,7 +905,6 @@ impl Op {
             Self::Compact => "compact",
             Self::SetThreadName { .. } => "set_thread_name",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
-            Self::Undo => "undo",
             Self::ThreadRollback { .. } => "thread_rollback",
             Self::Review { .. } => "review",
             Self::ApproveGuardianDeniedAction { .. } => "approve_guardian_denied_action",
@@ -1368,20 +1361,12 @@ pub enum EventMsg {
     /// User/system input message (what was sent to the model)
     UserMessage(UserMessageEvent),
 
-    /// Agent text output delta message
-    AgentMessageDelta(AgentMessageDeltaEvent),
-
     /// Reasoning event from agent.
     AgentReasoning(AgentReasoningEvent),
-
-    /// Agent reasoning delta event from agent.
-    AgentReasoningDelta(AgentReasoningDeltaEvent),
 
     /// Raw chain-of-thought from agent.
     AgentReasoningRawContent(AgentReasoningRawContentEvent),
 
-    /// Agent reasoning content delta event from agent.
-    AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent),
     /// Signaled when the model begins a new reasoning summary section (e.g., a new titled block).
     AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent),
 
@@ -1446,12 +1431,6 @@ pub enum EventMsg {
     /// Notification advising the user that something they are using has been
     /// deprecated and should be phased out.
     DeprecationNotice(DeprecationNoticeEvent),
-
-    BackgroundEvent(BackgroundEventEvent),
-
-    UndoStarted(UndoStartedEvent),
-
-    UndoCompleted(UndoCompletedEvent),
 
     /// Notification that a model stream experienced an error or disconnect
     /// and the system is handling it (e.g., retrying with backoff).
@@ -1580,19 +1559,13 @@ pub enum HookSource {
     Unknown,
 }
 
-impl HookSource {
-    /// Returns whether hooks from this source are managed and therefore not
-    /// user-configurable.
-    pub fn is_managed(self) -> bool {
-        matches!(
-            self,
-            Self::System
-                | Self::Mdm
-                | Self::CloudRequirements
-                | Self::LegacyManagedConfigFile
-                | Self::LegacyManagedConfigMdm
-        )
-    }
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum HookTrustStatus {
+    Managed,
+    Untrusted,
+    Trusted,
+    Modified,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -1849,6 +1822,7 @@ pub struct ItemStartedEvent {
     pub thread_id: ThreadId,
     pub turn_id: String,
     pub item: TurnItem,
+    pub started_at_ms: i64,
 }
 
 impl HasLegacyEvent for ItemStartedEvent {
@@ -1857,11 +1831,14 @@ impl HasLegacyEvent for ItemStartedEvent {
             TurnItem::WebSearch(item) => vec![EventMsg::WebSearchBegin(WebSearchBeginEvent {
                 call_id: item.id.clone(),
             })],
+            TurnItem::ImageView(_) => Vec::new(),
             TurnItem::ImageGeneration(item) => {
                 vec![EventMsg::ImageGenerationBegin(ImageGenerationBeginEvent {
                     call_id: item.id.clone(),
                 })]
             }
+            TurnItem::FileChange(item) => vec![item.as_legacy_begin_event(self.turn_id.clone())],
+            TurnItem::McpToolCall(item) => vec![item.as_legacy_begin_event()],
             _ => Vec::new(),
         }
     }
@@ -1872,6 +1849,15 @@ pub struct ItemCompletedEvent {
     pub thread_id: ThreadId,
     pub turn_id: String,
     pub item: TurnItem,
+    // Old rollout files may contain ItemCompleted events for PlanItem without
+    // this field. Default to 0 so those persisted rollouts still deserialize
+    // after tightening the core event contract.
+    #[serde(default = "default_item_completed_at_ms")]
+    pub completed_at_ms: i64,
+}
+
+const fn default_item_completed_at_ms() -> i64 {
+    0
 }
 
 pub trait HasLegacyEvent {
@@ -1880,7 +1866,13 @@ pub trait HasLegacyEvent {
 
 impl HasLegacyEvent for ItemCompletedEvent {
     fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
-        self.item.as_legacy_events(show_raw_agent_reasoning)
+        match &self.item {
+            TurnItem::FileChange(item) => item
+                .as_legacy_end_event(self.turn_id.clone())
+                .into_iter()
+                .collect(),
+            _ => self.item.as_legacy_events(show_raw_agent_reasoning),
+        }
     }
 }
 
@@ -1894,9 +1886,7 @@ pub struct AgentMessageContentDeltaEvent {
 
 impl HasLegacyEvent for AgentMessageContentDeltaEvent {
     fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        vec![EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-            delta: self.delta.clone(),
-        })]
+        Vec::new()
     }
 }
 
@@ -1921,9 +1911,7 @@ pub struct ReasoningContentDeltaEvent {
 
 impl HasLegacyEvent for ReasoningContentDeltaEvent {
     fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        vec![EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: self.delta.clone(),
-        })]
+        Vec::new()
     }
 }
 
@@ -1940,11 +1928,7 @@ pub struct ReasoningRawContentDeltaEvent {
 
 impl HasLegacyEvent for ReasoningRawContentDeltaEvent {
     fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        vec![EventMsg::AgentReasoningRawContentDelta(
-            AgentReasoningRawContentDeltaEvent {
-                delta: self.delta.clone(),
-            },
-        )]
+        Vec::new()
     }
 }
 
@@ -2310,11 +2294,6 @@ pub struct UserMessageEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct AgentMessageDeltaEvent {
-    pub delta: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct AgentReasoningEvent {
     pub text: String,
 }
@@ -2325,22 +2304,12 @@ pub struct AgentReasoningRawContentEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct AgentReasoningRawContentDeltaEvent {
-    pub delta: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct AgentReasoningSectionBreakEvent {
     // load with default value so it's backward compatible with the old format.
     #[serde(default)]
     pub item_id: String,
     #[serde(default)]
     pub summary_index: i64,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct AgentReasoningDeltaEvent {
-    pub delta: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
@@ -2383,6 +2352,8 @@ pub struct DynamicToolCallResponseEvent {
     pub call_id: String,
     /// Turn ID that this dynamic tool call belongs to.
     pub turn_id: String,
+    #[serde(default)]
+    pub completed_at_ms: i64,
     /// Dynamic tool namespace, when one was provided.
     #[serde(default)]
     pub namespace: Option<String>,
@@ -3093,6 +3064,8 @@ pub struct ExecCommandBeginEvent {
     pub process_id: Option<String>,
     /// Turn ID that this command belongs to.
     pub turn_id: String,
+    #[serde(default)]
+    pub started_at_ms: i64,
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory if not the default cwd for the agent.
@@ -3117,6 +3090,8 @@ pub struct ExecCommandEndEvent {
     pub process_id: Option<String>,
     /// Turn ID that this command belongs to.
     pub turn_id: String,
+    #[serde(default)]
+    pub completed_at_ms: i64,
     /// The command that was executed.
     pub command: Vec<String>,
     /// The command's working directory if not the default cwd for the agent.
@@ -3189,30 +3164,12 @@ pub struct TerminalInteractionEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct BackgroundEventEvent {
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct DeprecationNoticeEvent {
     /// Concise summary of what is deprecated.
     pub summary: String,
     /// Optional extra guidance, such as migration steps or rationale.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct UndoStartedEvent {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct UndoCompletedEvent {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -3803,6 +3760,8 @@ pub enum TurnAbortReason {
 pub struct CollabAgentSpawnBeginEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    #[serde(default)]
+    pub started_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
@@ -3842,6 +3801,8 @@ pub struct CollabAgentStatusEntry {
 pub struct CollabAgentSpawnEndEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    #[serde(default)]
+    pub completed_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the newly spawned agent, if it was created.
@@ -3867,6 +3828,8 @@ pub struct CollabAgentSpawnEndEvent {
 pub struct CollabAgentInteractionBeginEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    #[serde(default)]
+    pub started_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.
@@ -3880,6 +3843,8 @@ pub struct CollabAgentInteractionBeginEvent {
 pub struct CollabAgentInteractionEndEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    #[serde(default)]
+    pub completed_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.
@@ -3899,6 +3864,8 @@ pub struct CollabAgentInteractionEndEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct CollabWaitingBeginEvent {
+    #[serde(default)]
+    pub started_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receivers.
@@ -3916,6 +3883,8 @@ pub struct CollabWaitingEndEvent {
     pub sender_thread_id: ThreadId,
     /// ID of the waiting call.
     pub call_id: String,
+    #[serde(default)]
+    pub completed_at_ms: i64,
     /// Optional receiver metadata paired with final statuses.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_statuses: Vec<CollabAgentStatusEntry>,
@@ -3927,6 +3896,8 @@ pub struct CollabWaitingEndEvent {
 pub struct CollabCloseBeginEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    #[serde(default)]
+    pub started_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.
@@ -3937,6 +3908,8 @@ pub struct CollabCloseBeginEvent {
 pub struct CollabCloseEndEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    #[serde(default)]
+    pub completed_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.
@@ -3956,6 +3929,8 @@ pub struct CollabCloseEndEvent {
 pub struct CollabResumeBeginEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    #[serde(default)]
+    pub started_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.
@@ -3972,6 +3947,8 @@ pub struct CollabResumeBeginEvent {
 pub struct CollabResumeEndEvent {
     /// Identifier for the collab tool call.
     pub call_id: String,
+    #[serde(default)]
+    pub completed_at_ms: i64,
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.
@@ -3990,9 +3967,13 @@ pub struct CollabResumeEndEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::items::FileChangeItem;
     use crate::items::ImageGenerationItem;
+    use crate::items::McpToolCallItem;
+    use crate::items::McpToolCallStatus;
     use crate::items::UserMessageItem;
     use crate::items::WebSearchItem;
+    use crate::mcp::CallToolResult;
     use crate::permissions::FileSystemAccessMode;
     use crate::permissions::FileSystemPath;
     use crate::permissions::FileSystemSandboxEntry;
@@ -4008,20 +3989,6 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
     use tempfile::TempDir;
-
-    #[test]
-    fn hook_source_managedness_is_source_derived() {
-        assert_eq!(HookSource::System.is_managed(), true);
-        assert_eq!(HookSource::Mdm.is_managed(), true);
-        assert_eq!(HookSource::CloudRequirements.is_managed(), true);
-        assert_eq!(HookSource::LegacyManagedConfigFile.is_managed(), true);
-        assert_eq!(HookSource::LegacyManagedConfigMdm.is_managed(), true);
-        assert_eq!(HookSource::User.is_managed(), false);
-        assert_eq!(HookSource::Project.is_managed(), false);
-        assert_eq!(HookSource::SessionFlags.is_managed(), false);
-        assert_eq!(HookSource::Plugin.is_managed(), false);
-        assert_eq!(HookSource::Unknown.is_managed(), false);
-    }
 
     fn sorted_writable_roots(roots: Vec<WritableRoot>) -> Vec<(PathBuf, Vec<PathBuf>)> {
         let mut sorted_roots: Vec<(PathBuf, Vec<PathBuf>)> = roots
@@ -4645,6 +4612,7 @@ mod tests {
                     queries: None,
                 },
             }),
+            started_at_ms: 0,
         };
 
         let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
@@ -4661,6 +4629,7 @@ mod tests {
             thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
             item: TurnItem::UserMessage(UserMessageItem::new(&[])),
+            started_at_ms: 0,
         };
 
         assert!(
@@ -4682,6 +4651,7 @@ mod tests {
                 result: String::new(),
                 saved_path: None,
             }),
+            started_at_ms: 0,
         };
 
         let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
@@ -4689,6 +4659,77 @@ mod tests {
         match &legacy_events[0] {
             EventMsg::ImageGenerationBegin(event) => assert_eq!(event.call_id, "ig-1"),
             _ => panic!("expected ImageGenerationBegin event"),
+        }
+    }
+
+    #[test]
+    fn item_started_event_from_file_change_emits_patch_begin_event() {
+        let event = ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            started_at_ms: 0,
+            item: TurnItem::FileChange(FileChangeItem {
+                id: "patch-1".into(),
+                changes: [(
+                    PathBuf::from("new.txt"),
+                    FileChange::Add {
+                        content: "hello".into(),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                status: None,
+                auto_approved: Some(true),
+                stdout: None,
+                stderr: None,
+            }),
+        };
+
+        let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
+        assert_eq!(legacy_events.len(), 1);
+        match &legacy_events[0] {
+            EventMsg::PatchApplyBegin(event) => {
+                assert_eq!(event.call_id, "patch-1");
+                assert_eq!(event.turn_id, "turn-1");
+                assert!(event.auto_approved);
+                assert!(event.changes.contains_key(&PathBuf::from("new.txt")));
+            }
+            _ => panic!("expected PatchApplyBegin event"),
+        }
+    }
+
+    #[test]
+    fn item_started_event_from_mcp_tool_call_emits_begin_event() {
+        let event = ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            started_at_ms: 0,
+            item: TurnItem::McpToolCall(McpToolCallItem {
+                id: "mcp-1".into(),
+                server: "server".into(),
+                tool: "tool".into(),
+                arguments: json!({"arg": "value"}),
+                mcp_app_resource_uri: Some("app://connector".into()),
+                status: McpToolCallStatus::InProgress,
+                result: None,
+                error: None,
+                duration: None,
+            }),
+        };
+
+        let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
+        assert_eq!(legacy_events.len(), 1);
+        match &legacy_events[0] {
+            EventMsg::McpToolCallBegin(event) => {
+                assert_eq!(event.call_id, "mcp-1");
+                assert_eq!(event.invocation.server, "server");
+                assert_eq!(event.invocation.tool, "tool");
+                assert_eq!(
+                    event.mcp_app_resource_uri.as_deref(),
+                    Some("app://connector")
+                );
+            }
+            _ => panic!("expected McpToolCallBegin event"),
         }
     }
 
@@ -4704,6 +4745,7 @@ mod tests {
                 result: "Zm9v".into(),
                 saved_path: Some(test_path_buf("/tmp/ig-1.png").abs()),
             }),
+            completed_at_ms: 0,
         };
 
         let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
@@ -4723,6 +4765,114 @@ mod tests {
         }
     }
 
+    #[test]
+    fn item_completed_event_from_file_change_emits_patch_end_event() {
+        let event = ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            completed_at_ms: 0,
+            item: TurnItem::FileChange(FileChangeItem {
+                id: "patch-1".into(),
+                changes: [(
+                    PathBuf::from("new.txt"),
+                    FileChange::Add {
+                        content: "hello".into(),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                status: Some(PatchApplyStatus::Completed),
+                auto_approved: None,
+                stdout: Some("Done!".into()),
+                stderr: Some(String::new()),
+            }),
+        };
+
+        let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
+        assert_eq!(legacy_events.len(), 1);
+        match &legacy_events[0] {
+            EventMsg::PatchApplyEnd(event) => {
+                assert_eq!(event.call_id, "patch-1");
+                assert_eq!(event.turn_id, "turn-1");
+                assert_eq!(event.stdout, "Done!");
+                assert!(event.success);
+                assert_eq!(event.status, PatchApplyStatus::Completed);
+                assert!(event.changes.contains_key(&PathBuf::from("new.txt")));
+            }
+            _ => panic!("expected PatchApplyEnd event"),
+        }
+    }
+
+    #[test]
+    fn item_completed_event_from_mcp_tool_call_emits_end_event() {
+        let event = ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            completed_at_ms: 0,
+            item: TurnItem::McpToolCall(McpToolCallItem {
+                id: "mcp-1".into(),
+                server: "server".into(),
+                tool: "tool".into(),
+                arguments: json!({"arg": "value"}),
+                mcp_app_resource_uri: Some("app://connector".into()),
+                status: McpToolCallStatus::Completed,
+                result: Some(CallToolResult {
+                    content: vec![json!({"type": "text", "text": "ok"})],
+                    structured_content: None,
+                    is_error: Some(false),
+                    meta: None,
+                }),
+                error: None,
+                duration: Some(Duration::from_millis(42)),
+            }),
+        };
+
+        let legacy_events = event.as_legacy_events(/*show_raw_agent_reasoning*/ false);
+        assert_eq!(legacy_events.len(), 1);
+        match &legacy_events[0] {
+            EventMsg::McpToolCallEnd(event) => {
+                assert_eq!(event.call_id, "mcp-1");
+                assert_eq!(event.invocation.server, "server");
+                assert_eq!(event.invocation.tool, "tool");
+                assert_eq!(
+                    event.mcp_app_resource_uri.as_deref(),
+                    Some("app://connector")
+                );
+                assert_eq!(event.duration, Duration::from_millis(42));
+                assert!(event.is_success());
+            }
+            _ => panic!("expected McpToolCallEnd event"),
+        }
+    }
+
+    #[test]
+    fn item_started_event_requires_started_at_ms() {
+        let mut value = serde_json::to_value(ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            item: TurnItem::UserMessage(UserMessageItem::new(&[])),
+            started_at_ms: 123,
+        })
+        .unwrap();
+        value.as_object_mut().unwrap().remove("started_at_ms");
+
+        assert!(serde_json::from_value::<ItemStartedEvent>(value).is_err());
+    }
+
+    #[test]
+    fn item_completed_event_defaults_missing_completed_at_ms() {
+        let mut value = serde_json::to_value(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".into(),
+            item: TurnItem::UserMessage(UserMessageItem::new(&[])),
+            completed_at_ms: 123,
+        })
+        .unwrap();
+        value.as_object_mut().unwrap().remove("completed_at_ms");
+
+        let event = serde_json::from_value::<ItemCompletedEvent>(value).unwrap();
+        assert_eq!(event.completed_at_ms, 0);
+    }
     #[test]
     fn rollback_failed_error_does_not_affect_turn_status() {
         let event = ErrorEvent {
