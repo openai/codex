@@ -146,6 +146,12 @@ const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
 
+pub(crate) struct CompactConversationRequestSettings {
+    pub(crate) effort: Option<ReasoningEffortConfig>,
+    pub(crate) summary: ReasoningSummaryConfig,
+    pub(crate) service_tier: Option<ServiceTier>,
+}
+
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
 /// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
@@ -414,9 +420,7 @@ impl ModelClient {
         &self,
         prompt: &Prompt,
         model_info: &ModelInfo,
-        effort: Option<ReasoningEffortConfig>,
-        summary: ReasoningSummaryConfig,
-        service_tier: Option<ServiceTier>,
+        settings: CompactConversationRequestSettings,
         session_telemetry: &SessionTelemetry,
         compaction_trace: &CompactionTraceContext,
     ) -> Result<Vec<ResponseItem>> {
@@ -440,7 +444,7 @@ impl ModelClient {
             .as_ref()
             .is_some_and(CodexAuth::is_chatgpt_auth)
         {
-            service_tier
+            settings.service_tier
         } else {
             None
         };
@@ -448,8 +452,8 @@ impl ModelClient {
             &client_setup.api_provider,
             prompt,
             model_info,
-            effort,
-            summary,
+            settings.effort,
+            settings.summary,
             compact_service_tier,
         )?;
         let ResponsesApiRequest {
