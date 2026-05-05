@@ -428,6 +428,8 @@ pub struct Tui {
     event_broker: Arc<EventBroker>,
     pub(crate) terminal: Terminal,
     pending_history_lines: Vec<PendingHistoryLines>,
+    ambient_pet_image_state: crate::pets::PetImageRenderState,
+    pet_picker_preview_image_state: crate::pets::PetImageRenderState,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
     suspend_context: SuspendContext,
@@ -483,6 +485,8 @@ impl Tui {
             event_broker: Arc::new(EventBroker::new()),
             terminal,
             pending_history_lines: vec![],
+            ambient_pet_image_state: crate::pets::PetImageRenderState::default(),
+            pet_picker_preview_image_state: crate::pets::PetImageRenderState::default(),
             alt_saved_viewport: None,
             #[cfg(unix)]
             suspend_context: SuspendContext::new(),
@@ -875,8 +879,10 @@ impl Tui {
         &mut self,
         request: Option<crate::pets::AmbientPetDraw>,
     ) -> Result<()> {
+        let terminal = &mut self.terminal;
+        let state = &mut self.ambient_pet_image_state;
         stdout().sync_update(|_| {
-            crate::pets::render_ambient_pet_image(self.terminal.backend_mut(), request)
+            crate::pets::render_ambient_pet_image(terminal.backend_mut(), state, request)
                 .map_err(std::io::Error::other)
         })?
     }
@@ -885,15 +891,21 @@ impl Tui {
         &mut self,
         request: Option<crate::pets::AmbientPetDraw>,
     ) -> Result<()> {
+        let terminal = &mut self.terminal;
+        let state = &mut self.pet_picker_preview_image_state;
         stdout().sync_update(|_| {
-            crate::pets::render_pet_picker_preview_image(self.terminal.backend_mut(), request)
+            crate::pets::render_pet_picker_preview_image(terminal.backend_mut(), state, request)
                 .map_err(std::io::Error::other)
         })?
     }
 
     pub fn clear_ambient_pet_image(&mut self) -> Result<()> {
-        crate::pets::render_ambient_pet_image(self.terminal.backend_mut(), /*request*/ None)
-            .map_err(std::io::Error::other)
+        crate::pets::render_ambient_pet_image(
+            self.terminal.backend_mut(),
+            &mut self.ambient_pet_image_state,
+            /*request*/ None,
+        )
+        .map_err(std::io::Error::other)
     }
 
     /// Draw a frame using the resize-reflow viewport and history insertion rules.

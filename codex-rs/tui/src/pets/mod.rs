@@ -36,20 +36,28 @@ pub(crate) const DISABLED_PET_ID: &str = "disabled";
 
 pub(crate) fn render_ambient_pet_image(
     writer: &mut impl Write,
+    state: &mut PetImageRenderState,
     request: Option<AmbientPetDraw>,
 ) -> Result<()> {
-    render_pet_image(writer, /*image_id*/ 0xC0DE, request)
+    render_pet_image(writer, state, /*image_id*/ 0xC0DE, request)
 }
 
 pub(crate) fn render_pet_picker_preview_image(
     writer: &mut impl Write,
+    state: &mut PetImageRenderState,
     request: Option<AmbientPetDraw>,
 ) -> Result<()> {
-    render_pet_image(writer, /*image_id*/ 0xC0DF, request)
+    render_pet_image(writer, state, /*image_id*/ 0xC0DF, request)
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct PetImageRenderState {
+    last_sixel_clear_area: Option<SixelClearArea>,
 }
 
 fn render_pet_image(
     writer: &mut impl Write,
+    state: &mut PetImageRenderState,
     image_id: u32,
     request: Option<AmbientPetDraw>,
 ) -> Result<()> {
@@ -61,6 +69,11 @@ fn render_pet_image(
 
     let Some(request) = request else {
         write!(writer, "{}", image_protocol::kitty_delete_image(image_id))?;
+        if let Some(area) = state.last_sixel_clear_area.take() {
+            queue!(writer, SavePosition)?;
+            clear_sixel_area(writer, area)?;
+            queue!(writer, RestorePosition)?;
+        }
         writer.flush()?;
         return Ok(());
     };
@@ -98,8 +111,19 @@ fn render_pet_image(
     };
 
     queue!(writer, SavePosition)?;
-    if matches!(request.protocol, ImageProtocol::Sixel) {
-        clear_sixel_artifact_area(writer, &request)?;
+    let current_sixel_clear_area = if matches!(request.protocol, ImageProtocol::Sixel) {
+        Some(SixelClearArea::from(&request))
+    } else {
+        None
+    };
+    if let Some(previous_area) = state.last_sixel_clear_area.take()
+        && Some(previous_area) != current_sixel_clear_area
+    {
+        clear_sixel_area(writer, previous_area)?;
+    }
+    if let Some(area) = current_sixel_clear_area {
+        clear_sixel_area(writer, area)?;
+        state.last_sixel_clear_area = Some(area);
     }
     queue!(writer, MoveTo(request.x, request.y))?;
     match payload {
@@ -116,17 +140,32 @@ enum AmbientPetPayload {
     Bytes(Vec<u8>),
 }
 
-fn clear_sixel_artifact_area(
-    writer: &mut impl Write,
-    request: &AmbientPetDraw,
-) -> std::io::Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SixelClearArea {
+    x: u16,
+    clear_top_y: u16,
+    clear_bottom_y: u16,
+    columns: u16,
+}
+
+impl From<&AmbientPetDraw> for SixelClearArea {
+    fn from(request: &AmbientPetDraw) -> Self {
+        Self {
+            x: request.x,
+            clear_top_y: request.clear_top_y,
+            clear_bottom_y: request.y.saturating_add(request.rows),
+            columns: request.columns,
+        }
+    }
+}
+
+fn clear_sixel_area(writer: &mut impl Write, area: SixelClearArea) -> std::io::Result<()> {
     use crossterm::cursor::MoveTo;
     use crossterm::queue;
 
-    let blank = " ".repeat(request.columns.into());
-    let clear_bottom_y = request.y.saturating_add(request.rows);
-    for row in request.clear_top_y..clear_bottom_y {
-        queue!(writer, MoveTo(request.x, row))?;
+    let blank = " ".repeat(area.columns.into());
+    for row in area.clear_top_y..area.clear_bottom_y {
+        queue!(writer, MoveTo(area.x, row))?;
         write!(writer, "{blank}")?;
     }
     Ok(())
@@ -156,8 +195,9 @@ mod tests {
             sixel_dir: PathBuf::new(),
         };
         let mut output = Vec::new();
+        let mut state = PetImageRenderState::default();
 
-        render_ambient_pet_image(&mut output, Some(request)).unwrap();
+        render_ambient_pet_image(&mut output, &mut state, Some(request)).unwrap();
 
         let output = String::from_utf8(output).unwrap();
         let save = output.find("\x1b7").expect("saves cursor position");
@@ -172,8 +212,9 @@ mod tests {
     #[test]
     fn ambient_pet_image_clear_deletes_without_moving_cursor() {
         let mut output = Vec::new();
+        let mut state = PetImageRenderState::default();
 
-        render_ambient_pet_image(&mut output, /*request*/ None).unwrap();
+        render_ambient_pet_image(&mut output, &mut state, /*request*/ None).unwrap();
 
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("Ga=d,d=I,i=49374,q=2;"));
@@ -199,8 +240,9 @@ mod tests {
             sixel_dir: PathBuf::new(),
         };
         let mut output = Vec::new();
+        let mut state = PetImageRenderState::default();
 
-        render_ambient_pet_image(&mut output, Some(request)).unwrap();
+        render_ambient_pet_image(&mut output, &mut state, Some(request)).unwrap();
 
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("a=d,d=I,i=49374,q=2;"));
@@ -231,12 +273,48 @@ mod tests {
             sixel_dir,
         };
         let mut output = Vec::new();
+        let mut state = PetImageRenderState::default();
 
-        render_ambient_pet_image(&mut output, Some(request)).unwrap();
+        render_ambient_pet_image(&mut output, &mut state, Some(request)).unwrap();
 
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("\x1b[2;3H    \x1b[3;3H    \x1b[4;3H    \x1b[5;3H    \x1b[4;3H"));
         assert!(output.contains("fake-sixel"));
         assert!(output.contains("\x1b8"));
+    }
+
+    #[test]
+    fn sixel_pet_image_clear_erases_last_drawn_area() {
+        let dir = tempfile::tempdir().unwrap();
+        let frame = dir.path().join("frame.png");
+        std::fs::write(&frame, b"png").unwrap();
+        let sixel_dir = dir.path().join("sixel");
+        std::fs::create_dir(&sixel_dir).unwrap();
+        let sixel_frame = sixel_dir.join("frame_h75.six");
+        std::fs::write(&sixel_frame, b"fake-sixel").unwrap();
+        let request = AmbientPetDraw {
+            frame,
+            protocol: ImageProtocol::Sixel,
+            x: 2,
+            y: 3,
+            clear_top_y: 1,
+            columns: 4,
+            rows: 2,
+            height_px: 75,
+            sixel_dir,
+        };
+        let mut output = Vec::new();
+        let mut state = PetImageRenderState::default();
+
+        render_ambient_pet_image(&mut output, &mut state, Some(request)).unwrap();
+        output.clear();
+        render_ambient_pet_image(&mut output, &mut state, /*request*/ None).unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Ga=d,d=I,i=49374,q=2;"));
+        assert!(output.contains("\x1b7"));
+        assert!(output.contains("\x1b[2;3H    \x1b[3;3H    \x1b[4;3H    \x1b[5;3H    "));
+        assert!(output.contains("\x1b8"));
+        assert!(!output.contains("fake-sixel"));
     }
 }
