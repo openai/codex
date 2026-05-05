@@ -345,6 +345,8 @@ pub enum ThreadItem {
         id: String,
         status: String,
         revised_prompt: Option<String>,
+        #[serde(default)]
+        content: Option<ImageGenerationContent>,
         result: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -359,6 +361,30 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ContextCompaction { id: String },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", export_to = "v2/")]
+pub enum ImageGenerationContent {
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Inline {
+        mime_type: String,
+        data_base64: String,
+        byte_length: u64,
+        width: Option<u32>,
+        height: Option<u32>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Deferred {
+        content_id: String,
+        mime_type: String,
+        byte_length: u64,
+        width: Option<u32>,
+        height: Option<u32>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -822,6 +848,7 @@ impl From<CoreTurnItem> for ThreadItem {
                 id: image.id,
                 status: image.status,
                 revised_prompt: image.revised_prompt,
+                content: None,
                 result: image.result,
                 saved_path: image.saved_path,
             },

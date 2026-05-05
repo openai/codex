@@ -586,6 +586,7 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             status: String::new(),
             revised_prompt: None,
+            content: None,
             result: String::new(),
             saved_path: None,
         };
@@ -597,6 +598,7 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             status: payload.status.clone(),
             revised_prompt: payload.revised_prompt.clone(),
+            content: None,
             result: payload.result.clone(),
             saved_path: payload.saved_path.clone(),
         };
@@ -1469,6 +1471,7 @@ mod tests {
                         id: "ig_123".into(),
                         status: "completed".into(),
                         revised_prompt: Some("final prompt".into()),
+                        content: None,
                         result: "Zm9v".into(),
                         saved_path: Some(test_path_buf("/tmp/ig_123.png").abs()),
                     },

@@ -149,6 +149,147 @@ fn thread_turns_items_list_round_trips() {
 }
 
 #[test]
+fn image_generation_accepts_missing_content_for_legacy_payloads() {
+    let item: ThreadItem = serde_json::from_value(json!({
+        "type": "imageGeneration",
+        "id": "ig_123",
+        "status": "completed",
+        "revisedPrompt": null,
+        "result": "Zm9v",
+        "savedPath": null
+    }))
+    .expect("legacy image generation item should deserialize");
+
+    assert_eq!(
+        item,
+        ThreadItem::ImageGeneration {
+            id: "ig_123".to_string(),
+            status: "completed".to_string(),
+            revised_prompt: None,
+            content: None,
+            result: "Zm9v".to_string(),
+            saved_path: None,
+        }
+    );
+}
+
+#[test]
+fn image_generation_serializes_missing_content_as_null() {
+    let item = ThreadItem::ImageGeneration {
+        id: "ig_123".to_string(),
+        status: "completed".to_string(),
+        revised_prompt: None,
+        content: None,
+        result: "Zm9v".to_string(),
+        saved_path: None,
+    };
+
+    assert_eq!(
+        serde_json::to_value(item).expect("image generation item should serialize"),
+        json!({
+            "type": "imageGeneration",
+            "id": "ig_123",
+            "status": "completed",
+            "revisedPrompt": null,
+            "content": null,
+            "result": "Zm9v",
+        })
+    );
+}
+
+#[test]
+fn image_generation_inline_content_round_trips() {
+    let item = ThreadItem::ImageGeneration {
+        id: "ig_inline".to_string(),
+        status: "completed".to_string(),
+        revised_prompt: Some("final prompt".to_string()),
+        content: Some(ImageGenerationContent::Inline {
+            mime_type: "image/png".to_string(),
+            data_base64: "Zm9v".to_string(),
+            byte_length: 3,
+            width: Some(512),
+            height: Some(512),
+        }),
+        result: "Zm9v".to_string(),
+        saved_path: None,
+    };
+
+    let serialized =
+        serde_json::to_value(&item).expect("inline image generation item should serialize");
+
+    assert_eq!(
+        serialized,
+        json!({
+            "type": "imageGeneration",
+            "id": "ig_inline",
+            "status": "completed",
+            "revisedPrompt": "final prompt",
+            "content": {
+                "type": "inline",
+                "mimeType": "image/png",
+                "dataBase64": "Zm9v",
+                "byteLength": 3,
+                "width": 512,
+                "height": 512,
+            },
+            "result": "Zm9v",
+        })
+    );
+
+    assert_eq!(
+        serde_json::from_value::<ThreadItem>(serialized)
+            .expect("inline image generation item should deserialize"),
+        item
+    );
+}
+
+#[test]
+fn image_generation_deferred_content_round_trips() {
+    let item = ThreadItem::ImageGeneration {
+        id: "ig_deferred".to_string(),
+        status: "completed".to_string(),
+        revised_prompt: None,
+        content: Some(ImageGenerationContent::Deferred {
+            content_id: "content_123".to_string(),
+            mime_type: "image/png".to_string(),
+            byte_length: 3,
+            width: None,
+            height: None,
+        }),
+        result: String::new(),
+        saved_path: None,
+    };
+
+    let serialized =
+        serde_json::to_value(&item).expect("deferred image generation item should serialize");
+
+    assert_eq!(
+        serialized,
+        json!({
+            "type": "imageGeneration",
+            "id": "ig_deferred",
+            "status": "completed",
+            "revisedPrompt": null,
+            "content": {
+                "type": "deferred",
+                "contentId": "content_123",
+                "mimeType": "image/png",
+                "byteLength": 3,
+                "width": null,
+                "height": null,
+            },
+            "result": "",
+        })
+    );
+
+    assert_eq!(
+        serde_json::from_value::<ThreadItem>(serialized)
+            .expect("deferred image generation item should deserialize"),
+        item
+    );
+}
+
+#[test]
 fn thread_list_params_accepts_single_cwd() {
     let params = serde_json::from_value::<ThreadListParams>(json!({
         "cwd": "/workspace",
