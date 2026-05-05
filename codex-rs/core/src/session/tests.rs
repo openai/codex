@@ -1161,39 +1161,6 @@ async fn reload_user_config_layer_updates_effective_apps_config() {
 }
 
 #[tokio::test]
-async fn refresh_runtime_config_updates_effective_apps_config() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let codex_home = session.codex_home().await;
-    std::fs::create_dir_all(&codex_home).expect("create codex home");
-    std::fs::write(
-        codex_home.join(CONFIG_TOML_FILE),
-        "[apps.calendar]\nenabled = false\ndestructive_enabled = false\n",
-    )
-    .expect("write user config");
-
-    let next_config = load_latest_config_for_session(&session).await;
-    session.refresh_runtime_config(next_config).await;
-
-    let config = session.get_config().await;
-    let apps_toml = config
-        .config_layer_stack
-        .effective_config()
-        .as_table()
-        .and_then(|table| table.get("apps"))
-        .cloned()
-        .expect("apps table");
-    let apps = codex_config::types::AppsConfigToml::deserialize(apps_toml)
-        .expect("deserialize apps config");
-    let app = apps
-        .apps
-        .get("calendar")
-        .expect("calendar app config exists");
-
-    assert!(!app.enabled);
-    assert_eq!(app.destructive_enabled, Some(false));
-}
-
-#[tokio::test]
 async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
     let session = make_session_with_config(|config| {
         config
@@ -1298,13 +1265,18 @@ disabled_tools = [
 }
 
 #[tokio::test]
-async fn refresh_runtime_config_updates_effective_tool_suggest_config() {
+async fn refresh_runtime_config_updates_runtime_refreshable_fields_and_keeps_session_static_settings()
+ {
     let (session, _turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;
     std::fs::create_dir_all(&codex_home).expect("create codex home");
     std::fs::write(
         codex_home.join(CONFIG_TOML_FILE),
-        r#"[tool_suggest]
+        r#"[apps.calendar]
+enabled = false
+destructive_enabled = false
+
+[tool_suggest]
 disabled_tools = [
   { type = "connector", id = " calendar " },
   { type = "plugin", id = "slack@openai-curated" },
@@ -1313,31 +1285,30 @@ disabled_tools = [
     )
     .expect("write user config");
 
-    let next_config = load_latest_config_for_session(&session).await;
-    session.refresh_runtime_config(next_config).await;
-
-    let config = session.get_config().await;
-    assert_eq!(
-        config.tool_suggest.disabled_tools,
-        vec![
-            ToolSuggestDisabledTool::connector("calendar"),
-            ToolSuggestDisabledTool::plugin("slack@openai-curated"),
-        ]
-    );
-}
-
-#[tokio::test]
-async fn refresh_runtime_config_keeps_session_static_settings() {
-    let (session, _turn_context) = make_session_and_context().await;
     let original = session.get_config().await;
-    let mut next_config = (*original).clone();
+    let mut next_config = load_latest_config_for_session(&session).await;
     next_config.model = Some("gpt-5.4".to_string());
     next_config.notify = Some(vec!["echo".to_string()]);
-    next_config.tool_suggest.disabled_tools = vec![ToolSuggestDisabledTool::connector("calendar")];
 
     session.refresh_runtime_config(next_config).await;
 
     let config = session.get_config().await;
+    let apps_toml = config
+        .config_layer_stack
+        .effective_config()
+        .as_table()
+        .and_then(|table| table.get("apps"))
+        .cloned()
+        .expect("apps table");
+    let apps = codex_config::types::AppsConfigToml::deserialize(apps_toml)
+        .expect("deserialize apps config");
+    let app = apps
+        .apps
+        .get("calendar")
+        .expect("calendar app config exists");
+
+    assert!(!app.enabled);
+    assert_eq!(app.destructive_enabled, Some(false));
     assert_eq!(config.model, original.model);
     assert_eq!(config.notify, original.notify);
     assert_eq!(
