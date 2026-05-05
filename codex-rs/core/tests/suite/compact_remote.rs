@@ -106,6 +106,23 @@ fn contains_defer_loading(value: &Value) -> bool {
     }
 }
 
+fn canonical_json(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries = map.iter().collect::<Vec<_>>();
+            entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key.clone(), canonical_json(value)))
+                    .collect(),
+            )
+        }
+        Value::Array(values) => Value::Array(values.iter().map(canonical_json).collect()),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => value.clone(),
+    }
+}
+
 const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
 const DUMMY_FUNCTION_NAME: &str = "test_tool";
 const REMOTE_COMPACT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -597,18 +614,21 @@ async fn assert_remote_manual_compact_request_parity(
         .as_object_mut()
         .expect("compact request body should be an object")
         .remove("input");
+    let canonical_compact_body_without_input = canonical_json(&compact_body_without_input);
+    let canonical_expected_compact_body_without_input =
+        canonical_json(&expected_compact_body_without_input);
 
     assert_eq!(
         json!({
-            "compact_body_without_input": compact_body_without_input,
-            "expected_compact_body_without_input": expected_compact_body_without_input.clone(),
+            "compact_body_without_input": canonical_compact_body_without_input,
+            "expected_compact_body_without_input": canonical_expected_compact_body_without_input.clone(),
             "prompt_cache_key_matches_responses": compact_body["prompt_cache_key"] == normal_body["prompt_cache_key"],
             "prompt_cache_key_present": compact_body["prompt_cache_key"].is_string(),
             "service_tier": compact_body.get("service_tier").and_then(Value::as_str),
         }),
         json!({
-            "compact_body_without_input": expected_compact_body_without_input.clone(),
-            "expected_compact_body_without_input": expected_compact_body_without_input,
+            "compact_body_without_input": canonical_expected_compact_body_without_input.clone(),
+            "expected_compact_body_without_input": canonical_expected_compact_body_without_input,
             "prompt_cache_key_matches_responses": true,
             "prompt_cache_key_present": true,
             "service_tier": expected_service_tier,
