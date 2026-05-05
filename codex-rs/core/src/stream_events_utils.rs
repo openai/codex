@@ -138,11 +138,8 @@ pub(crate) async fn record_completed_response_item(
             .await;
     }
     mark_thread_memory_mode_polluted_if_external_context(sess, turn_context, item).await;
-    let has_memory_citation = record_stage1_output_usage_and_detect_memory_citation(
-        sess.services.state_db.as_ref(),
-        item,
-    )
-    .await;
+    let has_memory_citation =
+        record_stage1_output_usage_and_detect_memory_citation(sess.state_db(), item).await;
     if has_memory_citation {
         sess.record_memory_citation_for_turn(&turn_context.sub_id)
             .await;
@@ -177,7 +174,7 @@ pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
 }
 
 async fn record_stage1_output_usage_and_detect_memory_citation(
-    state_db_ctx: Option<&state_db::StateDbHandle>,
+    state_db_ctx: Option<state_db::StateDbHandle>,
     item: &ResponseItem,
 ) -> bool {
     let Some(raw_text) = raw_assistant_output_text_from_item(item) else {

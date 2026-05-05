@@ -29,7 +29,6 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
             text: "hello from debug prompt".to_string(),
             text_elements: Vec::new(),
         }],
-        /*state_db*/ None,
     )
     .await?;
 

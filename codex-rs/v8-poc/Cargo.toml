@@ -8,6 +8,9 @@ license.workspace = true
 name = "codex_v8_poc"
 path = "src/lib.rs"
 
+[features]
+sandbox = ["v8/v8_enable_sandbox"]
+
 [lints]
 workspace = true
 
