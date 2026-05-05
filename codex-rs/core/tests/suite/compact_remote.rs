@@ -428,17 +428,61 @@ async fn assert_remote_manual_compact_request_parity(
     }
     let harness = TestCodexHarness::with_builder(builder).await?;
     let codex = harness.test().codex.clone();
-    let responses_mock = mount_sse_once(
+    let image_url =
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+            .to_string();
+
+    let responses_mock = responses::mount_sse_sequence(
         harness.server(),
-        sse(vec![
-            responses::ev_assistant_message("cache-parity-assistant", "CACHE_PARITY_ASSISTANT"),
-            responses::ev_completed("cache-parity-response"),
-        ]),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("turn-one-assistant", "TURN_ONE_ASSISTANT"),
+                responses::ev_completed("turn-one-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_reasoning_item(
+                    "turn-two-reasoning",
+                    &["TURN_TWO_REASONING"],
+                    &["turn two raw content"],
+                ),
+                responses::ev_assistant_message("turn-two-assistant", "TURN_TWO_ASSISTANT"),
+                responses::ev_completed("turn-two-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_function_call("turn-three-call", DUMMY_FUNCTION_NAME, "{}"),
+                responses::ev_completed("turn-three-call-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("turn-three-assistant", "TURN_THREE_ASSISTANT"),
+                responses::ev_completed("turn-three-final-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_local_shell_call(
+                    "turn-four-local-shell",
+                    "completed",
+                    vec!["/bin/echo", "TURN_FOUR_LOCAL_SHELL"],
+                ),
+                responses::ev_completed("turn-four-local-shell-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("turn-four-assistant", "TURN_FOUR_ASSISTANT"),
+                responses::ev_completed("turn-four-final-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_reasoning_item(
+                    "turn-five-reasoning",
+                    &["TURN_FIVE_REASONING"],
+                    &["turn five raw content"],
+                ),
+                responses::ev_assistant_message("turn-five-assistant", "TURN_FIVE_ASSISTANT"),
+                responses::ev_completed("turn-five-response"),
+            ]),
+        ],
     )
     .await;
     let compact_mock = responses::mount_compact_user_history_with_summary_once(
         harness.server(),
-        "CACHE_PARITY_SUMMARY",
+        "REMOTE_CACHE_TIER_SUMMARY",
     )
     .await;
 
@@ -446,7 +490,68 @@ async fn assert_remote_manual_compact_request_parity(
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                text: "CACHE_PARITY_USER".to_string(),
+                text: "TURN_ONE_USER".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![
+                UserInput::Text {
+                    text: "TURN_TWO_PREFIX".to_string(),
+                    text_elements: Vec::new(),
+                },
+                UserInput::Text {
+                    text: "TURN_TWO_SUFFIX".to_string(),
+                    text_elements: Vec::new(),
+                },
+            ],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "TURN_THREE_TOOL_USER".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![
+                UserInput::Image { image_url },
+                UserInput::Text {
+                    text: "TURN_FOUR_IMAGE_USER".to_string(),
+                    text_elements: Vec::new(),
+                },
+            ],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "TURN_FIVE_USER".to_string(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
@@ -458,7 +563,21 @@ async fn assert_remote_manual_compact_request_parity(
     codex.submit(Op::Compact).await?;
     wait_for_turn_complete(&codex).await;
 
-    let normal_request = responses_mock.single_request();
+    let response_requests = responses_mock.requests();
+    assert_eq!(
+        response_requests.len(),
+        7,
+        "expected five turns with one unsupported tool continuation and one local shell continuation"
+    );
+    assert_eq!(
+        compact_mock.requests().len(),
+        1,
+        "expected exactly one remote compact request"
+    );
+    let normal_request = response_requests
+        .last()
+        .cloned()
+        .expect("last turn request missing");
     let compact_request = compact_mock.single_request();
     let normal_body = normal_request.body_json();
     let compact_body = compact_request.body_json();
@@ -518,7 +637,7 @@ async fn remote_manual_compact_api_auth_reuses_prompt_cache_key() -> Result<()> 
         /*configured_service_tier*/ None,
         /*expected_service_tier*/ None,
         "remote_manual_compact_api_auth_prompt_cache_key_request_diff",
-        "After one API-key-auth turn, remote manual compaction reuses the normal responses prompt_cache_key while omitting responses-only fields.",
+        "After five varied API-key-auth turns, remote manual compaction reuses the normal responses prompt_cache_key while omitting responses-only fields.",
     )
     .await?;
 
@@ -535,7 +654,7 @@ async fn remote_manual_compact_chatgpt_auth_reuses_service_tier_and_prompt_cache
         Some(ServiceTier::Fast),
         Some("priority"),
         "remote_manual_compact_chatgpt_auth_service_tier_prompt_cache_key_request_diff",
-        "After one ChatGPT-auth turn, remote manual compaction reuses the normal responses service_tier and prompt_cache_key while omitting responses-only fields.",
+        "After five varied ChatGPT-auth turns, remote manual compaction reuses the normal responses service_tier and prompt_cache_key while omitting responses-only fields.",
     )
     .await?;
 

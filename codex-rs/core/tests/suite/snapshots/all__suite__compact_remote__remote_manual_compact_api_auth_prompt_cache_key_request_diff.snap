@@ -2,7 +2,7 @@
 source: core/tests/suite/compact_remote.rs
 expression: "context_snapshot::format_request_body_diff_snapshot(scenario,\n\"Last Normal /responses Request\", &normal_request,\n\"Remote /responses/compact Request\", &compact_request,\n&ContextSnapshotOptions::default(),)"
 ---
-Scenario: After one API-key-auth turn, remote manual compaction reuses the normal responses prompt_cache_key while omitting responses-only fields.
+Scenario: After five varied API-key-auth turns, remote manual compaction reuses the normal responses prompt_cache_key while omitting responses-only fields.
 
 --- Last Normal /responses Request
 +++ Remote /responses/compact Request
@@ -16,7 +16,23 @@ Scenario: After one API-key-auth turn, remote manual compaction reuses the norma
 +    {
 +      "content": [
 +        {
-+          "text": "CACHE_PARITY_ASSISTANT",
++          "text": "turn five raw content",
++          "type": "reasoning_text"
++        }
++      ],
++      "encrypted_content": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYnR1cm4gZml2ZSByYXcgY29udGVudA==",
++      "summary": [
++        {
++          "text": "TURN_FIVE_REASONING",
++          "type": "summary_text"
++        }
++      ],
++      "type": "reasoning"
++    },
++    {
++      "content": [
++        {
++          "text": "TURN_FIVE_ASSISTANT",
 +          "type": "output_text"
 +        }
 +      ],
