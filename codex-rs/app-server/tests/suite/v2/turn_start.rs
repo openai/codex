@@ -44,6 +44,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnEnvironmentParams;
+use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
@@ -868,6 +869,8 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
         codex_app_server_protocol::TurnStatus::InProgress
     );
     assert_eq!(started.turn.id, turn.id);
+    assert_eq!(started.turn.items_view, TurnItemsView::NotLoaded);
+    assert!(started.turn.items.is_empty());
 
     let completed_notif: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -915,6 +918,8 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     assert_eq!(started2.thread_id, thread.id);
     assert_eq!(started2.turn.id, turn2.id);
     assert_eq!(started2.turn.status, TurnStatus::InProgress);
+    assert_eq!(started2.turn.items_view, TurnItemsView::NotLoaded);
+    assert!(started2.turn.items.is_empty());
 
     let completed_notif2: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,

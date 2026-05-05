@@ -161,7 +161,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
             let turn = {
                 let state = thread_state.lock().await;
-                state.active_turn_snapshot().unwrap_or_else(|| Turn {
+                let mut turn = state.active_turn_snapshot().unwrap_or_else(|| Turn {
                     id: payload.turn_id.clone(),
                     items: Vec::new(),
                     items_view: TurnItemsView::NotLoaded,
@@ -170,7 +170,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                     started_at: payload.started_at,
                     completed_at: None,
                     duration_ms: None,
-                })
+                });
+                turn.items.clear();
+                turn.items_view = TurnItemsView::NotLoaded;
+                turn
             };
             let notification = TurnStartedNotification {
                 thread_id: conversation_id.to_string(),

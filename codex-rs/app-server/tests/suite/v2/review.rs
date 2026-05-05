@@ -22,6 +22,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
+use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -85,6 +86,8 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
     assert_eq!(review_thread_id, thread_id.clone());
     let turn_id = turn.id.clone();
     assert_eq!(turn.status, TurnStatus::InProgress);
+    assert_eq!(turn.items_view, TurnItemsView::NotLoaded);
+    assert!(turn.items.is_empty());
 
     // Confirm we see the EnteredReviewMode marker on the main thread.
     let mut saw_entered_review_mode = false;
@@ -182,6 +185,8 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
     .await??;
     let ReviewStartResponse { turn, .. } = to_response::<ReviewStartResponse>(review_resp)?;
     let turn_id = turn.id.clone();
+    assert_eq!(turn.items_view, TurnItemsView::NotLoaded);
+    assert!(turn.items.is_empty());
 
     let server_req = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -300,6 +305,8 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
     } = to_response::<ReviewStartResponse>(review_resp)?;
 
     assert_eq!(turn.status, TurnStatus::InProgress);
+    assert_eq!(turn.items_view, TurnItemsView::NotLoaded);
+    assert!(turn.items.is_empty());
     assert_ne!(
         review_thread_id, thread_id,
         "detached review should run on a different thread"
