@@ -7,6 +7,7 @@ use anyhow::Result;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -408,6 +409,135 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
             ]
         )
     );
+
+    Ok(())
+}
+
+async fn assert_remote_manual_compact_request_parity(
+    auth: CodexAuth,
+    configured_service_tier: Option<ServiceTier>,
+    expected_service_tier: Option<&str>,
+    snapshot_name: &str,
+    scenario: &str,
+) -> Result<()> {
+    let mut builder = test_codex().with_auth(auth);
+    if let Some(service_tier) = configured_service_tier {
+        builder = builder.with_config(move |config| {
+            config.service_tier = Some(service_tier);
+        });
+    }
+    let harness = TestCodexHarness::with_builder(builder).await?;
+    let codex = harness.test().codex.clone();
+    let responses_mock = mount_sse_once(
+        harness.server(),
+        sse(vec![
+            responses::ev_assistant_message("cache-parity-assistant", "CACHE_PARITY_ASSISTANT"),
+            responses::ev_completed("cache-parity-response"),
+        ]),
+    )
+    .await;
+    let compact_mock = responses::mount_compact_user_history_with_summary_once(
+        harness.server(),
+        "CACHE_PARITY_SUMMARY",
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "CACHE_PARITY_USER".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+
+    let normal_request = responses_mock.single_request();
+    let compact_request = compact_mock.single_request();
+    let normal_body = normal_request.body_json();
+    let compact_body = compact_request.body_json();
+
+    let mut expected_compact_body_without_input = normal_body.clone();
+    let expected_compact_object = expected_compact_body_without_input
+        .as_object_mut()
+        .expect("responses request body should be an object");
+    for field in ["input", "client_metadata", "include", "store", "stream"] {
+        expected_compact_object.remove(field);
+    }
+    let mut compact_body_without_input = compact_body.clone();
+    compact_body_without_input
+        .as_object_mut()
+        .expect("compact request body should be an object")
+        .remove("input");
+
+    assert_eq!(
+        json!({
+            "compact_body_without_input": compact_body_without_input,
+            "expected_compact_body_without_input": expected_compact_body_without_input.clone(),
+            "prompt_cache_key_matches_responses": compact_body["prompt_cache_key"] == normal_body["prompt_cache_key"],
+            "prompt_cache_key_present": compact_body["prompt_cache_key"].is_string(),
+            "service_tier": compact_body.get("service_tier").and_then(Value::as_str),
+        }),
+        json!({
+            "compact_body_without_input": expected_compact_body_without_input.clone(),
+            "expected_compact_body_without_input": expected_compact_body_without_input,
+            "prompt_cache_key_matches_responses": true,
+            "prompt_cache_key_present": true,
+            "service_tier": expected_service_tier,
+        }),
+        "compact requests should carry the same shared request fields as /responses"
+    );
+
+    insta::assert_snapshot!(
+        snapshot_name,
+        context_snapshot::format_request_body_diff_snapshot(
+            scenario,
+            "Last Normal /responses Request",
+            &normal_request,
+            "Remote /responses/compact Request",
+            &compact_request,
+            &ContextSnapshotOptions::default(),
+        )
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_manual_compact_api_auth_reuses_prompt_cache_key() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    assert_remote_manual_compact_request_parity(
+        CodexAuth::from_api_key("dummy"),
+        /*configured_service_tier*/ None,
+        /*expected_service_tier*/ None,
+        "remote_manual_compact_api_auth_prompt_cache_key_request_diff",
+        "After one API-key-auth turn, remote manual compaction reuses the normal responses prompt_cache_key while omitting responses-only fields.",
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_manual_compact_chatgpt_auth_reuses_service_tier_and_prompt_cache_key() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    assert_remote_manual_compact_request_parity(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        Some(ServiceTier::Fast),
+        Some("priority"),
+        "remote_manual_compact_chatgpt_auth_service_tier_prompt_cache_key_request_diff",
+        "After one ChatGPT-auth turn, remote manual compaction reuses the normal responses service_tier and prompt_cache_key while omitting responses-only fields.",
+    )
+    .await?;
 
     Ok(())
 }

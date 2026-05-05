@@ -416,6 +416,7 @@ impl ModelClient {
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        service_tier: Option<ServiceTier>,
         session_telemetry: &SessionTelemetry,
         compaction_trace: &CompactionTraceContext,
     ) -> Result<Vec<ResponseItem>> {
@@ -440,7 +441,7 @@ impl ModelClient {
             model_info,
             effort,
             summary,
-            /*service_tier*/ None,
+            service_tier,
         )?;
         let ResponsesApiRequest {
             model,
@@ -449,6 +450,8 @@ impl ModelClient {
             tools,
             parallel_tool_calls,
             reasoning,
+            service_tier,
+            prompt_cache_key,
             text,
             ..
         } = request;
@@ -462,6 +465,8 @@ impl ModelClient {
             tools,
             parallel_tool_calls,
             reasoning,
+            service_tier: service_tier.as_deref(),
+            prompt_cache_key: prompt_cache_key.as_deref(),
             text,
         };
 

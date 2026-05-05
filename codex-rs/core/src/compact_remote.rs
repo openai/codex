@@ -172,6 +172,7 @@ async fn run_remote_compact_task_inner_impl(
             &turn_context.model_info,
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
+            turn_context.config.service_tier,
             &turn_context.session_telemetry,
             &compaction_trace,
         )

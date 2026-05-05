@@ -242,6 +242,158 @@ pub fn format_labeled_items_snapshot(
     format!("Scenario: {scenario}\n\n{sections}")
 }
 
+/// Render changed JSON lines between two captured `/responses` request bodies.
+///
+/// Request-parity tests use this to compare the entire JSON payload while showing only fields that
+/// changed, with the same redactions as the other context snapshots.
+pub fn format_request_body_diff_snapshot(
+    scenario: &str,
+    before_title: &str,
+    before_request: &ResponsesRequest,
+    after_title: &str,
+    after_request: &ResponsesRequest,
+    options: &ContextSnapshotOptions,
+) -> String {
+    let before = format_request_body_snapshot(before_request, options);
+    let after = format_request_body_snapshot(after_request, options);
+    let diff = format_changed_lines_diff(before_title, &before, after_title, &after);
+    format!("Scenario: {scenario}\n\n{diff}")
+}
+
+fn format_request_body_snapshot(
+    request: &ResponsesRequest,
+    options: &ContextSnapshotOptions,
+) -> String {
+    let mut body = request.body_json();
+    canonicalize_json_snapshot_value(&mut body, options);
+    serde_json::to_string_pretty(&body).expect("request body should serialize")
+}
+
+fn canonicalize_json_snapshot_value(value: &mut Value, options: &ContextSnapshotOptions) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                canonicalize_json_snapshot_value(value, options);
+            }
+        }
+        Value::Object(map) => {
+            // Keep request-body snapshots stable when serde_json preserves insertion order.
+            let mut entries = std::mem::take(map).into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+            for (key, mut value) in entries {
+                canonicalize_json_snapshot_value(&mut value, options);
+                map.insert(key, value);
+            }
+        }
+        Value::String(text) => {
+            *text = format_snapshot_json_string(text, options);
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn format_snapshot_json_string(text: &str, options: &ContextSnapshotOptions) -> String {
+    let normalized = match options.render_mode {
+        ContextSnapshotRenderMode::RedactedText
+        | ContextSnapshotRenderMode::KindWithTextPrefix { .. } => normalize_snapshot_uuids(
+            &normalize_snapshot_line_endings(&canonicalize_snapshot_text(text)),
+        ),
+        ContextSnapshotRenderMode::FullText => {
+            normalize_snapshot_uuids(&normalize_snapshot_line_endings(text))
+        }
+        ContextSnapshotRenderMode::KindOnly => unreachable!(),
+    };
+    match options.render_mode {
+        ContextSnapshotRenderMode::KindWithTextPrefix { max_chars }
+            if normalized.chars().count() > max_chars =>
+        {
+            let prefix = normalized.chars().take(max_chars).collect::<String>();
+            format!("{prefix}...")
+        }
+        ContextSnapshotRenderMode::RedactedText
+        | ContextSnapshotRenderMode::FullText
+        | ContextSnapshotRenderMode::KindWithTextPrefix { .. } => normalized,
+        ContextSnapshotRenderMode::KindOnly => unreachable!(),
+    }
+}
+
+fn format_changed_lines_diff(
+    before_title: &str,
+    before: &str,
+    after_title: &str,
+    after: &str,
+) -> String {
+    let before_lines = before.lines().collect::<Vec<&str>>();
+    let after_lines = after.lines().collect::<Vec<&str>>();
+    let mut diff = format!("--- {before_title}\n+++ {after_title}\n");
+    for line in diff_lines(before_lines.as_slice(), after_lines.as_slice()) {
+        match line {
+            DiffLine::Equal => {}
+            DiffLine::Remove(text) => {
+                diff.push('-');
+                diff.push_str(text);
+                diff.push('\n');
+            }
+            DiffLine::Add(text) => {
+                diff.push('+');
+                diff.push_str(text);
+                diff.push('\n');
+            }
+        }
+    }
+    diff
+}
+
+enum DiffLine<'a> {
+    Equal,
+    Remove(&'a str),
+    Add(&'a str),
+}
+
+fn diff_lines<'a>(before: &[&'a str], after: &[&'a str]) -> Vec<DiffLine<'a>> {
+    let after_len = after.len();
+    let mut lengths = vec![0usize; (before.len() + 1) * (after_len + 1)];
+    for before_index in (0..before.len()).rev() {
+        for after_index in (0..after.len()).rev() {
+            let offset = before_index * (after_len + 1) + after_index;
+            lengths[offset] = if before[before_index] == after[after_index] {
+                lengths[(before_index + 1) * (after_len + 1) + after_index + 1] + 1
+            } else {
+                lengths[(before_index + 1) * (after_len + 1) + after_index]
+                    .max(lengths[before_index * (after_len + 1) + after_index + 1])
+            };
+        }
+    }
+
+    let mut lines = Vec::new();
+    let mut before_index = 0usize;
+    let mut after_index = 0usize;
+    while before_index < before.len() && after_index < after.len() {
+        if before[before_index] == after[after_index] {
+            lines.push(DiffLine::Equal);
+            before_index += 1;
+            after_index += 1;
+        } else if lengths[(before_index + 1) * (after_len + 1) + after_index]
+            >= lengths[before_index * (after_len + 1) + after_index + 1]
+        {
+            lines.push(DiffLine::Remove(before[before_index]));
+            before_index += 1;
+        } else {
+            lines.push(DiffLine::Add(after[after_index]));
+            after_index += 1;
+        }
+    }
+    while before_index < before.len() {
+        lines.push(DiffLine::Remove(before[before_index]));
+        before_index += 1;
+    }
+    while after_index < after.len() {
+        lines.push(DiffLine::Add(after[after_index]));
+        after_index += 1;
+    }
+    lines
+}
+
 fn format_snapshot_text(text: &str, options: &ContextSnapshotOptions) -> String {
     match options.render_mode {
         ContextSnapshotRenderMode::RedactedText => {
@@ -340,6 +492,17 @@ fn normalize_dynamic_snapshot_paths(text: &str) -> String {
     system_skill_path_re
         .replace_all(text, "<SYSTEM_SKILLS_ROOT>/$1/SKILL.md")
         .into_owned()
+}
+
+fn normalize_snapshot_uuids(text: &str) -> String {
+    static UUID_RE: OnceLock<Regex> = OnceLock::new();
+    let uuid_re = UUID_RE.get_or_init(|| {
+        Regex::new(
+            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+        )
+        .expect("uuid regex should compile")
+    });
+    uuid_re.replace_all(text, "<UUID>").into_owned()
 }
 
 #[cfg(test)]
