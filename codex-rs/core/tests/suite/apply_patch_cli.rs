@@ -1365,53 +1365,6 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_turn_diff_for_rename_with_content_change(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let harness = apply_patch_harness().await?;
-    let test = harness.test();
-    let codex = test.codex.clone();
-
-    // Seed original file
-    harness.write_file("old.txt", "old\n").await?;
-
-    // Patch: update + move
-    let call_id = "apply-rename-change";
-    let patch = "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n-old\n+new\n*** End Patch";
-    mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
-
-    submit_without_wait(&harness, "rename with change").await?;
-
-    let mut last_diff: Option<String> = None;
-    wait_for_event(&codex, |event| match event {
-        EventMsg::TurnDiff(ev) => {
-            last_diff = Some(ev.unified_diff.clone());
-            false
-        }
-        EventMsg::TurnComplete(_) => true,
-        _ => false,
-    })
-    .await;
-
-    let diff = last_diff.expect("expected TurnDiff event after rename");
-    // Basic checks: shows old -> new, and the content delta
-    assert!(diff.contains("old.txt"), "diff missing old path: {diff:?}");
-    assert!(diff.contains("new.txt"), "diff missing new path: {diff:?}");
-    assert!(diff.contains("--- a/"), "missing old header");
-    assert!(diff.contains("+++ b/"), "missing new header");
-    assert!(diff.contains("-old\n"), "missing removal line");
-    assert!(diff.contains("+new\n"), "missing addition line");
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

@@ -1456,50 +1456,34 @@ g
     }
 
     #[tokio::test]
-    async fn test_add_over_unreadable_destination_returns_inexact_delta() {
+    async fn test_unreadable_destinations_return_inexact_delta() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("binary.dat");
-        fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
-        let patch = wrap_patch("*** Add File: binary.dat\n+text");
-
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let delta = apply_patch(
-            &patch,
-            &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
-            &mut stdout,
-            &mut stderr,
-            LOCAL_FS.as_ref(),
-            /*sandbox*/ None,
-        )
-        .await
-        .unwrap();
-
-        assert!(!delta.is_exact());
-    }
-
-    #[tokio::test]
-    async fn test_move_over_unreadable_destination_returns_inexact_delta() {
-        let dir = tempdir().unwrap();
         fs::write(dir.path().join("source.txt"), "before\n").unwrap();
-        fs::write(dir.path().join("binary.dat"), [0xff, 0xfe, 0xfd]).unwrap();
-        let patch =
-            wrap_patch("*** Update File: source.txt\n*** Move to: binary.dat\n@@\n-before\n+after");
+        let cwd = AbsolutePathBuf::from_absolute_path(dir.path()).unwrap();
 
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let delta = apply_patch(
-            &patch,
-            &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
-            &mut stdout,
-            &mut stderr,
-            LOCAL_FS.as_ref(),
-            /*sandbox*/ None,
-        )
-        .await
-        .unwrap();
+        for patch in [
+            wrap_patch("*** Add File: binary.dat\n+text"),
+            wrap_patch(
+                "*** Update File: source.txt\n*** Move to: binary.dat\n@@\n-before\n+after",
+            ),
+        ] {
+            fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let delta = apply_patch(
+                &patch,
+                &cwd,
+                &mut stdout,
+                &mut stderr,
+                LOCAL_FS.as_ref(),
+                /*sandbox*/ None,
+            )
+            .await
+            .unwrap();
 
-        assert!(!delta.is_exact());
+            assert!(!delta.is_exact());
+        }
     }
 
     #[cfg(unix)]

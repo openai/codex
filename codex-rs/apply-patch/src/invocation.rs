@@ -860,44 +860,31 @@ PATCH"#,
     }
 
     #[tokio::test]
-    async fn test_add_over_unreadable_destination_still_verifies() {
+    async fn test_unreadable_destinations_still_verify() {
         let session_dir = tempdir().unwrap();
         fs::write(session_dir.path().join("binary.dat"), [0xff, 0xfe, 0xfd]).unwrap();
-        let argv = vec![
+        let cwd = AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap();
+        let add_argv = vec![
             "apply_patch".to_string(),
             "*** Begin Patch\n*** Add File: binary.dat\n+text\n*** End Patch".to_string(),
         ];
-
-        let result = maybe_parse_apply_patch_verified(
-            &argv,
-            &AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
-            LOCAL_FS.as_ref(),
-            /*sandbox*/ None,
-        )
-        .await;
-
-        assert!(matches!(result, MaybeApplyPatchVerified::Body(_)));
-    }
-
-    #[tokio::test]
-    async fn test_move_over_unreadable_destination_still_verifies() {
-        let session_dir = tempdir().unwrap();
         fs::write(session_dir.path().join("source.txt"), "before\n").unwrap();
-        fs::write(session_dir.path().join("binary.dat"), [0xff, 0xfe, 0xfd]).unwrap();
-        let argv = vec![
+        let move_argv = vec![
             "apply_patch".to_string(),
             "*** Begin Patch\n*** Update File: source.txt\n*** Move to: binary.dat\n@@\n-before\n+after\n*** End Patch".to_string(),
         ];
 
-        let result = maybe_parse_apply_patch_verified(
-            &argv,
-            &AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
-            LOCAL_FS.as_ref(),
-            /*sandbox*/ None,
-        )
-        .await;
+        for argv in [add_argv, move_argv] {
+            let result = maybe_parse_apply_patch_verified(
+                &argv,
+                &cwd,
+                LOCAL_FS.as_ref(),
+                /*sandbox*/ None,
+            )
+            .await;
 
-        assert!(matches!(result, MaybeApplyPatchVerified::Body(_)));
+            assert!(matches!(result, MaybeApplyPatchVerified::Body(_)));
+        }
     }
 
     #[cfg(unix)]
