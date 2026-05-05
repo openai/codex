@@ -2,9 +2,11 @@ mod shared;
 
 mod account;
 mod apps;
+mod collaboration_mode;
 mod command_exec;
 mod config;
 mod device_key;
+mod experimental_feature;
 mod feedback;
 mod fs;
 mod hook;
@@ -24,9 +26,11 @@ mod windows_sandbox;
 
 pub use account::*;
 pub use apps::*;
+pub use collaboration_mode::*;
 pub use command_exec::*;
 pub use config::*;
 pub use device_key::*;
+pub use experimental_feature::*;
 pub use feedback::*;
 pub use fs::*;
 pub use hook::*;
