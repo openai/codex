@@ -183,5 +183,15 @@ common:ci-v8 --build_metadata=TAG_os=linux
 common:ci-v8 --config=remote
 common:ci-v8 --strategy=remote
 
+# Source-built Bazel V8 artifacts use the in-process sandbox by default. This
+# does not affect Cargo's default prebuilt rusty_v8 path.
+common --@v8//:v8_enable_pointer_compression=True
+common --@v8//:v8_enable_sandbox=True
+
+# Keep currently published rusty_v8 release artifacts non-sandboxed until the
+# artifact migration ships matching Rust feature selection for Cargo consumers.
+common:v8-release-compat --@v8//:v8_enable_pointer_compression=False
+common:v8-release-compat --@v8//:v8_enable_sandbox=False
+
 # Optional per-user local overrides.
 try-import %workspace%/user.bazelrc
