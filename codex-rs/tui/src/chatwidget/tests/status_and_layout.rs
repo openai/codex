@@ -1451,7 +1451,7 @@ async fn ambient_pet_reserves_history_wrap_width() {
 
 #[tokio::test]
 #[serial]
-async fn ambient_pet_reduces_stream_width_without_changing_composer_rendering() {
+async fn ambient_pet_reduces_stream_width_and_composer_text_width() {
     use ratatui::Terminal;
 
     let (mut with_pet, _with_pet_rx, _with_pet_op_rx) =
@@ -1476,32 +1476,48 @@ async fn ambient_pet_reduces_stream_width_without_changing_composer_rendering() 
     );
     assert!(stream_width_with_pet < stream_width_without_pet);
 
-    with_pet.bottom_pane.set_composer_text(
-        "same composer draft".to_string(),
-        Vec::new(),
-        Vec::new(),
-    );
-    disabled.bottom_pane.set_composer_text(
-        "same composer draft".to_string(),
-        Vec::new(),
-        Vec::new(),
-    );
+    let draft =
+        "Minim commodo esse elit Lorem exercitation elit ipsum proident labore. Esse culpa aliqua"
+            .to_string();
+    with_pet
+        .bottom_pane
+        .set_composer_text(draft.clone(), Vec::new(), Vec::new());
+    disabled
+        .bottom_pane
+        .set_composer_text(draft, Vec::new(), Vec::new());
 
     let mut with_pet_terminal =
-        Terminal::new(TestBackend::new(/*width*/ 80, /*height*/ 5)).expect("create terminal");
+        Terminal::new(TestBackend::new(/*width*/ 80, /*height*/ 6)).expect("create terminal");
     with_pet_terminal
         .draw(|f| with_pet.render(f.area(), f.buffer_mut()))
         .expect("draw pet-enabled chat");
     let mut disabled_terminal =
-        Terminal::new(TestBackend::new(/*width*/ 80, /*height*/ 5)).expect("create terminal");
+        Terminal::new(TestBackend::new(/*width*/ 80, /*height*/ 6)).expect("create terminal");
     disabled_terminal
         .draw(|f| disabled.render(f.area(), f.buffer_mut()))
         .expect("draw disabled-pet chat");
 
-    assert_eq!(
-        normalized_backend_snapshot(with_pet_terminal.backend()),
-        normalized_backend_snapshot(disabled_terminal.backend())
-    );
+    let pet_row = buffer_row_containing(with_pet_terminal.backend().buffer(), "Minim")
+        .expect("pet-enabled composer row should render draft");
+    let disabled_row = buffer_row_containing(disabled_terminal.backend().buffer(), "Minim")
+        .expect("disabled-pet composer row should render draft");
+
+    assert!(row_tail_is_blank(&pet_row, /*start_col*/ 69));
+    assert!(!row_tail_is_blank(&disabled_row, /*start_col*/ 69));
+}
+
+fn buffer_row_containing(buffer: &ratatui::buffer::Buffer, text: &str) -> Option<String> {
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer.cell((x, y)).expect("cell should exist").symbol())
+                .collect::<String>()
+        })
+        .find(|row| row.contains(text))
+}
+
+fn row_tail_is_blank(row: &str, start_col: usize) -> bool {
+    row.chars().skip(start_col).all(char::is_whitespace)
 }
 
 #[tokio::test]

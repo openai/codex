@@ -10735,11 +10735,42 @@ impl ChatWidget {
         flex.push(/*flex*/ 0, active_hook_cell_renderable);
         flex.push(
             /*flex*/ 0,
-            RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(
+            RenderableItem::Owned(Box::new(BottomPaneComposerReserveRenderable {
+                bottom_pane: &self.bottom_pane,
+                right_reserve: active_cell_right_reserve,
+            }))
+            .inset(Insets::tlbr(
                 /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
             )),
         );
         RenderableItem::Owned(Box::new(flex))
+    }
+}
+
+struct BottomPaneComposerReserveRenderable<'a> {
+    bottom_pane: &'a BottomPane,
+    right_reserve: u16,
+}
+
+impl Renderable for BottomPaneComposerReserveRenderable<'_> {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.bottom_pane
+            .render_with_composer_right_reserve(area, buf, self.right_reserve);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.bottom_pane
+            .desired_height_with_composer_right_reserve(width, self.right_reserve)
+    }
+
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        self.bottom_pane
+            .cursor_pos_with_composer_right_reserve(area, self.right_reserve)
+    }
+
+    fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
+        self.bottom_pane
+            .cursor_style_with_composer_right_reserve(area, self.right_reserve)
     }
 }
 
