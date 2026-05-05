@@ -916,7 +916,7 @@ impl App {
         session.cwd = notification.thread.cwd.clone();
         let rollout_path = notification.thread.path.clone();
         if let Some(model) =
-            read_session_model(&self.config, thread_id, rollout_path.as_deref()).await
+            read_session_model(self.state_db.as_deref(), thread_id, rollout_path.as_deref()).await
         {
             session.model = model;
         } else if rollout_path.is_some() {
@@ -1238,6 +1238,12 @@ impl App {
         snapshot: ThreadEventSnapshot,
         resume_restored_queue: bool,
     ) {
+        let should_buffer_replay = self.terminal_resize_reflow_enabled()
+            && (!snapshot.turns.is_empty() || !snapshot.events.is_empty());
+        if should_buffer_replay {
+            self.app_event_tx
+                .send(AppEvent::BeginThreadSwitchHistoryReplayBuffer);
+        }
         let suppress_replay_notices =
             replay_filter::snapshot_has_pending_interactive_request(&snapshot);
         if let Some(session) = snapshot.session {
@@ -1263,6 +1269,10 @@ impl App {
             }
             self.handle_thread_event_replay(event);
         }
+        if should_buffer_replay {
+            self.app_event_tx
+                .send(AppEvent::EndInitialHistoryReplayBuffer);
+        }
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ false);
         self.chat_widget
@@ -1279,6 +1289,16 @@ impl App {
             session_selection,
             SessionSelection::StartFresh | SessionSelection::Exit
         )
+    }
+
+    pub(super) fn should_prompt_for_paused_goal_after_startup_resume(
+        session_selection: &SessionSelection,
+        initial_prompt: &Option<String>,
+        initial_images: &[PathBuf],
+    ) -> bool {
+        matches!(session_selection, SessionSelection::Resume(_))
+            && initial_prompt.is_none()
+            && initial_images.is_empty()
     }
 
     pub(super) fn should_handle_active_thread_events(

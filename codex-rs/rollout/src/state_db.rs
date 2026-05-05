@@ -17,15 +17,52 @@ use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
+use tracing::info;
 use tracing::warn;
 
 /// Core-facing handle to the SQLite-backed state runtime.
 pub type StateDbHandle = Arc<codex_state::StateRuntime>;
 
-/// Initialize the state runtime for thread state persistence and backfill checks.
+#[cfg(not(test))]
+const STARTUP_BACKFILL_POLL_INTERVAL: Duration = Duration::from_secs(1);
+#[cfg(test)]
+const STARTUP_BACKFILL_POLL_INTERVAL: Duration = Duration::from_millis(10);
+#[cfg(not(test))]
+const STARTUP_BACKFILL_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const STARTUP_BACKFILL_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Initialize the state runtime for thread state persistence.
+///
+/// This is the process entry point for local state: it opens the SQLite-backed
+/// runtime, applies rollout metadata backfills as needed, and returns the
+/// initialized handle.
 pub async fn init(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
     let config = RolloutConfig::from_view(config);
-    init_with_roots(
+    match try_init_with_roots(
+        config.codex_home,
+        config.sqlite_home,
+        config.model_provider_id,
+    )
+    .await
+    {
+        Ok(runtime) => Some(runtime),
+        Err(err) => {
+            emit_startup_warning(&format!("failed to initialize state runtime: {err}"));
+            None
+        }
+    }
+}
+
+/// Initialize the state runtime and return any initialization error to the caller.
+///
+/// Prefer [`init`] unless the caller needs to surface the exact failure after
+/// tracing or UI setup has completed.
+pub async fn try_init(config: &impl RolloutConfigView) -> anyhow::Result<StateDbHandle> {
+    let config = RolloutConfig::from_view(config);
+    try_init_with_roots(
         config.codex_home,
         config.sqlite_home,
         config.model_provider_id,
@@ -33,52 +70,128 @@ pub async fn init(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
     .await
 }
 
-/// Initialize the state runtime for a local thread store.
-pub async fn init_with_roots(
+async fn try_init_with_roots(
     codex_home: PathBuf,
     sqlite_home: PathBuf,
     default_model_provider_id: String,
-) -> Option<StateDbHandle> {
-    let runtime = match codex_state::StateRuntime::init(
-        sqlite_home.clone(),
-        default_model_provider_id.clone(),
+) -> anyhow::Result<StateDbHandle> {
+    try_init_with_roots_inner(
+        codex_home,
+        sqlite_home,
+        default_model_provider_id,
+        /*backfill_lease_seconds*/ None,
     )
     .await
-    {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            warn!(
-                "failed to initialize state runtime at {}: {err}",
-                sqlite_home.display()
-            );
-            return None;
-        }
-    };
-    let backfill_state = match runtime.get_backfill_state().await {
-        Ok(state) => state,
-        Err(err) => {
-            warn!(
+}
+
+#[cfg(test)]
+async fn try_init_with_roots_and_backfill_lease(
+    codex_home: PathBuf,
+    sqlite_home: PathBuf,
+    default_model_provider_id: String,
+    backfill_lease_seconds: i64,
+) -> anyhow::Result<StateDbHandle> {
+    try_init_with_roots_inner(
+        codex_home,
+        sqlite_home,
+        default_model_provider_id,
+        Some(backfill_lease_seconds),
+    )
+    .await
+}
+
+async fn try_init_with_roots_inner(
+    codex_home: PathBuf,
+    sqlite_home: PathBuf,
+    default_model_provider_id: String,
+    backfill_lease_seconds: Option<i64>,
+) -> anyhow::Result<StateDbHandle> {
+    let runtime =
+        codex_state::StateRuntime::init(sqlite_home.clone(), default_model_provider_id.clone())
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "failed to initialize state runtime at {}: {err}",
+                    sqlite_home.display()
+                )
+            })?;
+    let wait_started = Instant::now();
+    let mut reported_wait = false;
+    loop {
+        let backfill_state = runtime.get_backfill_state().await.map_err(|err| {
+            anyhow::anyhow!(
                 "failed to read backfill state at {}: {err}",
                 codex_home.display()
-            );
-            return None;
+            )
+        })?;
+        if backfill_state.status == codex_state::BackfillStatus::Complete {
+            return Ok(runtime);
         }
-    };
-    if backfill_state.status != codex_state::BackfillStatus::Complete {
-        let runtime_for_backfill = runtime.clone();
-        tokio::spawn(async move {
+
+        if let Some(backfill_lease_seconds) = backfill_lease_seconds {
+            metadata::backfill_sessions_with_lease(
+                runtime.as_ref(),
+                codex_home.as_path(),
+                default_model_provider_id.as_str(),
+                backfill_lease_seconds,
+            )
+            .await;
+        } else {
             metadata::backfill_sessions(
-                runtime_for_backfill.as_ref(),
+                runtime.as_ref(),
                 codex_home.as_path(),
                 default_model_provider_id.as_str(),
             )
             .await;
-        });
+        }
+        let backfill_state = runtime.get_backfill_state().await.map_err(|err| {
+            anyhow::anyhow!(
+                "failed to read backfill state at {} after startup backfill: {err}",
+                codex_home.display()
+            )
+        })?;
+        if backfill_state.status == codex_state::BackfillStatus::Complete {
+            return Ok(runtime);
+        }
+        if wait_started.elapsed() >= STARTUP_BACKFILL_WAIT_TIMEOUT {
+            return Err(anyhow::anyhow!(
+                "timed out waiting for state db backfill at {} after {:?} (status: {})",
+                codex_home.display(),
+                STARTUP_BACKFILL_WAIT_TIMEOUT,
+                backfill_state.status.as_str()
+            ));
+        }
+
+        let message = format!(
+            "state db backfill is {} at {}; waiting up to {:?} before retrying startup initialization",
+            backfill_state.status.as_str(),
+            codex_home.display(),
+            STARTUP_BACKFILL_WAIT_TIMEOUT,
+        );
+        if reported_wait {
+            info!("{message}");
+        } else {
+            emit_startup_warning(&message);
+            reported_wait = true;
+        }
+        tokio::time::sleep(STARTUP_BACKFILL_POLL_INTERVAL).await;
     }
-    Some(runtime)
 }
 
-/// Get the DB if the feature is enabled and the DB exists.
+fn emit_startup_warning(message: &str) {
+    warn!("{message}");
+    if !tracing::dispatcher::has_been_set() {
+        #[allow(clippy::print_stderr)]
+        {
+            eprintln!("{message}");
+        }
+    }
+}
+
+/// Open the DB if it exists and its startup backfill has already completed.
+///
+/// Unlike [`init`], this helper does not run rollout backfill. It is for
+/// optional local reads from non-owning contexts such as remote app-server mode.
 pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
     let state_path = codex_state::state_db_path(config.sqlite_home());
     if !tokio::fs::try_exists(&state_path).await.unwrap_or(false) {
@@ -91,21 +204,6 @@ pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHand
     .await
     .ok()?;
     require_backfill_complete(runtime, config.sqlite_home()).await
-}
-
-/// Open the state runtime when the SQLite file exists, without feature gating.
-///
-/// This is used for parity checks during the SQLite migration phase.
-pub async fn open_if_present(codex_home: &Path, default_provider: &str) -> Option<StateDbHandle> {
-    let db_path = codex_state::state_db_path(codex_home);
-    if !tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
-        return None;
-    }
-    let runtime =
-        codex_state::StateRuntime::init(codex_home.to_path_buf(), default_provider.to_string())
-            .await
-            .ok()?;
-    require_backfill_complete(runtime, codex_home).await
 }
 
 async fn require_backfill_complete(

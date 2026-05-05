@@ -458,7 +458,6 @@ impl ToolRegistry {
                 outcome.additional_contexts.clone(),
             )
             .await;
-
             let replacement_text = if outcome.should_stop {
                 Some(
                     outcome

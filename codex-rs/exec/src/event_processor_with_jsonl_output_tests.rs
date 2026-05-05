@@ -20,6 +20,7 @@ fn failed_turn_does_not_overwrite_output_last_message_file() {
             },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
         },
     ));
 

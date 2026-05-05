@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::tools::context::FunctionToolOutput;
+use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::protocol::InterAgentCommunication;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -97,6 +98,7 @@ async fn handle_message_submission(
             &turn,
             CollabAgentInteractionBeginEvent {
                 call_id: call_id.clone(),
+                started_at_ms: now_unix_timestamp_ms(),
                 sender_thread_id: session.conversation_id,
                 receiver_thread_id,
                 prompt: prompt.clone(),
@@ -132,6 +134,7 @@ async fn handle_message_submission(
             &turn,
             CollabAgentInteractionEndEvent {
                 call_id,
+                completed_at_ms: now_unix_timestamp_ms(),
                 sender_thread_id: session.conversation_id,
                 receiver_thread_id,
                 receiver_agent_nickname: receiver_agent.agent_nickname,

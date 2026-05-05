@@ -1,4 +1,5 @@
 use super::*;
+use crate::turn_timing::now_unix_timestamp_ms;
 
 pub(crate) struct Handler;
 
@@ -34,6 +35,7 @@ impl ToolHandler for Handler {
                 &turn,
                 CollabCloseBeginEvent {
                     call_id: call_id.clone(),
+                    started_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id: agent_id,
                 }
@@ -54,6 +56,7 @@ impl ToolHandler for Handler {
                         &turn,
                         CollabCloseEndEvent {
                             call_id: call_id.clone(),
+                            completed_at_ms: now_unix_timestamp_ms(),
                             sender_thread_id: session.conversation_id,
                             receiver_thread_id: agent_id,
                             receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
@@ -75,6 +78,7 @@ impl ToolHandler for Handler {
                 &turn,
                 CollabCloseEndEvent {
                     call_id,
+                    completed_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id: agent_id,
                     receiver_agent_nickname: receiver_agent.agent_nickname,

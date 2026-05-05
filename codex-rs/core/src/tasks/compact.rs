@@ -33,7 +33,14 @@ impl SessionTask for CompactTask {
                 /*inc*/ 1,
                 &[("type", "remote")],
             );
-            crate::compact_remote::run_remote_compact_task(session.clone(), ctx).await
+            if ctx
+                .features
+                .enabled(codex_features::Feature::RemoteCompactionV2)
+            {
+                crate::compact_remote_v2::run_remote_compact_task(session.clone(), ctx).await
+            } else {
+                crate::compact_remote::run_remote_compact_task(session.clone(), ctx).await
+            }
         } else {
             session.services.session_telemetry.counter(
                 "codex.task.compact",

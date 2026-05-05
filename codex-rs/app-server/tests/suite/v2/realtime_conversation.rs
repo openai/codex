@@ -1225,13 +1225,13 @@ async fn webrtc_v1_start_posts_offer_returns_sdp_and_joins_sideband() -> Result<
         "v=offer\r\n",
         v1_session_create_json(),
     )?;
+
+    let session_update = harness.sideband_outbound_request(/*request_index*/ 0).await;
+    assert_v1_session_update(&session_update)?;
     assert_eq!(
         harness.realtime_server.single_handshake().uri(),
         "/v1/realtime?intent=quicksilver&call_id=rtc_e2e"
     );
-
-    let session_update = harness.sideband_outbound_request(/*request_index*/ 0).await;
-    assert_v1_session_update(&session_update)?;
 
     let closed = timeout(
         Duration::from_millis(100),

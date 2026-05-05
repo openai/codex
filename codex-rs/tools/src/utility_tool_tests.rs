@@ -4,50 +4,6 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
 #[test]
-fn list_dir_tool_matches_expected_spec() {
-    assert_eq!(
-        create_list_dir_tool(),
-        ToolSpec::Function(ResponsesApiTool {
-            name: "list_dir".to_string(),
-            description:
-                "Lists entries in a local directory with 1-indexed entry numbers and simple type labels."
-                    .to_string(),
-            strict: false,
-            defer_loading: None,
-            parameters: JsonSchema::object(BTreeMap::from([
-                    (
-                        "depth".to_string(),
-                        JsonSchema::number(Some(
-                            "The maximum directory depth to traverse. Must be 1 or greater."
-                                .to_string(),
-                        )),
-                    ),
-                    (
-                        "dir_path".to_string(),
-                        JsonSchema::string(Some(
-                            "Absolute path to the directory to list.".to_string(),
-                        )),
-                    ),
-                    (
-                        "limit".to_string(),
-                        JsonSchema::number(Some(
-                            "The maximum number of entries to return.".to_string(),
-                        )),
-                    ),
-                    (
-                        "offset".to_string(),
-                        JsonSchema::number(Some(
-                            "The entry number to start listing from. Must be 1 or greater."
-                                .to_string(),
-                        )),
-                    ),
-                ]), Some(vec!["dir_path".to_string()]), Some(false.into())),
-            output_schema: None,
-        })
-    );
-}
-
-#[test]
 fn test_sync_tool_matches_expected_spec() {
     assert_eq!(
         create_test_sync_tool(),
