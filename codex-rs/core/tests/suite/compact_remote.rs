@@ -586,14 +586,7 @@ async fn assert_remote_manual_compact_request_parity(
     let expected_compact_object = expected_compact_body_without_input
         .as_object_mut()
         .expect("responses request body should be an object");
-    for field in [
-        "input",
-        "client_metadata",
-        "include",
-        "instructions",
-        "store",
-        "stream",
-    ] {
+    for field in ["input", "client_metadata", "include", "store", "stream"] {
         expected_compact_object.remove(field);
     }
     if expected_service_tier.is_none() {
