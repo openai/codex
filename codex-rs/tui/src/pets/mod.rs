@@ -97,7 +97,11 @@ fn render_pet_image(
         }
     };
 
-    queue!(writer, SavePosition, MoveTo(request.x, request.y))?;
+    queue!(writer, SavePosition)?;
+    if matches!(request.protocol, ImageProtocol::Sixel) {
+        clear_pet_cell_area(writer, &request)?;
+    }
+    queue!(writer, MoveTo(request.x, request.y))?;
     match payload {
         AmbientPetPayload::Text(payload) => write!(writer, "{payload}")?,
         AmbientPetPayload::Bytes(payload) => writer.write_all(&payload)?,
@@ -110,6 +114,18 @@ fn render_pet_image(
 enum AmbientPetPayload {
     Text(String),
     Bytes(Vec<u8>),
+}
+
+fn clear_pet_cell_area(writer: &mut impl Write, request: &AmbientPetDraw) -> std::io::Result<()> {
+    use crossterm::cursor::MoveTo;
+    use crossterm::queue;
+
+    let blank = " ".repeat(request.columns.into());
+    for row in 0..request.rows {
+        queue!(writer, MoveTo(request.x, request.y.saturating_add(row)))?;
+        write!(writer, "{blank}")?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -185,6 +201,35 @@ mod tests {
         assert!(output.contains("\x1b[4;3H"));
         assert!(output.contains("a=T,t=f,f=100,c=4,r=2,q=2,i=49374;"));
         assert!(!output.contains("cG5n"));
+        assert!(output.contains("\x1b8"));
+    }
+
+    #[test]
+    fn sixel_pet_image_clears_cell_area_before_redrawing() {
+        let dir = tempfile::tempdir().unwrap();
+        let frame = dir.path().join("frame.png");
+        std::fs::write(&frame, b"png").unwrap();
+        let sixel_dir = dir.path().join("sixel");
+        std::fs::create_dir(&sixel_dir).unwrap();
+        let sixel_frame = sixel_dir.join("frame_h75.six");
+        std::fs::write(&sixel_frame, b"fake-sixel").unwrap();
+        let request = AmbientPetDraw {
+            frame,
+            protocol: ImageProtocol::Sixel,
+            x: 2,
+            y: 3,
+            columns: 4,
+            rows: 2,
+            height_px: 75,
+            sixel_dir,
+        };
+        let mut output = Vec::new();
+
+        render_ambient_pet_image(&mut output, Some(request)).unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("\x1b[4;3H    \x1b[5;3H    \x1b[4;3H"));
+        assert!(output.contains("fake-sixel"));
         assert!(output.contains("\x1b8"));
     }
 }
