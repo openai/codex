@@ -8,7 +8,9 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
+use codex_rollout::RolloutConfig;
 use codex_rollout::SESSIONS_SUBDIR;
+use codex_rollout::state_db::StateDbHandle;
 use codex_state::state_db_path;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -19,6 +21,26 @@ const TEST_TIMESTAMP: &str = "2025-01-01T00-00-00";
 async fn read_config_toml(codex_home: &Path) -> io::Result<ConfigToml> {
     let contents = tokio::fs::read_to_string(codex_home.join("config.toml")).await?;
     toml::from_str(&contents).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+}
+
+async fn state_db_for_test(codex_home: &Path) -> io::Result<StateDbHandle> {
+    state_db_for_test_with_sqlite_home(codex_home, codex_home).await
+}
+
+async fn state_db_for_test_with_sqlite_home(
+    codex_home: &Path,
+    sqlite_home: &Path,
+) -> io::Result<StateDbHandle> {
+    let config = RolloutConfig {
+        codex_home: codex_home.to_path_buf(),
+        sqlite_home: sqlite_home.to_path_buf(),
+        cwd: codex_home.to_path_buf(),
+        model_provider_id: "openai".to_string(),
+        generate_memories: false,
+    };
+    codex_rollout::state_db::try_init(&config)
+        .await
+        .map_err(io::Error::other)
 }
 
 async fn write_session_with_user_event(codex_home: &Path) -> io::Result<()> {
@@ -88,7 +110,8 @@ async fn applies_when_sessions_exist_and_no_personality() -> io::Result<()> {
     write_session_with_user_event(temp.path()).await?;
 
     let config_toml = ConfigToml::default();
-    let status = maybe_migrate_personality(temp.path(), &config_toml).await?;
+    let state_db = state_db_for_test(temp.path()).await?;
+    let status = maybe_migrate_personality(temp.path(), &config_toml, state_db).await?;
 
     assert_eq!(status, PersonalityMigrationStatus::Applied);
     assert!(temp.path().join(PERSONALITY_MIGRATION_FILENAME).exists());
@@ -104,7 +127,8 @@ async fn applies_when_only_archived_sessions_exist_and_no_personality() -> io::R
     write_archived_session_with_user_event(temp.path()).await?;
 
     let config_toml = ConfigToml::default();
-    let status = maybe_migrate_personality(temp.path(), &config_toml).await?;
+    let state_db = state_db_for_test(temp.path()).await?;
+    let status = maybe_migrate_personality(temp.path(), &config_toml, state_db).await?;
 
     assert_eq!(status, PersonalityMigrationStatus::Applied);
     assert!(temp.path().join(PERSONALITY_MIGRATION_FILENAME).exists());
@@ -120,7 +144,8 @@ async fn skips_when_marker_exists() -> io::Result<()> {
     create_marker(&temp.path().join(PERSONALITY_MIGRATION_FILENAME)).await?;
 
     let config_toml = ConfigToml::default();
-    let status = maybe_migrate_personality(temp.path(), &config_toml).await?;
+    let state_db = state_db_for_test(temp.path()).await?;
+    let status = maybe_migrate_personality(temp.path(), &config_toml, state_db).await?;
 
     assert_eq!(status, PersonalityMigrationStatus::SkippedMarker);
     assert!(!temp.path().join("config.toml").exists());
@@ -137,7 +162,8 @@ async fn skips_when_personality_explicit() -> io::Result<()> {
         .map_err(|err| io::Error::other(format!("failed to write config: {err}")))?;
 
     let config_toml = read_config_toml(temp.path()).await?;
-    let status = maybe_migrate_personality(temp.path(), &config_toml).await?;
+    let state_db = state_db_for_test(temp.path()).await?;
+    let status = maybe_migrate_personality(temp.path(), &config_toml, state_db).await?;
 
     assert_eq!(
         status,
@@ -154,7 +180,8 @@ async fn skips_when_personality_explicit() -> io::Result<()> {
 async fn skips_when_no_sessions() -> io::Result<()> {
     let temp = TempDir::new()?;
     let config_toml = ConfigToml::default();
-    let status = maybe_migrate_personality(temp.path(), &config_toml).await?;
+    let state_db = state_db_for_test(temp.path()).await?;
+    let status = maybe_migrate_personality(temp.path(), &config_toml, state_db).await?;
 
     assert_eq!(status, PersonalityMigrationStatus::SkippedNoSessions);
     assert!(temp.path().join(PERSONALITY_MIGRATION_FILENAME).exists());
@@ -169,12 +196,9 @@ async fn uses_configured_sqlite_home_when_checking_for_sessions() -> io::Result<
     write_session_with_user_event(codex_home.path()).await?;
 
     let config_toml = ConfigToml::default();
-    let status = maybe_migrate_personality_with_sqlite_home(
-        codex_home.path(),
-        &config_toml,
-        sqlite_home.path(),
-    )
-    .await?;
+    let state_db =
+        state_db_for_test_with_sqlite_home(codex_home.path(), sqlite_home.path()).await?;
+    let status = maybe_migrate_personality(codex_home.path(), &config_toml, state_db).await?;
 
     assert_eq!(status, PersonalityMigrationStatus::Applied);
     assert!(

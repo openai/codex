@@ -1,6 +1,7 @@
 use crate::config::edit::ConfigEditsBuilder;
 use codex_config::config_toml::ConfigToml;
 use codex_protocol::config_types::Personality;
+use codex_rollout::state_db::StateDbHandle;
 use codex_thread_store::ListThreadsParams;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
@@ -24,14 +25,7 @@ pub enum PersonalityMigrationStatus {
 pub async fn maybe_migrate_personality(
     codex_home: &Path,
     config_toml: &ConfigToml,
-) -> io::Result<PersonalityMigrationStatus> {
-    maybe_migrate_personality_with_sqlite_home(codex_home, config_toml, codex_home).await
-}
-
-pub async fn maybe_migrate_personality_with_sqlite_home(
-    codex_home: &Path,
-    config_toml: &ConfigToml,
-    sqlite_home: &Path,
+    state_db: StateDbHandle,
 ) -> io::Result<PersonalityMigrationStatus> {
     let marker_path = codex_home.join(PERSONALITY_MIGRATION_FILENAME);
     if tokio::fs::try_exists(&marker_path).await? {
@@ -51,7 +45,7 @@ pub async fn maybe_migrate_personality_with_sqlite_home(
         .or_else(|| config_toml.model_provider.clone())
         .unwrap_or_else(|| "openai".to_string());
 
-    if !has_recorded_sessions(codex_home, sqlite_home, model_provider_id.as_str()).await? {
+    if !has_recorded_sessions(codex_home, model_provider_id.as_str(), state_db).await? {
         create_marker(&marker_path).await?;
         return Ok(PersonalityMigrationStatus::SkippedNoSessions);
     }
@@ -70,19 +64,13 @@ pub async fn maybe_migrate_personality_with_sqlite_home(
 
 async fn has_recorded_sessions(
     codex_home: &Path,
-    sqlite_home: &Path,
     default_provider: &str,
+    state_db: StateDbHandle,
 ) -> io::Result<bool> {
     let config = LocalThreadStoreConfig {
         codex_home: codex_home.to_path_buf(),
         default_model_provider_id: default_provider.to_string(),
     };
-    let state_db = codex_state::StateRuntime::init(
-        sqlite_home.to_path_buf(),
-        config.default_model_provider_id.clone(),
-    )
-    .await
-    .map_err(io::Error::other)?;
     let store = LocalThreadStore::new(config, state_db);
     if has_threads(&store, /*archived*/ false).await? {
         return Ok(true);

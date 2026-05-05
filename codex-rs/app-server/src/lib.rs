@@ -454,24 +454,6 @@ pub async fn run_main_with_transport_options(
         .await
     {
         Ok(config) => {
-            let effective_toml = config.config_layer_stack.effective_config();
-            match effective_toml.try_into() {
-                Ok(config_toml) => {
-                    if let Err(err) = codex_core::personality_migration::maybe_migrate_personality_with_sqlite_home(
-                        &config.codex_home,
-                        &config_toml,
-                        &config.sqlite_home,
-                    )
-                    .await
-                    {
-                        warn!(error = %err, "Failed to run personality migration");
-                    }
-                }
-                Err(err) => {
-                    warn!(error = %err, "Failed to deserialize config for personality migration");
-                }
-            }
-
             let discovered_thread_config_loader = configured_thread_config_loader(&config);
             config_manager
                 .replace_thread_config_loader(Arc::clone(&discovered_thread_config_loader));
@@ -485,22 +467,69 @@ pub async fn run_main_with_transport_options(
         }
     };
     let mut config_warnings = Vec::new();
-    let config = match config_manager
+    let (mut config, should_run_personality_migration) = match config_manager
         .load_latest_config(/*fallback_cwd*/ None)
         .await
     {
-        Ok(config) => config,
+        Ok(config) => (config, true),
         Err(err) => {
             let message = config_warning_from_error("Invalid configuration; using defaults.", &err);
             config_warnings.push(message);
-            config_manager.load_default_config().await.map_err(|e| {
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    format!("error loading default config after config error: {e}"),
-                )
-            })?
+            (
+                config_manager.load_default_config().await.map_err(|e| {
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("error loading default config after config error: {e}"),
+                    )
+                })?,
+                false,
+            )
         }
     };
+
+    let state_db = init_state_db_from_config(&config)
+        .await
+        .ok_or_else(|| std::io::Error::other("failed to initialize sqlite state db"))?;
+
+    if should_run_personality_migration {
+        let effective_toml = config.config_layer_stack.effective_config();
+        match effective_toml.try_into() {
+            Ok(config_toml) => {
+                match codex_core::personality_migration::maybe_migrate_personality(
+                    &config.codex_home,
+                    &config_toml,
+                    state_db.clone(),
+                )
+                .await
+                {
+                    Ok(codex_core::personality_migration::PersonalityMigrationStatus::Applied) => {
+                        config = config_manager
+                            .load_latest_config(/*fallback_cwd*/ None)
+                            .await
+                            .map_err(|err| {
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    format!(
+                                        "error reloading config after personality migration: {err}"
+                                    ),
+                                )
+                            })?;
+                    }
+                    Ok(
+                        codex_core::personality_migration::PersonalityMigrationStatus::SkippedMarker
+                        | codex_core::personality_migration::PersonalityMigrationStatus::SkippedExplicitPersonality
+                        | codex_core::personality_migration::PersonalityMigrationStatus::SkippedNoSessions,
+                    ) => {}
+                    Err(err) => {
+                        warn!(error = %err, "Failed to run personality migration");
+                    }
+                }
+            }
+            Err(err) => {
+                warn!(error = %err, "Failed to deserialize config for personality migration");
+            }
+        }
+    }
 
     if let Ok(Some(err)) = check_execpolicy_for_warnings(&config.config_layer_stack).await {
         let (path, range) = exec_policy_warning_location(&err);
@@ -569,9 +598,6 @@ pub async fn run_main_with_transport_options(
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-    let state_db = init_state_db_from_config(&config)
-        .await
-        .ok_or_else(|| std::io::Error::other("failed to initialize sqlite state db"))?;
     let log_db = log_db::start(state_db.clone());
     let log_db_layer = Some(
         log_db
