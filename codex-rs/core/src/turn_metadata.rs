@@ -17,7 +17,7 @@ use codex_git_utils::get_head_commit_hash;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 const MODEL_KEY: &str = "model";
@@ -69,7 +69,7 @@ pub(crate) struct TurnMetadataBag {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    thread_source: Option<&'static str>,
+    thread_source: Option<ThreadSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_id: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -115,7 +115,7 @@ fn merge_turn_metadata(
 
 fn build_turn_metadata_bag(
     session_id: Option<String>,
-    thread_source: Option<&'static str>,
+    thread_source: Option<ThreadSource>,
     turn_id: Option<String>,
     sandbox: Option<String>,
     repo_root: Option<String>,
@@ -187,7 +187,7 @@ pub(crate) struct TurnMetadataState {
 impl TurnMetadataState {
     pub(crate) fn new(
         session_id: String,
-        session_source: &SessionSource,
+        thread_source: Option<ThreadSource>,
         turn_id: String,
         cwd: AbsolutePathBuf,
         permission_profile: &PermissionProfile,
@@ -205,7 +205,7 @@ impl TurnMetadataState {
         );
         let base_metadata = build_turn_metadata_bag(
             Some(session_id),
-            session_source.thread_source_name(),
+            thread_source,
             Some(turn_id),
             sandbox,
             /*repo_root*/ None,

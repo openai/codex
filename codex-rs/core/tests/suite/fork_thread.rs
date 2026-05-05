@@ -101,6 +101,7 @@ async fn fork_thread_twice_drops_to_first_message() {
             ForkSnapshot::TruncateBeforeNthUserMessage(1),
             config_for_fork.clone(),
             base_path.clone(),
+            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
@@ -125,6 +126,7 @@ async fn fork_thread_twice_drops_to_first_message() {
             ForkSnapshot::TruncateBeforeNthUserMessage(0),
             config_for_fork.clone(),
             fork1_path.clone(),
+            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
@@ -197,6 +199,7 @@ async fn fork_thread_from_history_does_not_require_source_rollout_path() {
                 history: source_items.clone(),
                 rollout_path: None,
             }),
+            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )

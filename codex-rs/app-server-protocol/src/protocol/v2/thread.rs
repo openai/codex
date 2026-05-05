@@ -6,6 +6,7 @@ use super::PermissionProfileSelectionParams;
 use super::SandboxMode;
 use super::SandboxPolicy;
 use super::Thread;
+use super::ThreadSource;
 use super::Turn;
 use super::TurnEnvironmentParams;
 use super::shared::v2_enum_from_core;
@@ -134,6 +135,9 @@ pub struct ThreadStartParams {
     pub ephemeral: Option<bool>,
     #[ts(optional = nullable)]
     pub session_start_source: Option<ThreadStartSource>,
+    /// Optional client-supplied analytics source classification for this thread.
+    #[ts(optional = nullable)]
+    pub thread_source: Option<ThreadSource>,
     /// Optional sticky environments for this thread.
     ///
     /// Omitted selects the default environment when environment access is
@@ -388,6 +392,9 @@ pub struct ThreadForkParams {
     pub developer_instructions: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
+    /// Optional client-supplied analytics source classification for this forked thread.
+    #[ts(optional = nullable)]
+    pub thread_source: Option<ThreadSource>,
     /// When true, return only thread metadata and live fork state without
     /// populating `thread.turns`. This is useful when the client plans to call
     /// `thread/turns/list` immediately after forking.

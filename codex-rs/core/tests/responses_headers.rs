@@ -452,7 +452,7 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         initial_parsed
             .get("thread_source")
             .and_then(serde_json::Value::as_str),
-        Some("user")
+        None
     );
 
     let git_config_global = cwd.join("empty-git-config");
@@ -565,13 +565,13 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         first_parsed
             .get("thread_source")
             .and_then(serde_json::Value::as_str),
-        Some("user")
+        None
     );
     assert_eq!(
         second_parsed
             .get("thread_source")
             .and_then(serde_json::Value::as_str),
-        Some("user")
+        None
     );
     assert_eq!(
         first_turn_id, second_turn_id,

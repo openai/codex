@@ -2,6 +2,7 @@ use super::*;
 use crate::goals::GoalRuntimeState;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use tokio::sync::Semaphore;
 
@@ -86,6 +87,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) app_server_client_version: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     pub(super) session_source: SessionSource,
+    /// Optional analytics source classification for this thread.
+    pub(super) thread_source: Option<ThreadSource>,
     pub(super) dynamic_tools: Vec<DynamicToolSpec>,
     pub(super) persist_extended_history: bool,
     pub(super) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -141,6 +144,7 @@ impl SessionConfiguration {
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
             session_source: self.session_source.clone(),
+            thread_source: self.thread_source,
         }
     }
 
@@ -393,6 +397,7 @@ impl Session {
                                 thread_id: conversation_id,
                                 forked_from_id,
                                 source: session_source,
+                                thread_source: session_configuration.thread_source,
                                 base_instructions: BaseInstructions {
                                     text: session_configuration.base_instructions.clone(),
                                 },
@@ -875,6 +880,7 @@ impl Session {
                 msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                     session_id: conversation_id,
                     forked_from_id,
+                    thread_source: session_configuration.thread_source,
                     thread_name: session_configuration.thread_name.clone(),
                     model: session_configuration.collaboration_mode.model().to_string(),
                     model_provider_id: config.model_provider_id.clone(),

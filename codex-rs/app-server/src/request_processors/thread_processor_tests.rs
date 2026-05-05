@@ -283,6 +283,7 @@ mod thread_processor_behavior_tests {
             cwd: PathBuf::from("/tmp"),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,
+            thread_source: Some(codex_protocol::protocol::ThreadSource::User),
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -540,6 +541,7 @@ mod thread_processor_behavior_tests {
             reasoning_effort: None,
             personality: None,
             session_source: SessionSource::Cli,
+            thread_source: None,
         };
 
         assert_eq!(
@@ -828,6 +830,7 @@ mod thread_processor_behavior_tests {
                 agent_nickname: None,
                 agent_role: None,
             }),
+            thread_source: Some(codex_protocol::protocol::ThreadSource::Subagent),
             agent_nickname: Some("atlas".to_string()),
             agent_role: Some("explorer".to_string()),
             model_provider: Some("test-provider".to_string()),
@@ -849,6 +852,7 @@ mod thread_processor_behavior_tests {
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));
+        assert_eq!(thread.thread_source, None);
         Ok(())
     }
 
@@ -975,6 +979,7 @@ mod thread_processor_behavior_tests {
             PathBuf::from("/"),
             "0.0.0".to_string(),
             source,
+            Some(codex_protocol::protocol::ThreadSource::Subagent),
             Some("atlas".to_string()),
             Some("explorer".to_string()),
             /*git_sha*/ None,
