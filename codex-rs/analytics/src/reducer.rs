@@ -496,6 +496,7 @@ impl AnalyticsReducer {
                     skill_name: invocation.skill_name.clone(),
                     event_params: SkillInvocationEventParams {
                         thread_id: Some(tracking.thread_id.clone()),
+                        turn_id: Some(tracking.turn_id.clone()),
                         invoke_type: Some(invocation.invocation_type),
                         model_slug: Some(tracking.model_slug.clone()),
                         product_client_id: Some(originator().value),
