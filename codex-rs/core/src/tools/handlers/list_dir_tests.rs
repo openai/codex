@@ -13,7 +13,17 @@ async fn list_dir_slice(
     limit: usize,
     depth: usize,
 ) -> Result<Vec<String>, FunctionCallError> {
-    list_dir_slice_with_policy(path, offset, limit, depth, /*read_deny_matcher*/ None).await
+    let path = AbsolutePathBuf::from_absolute_path(path).expect("absolute temp path");
+    list_dir_slice_with_policy(
+        codex_exec_server::LOCAL_FS.clone(),
+        &path,
+        offset,
+        limit,
+        depth,
+        /*read_deny_matcher*/ None,
+        /*sandbox*/ None,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -74,6 +84,24 @@ async fn lists_directory_entries() {
     ];
 
     assert_eq!(entries, expected);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn lists_broken_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().expect("create tempdir");
+    let dir_path = temp.path();
+    symlink(dir_path.join("missing.txt"), dir_path.join("broken")).expect("create broken symlink");
+
+    let entries = list_dir_slice(
+        dir_path, /*offset*/ 1, /*limit*/ 20, /*depth*/ 1,
+    )
+    .await
+    .expect("list directory");
+
+    assert_eq!(entries, vec!["broken@".to_string()]);
 }
 
 #[tokio::test]
@@ -314,12 +342,16 @@ async fn hides_denied_entries_and_prunes_denied_subtrees() {
     ]);
 
     let read_deny_matcher = ReadDenyMatcher::new(&policy, dir_path);
+    let absolute_dir_path =
+        AbsolutePathBuf::from_absolute_path(dir_path).expect("absolute temp path");
     let entries = list_dir_slice_with_policy(
-        dir_path,
+        codex_exec_server::LOCAL_FS.clone(),
+        &absolute_dir_path,
         /*offset*/ 1,
         /*limit*/ 20,
         /*depth*/ 3,
         read_deny_matcher.as_ref(),
+        /*sandbox*/ None,
     )
     .await
     .expect("list directory");

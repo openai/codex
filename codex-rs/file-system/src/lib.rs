@@ -42,6 +42,7 @@ pub struct ReadDirectoryEntry {
     pub file_name: String,
     pub is_directory: bool,
     pub is_file: bool,
+    pub is_symlink: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]

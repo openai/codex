@@ -270,11 +270,13 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
                 file_name: "nested".to_string(),
                 is_directory: true,
                 is_file: false,
+                is_symlink: false,
             },
             FsReadDirectoryEntry {
                 file_name: "root.txt".to_string(),
                 is_directory: false,
                 is_file: true,
+                is_symlink: false,
             },
         ]
     );

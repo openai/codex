@@ -1,4 +1,5 @@
 use crate::CommandToolOptions;
+use crate::ListDirToolOptions;
 use crate::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 use crate::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::ResponsesApiNamespace;
@@ -136,9 +137,9 @@ pub fn build_tool_registry_plan(
         );
     }
 
+    let include_environment_id = matches!(config.environment_mode, ToolEnvironmentMode::Multiple);
+
     if config.environment_mode.has_environment() {
-        let include_environment_id =
-            matches!(config.environment_mode, ToolEnvironmentMode::Multiple);
         match &config.shell_type {
             ConfigShellToolType::Default => {
                 plan.push_spec(
@@ -364,7 +365,9 @@ pub fn build_tool_registry_plan(
             .any(|tool| tool == "list_dir")
     {
         plan.push_spec(
-            create_list_dir_tool(),
+            create_list_dir_tool(ListDirToolOptions {
+                include_environment_id,
+            }),
             /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
         );

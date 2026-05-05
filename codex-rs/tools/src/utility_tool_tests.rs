@@ -6,15 +6,18 @@ use std::collections::BTreeMap;
 #[test]
 fn list_dir_tool_matches_expected_spec() {
     assert_eq!(
-        create_list_dir_tool(),
+        create_list_dir_tool(ListDirToolOptions {
+            include_environment_id: false,
+        }),
         ToolSpec::Function(ResponsesApiTool {
             name: "list_dir".to_string(),
             description:
-                "Lists entries in a local directory with 1-indexed entry numbers and simple type labels."
+                "Lists entries in a directory with 1-indexed entry numbers and simple type labels."
                     .to_string(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::object(BTreeMap::from([
+            parameters: JsonSchema::object(
+                BTreeMap::from([
                     (
                         "depth".to_string(),
                         JsonSchema::number(Some(
@@ -41,7 +44,10 @@ fn list_dir_tool_matches_expected_spec() {
                                 .to_string(),
                         )),
                     ),
-                ]), Some(vec!["dir_path".to_string()]), Some(false.into())),
+                ]),
+                Some(vec!["dir_path".to_string()]),
+                Some(false.into())
+            ),
             output_schema: None,
         })
     );

@@ -229,6 +229,7 @@ pub(crate) async fn run_direct_request(
                     file_name: entry.file_name,
                     is_directory: entry.is_directory,
                     is_file: entry.is_file,
+                    is_symlink: entry.is_symlink,
                 })
                 .collect();
             Ok(FsHelperPayload::ReadDirectory(FsReadDirectoryResponse {

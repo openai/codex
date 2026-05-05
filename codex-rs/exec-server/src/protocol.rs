@@ -224,6 +224,7 @@ pub struct FsReadDirectoryEntry {
     pub file_name: String,
     pub is_directory: bool,
     pub is_file: bool,
+    pub is_symlink: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

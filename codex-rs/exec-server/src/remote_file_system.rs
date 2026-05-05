@@ -144,6 +144,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
                 file_name: entry.file_name,
                 is_directory: entry.is_directory,
                 is_file: entry.is_file,
+                is_symlink: entry.is_symlink,
             })
             .collect())
     }

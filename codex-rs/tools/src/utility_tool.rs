@@ -1,10 +1,16 @@
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
 use crate::ToolSpec;
+use crate::tool_spec::maybe_insert_environment_id_parameter;
 use std::collections::BTreeMap;
 
-pub fn create_list_dir_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListDirToolOptions {
+    pub include_environment_id: bool,
+}
+
+pub fn create_list_dir_tool(options: ListDirToolOptions) -> ToolSpec {
+    let mut properties = BTreeMap::from([
         (
             "dir_path".to_string(),
             JsonSchema::string(Some("Absolute path to the directory to list.".to_string())),
@@ -26,15 +32,20 @@ pub fn create_list_dir_tool() -> ToolSpec {
             )),
         ),
     ]);
+    maybe_insert_environment_id_parameter(&mut properties, options.include_environment_id);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "list_dir".to_string(),
         description:
-            "Lists entries in a local directory with 1-indexed entry numbers and simple type labels."
+            "Lists entries in a directory with 1-indexed entry numbers and simple type labels."
                 .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(properties, Some(vec!["dir_path".to_string()]), Some(false.into())),
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["dir_path".to_string()]),
+            Some(false.into()),
+        ),
         output_schema: None,
     })
 }
