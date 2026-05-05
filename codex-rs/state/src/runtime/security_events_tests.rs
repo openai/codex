@@ -350,7 +350,7 @@ async fn delete_security_events_before_removes_old_rows() {
 
     assert_eq!(
         runtime
-            .delete_security_events_before(1_700_000_050)
+            .delete_security_events_before(/*cutoff_ts*/ 1_700_000_050)
             .await
             .expect("delete old events"),
         1
