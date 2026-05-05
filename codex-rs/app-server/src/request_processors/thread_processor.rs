@@ -165,10 +165,8 @@ fn normalize_thread_list_cwd_filters(
     for cwd in cwds {
         let cwd = AbsolutePathBuf::relative_to_current_dir(cwd.as_str())
             .map(AbsolutePathBuf::into_path_buf)
-            .map_err(|err| JSONRPCErrorError {
-                code: INVALID_PARAMS_ERROR_CODE,
-                message: format!("invalid thread/list cwd filter `{cwd}`: {err}"),
-                data: None,
+            .map_err(|err| {
+                invalid_params(format!("invalid thread/list cwd filter `{cwd}`: {err}"))
             })?;
         normalized_cwds.push(cwd);
     }
@@ -567,21 +565,14 @@ impl ThreadRequestProcessor {
         thread_id: &str,
     ) -> Result<(ThreadId, Arc<CodexThread>), JSONRPCErrorError> {
         // Resolve the core conversation handle from a v2 thread id string.
-        let thread_id = ThreadId::from_string(thread_id).map_err(|err| JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: format!("invalid thread id: {err}"),
-            data: None,
-        })?;
+        let thread_id = ThreadId::from_string(thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         let thread = self
             .thread_manager
             .get_thread(thread_id)
             .await
-            .map_err(|_| JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("thread not found: {thread_id}"),
-                data: None,
-            })?;
+            .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
 
         Ok((thread_id, thread))
     }
@@ -604,11 +595,7 @@ impl ThreadRequestProcessor {
         thread
             .set_app_server_client_info(app_server_client_name, app_server_client_version)
             .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to set app server client info: {err}"),
-                data: None,
-            })
+            .map_err(|err| internal_error(format!("failed to set app server client info: {err}")))
     }
 
     async fn finalize_thread_teardown(&self, thread_id: ThreadId) {
@@ -1536,10 +1523,8 @@ impl ThreadRequestProcessor {
             .and_then(|stored_thread| {
                 summary_from_stored_thread(stored_thread, fallback_provider.as_str())
                     .map(|summary| summary_to_thread(summary, &self.config.cwd))
-                    .ok_or_else(|| JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!("failed to read unarchived thread {thread_id}"),
-                        data: None,
+                    .ok_or_else(|| {
+                        internal_error(format!("failed to read unarchived thread {thread_id}"))
                     })
             })?;
 
@@ -3239,11 +3224,9 @@ fn paginate_thread_turns(
         .as_ref()
         .and_then(|anchor| turns.iter().position(|turn| turn.id == anchor.turn_id));
     if anchor.is_some() && anchor_index.is_none() {
-        return Err(JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: "invalid cursor: anchor turn is no longer present".to_string(),
-            data: None,
-        });
+        return Err(invalid_request(
+            "invalid cursor: anchor turn is no longer present",
+        ));
     }
 
     let mut keyed_turns: Vec<_> = turns.into_iter().enumerate().collect();
@@ -3304,19 +3287,11 @@ fn serialize_thread_turns_cursor(
         turn_id: turn_id.to_string(),
         include_anchor,
     })
-    .map_err(|err| JSONRPCErrorError {
-        code: INTERNAL_ERROR_CODE,
-        message: format!("failed to serialize cursor: {err}"),
-        data: None,
-    })
+    .map_err(|err| internal_error(format!("failed to serialize cursor: {err}")))
 }
 
 fn parse_thread_turns_cursor(cursor: &str) -> Result<ThreadTurnsCursor, JSONRPCErrorError> {
-    serde_json::from_str(cursor).map_err(|_| JSONRPCErrorError {
-        code: INVALID_REQUEST_ERROR_CODE,
-        message: format!("invalid cursor: {cursor}"),
-        data: None,
-    })
+    serde_json::from_str(cursor).map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))
 }
 
 fn reconstruct_thread_turns_for_turns_list(
@@ -3367,36 +3342,18 @@ fn thread_read_view_error(err: ThreadReadViewError) -> JSONRPCErrorError {
 
 fn thread_store_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
     match err {
-        ThreadStoreError::InvalidRequest { message } => JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message,
-            data: None,
-        },
-        err => JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: format!("failed to list threads: {err}"),
-            data: None,
-        },
+        ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        err => internal_error(format!("failed to list threads: {err}")),
     }
 }
 
 fn thread_store_resume_read_error(err: ThreadStoreError) -> JSONRPCErrorError {
     match err {
-        ThreadStoreError::InvalidRequest { message } => JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message,
-            data: None,
-        },
-        ThreadStoreError::ThreadNotFound { thread_id } => JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: format!("no rollout found for thread id {thread_id}"),
-            data: None,
-        },
-        err => JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: format!("failed to read thread: {err}"),
-            data: None,
-        },
+        ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::ThreadNotFound { thread_id } => {
+            invalid_request(format!("no rollout found for thread id {thread_id}"))
+        }
+        err => internal_error(format!("failed to read thread: {err}")),
     }
 }
 
@@ -3459,25 +3416,17 @@ fn conversation_summary_thread_id_read_error(
         ThreadStoreError::ThreadNotFound { thread_id } if thread_id == conversation_id => {
             conversation_summary_not_found_error(conversation_id)
         }
-        ThreadStoreError::InvalidRequest { message } => JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message,
-            data: None,
-        },
-        err => JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: format!("failed to load conversation summary for {conversation_id}: {err}"),
-            data: None,
-        },
+        ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        err => internal_error(format!(
+            "failed to load conversation summary for {conversation_id}: {err}"
+        )),
     }
 }
 
 fn conversation_summary_not_found_error(conversation_id: ThreadId) -> JSONRPCErrorError {
-    JSONRPCErrorError {
-        code: INVALID_REQUEST_ERROR_CODE,
-        message: format!("no rollout found for conversation id {conversation_id}"),
-        data: None,
-    }
+    invalid_request(format!(
+        "no rollout found for conversation id {conversation_id}"
+    ))
 }
 
 fn conversation_summary_rollout_path_read_error(
@@ -3485,55 +3434,29 @@ fn conversation_summary_rollout_path_read_error(
     err: ThreadStoreError,
 ) -> JSONRPCErrorError {
     match err {
-        ThreadStoreError::InvalidRequest { message } => JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message,
-            data: None,
-        },
-        err => JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: format!(
-                "failed to load conversation summary from {}: {}",
-                path.display(),
-                err
-            ),
-            data: None,
-        },
+        ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        err => internal_error(format!(
+            "failed to load conversation summary from {}: {}",
+            path.display(),
+            err
+        )),
     }
 }
 
 fn thread_store_write_error(operation: &str, err: ThreadStoreError) -> JSONRPCErrorError {
     match err {
-        ThreadStoreError::ThreadNotFound { thread_id } => JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: format!("thread not found: {thread_id}"),
-            data: None,
-        },
-        ThreadStoreError::InvalidRequest { message } => JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message,
-            data: None,
-        },
-        err => JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: format!("failed to {operation}: {err}"),
-            data: None,
-        },
+        ThreadStoreError::ThreadNotFound { thread_id } => {
+            invalid_request(format!("thread not found: {thread_id}"))
+        }
+        ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        err => internal_error(format!("failed to {operation}: {err}")),
     }
 }
 
 fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPCErrorError {
     match err {
-        ThreadStoreError::InvalidRequest { message } => JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message,
-            data: None,
-        },
-        err => JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: format!("failed to {operation} thread: {err}"),
-            data: None,
-        },
+        ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        err => internal_error(format!("failed to {operation} thread: {err}")),
     }
 }
 

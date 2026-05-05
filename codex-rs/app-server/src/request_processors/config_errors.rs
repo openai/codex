@@ -29,9 +29,7 @@ pub(super) fn config_load_error(err: &std::io::Error) -> JSONRPCErrorError {
         data
     });
 
-    JSONRPCErrorError {
-        code: INVALID_REQUEST_ERROR_CODE,
-        message: format!("failed to load configuration: {err}"),
-        data,
-    }
+    let mut error = invalid_request(format!("failed to load configuration: {err}"));
+    error.data = data;
+    error
 }

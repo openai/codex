@@ -219,11 +219,7 @@ impl PluginRequestProcessor {
         self.config_manager
             .load_latest_config(fallback_cwd)
             .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to reload config: {err}"),
-                data: None,
-            })
+            .map_err(|err| internal_error(format!("failed to reload config: {err}")))
     }
 
     async fn workspace_codex_plugins_enabled(
@@ -1307,16 +1303,17 @@ fn remote_plugin_catalog_error_to_jsonrpc(
     err: RemotePluginCatalogError,
     context: &str,
 ) -> JSONRPCErrorError {
-    let code = match &err {
+    let message = format!("{context}: {err}");
+    match &err {
         RemotePluginCatalogError::AuthRequired | RemotePluginCatalogError::UnsupportedAuthMode => {
-            INVALID_REQUEST_ERROR_CODE
+            invalid_request(message)
         }
         RemotePluginCatalogError::UnexpectedStatus { status, .. } if status.as_u16() == 404 => {
-            INVALID_REQUEST_ERROR_CODE
+            invalid_request(message)
         }
         RemotePluginCatalogError::InvalidPluginPath { .. }
         | RemotePluginCatalogError::ArchiveTooLarge { .. }
-        | RemotePluginCatalogError::UnknownMarketplace { .. } => INVALID_REQUEST_ERROR_CODE,
+        | RemotePluginCatalogError::UnknownMarketplace { .. } => invalid_request(message),
         RemotePluginCatalogError::AuthToken(_)
         | RemotePluginCatalogError::Request { .. }
         | RemotePluginCatalogError::UnexpectedStatus { .. }
@@ -1330,12 +1327,7 @@ fn remote_plugin_catalog_error_to_jsonrpc(
         | RemotePluginCatalogError::ArchiveJoin(_)
         | RemotePluginCatalogError::MissingUploadEtag
         | RemotePluginCatalogError::UnexpectedResponse(_)
-        | RemotePluginCatalogError::CacheRemove(_) => INTERNAL_ERROR_CODE,
-    };
-    JSONRPCErrorError {
-        code,
-        message: format!("{context}: {err}"),
-        data: None,
+        | RemotePluginCatalogError::CacheRemove(_) => internal_error(message),
     }
 }
 

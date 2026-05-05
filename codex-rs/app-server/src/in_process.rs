@@ -52,9 +52,9 @@ use std::time::Duration;
 
 use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
-use crate::error_code::INTERNAL_ERROR_CODE;
-use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::error_code::OVERLOADED_ERROR_CODE;
+use crate::error_code::internal_error;
+use crate::error_code::invalid_request;
 use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
@@ -526,11 +526,9 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                     entry.insert(response_tx);
                                 }
                                 Entry::Occupied(_) => {
-                                    let _ = response_tx.send(Err(JSONRPCErrorError {
-                                        code: INVALID_REQUEST_ERROR_CODE,
-                                        message: format!("duplicate request id: {request_id:?}"),
-                                        data: None,
-                                    }));
+                                    let _ = response_tx.send(Err(invalid_request(format!(
+                                        "duplicate request id: {request_id:?}"
+                                    ))));
                                     continue;
                                 }
                             }
@@ -553,13 +551,9 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                     if let Some(response_tx) =
                                         pending_request_responses.remove(&request_id)
                                     {
-                                        let _ = response_tx.send(Err(JSONRPCErrorError {
-                                            code: INTERNAL_ERROR_CODE,
-                                            message:
-                                                "in-process app-server request processor is closed"
-                                                    .to_string(),
-                                            data: None,
-                                        }));
+                                        let _ = response_tx.send(Err(internal_error(
+                                            "in-process app-server request processor is closed",
+                                        )));
                                     }
                                     break;
                                 }
@@ -627,15 +621,20 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                             if let Err(send_error) = event_tx
                                 .try_send(InProcessServerEvent::ServerRequest(request))
                             {
-                                let (code, message, inner) = match send_error {
+                                let (error, inner) = match send_error {
                                     mpsc::error::TrySendError::Full(inner) => (
-                                        OVERLOADED_ERROR_CODE,
-                                        "in-process server request queue is full",
+                                        JSONRPCErrorError {
+                                            code: OVERLOADED_ERROR_CODE,
+                                            message:
+                                                "in-process server request queue is full".to_string(),
+                                            data: None,
+                                        },
                                         inner,
                                     ),
                                     mpsc::error::TrySendError::Closed(inner) => (
-                                        INTERNAL_ERROR_CODE,
-                                        "in-process server request consumer is closed",
+                                        internal_error(
+                                            "in-process server request consumer is closed",
+                                        ),
                                         inner,
                                     ),
                                 };
@@ -644,14 +643,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                     _ => unreachable!("we just sent a ServerRequest variant"),
                                 };
                                 outgoing_message_sender
-                                    .notify_client_error(
-                                        request_id,
-                                        JSONRPCErrorError {
-                                            code,
-                                            message: message.to_string(),
-                                            data: None,
-                                        },
-                                    )
+                                    .notify_client_error(request_id, error)
                                     .await;
                             }
                         }
@@ -688,21 +680,17 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         drop(writer_rx);
         drop(processor_tx);
         outgoing_message_sender
-            .cancel_all_requests(Some(JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: "in-process app-server runtime is shutting down".to_string(),
-                data: None,
-            }))
+            .cancel_all_requests(Some(internal_error(
+                "in-process app-server runtime is shutting down",
+            )))
             .await;
         // Drop the runtime's last sender before awaiting the router task so
         // `outgoing_rx.recv()` can observe channel closure and exit cleanly.
         drop(outgoing_message_sender);
         for (_, response_tx) in pending_request_responses {
-            let _ = response_tx.send(Err(JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: "in-process app-server runtime is shutting down".to_string(),
-                data: None,
-            }));
+            let _ = response_tx.send(Err(internal_error(
+                "in-process app-server runtime is shutting down",
+            )));
         }
 
         if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut processor_handle).await {
@@ -731,6 +719,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error_code::INVALID_REQUEST_ERROR_CODE;
     use codex_app_server_protocol::ClientInfo;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::DeviceKeyPublicParams;

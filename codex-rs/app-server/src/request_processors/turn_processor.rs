@@ -171,21 +171,14 @@ impl TurnRequestProcessor {
         thread_id: &str,
     ) -> Result<(ThreadId, Arc<CodexThread>), JSONRPCErrorError> {
         // Resolve the core conversation handle from a v2 thread id string.
-        let thread_id = ThreadId::from_string(thread_id).map_err(|err| JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: format!("invalid thread id: {err}"),
-            data: None,
-        })?;
+        let thread_id = ThreadId::from_string(thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         let thread = self
             .thread_manager
             .get_thread(thread_id)
             .await
-            .map_err(|_| JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("thread not found: {thread_id}"),
-                data: None,
-            })?;
+            .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
 
         Ok((thread_id, thread))
     }
@@ -209,14 +202,6 @@ impl TurnRequestProcessor {
     fn review_request_from_target(
         target: ApiReviewTarget,
     ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
-        fn invalid_request(message: String) -> JSONRPCErrorError {
-            JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message,
-                data: None,
-            }
-        }
-
         let cleaned_target = match target {
             ApiReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
             ApiReviewTarget::BaseBranch { branch } => {
@@ -305,17 +290,15 @@ impl TurnRequestProcessor {
     }
 
     fn input_too_large_error(actual_chars: usize) -> JSONRPCErrorError {
-        JSONRPCErrorError {
-            code: INVALID_PARAMS_ERROR_CODE,
-            message: format!(
-                "Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters."
-            ),
-            data: Some(serde_json::json!({
-                "input_error_code": INPUT_TOO_LARGE_ERROR_CODE,
-                "max_chars": MAX_USER_INPUT_TEXT_CHARS,
-                "actual_chars": actual_chars,
-            })),
-        }
+        let mut error = invalid_params(format!(
+            "Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters."
+        ));
+        error.data = Some(serde_json::json!({
+            "input_error_code": INPUT_TOO_LARGE_ERROR_CODE,
+            "max_chars": MAX_USER_INPUT_TEXT_CHARS,
+            "actual_chars": actual_chars,
+        }));
+        error
     }
 
     fn validate_v2_input_limit(items: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
@@ -564,11 +547,7 @@ impl TurnRequestProcessor {
         thread
             .set_app_server_client_info(app_server_client_name, app_server_client_version)
             .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to set app server client info: {err}"),
-                data: None,
-            })
+            .map_err(|err| internal_error(format!("failed to set app server client info: {err}")))
     }
 
     async fn turn_steer_inner(
@@ -612,9 +591,8 @@ impl TurnRequestProcessor {
             )
             .await
             .map_err(|err| {
-                let (code, message, data, error_type) = match err {
+                let (message, data, error_type) = match err {
                     SteerInputError::NoActiveTurn(_) => (
-                        INVALID_REQUEST_ERROR_CODE,
                         "no active turn to steer".to_string(),
                         None,
                         Some(AnalyticsJsonRpcError::TurnSteer(
@@ -622,7 +600,6 @@ impl TurnRequestProcessor {
                         )),
                     ),
                     SteerInputError::ExpectedTurnMismatch { expected, actual } => (
-                        INVALID_REQUEST_ERROR_CODE,
                         format!("expected active turn id `{expected}` but found `{actual}`"),
                         None,
                         Some(AnalyticsJsonRpcError::TurnSteer(
@@ -658,24 +635,19 @@ impl TurnRequestProcessor {
                             }
                         };
                         (
-                            INVALID_REQUEST_ERROR_CODE,
                             message,
                             data,
                             Some(AnalyticsJsonRpcError::TurnSteer(turn_steer_error)),
                         )
                     }
                     SteerInputError::EmptyInput => (
-                        INVALID_REQUEST_ERROR_CODE,
                         "input must not be empty".to_string(),
                         None,
                         Some(AnalyticsJsonRpcError::Input(InputError::Empty)),
                     ),
                 };
-                let error = JSONRPCErrorError {
-                    code,
-                    message,
-                    data,
-                };
+                let mut error = invalid_request(message);
+                error.data = data;
                 self.track_error_response(request_id, &error, error_type);
                 error
             })?;
