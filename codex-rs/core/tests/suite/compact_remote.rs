@@ -589,6 +589,9 @@ async fn assert_remote_manual_compact_request_parity(
     for field in ["input", "client_metadata", "include", "store", "stream"] {
         expected_compact_object.remove(field);
     }
+    if expected_service_tier.is_none() {
+        expected_compact_object.remove("service_tier");
+    }
     let mut compact_body_without_input = compact_body.clone();
     compact_body_without_input
         .as_object_mut()
@@ -634,10 +637,10 @@ async fn remote_manual_compact_api_auth_reuses_prompt_cache_key() -> Result<()> 
 
     assert_remote_manual_compact_request_parity(
         CodexAuth::from_api_key("dummy"),
-        /*configured_service_tier*/ None,
+        Some(ServiceTier::Fast),
         /*expected_service_tier*/ None,
         "remote_manual_compact_api_auth_prompt_cache_key_request_diff",
-        "After five varied API-key-auth turns, remote manual compaction reuses the normal responses prompt_cache_key while omitting responses-only fields.",
+        "After five varied API-key-auth turns, remote manual compaction reuses the normal responses prompt_cache_key while omitting API-key service_tier and responses-only fields.",
     )
     .await?;
 
