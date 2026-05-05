@@ -748,28 +748,18 @@ impl Session {
     }
 
     pub(crate) async fn maybe_emit_unknown_model_warning_for_turn(&self, tc: &TurnContext) {
-        if !tc.model_info.used_fallback_model_metadata {
-            return;
+        if tc.model_info.used_fallback_model_metadata {
+            self.send_event(
+                tc,
+                EventMsg::Warning(WarningEvent {
+                    message: format!(
+                        "Model metadata for `{}` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.",
+                        tc.model_info.slug
+                    ),
+                }),
+            )
+            .await;
         }
-        let should_emit = {
-            let mut state = self.state.lock().await;
-            state
-                .fallback_model_metadata_warning_slugs
-                .insert(tc.model_info.slug.clone())
-        };
-        if !should_emit {
-            return;
-        }
-        self.send_event(
-            tc,
-            EventMsg::Warning(WarningEvent {
-                message: format!(
-                    "Model metadata for `{}` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.",
-                    tc.model_info.slug
-                ),
-            }),
-        )
-        .await;
     }
 
     pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {

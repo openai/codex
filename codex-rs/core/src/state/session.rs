@@ -24,7 +24,6 @@ pub(crate) struct SessionState {
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
-    pub(crate) fallback_model_metadata_warning_slugs: HashSet<String>,
     /// Settings used by the latest regular user turn, used for turn-to-turn
     /// model/realtime handling on subsequent regular turns (including full-context
     /// reinjection after resume or `/compact`).
@@ -48,7 +47,6 @@ impl SessionState {
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
-            fallback_model_metadata_warning_slugs: HashSet::new(),
             previous_turn_settings: None,
             startup_prewarm: None,
             active_connector_selection: HashSet::new(),

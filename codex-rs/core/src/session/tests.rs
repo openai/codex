@@ -6014,31 +6014,6 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
 }
 
 #[tokio::test]
-async fn unknown_model_warning_emits_once_per_session_for_same_slug() {
-    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
-    let mut turn_context = Arc::into_inner(turn_context).expect("sole turn context owner");
-    turn_context.model_info = model_info::model_info_from_slug("unknown-model");
-
-    session
-        .maybe_emit_unknown_model_warning_for_turn(&turn_context)
-        .await;
-    let warning_event = timeout(Duration::from_secs(1), rx.recv())
-        .await
-        .expect("warning event should arrive")
-        .expect("warning event should be readable");
-    assert!(matches!(
-        warning_event.msg,
-        EventMsg::Warning(WarningEvent { message })
-            if message == "Model metadata for `unknown-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
-    ));
-
-    session
-        .maybe_emit_unknown_model_warning_for_turn(&turn_context)
-        .await;
-    assert!(rx.try_recv().is_err());
-}
-
-#[tokio::test]
 async fn handle_output_item_done_records_image_save_history_message() {
     let (session, turn_context) = make_session_and_context().await;
     let session = Arc::new(session);
