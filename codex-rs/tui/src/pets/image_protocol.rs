@@ -171,7 +171,8 @@ fn supports_kitty_graphics(info: &TerminalInfo) -> bool {
 }
 
 fn supports_sixel(info: &TerminalInfo) -> bool {
-    terminal_field_contains(info.term.as_deref(), "sixel")
+    matches!(info.name, TerminalName::WindowsTerminal)
+        || terminal_field_contains(info.term.as_deref(), "sixel")
         || terminal_field_contains(info.term.as_deref(), "mlterm")
         || terminal_field_contains(info.term.as_deref(), "foot")
 }
@@ -494,6 +495,12 @@ mod tests {
                 /*multiplexer*/ None,
                 /*term_program*/ None,
                 Some("mlterm"),
+            ),
+            terminal_info_for_test(
+                TerminalName::WindowsTerminal,
+                /*multiplexer*/ None,
+                Some("WindowsTerminal"),
+                Some("xterm-256color"),
             ),
         ] {
             assert_eq!(
