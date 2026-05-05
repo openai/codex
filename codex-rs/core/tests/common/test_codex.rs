@@ -425,7 +425,7 @@ impl TestCodexBuilder {
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
         let state_db = codex_core::init_state_db(&config).await;
-        codex_core::test_support::set_thread_manager_test_mode(true);
+        codex_core::test_support::set_thread_manager_test_mode(/*enabled*/ true);
         let installation_id = resolve_installation_id(&config.codex_home).await?;
         let thread_manager = ThreadManager::new(
             &config,
