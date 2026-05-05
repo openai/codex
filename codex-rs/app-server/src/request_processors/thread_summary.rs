@@ -1,6 +1,11 @@
 use super::*;
 
 #[cfg(test)]
+use chrono::DateTime;
+#[cfg(test)]
+use chrono::Utc;
+
+#[cfg(test)]
 pub(crate) async fn read_summary_from_rollout(
     path: &Path,
     fallback_provider: &str,
@@ -203,6 +208,7 @@ pub(super) fn thread_response_sandbox_policy(
     sandbox_policy.into()
 }
 
+#[cfg(test)]
 fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     timestamp.and_then(|ts| {
         chrono::DateTime::parse_from_rfc3339(ts)
@@ -229,6 +235,7 @@ pub(super) fn thread_started_notification(mut thread: Thread) -> ThreadStartedNo
     ThreadStartedNotification { thread }
 }
 
+#[cfg(test)]
 pub(crate) fn summary_to_thread(
     summary: ConversationSummary,
     fallback_cwd: &AbsolutePathBuf,
