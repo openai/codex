@@ -120,7 +120,7 @@ pub(crate) fn detect_pet_image_support() -> PetImageSupport {
     }
 
     if env::var_os("WEZTERM_EXECUTABLE").is_some() || env::var_os("WEZTERM_VERSION").is_some() {
-        return PetImageSupport::Supported(ImageProtocol::Sixel);
+        return PetImageSupport::Supported(ImageProtocol::Kitty);
     }
 
     pet_image_support_for_terminal(&terminal_info())
@@ -149,19 +149,22 @@ fn pet_image_support_for_terminal(info: &TerminalInfo) -> PetImageSupport {
 }
 
 fn supports_kitty_graphics(info: &TerminalInfo) -> bool {
-    matches!(info.name, TerminalName::Ghostty | TerminalName::Kitty)
-        || terminal_field_contains(info.term.as_deref(), "kitty")
+    matches!(
+        info.name,
+        TerminalName::Ghostty | TerminalName::Kitty | TerminalName::WezTerm
+    ) || terminal_field_contains(info.term.as_deref(), "kitty")
         || terminal_field_contains(info.term.as_deref(), "ghostty")
+        || terminal_field_contains(info.term.as_deref(), "wezterm")
         || terminal_field_contains(info.term_program.as_deref(), "kitty")
         || terminal_field_contains(info.term_program.as_deref(), "ghostty")
+        || terminal_field_contains(info.term_program.as_deref(), "wezterm")
 }
 
 fn supports_sixel(info: &TerminalInfo) -> bool {
-    matches!(info.name, TerminalName::Iterm2 | TerminalName::WezTerm)
+    matches!(info.name, TerminalName::Iterm2)
         || terminal_field_contains(info.term.as_deref(), "sixel")
         || terminal_field_contains(info.term.as_deref(), "mlterm")
         || terminal_field_contains(info.term.as_deref(), "foot")
-        || terminal_field_contains(info.term_program.as_deref(), "wezterm")
         || terminal_field_contains(info.term_program.as_deref(), "iterm")
 }
 
@@ -258,26 +261,27 @@ mod tests {
 
     use super::*;
 
-    struct TmuxEnvGuard {
+    struct EnvVarGuard {
+        name: &'static str,
         previous: Option<std::ffi::OsString>,
     }
 
-    impl TmuxEnvGuard {
-        fn new(value: Option<&str>) -> Self {
-            let previous = env::var_os("TMUX");
+    impl EnvVarGuard {
+        fn new(name: &'static str, value: Option<&str>) -> Self {
+            let previous = env::var_os(name);
             match value {
-                Some(value) => unsafe { env::set_var("TMUX", value) },
-                None => unsafe { env::remove_var("TMUX") },
+                Some(value) => unsafe { env::set_var(name, value) },
+                None => unsafe { env::remove_var(name) },
             }
-            Self { previous }
+            Self { name, previous }
         }
     }
 
-    impl Drop for TmuxEnvGuard {
+    impl Drop for EnvVarGuard {
         fn drop(&mut self) {
             match self.previous.take() {
-                Some(value) => unsafe { env::set_var("TMUX", value) },
-                None => unsafe { env::remove_var("TMUX") },
+                Some(value) => unsafe { env::set_var(self.name, value) },
+                None => unsafe { env::remove_var(self.name) },
             }
         }
     }
@@ -285,7 +289,7 @@ mod tests {
     #[test]
     #[serial]
     fn kitty_png_transmission_encodes_inline_data() {
-        let _guard = TmuxEnvGuard::new(/*value*/ None);
+        let _guard = EnvVarGuard::new("TMUX", /*value*/ None);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("frame.png");
         fs::write(&path, b"png").unwrap();
@@ -303,7 +307,7 @@ mod tests {
     #[test]
     #[serial]
     fn tmux_passthrough_wraps_and_escapes_control_sequence() {
-        let _guard = TmuxEnvGuard::new(Some("session"));
+        let _guard = EnvVarGuard::new("TMUX", Some("session"));
         assert_eq!(
             wrap_for_tmux_if_needed("\x1b_Gx;\x1b\\"),
             "\x1bPtmux;\x1b\x1b_Gx;\x1b\x1b\\\x1b\\"
@@ -329,7 +333,7 @@ mod tests {
     #[test]
     #[serial]
     fn auto_protocol_is_disabled_inside_tmux() {
-        let _guard = TmuxEnvGuard::new(Some("session"));
+        let _guard = EnvVarGuard::new("TMUX", Some("session"));
 
         assert_eq!(
             ProtocolSelection::Auto.resolve(),
@@ -340,7 +344,7 @@ mod tests {
     #[test]
     #[serial]
     fn explicit_protocol_still_resolves_inside_tmux() {
-        let _guard = TmuxEnvGuard::new(Some("session"));
+        let _guard = EnvVarGuard::new("TMUX", Some("session"));
 
         assert_eq!(
             ProtocolSelection::Kitty.resolve(),
@@ -390,10 +394,28 @@ mod tests {
                 /*term*/ None,
             ),
             terminal_info_for_test(
+                TerminalName::WezTerm,
+                /*multiplexer*/ None,
+                Some("WezTerm"),
+                /*term*/ None,
+            ),
+            terminal_info_for_test(
                 TerminalName::Unknown,
                 /*multiplexer*/ None,
                 /*term_program*/ None,
                 Some("xterm-kitty"),
+            ),
+            terminal_info_for_test(
+                TerminalName::Unknown,
+                /*multiplexer*/ None,
+                /*term_program*/ None,
+                Some("wezterm"),
+            ),
+            terminal_info_for_test(
+                TerminalName::Unknown,
+                /*multiplexer*/ None,
+                Some("WezTerm"),
+                Some("xterm-256color"),
             ),
         ] {
             assert_eq!(
@@ -406,12 +428,6 @@ mod tests {
     #[test]
     fn pet_image_support_detects_sixel_terminals() {
         for info in [
-            terminal_info_for_test(
-                TerminalName::WezTerm,
-                /*multiplexer*/ None,
-                Some("WezTerm"),
-                /*term*/ None,
-            ),
             terminal_info_for_test(
                 TerminalName::Iterm2,
                 /*multiplexer*/ None,
@@ -442,6 +458,24 @@ mod tests {
                 PetImageSupport::Supported(ImageProtocol::Sixel)
             );
         }
+    }
+
+    #[test]
+    #[serial]
+    fn wezterm_env_uses_kitty_graphics_for_ambient_pets() {
+        let _tmux = EnvVarGuard::new("TMUX", /*value*/ None);
+        let _tmux_pane = EnvVarGuard::new("TMUX_PANE", /*value*/ None);
+        let _zellij = EnvVarGuard::new("ZELLIJ", /*value*/ None);
+        let _zellij_session = EnvVarGuard::new("ZELLIJ_SESSION_NAME", /*value*/ None);
+        let _zellij_version = EnvVarGuard::new("ZELLIJ_VERSION", /*value*/ None);
+        let _kitty = EnvVarGuard::new("KITTY_WINDOW_ID", /*value*/ None);
+        let _wezterm = EnvVarGuard::new("WEZTERM_VERSION", Some("20240203"));
+        let _wezterm_executable = EnvVarGuard::new("WEZTERM_EXECUTABLE", /*value*/ None);
+
+        assert_eq!(
+            detect_pet_image_support(),
+            PetImageSupport::Supported(ImageProtocol::Kitty)
+        );
     }
 
     #[test]
