@@ -21,7 +21,6 @@ use tracing::Instrument;
 use tracing::Span;
 use tracing::warn;
 
-use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::internal_error;
 use crate::server_request_error::TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON;
 pub(crate) use codex_app_server_transport::ConnectionId;
@@ -157,11 +156,14 @@ impl ThreadScopedOutgoingMessageSender {
         self.outgoing
             .cancel_requests_for_thread(
                 self.thread_id,
-                Some(JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: "client request resolved because the turn state was changed"
-                        .to_string(),
-                    data: Some(serde_json::json!({ "reason": TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON })),
+                Some({
+                    let mut error = internal_error(
+                        "client request resolved because the turn state was changed",
+                    );
+                    error.data = Some(serde_json::json!({
+                        "reason": TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON,
+                    }));
+                    error
                 }),
             )
             .await
@@ -1011,11 +1013,7 @@ mod tests {
             connection_id: ConnectionId(9),
             request_id: RequestId::Integer(3),
         };
-        let error = JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: "boom".to_string(),
-            data: None,
-        };
+        let error = internal_error("boom");
 
         outgoing.send_error(request_id.clone(), error.clone()).await;
 
@@ -1139,11 +1137,7 @@ mod tests {
             ))
             .await;
 
-        let error = JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: "refresh failed".to_string(),
-            data: None,
-        };
+        let error = internal_error("refresh failed");
 
         outgoing
             .notify_client_error(request_id, error.clone())
@@ -1253,11 +1247,7 @@ mod tests {
                 },
             ))
             .await;
-        let error = JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: "tracked request cancelled".to_string(),
-            data: None,
-        };
+        let error = internal_error("tracked request cancelled");
 
         outgoing
             .cancel_requests_for_thread(thread_id, Some(error.clone()))

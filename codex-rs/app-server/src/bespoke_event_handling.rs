@@ -75,6 +75,7 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnDiffUpdatedNotification;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptResponse;
+use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
@@ -157,15 +158,19 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
             let turn = {
                 let state = thread_state.lock().await;
-                state.active_turn_snapshot().unwrap_or_else(|| Turn {
+                let mut turn = state.active_turn_snapshot().unwrap_or_else(|| Turn {
                     id: payload.turn_id.clone(),
                     items: Vec::new(),
+                    items_view: TurnItemsView::NotLoaded,
                     error: None,
                     status: TurnStatus::InProgress,
                     started_at: payload.started_at,
                     completed_at: None,
                     duration_ms: None,
-                })
+                });
+                turn.items.clear();
+                turn.items_view = TurnItemsView::NotLoaded;
+                turn
             };
             let notification = TurnStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1305,6 +1310,7 @@ async fn emit_turn_completed_with_status(
         turn: Turn {
             id: event_turn_id,
             items: vec![],
+            items_view: TurnItemsView::NotLoaded,
             error: turn_completion_metadata.error,
             status: turn_completion_metadata.status,
             started_at: turn_completion_metadata.started_at,
@@ -3199,6 +3205,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn turn_started_omits_active_snapshot_items() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = load_default_config_for_test(&codex_home).await;
+        let thread_manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider_and_home(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+                config.model_provider.clone(),
+                config.codex_home.to_path_buf(),
+                Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+            ),
+        );
+        let codex_core::NewThread {
+            thread_id: conversation_id,
+            thread: conversation,
+            ..
+        } = thread_manager.start_thread(config.clone()).await?;
+        let thread_state = new_thread_state();
+        {
+            let mut state = thread_state.lock().await;
+            state.track_current_turn_event(
+                "turn-1",
+                &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: "turn-1".to_string(),
+                    started_at: Some(42),
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                }),
+            );
+            state.track_current_turn_event(
+                "turn-1",
+                &EventMsg::UserMessage(codex_protocol::protocol::UserMessageEvent {
+                    message: "already tracked".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                }),
+            );
+        }
+        let thread_watch_manager = ThreadWatchManager::new();
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            conversation_id,
+        );
+
+        apply_bespoke_event_handling(
+            Event {
+                id: "turn-1".to_string(),
+                msg: EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: "turn-1".to_string(),
+                    started_at: Some(42),
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                }),
+            },
+            conversation_id,
+            conversation,
+            thread_manager,
+            /*analytics_events_client*/ None,
+            outgoing,
+            thread_state,
+            thread_watch_manager,
+            Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
+            "test-provider".to_string(),
+        )
+        .await;
+
+        let msg = recv_broadcast_message(&mut rx).await?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnStarted(n)) => {
+                assert_eq!(n.turn.id, "turn-1");
+                assert_eq!(n.turn.items_view, TurnItemsView::NotLoaded);
+                assert!(n.turn.items.is_empty());
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_handle_turn_complete_emits_completed_without_error() -> Result<()> {
         let conversation_id = ThreadId::new();
         let event_turn_id = "complete1".to_string();
@@ -3245,6 +3336,8 @@ mod tests {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, event_turn_id);
                 assert_eq!(n.turn.status, TurnStatus::Completed);
+                assert_eq!(n.turn.items_view, TurnItemsView::NotLoaded);
+                assert!(n.turn.items.is_empty());
                 assert_eq!(n.turn.error, None);
                 assert_eq!(n.turn.started_at, Some(42));
                 assert_eq!(n.turn.completed_at, Some(TEST_TURN_COMPLETED_AT));

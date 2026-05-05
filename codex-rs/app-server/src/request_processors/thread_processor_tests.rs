@@ -52,6 +52,7 @@ mod thread_processor_behavior_tests {
     use chrono::DateTime;
     use chrono::Utc;
     use codex_app_server_protocol::ServerRequestPayload;
+    use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_config::CloudRequirementsLoader;
     use codex_config::LoaderOverrides;
@@ -205,6 +206,7 @@ mod thread_processor_behavior_tests {
                     text_elements: Vec::new(),
                 }],
             }],
+            items_view: TurnItemsView::Full,
             error: None,
             status: TurnStatus::InProgress,
             started_at: None,

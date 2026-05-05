@@ -293,6 +293,7 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::HookCell;
 use crate::history_cell::McpInvocation;
 use crate::history_cell::McpToolCallCell;
@@ -756,6 +757,7 @@ pub(crate) struct ChatWidget {
     /// where the overlay may briefly treat new tail content as already cached.
     active_cell_revision: u64,
     config: Config,
+    raw_output_mode: bool,
     /// Runtime value resolved by core. `config.service_tier` remains the explicit user choice.
     effective_service_tier: Option<ServiceTier>,
     /// The unmasked collaboration mode settings (always Default mode).
@@ -2329,6 +2331,7 @@ impl ChatWidget {
             self.plan_stream_controller = Some(PlanStreamController::new(
                 self.current_stream_width(/*reserved_cols*/ 4),
                 &self.config.cwd,
+                self.history_render_mode(),
             ));
         }
         if let Some(controller) = self.plan_stream_controller.as_mut()
@@ -4331,6 +4334,7 @@ impl ChatWidget {
             self.stream_controller = Some(StreamController::new(
                 self.current_stream_width(/*reserved_cols*/ 2),
                 &self.config.cwd,
+                self.history_render_mode(),
             ));
         }
         if let Some(controller) = self.stream_controller.as_mut()
@@ -4890,6 +4894,7 @@ impl ChatWidget {
             }),
             active_cell,
             active_cell_revision: 0,
+            raw_output_mode: config.tui_raw_output_mode,
             config,
             effective_service_tier,
             skills_all: Vec::new(),
@@ -5959,6 +5964,7 @@ impl ChatWidget {
         for turn in turns {
             let Turn {
                 id: turn_id,
+                items_view: _,
                 items,
                 status,
                 error,
@@ -5982,6 +5988,7 @@ impl ChatWidget {
                         thread_id: self.thread_id.map(|id| id.to_string()).unwrap_or_default(),
                         turn: Turn {
                             id: turn_id,
+                            items_view: codex_app_server_protocol::TurnItemsView::NotLoaded,
                             items: Vec::new(),
                             status,
                             error,
@@ -10274,6 +10281,53 @@ impl ChatWidget {
                 Some(crate::width::usable_content_width(width, reserved_cols).unwrap_or(1))
             }
         })
+    }
+
+    pub(crate) fn raw_output_mode(&self) -> bool {
+        self.raw_output_mode
+    }
+
+    pub(crate) fn history_render_mode(&self) -> HistoryRenderMode {
+        if self.raw_output_mode {
+            HistoryRenderMode::Raw
+        } else {
+            HistoryRenderMode::Rich
+        }
+    }
+
+    pub(crate) fn set_raw_output_mode(&mut self, enabled: bool) {
+        self.raw_output_mode = enabled;
+        self.config.tui_raw_output_mode = enabled;
+        let render_mode = self.history_render_mode();
+        if let Some(controller) = self.stream_controller.as_mut() {
+            controller.set_render_mode(render_mode);
+        }
+        if let Some(controller) = self.plan_stream_controller.as_mut() {
+            controller.set_render_mode(render_mode);
+        }
+        self.refresh_status_surfaces();
+    }
+
+    pub(crate) fn raw_output_mode_notice(enabled: bool) -> &'static str {
+        if enabled {
+            "Raw output mode on: transcript text is shown for clean terminal selection."
+        } else {
+            "Raw output mode off: rich transcript rendering restored."
+        }
+    }
+
+    pub(crate) fn set_raw_output_mode_and_notify(&mut self, enabled: bool) {
+        self.set_raw_output_mode(enabled);
+        self.add_info_message(
+            Self::raw_output_mode_notice(enabled).to_string(),
+            /*hint*/ None,
+        );
+    }
+
+    pub(crate) fn toggle_raw_output_mode_and_notify(&mut self) -> bool {
+        let enabled = !self.raw_output_mode;
+        self.set_raw_output_mode_and_notify(enabled);
+        enabled
     }
 
     /// Update resize-sensitive chat widget state after the terminal width changes.

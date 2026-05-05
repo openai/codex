@@ -75,6 +75,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::net::TcpListener as StdTcpListener;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -370,6 +371,16 @@ async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
     } else {
         None
     };
+    match proxy.as_ref() {
+        Some(proxy) => info!(
+            "CONNECT route selected (host={}, port={}, route=upstream_proxy, proxy={})",
+            target.host, target.port, proxy.address
+        ),
+        None => info!(
+            "CONNECT route selected (host={}, port={}, route=direct)",
+            target.host, target.port
+        ),
+    }
 
     if let Err(err) = forward_connect_tunnel(upgraded, proxy, app_state).await {
         warn!("tunnel error: {err}");
@@ -402,21 +413,47 @@ async fn forward_connect_tunnel(
     let connector = TlsConnectorLayer::tunnel(None)
         .with_connector_data(tls_config)
         .into_layer(proxy_connector);
-    let EstablishedClientConnection { conn: target, .. } =
-        connector.connect(req).await.map_err(|err| {
-            OpaqueError::from_boxed(err)
+    info!("CONNECT upstream dial started (target={authority})");
+    let connect_started_at = Instant::now();
+    let EstablishedClientConnection { conn: target, .. } = match connector.connect(req).await {
+        Ok(connection) => {
+            info!(
+                "CONNECT upstream dial established (target={authority}, elapsed_ms={})",
+                connect_started_at.elapsed().as_millis()
+            );
+            connection
+        }
+        Err(err) => {
+            warn!(
+                "CONNECT upstream dial failed (target={authority}, elapsed_ms={})",
+                connect_started_at.elapsed().as_millis()
+            );
+            return Err(OpaqueError::from_boxed(err)
                 .with_context(|| format!("establish CONNECT tunnel to {authority}"))
-                .into_boxed()
-        })?;
+                .into_boxed());
+        }
+    };
 
     let proxy_req = ProxyRequest {
         source: upgraded,
         target,
     };
+    info!("CONNECT tunnel forwarding started (target={authority})");
+    let forward_started_at = Instant::now();
     StreamForwardService::default()
         .serve(proxy_req)
         .await
+        .map(|_| {
+            info!(
+                "CONNECT tunnel forwarding completed (target={authority}, elapsed_ms={})",
+                forward_started_at.elapsed().as_millis()
+            );
+        })
         .map_err(|err| {
+            warn!(
+                "CONNECT tunnel forwarding failed (target={authority}, elapsed_ms={})",
+                forward_started_at.elapsed().as_millis()
+            );
             OpaqueError::from_boxed(err.into())
                 .with_context(|| format!("forward CONNECT tunnel to {authority}"))
                 .into_boxed()

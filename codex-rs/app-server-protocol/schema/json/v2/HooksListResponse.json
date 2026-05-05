@@ -47,6 +47,9 @@
             "null"
           ]
         },
+        "currentHash": {
+          "type": "string"
+        },
         "displayOrder": {
           "format": "int64",
           "type": "integer"
@@ -94,9 +97,13 @@
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
+        },
+        "trustStatus": {
+          "$ref": "#/definitions/HookTrustStatus"
         }
       },
       "required": [
+        "currentHash",
         "displayOrder",
         "enabled",
         "eventName",
@@ -105,7 +112,8 @@
         "key",
         "source",
         "sourcePath",
-        "timeoutSec"
+        "timeoutSec",
+        "trustStatus"
       ],
       "type": "object"
     },
@@ -121,6 +129,15 @@
         "legacyManagedConfigFile",
         "legacyManagedConfigMdm",
         "unknown"
+      ],
+      "type": "string"
+    },
+    "HookTrustStatus": {
+      "enum": [
+        "managed",
+        "untrusted",
+        "trusted",
+        "modified"
       ],
       "type": "string"
     },

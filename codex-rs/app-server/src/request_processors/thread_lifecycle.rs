@@ -147,23 +147,17 @@ pub(super) async fn ensure_conversation_listener(
     {
         Ok(conv) => conv,
         Err(_) => {
-            return Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("thread not found: {conversation_id}"),
-                data: None,
-            });
+            return Err(invalid_request(format!(
+                "thread not found: {conversation_id}"
+            )));
         }
     };
     let thread_state = {
         let pending_thread_unloads = listener_task_context.pending_thread_unloads.lock().await;
         if pending_thread_unloads.contains(&conversation_id) {
-            return Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!(
-                    "thread {conversation_id} is closing; retry after the thread is closed"
-                ),
-                data: None,
-            });
+            return Err(invalid_request(format!(
+                "thread {conversation_id} is closing; retry after the thread is closed"
+            )));
         }
         let Some(thread_state) = listener_task_context
             .thread_state_manager
@@ -229,13 +223,9 @@ pub(super) async fn ensure_listener_task_running(
     )
     .await
     else {
-        return Err(JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: format!(
-                "thread {conversation_id} is closing; retry after the thread is closed"
-            ),
-            data: None,
-        });
+        return Err(invalid_request(format!(
+            "thread {conversation_id} is closing; retry after the thread is closed"
+        )));
     };
     let (mut listener_command_rx, listener_generation) = {
         let mut thread_state = thread_state.lock().await;

@@ -13,7 +13,7 @@ use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
-use crate::tools::handlers::resolve_workdir_base_path;
+use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
@@ -67,6 +67,16 @@ pub(crate) struct ExecCommandArgs {
     justification: Option<String>,
     #[serde(default)]
     prefix_rule: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExecCommandEnvironmentArgs {
+    #[serde(default)]
+    environment_id: Option<String>,
+    // Keep this raw until after environment selection; relative paths must be
+    // resolved against the selected environment cwd, not the process cwd.
+    #[serde(default)]
+    workdir: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -179,24 +189,33 @@ impl ToolHandler for ExecCommandHandler {
             }
         };
 
-        let Some(turn_environment) = turn.environments.primary() else {
+        let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
+        let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
+        let environment_args: ExecCommandEnvironmentArgs = parse_arguments(&arguments)?;
+        let Some(turn_environment) =
+            resolve_tool_environment(turn.as_ref(), environment_args.environment_id.as_deref())?
+        else {
             return Err(FunctionCallError::RespondToModel(
                 "unified exec is unavailable in this session".to_string(),
             ));
         };
-        let fs = turn_environment.environment.get_filesystem();
-
-        let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
-        let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
-        let cwd = resolve_workdir_base_path(&arguments, &context.turn.cwd)?;
+        let cwd = environment_args
+            .workdir
+            .as_deref()
+            .filter(|workdir| !workdir.is_empty())
+            .map_or_else(
+                || turn_environment.cwd.clone(),
+                |workdir| turn_environment.cwd.join(workdir),
+            );
+        let environment = Arc::clone(&turn_environment.environment);
+        let fs = environment.get_filesystem();
         let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
         let hook_command = args.cmd.clone();
-        let workdir = context.turn.resolve_path(args.workdir.clone());
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
             context.turn.as_ref(),
             &hook_command,
-            &workdir,
+            &cwd,
         )
         .await;
         let process_id = manager.allocate_process_id().await;
@@ -210,7 +229,6 @@ impl ToolHandler for ExecCommandHandler {
         let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
 
         let ExecCommandArgs {
-            workdir,
             tty,
             yield_time_ms,
             max_output_tokens,
@@ -228,7 +246,7 @@ impl ToolHandler for ExecCommandHandler {
         let requested_additional_permissions = additional_permissions.clone();
         let effective_additional_permissions = apply_granted_turn_permissions(
             context.session.as_ref(),
-            context.turn.cwd.as_path(),
+            cwd.as_path(),
             sandbox_permissions,
             additional_permissions,
         )
@@ -255,10 +273,6 @@ impl ToolHandler for ExecCommandHandler {
             )));
         }
 
-        let workdir = workdir.filter(|value| !value.is_empty());
-
-        let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
-        let cwd = workdir.clone().unwrap_or(cwd);
         let normalized_additional_permissions = match implicit_granted_permissions(
             sandbox_permissions,
             requested_additional_permissions.as_ref(),
@@ -319,7 +333,8 @@ impl ToolHandler for ExecCommandHandler {
                     process_id,
                     yield_time_ms,
                     max_output_tokens: Some(max_output_tokens),
-                    workdir,
+                    cwd,
+                    environment,
                     network: context.turn.network.clone(),
                     tty,
                     sandbox_permissions: effective_additional_permissions.sandbox_permissions,

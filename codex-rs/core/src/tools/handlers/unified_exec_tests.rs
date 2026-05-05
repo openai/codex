@@ -1,17 +1,10 @@
 use super::*;
 use crate::shell::default_user_shell;
-use crate::tools::handlers::parse_arguments_with_base_path;
-use crate::tools::handlers::resolve_workdir_base_path;
-use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
-use codex_protocol::models::FileSystemPermissions;
 use codex_tools::UnifiedExecShellMode;
 use codex_tools::ZshForkConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
-use std::fs;
 use std::sync::Arc;
-use tempfile::tempdir;
 
 use crate::session::tests::make_session_and_context;
 use crate::tools::context::ExecCommandToolOutput;
@@ -181,39 +174,6 @@ fn test_get_command_ignores_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<
             "-lc".to_string(),
             "echo hello".to_string()
         ]
-    );
-    Ok(())
-}
-
-#[test]
-fn exec_command_args_resolve_relative_additional_permissions_against_workdir() -> anyhow::Result<()>
-{
-    let cwd = tempdir()?;
-    let workdir = cwd.path().join("nested");
-    fs::create_dir_all(&workdir)?;
-    let expected_write = workdir.join("relative-write.txt");
-    let json = r#"{
-            "cmd": "echo hello",
-            "workdir": "nested",
-            "additional_permissions": {
-                "file_system": {
-                    "write": ["./relative-write.txt"]
-                }
-            }
-        }"#;
-
-    let base_path = resolve_workdir_base_path(json, &cwd.path().abs())?;
-    let args: ExecCommandArgs = parse_arguments_with_base_path(json, &base_path)?;
-
-    assert_eq!(
-        args.additional_permissions,
-        Some(PermissionProfile {
-            file_system: Some(FileSystemPermissions::from_read_write_roots(
-                /*read*/ None,
-                Some(vec![expected_write.abs()]),
-            )),
-            ..Default::default()
-        })
     );
     Ok(())
 }

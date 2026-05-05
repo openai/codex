@@ -89,32 +89,21 @@ impl McpRequestProcessor {
         self.config_manager
             .load_latest_config(fallback_cwd)
             .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to reload config: {err}"),
-                data: None,
-            })
+            .map_err(|err| internal_error(format!("failed to reload config: {err}")))
     }
 
     async fn load_thread(
         &self,
         thread_id: &str,
     ) -> Result<(ThreadId, Arc<CodexThread>), JSONRPCErrorError> {
-        let thread_id = ThreadId::from_string(thread_id).map_err(|err| JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: format!("invalid thread id: {err}"),
-            data: None,
-        })?;
+        let thread_id = ThreadId::from_string(thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         let thread = self
             .thread_manager
             .get_thread(thread_id)
             .await
-            .map_err(|_| JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("thread not found: {thread_id}"),
-                data: None,
-            })?;
+            .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
 
         Ok((thread_id, thread))
     }
@@ -130,11 +119,9 @@ impl McpRequestProcessor {
         let mcp_servers = match serde_json::to_value(configured_servers) {
             Ok(value) => value,
             Err(err) => {
-                return Err(JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to serialize MCP servers: {err}"),
-                    data: None,
-                });
+                return Err(internal_error(format!(
+                    "failed to serialize MCP servers: {err}"
+                )));
             }
         };
 
@@ -142,13 +129,9 @@ impl McpRequestProcessor {
             match serde_json::to_value(config.mcp_oauth_credentials_store_mode) {
                 Ok(value) => value,
                 Err(err) => {
-                    return Err(JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!(
-                            "failed to serialize MCP OAuth credentials store mode: {err}"
-                        ),
-                        data: None,
-                    });
+                    return Err(internal_error(format!(
+                        "failed to serialize MCP OAuth credentials store mode: {err}"
+                    )));
                 }
             };
 

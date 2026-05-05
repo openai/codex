@@ -2,11 +2,11 @@
 source: tui/src/keymap_setup.rs
 expression: snapshot
 ---
-tab: All (86 selectable)
+tab: All (87 selectable)
 tab: Common (19 selectable)
 tab: Customized (0) (0 selectable)
 tab: Unbound (2) (2 selectable)
-tab: App (8 selectable)
+tab: App (9 selectable)
 tab: Composer (5 selectable)
 tab: Editor (17 selectable)
 tab: Vim (34 selectable)
@@ -18,10 +18,10 @@ Open External Editor | ctrl-g | Global open_external_editor Open External Editor
 Copy | ctrl-o | Global copy Copy Copy the last agent response to the clipboard. ctrl-o Default
 Clear Terminal | ctrl-l | Global clear_terminal Clear Terminal Clear the terminal UI. ctrl-l Default
 Toggle Vim Mode | unbound | Global toggle_vim_mode Toggle Vim Mode Turn Vim composer mode on or off. unbound Default
+Toggle Raw Output | alt-r | Global toggle_raw_output Toggle Raw Output Toggle raw scrollback mode. alt-r Default
 Decrease Reasoning Effort | alt-, | Chat decrease_reasoning_effort Decrease Reasoning Effort Decrease reasoning effort. alt-, Default
 Increase Reasoning Effort | alt-. | Chat increase_reasoning_effort Increase Reasoning Effort Increase reasoning effort. alt-. Default
 Edit Queued Message | alt-up, shift-left | Chat edit_queued_message Edit Queued Message Edit the most recently queued message. alt-up, shift-left Default
 Submit | enter | Composer submit Submit Submit the current composer draft. enter Default
 Queue | tab | Composer queue Queue Queue the draft while a task is running. tab Default
 Toggle Shortcuts | ?, shift-? | Composer toggle_shortcuts Toggle Shortcuts Show or hide the composer shortcut overlay. ?, shift-? Default
-History Search Previous | ctrl-r | Composer history_search_previous History Search Previous Open history search or move to the previous match. ctrl-r Default

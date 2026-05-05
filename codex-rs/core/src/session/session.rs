@@ -1,6 +1,5 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
-use codex_otel::LEGACY_NOTIFY_CONFIGURED_METRIC;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -573,24 +572,6 @@ impl Session {
                     }),
                 });
             }
-            let legacy_notify_configured = config
-                .notify
-                .as_ref()
-                .is_some_and(|argv| !argv.is_empty() && !argv[0].is_empty());
-            if legacy_notify_configured {
-                post_session_configured_events.push(Event {
-                    id: INITIAL_SUBMIT_ID.to_owned(),
-                    msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
-                        summary:
-                            "`notify` is deprecated and will be removed in a future release."
-                                .to_string(),
-                        details: Some(
-                            "Switch to a `Stop` hook for end-of-turn automation. See https://developers.openai.com/codex/hooks."
-                                .to_string(),
-                        ),
-                    }),
-                });
-            }
             for message in &config.startup_warnings {
                 post_session_configured_events.push(Event {
                     id: "".to_owned(),
@@ -647,9 +628,6 @@ impl Session {
             .with_auth_env(auth_env_telemetry.to_otel_metadata());
             if let Some(service_name) = session_configuration.metrics_service_name.as_deref() {
                 session_telemetry = session_telemetry.with_metrics_service_name(service_name);
-            }
-            if legacy_notify_configured {
-                session_telemetry.counter(LEGACY_NOTIFY_CONFIGURED_METRIC, /*inc*/ 1, &[]);
             }
             let network_proxy_audit_metadata = NetworkProxyAuditMetadata {
                 conversation_id: Some(conversation_id.to_string()),

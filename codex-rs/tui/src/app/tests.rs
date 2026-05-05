@@ -299,6 +299,17 @@ async fn ignore_same_thread_resume_allows_reattaching_displayed_inactive_thread(
     assert!(app.transcript_cells.is_empty());
 }
 
+#[test]
+fn hooks_needing_review_startup_warning_snapshot() {
+    let message = startup_prompts::hooks_needing_review_warning(/*count*/ 2)
+        .expect("review-needed hooks should produce a startup warning");
+    let rendered = lines_to_single_string(
+        &history_cell::new_warning_event(message).display_lines(/*width*/ 80),
+    );
+
+    assert_app_snapshot!("hooks_needing_review_startup_warning", rendered);
+}
+
 #[tokio::test]
 async fn enqueue_primary_thread_session_replays_buffered_approval_after_attach() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
@@ -4078,6 +4089,7 @@ async fn height_shrink_schedules_resize_reflow() {
 fn test_turn(turn_id: &str, status: TurnStatus, items: Vec<ThreadItem>) -> Turn {
     Turn {
         id: turn_id.to_string(),
+        items_view: codex_app_server_protocol::TurnItemsView::Full,
         items,
         status,
         error: None,
@@ -4656,6 +4668,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
             turns: vec![
                 Turn {
                     id: "turn-1".to_string(),
+                    items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: vec![ThreadItem::UserMessage {
                         id: "user-1".to_string(),
                         content: vec![AppServerUserInput::Text {
@@ -4671,6 +4684,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
                 },
                 Turn {
                     id: "turn-2".to_string(),
+                    items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: vec![
                         ThreadItem::UserMessage {
                             id: "user-2".to_string(),

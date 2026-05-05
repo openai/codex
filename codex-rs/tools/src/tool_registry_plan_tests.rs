@@ -19,6 +19,7 @@ use crate::ToolRegistryPlanDeferredTool;
 use crate::ToolRegistryPlanMcpTool;
 use crate::ToolsConfigParams;
 use crate::WaitAgentTimeoutOptions;
+use crate::create_exec_command_tool;
 use crate::mcp_call_tool_result_output_schema;
 use crate::request_user_input_available_modes;
 use codex_app_server_protocol::AppInfo;
@@ -157,6 +158,49 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         strip_descriptions_tool(&mut expected_spec);
         assert_eq!(actual_spec, expected_spec, "spec mismatch for {name}");
     }
+}
+
+#[test]
+fn exec_command_spec_includes_environment_id_only_for_multiple_selected_environments() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+    let config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (single_environment_tools, _) = build_specs(
+        &config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_process_tool_environment_id(
+        &single_environment_tools,
+        "exec_command",
+        /*expected_present*/ false,
+    );
+
+    let multi_environment_config = config.with_environment_mode(ToolEnvironmentMode::Multiple);
+    let (multi_environment_tools, _) = build_specs(
+        &multi_environment_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_process_tool_environment_id(
+        &multi_environment_tools,
+        "exec_command",
+        /*expected_present*/ true,
+    );
 }
 
 #[test]
@@ -2422,6 +2466,23 @@ fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a Co
         .iter()
         .find(|tool| tool.name() == expected_name)
         .unwrap_or_else(|| panic!("expected tool {expected_name}"))
+}
+
+fn assert_process_tool_environment_id(
+    tools: &[ConfiguredToolSpec],
+    expected_name: &str,
+    expected_present: bool,
+) {
+    let tool = find_tool(tools, expected_name);
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &tool.spec else {
+        panic!("expected function tool {expected_name}");
+    };
+    let (properties, _) = expect_object_schema(parameters);
+    assert_eq!(
+        properties.contains_key("environment_id"),
+        expected_present,
+        "{expected_name} environment_id parameter presence"
+    );
 }
 
 fn find_namespace_function_tool<'a>(

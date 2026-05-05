@@ -1559,19 +1559,13 @@ pub enum HookSource {
     Unknown,
 }
 
-impl HookSource {
-    /// Returns whether hooks from this source are managed and therefore not
-    /// user-configurable.
-    pub fn is_managed(self) -> bool {
-        matches!(
-            self,
-            Self::System
-                | Self::Mdm
-                | Self::CloudRequirements
-                | Self::LegacyManagedConfigFile
-                | Self::LegacyManagedConfigMdm
-        )
-    }
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum HookTrustStatus {
+    Managed,
+    Untrusted,
+    Trusted,
+    Modified,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -3995,20 +3989,6 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
     use tempfile::TempDir;
-
-    #[test]
-    fn hook_source_managedness_is_source_derived() {
-        assert_eq!(HookSource::System.is_managed(), true);
-        assert_eq!(HookSource::Mdm.is_managed(), true);
-        assert_eq!(HookSource::CloudRequirements.is_managed(), true);
-        assert_eq!(HookSource::LegacyManagedConfigFile.is_managed(), true);
-        assert_eq!(HookSource::LegacyManagedConfigMdm.is_managed(), true);
-        assert_eq!(HookSource::User.is_managed(), false);
-        assert_eq!(HookSource::Project.is_managed(), false);
-        assert_eq!(HookSource::SessionFlags.is_managed(), false);
-        assert_eq!(HookSource::Plugin.is_managed(), false);
-        assert_eq!(HookSource::Unknown.is_managed(), false);
-    }
 
     fn sorted_writable_roots(roots: Vec<WritableRoot>) -> Vec<(PathBuf, Vec<PathBuf>)> {
         let mut sorted_roots: Vec<(PathBuf, Vec<PathBuf>)> = roots

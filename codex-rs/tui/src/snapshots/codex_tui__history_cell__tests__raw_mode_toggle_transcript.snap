@@ -1,0 +1,58 @@
+---
+source: tui/src/history_cell.rs
+expression: rendered
+---
+rich before:
+
+› Please format this
+  for copying
+
+• - first item
+  - second item
+  
+  | Col | Value |
+  | --- | --- |
+  | code | x = 1 |
+  
+  copy me
+• Called
+  └ workspace.inspect({"path":"README.md
+        "})
+    structured output
+    second line
+
+raw on:
+Please format this
+for copying
+- first item
+- second item
+
+| Col | Value |
+| --- | --- |
+| code | `x = 1` |
+
+```text
+copy me
+```
+Called workspace.inspect({"path":"README.md"})
+structured output
+second line
+
+rich after:
+
+› Please format this
+  for copying
+
+• - first item
+  - second item
+  
+  | Col | Value |
+  | --- | --- |
+  | code | x = 1 |
+  
+  copy me
+• Called
+  └ workspace.inspect({"path":"README.md
+        "})
+    structured output
+    second line

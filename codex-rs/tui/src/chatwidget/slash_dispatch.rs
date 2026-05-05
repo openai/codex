@@ -32,6 +32,7 @@ const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
 const GOAL_USAGE: &str = "Usage: /goal <objective>";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
+const RAW_USAGE: &str = "Usage: /raw [on|off]";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -102,6 +103,11 @@ impl ChatWidget {
         };
 
         self.request_side_conversation(parent_thread_id, /*user_message*/ None);
+    }
+
+    fn emit_raw_output_mode_changed(&self, enabled: bool) {
+        self.app_event_tx
+            .send(AppEvent::RawOutputModeChanged { enabled });
     }
 
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
@@ -314,6 +320,10 @@ impl ChatWidget {
             }
             SlashCommand::Copy => {
                 self.copy_last_agent_markdown();
+            }
+            SlashCommand::Raw => {
+                let enabled = self.toggle_raw_output_mode_and_notify();
+                self.emit_raw_output_mode_changed(enabled);
             }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
@@ -594,6 +604,17 @@ impl ChatWidget {
                     }
                 }
                 _ => self.add_error_message("Usage: /keymap [debug]".to_string()),
+            },
+            SlashCommand::Raw => match trimmed.to_ascii_lowercase().as_str() {
+                "on" => {
+                    self.set_raw_output_mode_and_notify(/*enabled*/ true);
+                    self.emit_raw_output_mode_changed(/*enabled*/ true);
+                }
+                "off" => {
+                    self.set_raw_output_mode_and_notify(/*enabled*/ false);
+                    self.emit_raw_output_mode_changed(/*enabled*/ false);
+                }
+                _ => self.add_error_message(RAW_USAGE.to_string()),
             },
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
@@ -878,6 +899,7 @@ impl ChatWidget {
             | SlashCommand::Plugins
             | SlashCommand::Rollout
             | SlashCommand::Copy
+            | SlashCommand::Raw
             | SlashCommand::Vim
             | SlashCommand::Diff
             | SlashCommand::Rename

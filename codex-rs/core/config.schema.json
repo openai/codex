@@ -999,6 +999,9 @@
       "properties": {
         "enabled": {
           "type": "boolean"
+        },
+        "trusted_hash": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -2460,6 +2463,7 @@
               "queue": null,
               "submit": null,
               "toggle_fast_mode": null,
+              "toggle_raw_output": null,
               "toggle_shortcuts": null,
               "toggle_vim_mode": null
             },
@@ -2557,6 +2561,11 @@
           ],
           "default": true,
           "description": "Enable desktop notifications from the TUI. Defaults to `true`."
+        },
+        "raw_output_mode": {
+          "default": false,
+          "description": "Start the TUI in raw scrollback mode for copy-friendly transcript output. Defaults to `false`.",
+          "type": "boolean"
         },
         "show_tooltips": {
           "default": true,
@@ -2956,6 +2965,14 @@
           ],
           "description": "Toggle Fast mode."
         },
+        "toggle_raw_output": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle raw scrollback mode for copy-friendly transcript selection."
+        },
         "toggle_shortcuts": {
           "allOf": [
             {
@@ -3062,6 +3079,7 @@
             "queue": null,
             "submit": null,
             "toggle_fast_mode": null,
+            "toggle_raw_output": null,
             "toggle_shortcuts": null,
             "toggle_vim_mode": null
           }
@@ -4294,7 +4312,7 @@
     },
     "notify": {
       "default": null,
-      "description": "Deprecated optional external command to spawn for end-user notifications.",
+      "description": "Optional external command to spawn for end-user notifications.",
       "items": {
         "type": "string"
       },
