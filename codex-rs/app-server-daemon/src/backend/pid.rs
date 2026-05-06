@@ -74,7 +74,7 @@ impl PidBackend {
                 PidFileState::Missing => return Ok(false),
                 PidFileState::Starting => return Ok(true),
                 PidFileState::Running(record) => {
-                    if process_matches_record(&record).await? {
+                    if self.record_is_active(&record).await? {
                         return Ok(true);
                     }
                     match self.refresh_after_stale_record(&record).await? {
@@ -110,7 +110,7 @@ impl PidBackend {
                     match self.read_pid_file_state_with_lock_held().await? {
                         PidFileState::Missing => continue,
                         PidFileState::Running(record) => {
-                            if process_matches_record(&record).await? {
+                            if self.record_is_active(&record).await? {
                                 return Ok(None);
                             }
                             let _ = fs::remove_file(&self.pid_file).await;
@@ -199,7 +199,7 @@ impl PidBackend {
             let Some(record) = self.wait_for_pid_start().await? else {
                 return Ok(());
             };
-            if !self.stop_target_is_active(&record).await? {
+            if !self.record_is_active(&record).await? {
                 match self.refresh_after_stale_record(&record).await? {
                     PidFileState::Missing => return Ok(()),
                     PidFileState::Starting | PidFileState::Running(_) => continue,
@@ -212,7 +212,7 @@ impl PidBackend {
             let deadline = tokio::time::Instant::now() + STOP_TIMEOUT;
             let mut forced = false;
             while tokio::time::Instant::now() < deadline {
-                if !self.stop_target_is_active(&record).await? {
+                if !self.record_is_active(&record).await? {
                     match self.refresh_after_stale_record(&record).await? {
                         PidFileState::Missing => return Ok(()),
                         PidFileState::Starting | PidFileState::Running(_) => break,
@@ -225,7 +225,7 @@ impl PidBackend {
                 sleep(STOP_POLL_INTERVAL).await;
             }
 
-            if self.stop_target_is_active(&record).await? {
+            if self.record_is_active(&record).await? {
                 bail!("timed out waiting for pid-managed app server {pid} to stop");
             }
         }
@@ -371,7 +371,7 @@ impl PidBackend {
         }
     }
 
-    async fn stop_target_is_active(&self, record: &PidRecord) -> Result<bool> {
+    async fn record_is_active(&self, record: &PidRecord) -> Result<bool> {
         match self.command_kind {
             PidCommandKind::AppServer { .. } => process_matches_record(record).await,
             PidCommandKind::UpdateLoop => {
