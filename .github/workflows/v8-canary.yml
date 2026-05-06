@@ -71,10 +71,24 @@ jobs:
         include:
           - runner: ubuntu-24.04
             platform: linux_amd64_musl
+            sandbox: false
             target: x86_64-unknown-linux-musl
+            variant: release
+          - runner: ubuntu-24.04
+            platform: linux_amd64_musl
+            sandbox: true
+            target: x86_64-unknown-linux-musl
+            variant: ptrcomp-sandbox
           - runner: ubuntu-24.04-arm
             platform: linux_arm64_musl
+            sandbox: false
             target: aarch64-unknown-linux-musl
+            variant: release
+          - runner: ubuntu-24.04-arm
+            platform: linux_arm64_musl
+            sandbox: true
+            target: aarch64-unknown-linux-musl
+            variant: ptrcomp-sandbox
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -96,13 +110,20 @@ jobs:
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
           PLATFORM: ${{ matrix.platform }}
+          SANDBOX: ${{ matrix.sandbox }}
           TARGET: ${{ matrix.target }}
         shell: bash
         run: |
           set -euo pipefail
 
           target_suffix="${TARGET//-/_}"
-          pair_target="//third_party/v8:rusty_v8_release_pair_${target_suffix}"
+          pair_kind="release_pair"
+          bazel_config_args=(--config=v8-release-compat)
+          if [[ "${SANDBOX}" == "true" ]]; then
+            pair_kind="sandbox_release_pair"
+            bazel_config_args=()
+          fi
+          pair_target="//third_party/v8:rusty_v8_${pair_kind}_${target_suffix}"
           extra_targets=(
             "@llvm//runtimes/libcxx:libcxx.static"
             "@llvm//runtimes/libcxx:libcxxabi.static"
@@ -111,7 +132,7 @@ jobs:
           bazel_args=(
             build
             "--platforms=@llvm//platforms:${PLATFORM}"
-            --config=v8-release-compat
+            "${bazel_config_args[@]}"
             "${pair_target}"
             "${extra_targets[@]}"
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
@@ -126,19 +147,27 @@ jobs:
       - name: Stage release pair
         env:
           PLATFORM: ${{ matrix.platform }}
+          SANDBOX: ${{ matrix.sandbox }}
           TARGET: ${{ matrix.target }}
         shell: bash
         run: |
           set -euo pipefail
 
-          python3 .github/scripts/rusty_v8_bazel.py stage-release-pair \
-            --platform "${PLATFORM}" \
-            --target "${TARGET}" \
-            --bazel-config v8-release-compat \
+          stage_args=(
+            --platform "${PLATFORM}"
+            --target "${TARGET}"
             --output-dir "dist/${TARGET}"
+          )
+          if [[ "${SANDBOX}" == "true" ]]; then
+            stage_args+=(--sandbox)
+          else
+            stage_args+=(--bazel-config v8-release-compat)
+          fi
+
+          python3 .github/scripts/rusty_v8_bazel.py stage-release-pair "${stage_args[@]}"
 
       - name: Upload staged musl artifacts
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: v8-canary-${{ needs.metadata.outputs.v8_version }}-${{ matrix.target }}
+          name: v8-canary-${{ needs.metadata.outputs.v8_version }}-${{ matrix.variant }}-${{ matrix.target }}
           path: dist/${{ matrix.target }}/*

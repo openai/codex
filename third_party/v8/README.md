@@ -40,7 +40,7 @@ The consumer-facing selectors are:
 - `//third_party/v8:rusty_v8_archive_for_target`
 - `//third_party/v8:rusty_v8_binding_for_target`
 
-Musl release assets are expected at the tag:
+Current musl release assets are expected at the tag:
 
 - `rusty-v8-v<crate_version>`
 
@@ -49,12 +49,31 @@ with these raw asset names:
 - `librusty_v8_release_<target>.a.gz`
 - `src_binding_release_<target>.rs`
 
+During the sandbox rollout, sandbox-enabled assets are published alongside those
+current assets on the same tag, with the Rust crate's sandbox feature suffix in
+their raw names:
+
+- `librusty_v8_ptrcomp_sandbox_release_<target>.a.gz`
+- `rusty_v8_ptrcomp_sandbox_release_<target>.lib.gz`
+- `src_binding_ptrcomp_sandbox_release_<target>.rs`
+
 The dedicated publishing workflow is `.github/workflows/rusty-v8-release.yml`.
-It builds musl release pairs from source and keeps the release artifacts as the
-statically linked form:
+Every tagged run builds the current musl release pairs from source and keeps the
+release artifacts as the statically linked form:
 
 - `//third_party/v8:rusty_v8_release_pair_x86_64_unknown_linux_musl`
 - `//third_party/v8:rusty_v8_release_pair_aarch64_unknown_linux_musl`
+
+The same run also builds the matching sandbox pair targets:
+
+- `//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_unknown_linux_musl`
+- `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_unknown_linux_musl`
+- `//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_pc_windows_msvc`
+- `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_pc_windows_msvc`
+
+The workflow validates the staged sandbox outputs before publication by checking
+the emitted checksums, running the focused V8/code-mode sandbox tests, and smoke
+starting a release `codex` binary on every supported artifact target.
 
 Cargo musl builds use `RUSTY_V8_ARCHIVE` plus a downloaded
 `RUSTY_V8_SRC_BINDING_PATH` to point at those `openai/codex` release assets

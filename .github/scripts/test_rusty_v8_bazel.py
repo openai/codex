@@ -13,6 +13,46 @@ import rusty_v8_module_bazel
 
 
 class RustyV8BazelTest(unittest.TestCase):
+    def test_release_pair_labels_and_staged_names_distinguish_sandbox_artifacts(self) -> None:
+        self.assertEqual(
+            "//third_party/v8:rusty_v8_release_pair_x86_64_unknown_linux_musl",
+            rusty_v8_bazel.release_pair_label("x86_64-unknown-linux-musl"),
+        )
+        self.assertEqual(
+            "//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_unknown_linux_musl",
+            rusty_v8_bazel.release_pair_label("x86_64-unknown-linux-musl", sandbox=True),
+        )
+        self.assertEqual(
+            "librusty_v8_release_x86_64-unknown-linux-musl.a.gz",
+            rusty_v8_bazel.staged_archive_name(
+                "x86_64-unknown-linux-musl",
+                Path("libv8.a"),
+                rusty_v8_bazel.RELEASE_ARTIFACT_PROFILE,
+            ),
+        )
+        self.assertEqual(
+            "rusty_v8_ptrcomp_sandbox_release_x86_64-pc-windows-msvc.lib.gz",
+            rusty_v8_bazel.staged_archive_name(
+                "x86_64-pc-windows-msvc",
+                Path("v8.lib"),
+                rusty_v8_bazel.SANDBOX_ARTIFACT_PROFILE,
+            ),
+        )
+        self.assertEqual(
+            "src_binding_ptrcomp_sandbox_release_x86_64-unknown-linux-musl.rs",
+            rusty_v8_bazel.staged_binding_name(
+                "x86_64-unknown-linux-musl",
+                rusty_v8_bazel.SANDBOX_ARTIFACT_PROFILE,
+            ),
+        )
+        self.assertEqual(
+            "rusty_v8_ptrcomp_sandbox_release_x86_64-unknown-linux-musl.sha256",
+            rusty_v8_bazel.staged_checksums_name(
+                "x86_64-unknown-linux-musl",
+                rusty_v8_bazel.SANDBOX_ARTIFACT_PROFILE,
+            ),
+        )
+
     @patch("rusty_v8_bazel.ensure_bazel_output_files")
     @patch("rusty_v8_bazel.subprocess.run")
     def test_host_runnable_bazel_output_file_selects_runnable_candidate(
