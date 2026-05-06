@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
+use async_trait::async_trait;
 use serde::Deserialize;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -14,6 +15,8 @@ use crate::ExecServerRuntimePaths;
 use crate::client_api::ExecServerTransportParams;
 use crate::client_api::StdioExecServerCommand;
 use crate::environment::LOCAL_ENVIRONMENT_ID;
+use crate::environment_provider::EnvironmentDefault;
+use crate::environment_provider::EnvironmentProviderSnapshot;
 
 const ENVIRONMENTS_TOML_FILE: &str = "environments.toml";
 const MAX_ENVIRONMENT_ID_LEN: usize = 64;
@@ -40,7 +43,7 @@ struct EnvironmentToml {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TomlEnvironmentProvider {
-    default_environment_id: Option<String>,
+    default: EnvironmentDefault,
     environments: HashMap<String, ExecServerTransportParams>,
 }
 
@@ -65,20 +68,20 @@ impl TomlEnvironmentProvider {
             }
             environments.insert(id, transport);
         }
-        let default_environment_id =
-            normalize_default_environment_id(config.default.as_deref(), &ids)?;
+        let default = normalize_default_environment_id(config.default.as_deref(), &ids)?;
         Ok(Self {
-            default_environment_id,
+            default,
             environments,
         })
     }
 }
 
+#[async_trait]
 impl EnvironmentProvider for TomlEnvironmentProvider {
-    fn get_environments(
+    async fn snapshot(
         &self,
         local_runtime_paths: &ExecServerRuntimePaths,
-    ) -> Result<HashMap<String, Environment>, ExecServerError> {
+    ) -> Result<EnvironmentProviderSnapshot, ExecServerError> {
         let mut environments = HashMap::from([(
             LOCAL_ENVIRONMENT_ID.to_string(),
             Environment::local(local_runtime_paths.clone()),
@@ -94,11 +97,10 @@ impl EnvironmentProvider for TomlEnvironmentProvider {
             );
         }
 
-        Ok(environments)
-    }
-
-    fn default_environment_id(&self) -> Option<String> {
-        self.default_environment_id.clone()
+        Ok(EnvironmentProviderSnapshot {
+            environments,
+            default: self.default.clone(),
+        })
     }
 }
 
@@ -193,9 +195,11 @@ pub(crate) fn environment_provider_from_codex_home(
 fn normalize_default_environment_id(
     default: Option<&str>,
     ids: &HashSet<String>,
-) -> Result<Option<String>, ExecServerError> {
+) -> Result<EnvironmentDefault, ExecServerError> {
     let Some(default) = default.map(str::trim) else {
-        return Ok(Some(LOCAL_ENVIRONMENT_ID.to_string()));
+        return Ok(EnvironmentDefault::EnvironmentId(
+            LOCAL_ENVIRONMENT_ID.to_string(),
+        ));
     };
     if default.is_empty() {
         return Err(ExecServerError::Protocol(
@@ -208,9 +212,9 @@ fn normalize_default_environment_id(
         )));
     }
     if default.eq_ignore_ascii_case("none") {
-        Ok(None)
+        Ok(EnvironmentDefault::Disabled)
     } else {
-        Ok(Some(default.to_string()))
+        Ok(EnvironmentDefault::EnvironmentId(default.to_string()))
     }
 }
 
@@ -333,9 +337,14 @@ mod tests {
         .expect("provider");
         let runtime_paths = test_runtime_paths();
 
-        let environments = provider
-            .get_environments(&runtime_paths)
+        let snapshot = provider
+            .snapshot(&runtime_paths)
+            .await
             .expect("environments");
+        let EnvironmentProviderSnapshot {
+            environments,
+            default,
+        } = snapshot;
 
         assert!(!environments[LOCAL_ENVIRONMENT_ID].is_remote());
         assert_eq!(
@@ -346,30 +355,38 @@ mod tests {
         assert!(environments["ssh-dev"].is_remote());
         assert_eq!(environments["ssh-dev"].exec_server_url(), None);
         assert_eq!(
-            provider.default_environment_id(),
-            Some("ssh-dev".to_string())
+            default,
+            EnvironmentDefault::EnvironmentId("ssh-dev".to_string())
         );
     }
 
-    #[test]
-    fn toml_provider_default_omitted_selects_local() {
+    #[tokio::test]
+    async fn toml_provider_default_omitted_selects_local() {
         let provider = TomlEnvironmentProvider::new(EnvironmentsToml::default()).expect("provider");
+        let snapshot = provider
+            .snapshot(&test_runtime_paths())
+            .await
+            .expect("environments");
 
         assert_eq!(
-            provider.default_environment_id,
-            Some(LOCAL_ENVIRONMENT_ID.to_string())
+            snapshot.default,
+            EnvironmentDefault::EnvironmentId(LOCAL_ENVIRONMENT_ID.to_string())
         );
     }
 
-    #[test]
-    fn toml_provider_default_none_disables_default() {
+    #[tokio::test]
+    async fn toml_provider_default_none_disables_default() {
         let provider = TomlEnvironmentProvider::new(EnvironmentsToml {
             default: Some("none".to_string()),
             environments: Vec::new(),
         })
         .expect("provider");
+        let snapshot = provider
+            .snapshot(&test_runtime_paths())
+            .await
+            .expect("environments");
 
-        assert_eq!(provider.default_environment_id, None);
+        assert_eq!(snapshot.default, EnvironmentDefault::Disabled);
     }
 
     #[test]
@@ -665,12 +682,13 @@ default = "none"
         let provider =
             environment_provider_from_codex_home(codex_home.path()).expect("environment provider");
 
-        let environments = provider
-            .get_environments(&test_runtime_paths())
+        let snapshot = provider
+            .snapshot(&test_runtime_paths())
+            .await
             .expect("environments");
 
-        assert!(environments.contains_key(LOCAL_ENVIRONMENT_ID));
-        assert_eq!(provider.default_environment_id(), None);
+        assert!(snapshot.environments.contains_key(LOCAL_ENVIRONMENT_ID));
+        assert_eq!(snapshot.default, EnvironmentDefault::Disabled);
     }
 
     #[tokio::test]
@@ -680,10 +698,11 @@ default = "none"
         let provider =
             environment_provider_from_codex_home(codex_home.path()).expect("environment provider");
 
-        let environments = provider
-            .get_environments(&test_runtime_paths())
+        let snapshot = provider
+            .snapshot(&test_runtime_paths())
+            .await
             .expect("environments");
 
-        assert!(environments.contains_key(LOCAL_ENVIRONMENT_ID));
+        assert!(snapshot.environments.contains_key(LOCAL_ENVIRONMENT_ID));
     }
 }
