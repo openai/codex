@@ -163,6 +163,7 @@ impl Daemon {
             ));
         }
 
+        self.ensure_managed_codex_bin()?;
         let pid = self.start_managed_backend(&settings).await?;
         let info = self.wait_until_ready().await?;
         Ok(self.output(
@@ -183,6 +184,7 @@ impl Daemon {
             ));
         }
 
+        self.ensure_managed_codex_bin()?;
         if let Some(backend) = self.running_backend_instance(&settings).await? {
             backend.stop().await?;
         }
@@ -270,12 +272,7 @@ impl Daemon {
     }
 
     async fn bootstrap_locked(&self, options: BootstrapOptions) -> Result<BootstrapOutput> {
-        if !self.managed_codex_bin.is_file() {
-            return Err(anyhow!(
-                "managed standalone Codex install not found at {}; install Codex first",
-                self.managed_codex_bin.display()
-            ));
-        }
+        self.ensure_managed_codex_bin()?;
 
         let settings = DaemonSettings {
             remote_control_enabled: options.remote_control_enabled,
@@ -335,6 +332,17 @@ impl Daemon {
     async fn start_managed_backend(&self, settings: &DaemonSettings) -> Result<Option<u32>> {
         let backend = backend::pid_backend(self.backend_paths(settings));
         backend.start().await
+    }
+
+    fn ensure_managed_codex_bin(&self) -> Result<()> {
+        if self.managed_codex_bin.is_file() {
+            return Ok(());
+        }
+
+        Err(anyhow!(
+            "managed standalone Codex install not found at {}; install Codex first",
+            self.managed_codex_bin.display()
+        ))
     }
 
     fn backend_paths(&self, settings: &DaemonSettings) -> BackendPaths {
