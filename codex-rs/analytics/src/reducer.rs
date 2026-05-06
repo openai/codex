@@ -1453,6 +1453,9 @@ fn tool_item_base(
         tool_name,
         started_at_ms: context.started_at_ms,
         completed_at_ms: context.completed_at_ms,
+        // duration_ms reflects item lifecycle observed by app-server. For web
+        // search and image generation in particular, that can be narrower than
+        // full upstream execution time.
         duration_ms: observed_duration_ms(context.started_at_ms, context.completed_at_ms),
         execution_duration_ms: outcome.execution_duration_ms,
         review_count: 0,

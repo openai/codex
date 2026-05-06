@@ -448,6 +448,8 @@ pub(crate) struct CodexToolItemEventBase {
     pub(crate) tool_name: String,
     pub(crate) started_at_ms: u64,
     pub(crate) completed_at_ms: u64,
+    // Observed item lifecycle duration. This may undercount end-to-end execution
+    // for tools where app-server only sees part of the upstream flow.
     pub(crate) duration_ms: Option<u64>,
     pub(crate) execution_duration_ms: Option<u64>,
     pub(crate) review_count: u64,
