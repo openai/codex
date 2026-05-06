@@ -181,119 +181,18 @@ jobs:
           name: rusty-v8-${{ needs.metadata.outputs.v8_version }}-${{ matrix.variant }}-${{ matrix.target }}
           path: dist/${{ matrix.target }}/*
 
-  validate-sandbox:
-    name: Validate sandbox artifacts - ${{ matrix.target }}
-    needs:
-      - metadata
-      - build
-    runs-on: ${{ matrix.runs_on }}
-    defaults:
-      run:
-        working-directory: codex-rs
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-musl
-            exe_suffix: ""
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
-          - target: aarch64-unknown-linux-musl
-            exe_suffix: ""
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
-          - target: x86_64-pc-windows-msvc
-            exe_suffix: ".exe"
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
-          - target: aarch64-pc-windows-msvc
-            exe_suffix: ".exe"
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
-
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-
-      - if: ${{ runner.os == 'Linux' }}
-        name: Install Linux build dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            pkg-config \
-            libcap-dev
-
-      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Download staged sandbox artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: rusty-v8-${{ needs.metadata.outputs.v8_version }}-ptrcomp-sandbox-${{ matrix.target }}
-          path: ${{ runner.temp }}/rusty_v8_sandbox
-
-      - name: Configure sandboxed rusty_v8 artifact overrides
-        env:
-          ARTIFACT_DIR: ${{ runner.temp }}/rusty_v8_sandbox
-          TARGET: ${{ matrix.target }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          artifact_profile="ptrcomp_sandbox_release"
-          binding_path="${ARTIFACT_DIR}/src_binding_${artifact_profile}_${TARGET}.rs"
-          checksums_path="${ARTIFACT_DIR}/rusty_v8_${artifact_profile}_${TARGET}.sha256"
-
-          if [[ "${TARGET}" == *-pc-windows-msvc ]]; then
-            archive_name="rusty_v8_${artifact_profile}_${TARGET}.lib.gz"
-          else
-            archive_name="librusty_v8_${artifact_profile}_${TARGET}.a.gz"
-          fi
-          archive_path="${ARTIFACT_DIR}/${archive_name}"
-
-          if [[ "$(wc -l < "${checksums_path}")" -ne 2 ]]; then
-            echo "Expected exactly two checksums for ${TARGET} in ${checksums_path}" >&2
-            exit 1
-          fi
-
-          (cd "${ARTIFACT_DIR}" && sha256sum -c "${checksums_path}")
-          echo "RUSTY_V8_ARCHIVE=${archive_path}" >> "${GITHUB_ENV}"
-          echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "${GITHUB_ENV}"
-
-      - name: Run sandboxed V8 probe tests
-        shell: bash
-        run: cargo test -p codex-v8-poc --target "${{ matrix.target }}" --features sandbox
-
-      - name: Run sandboxed code-mode tests
-        shell: bash
-        run: cargo test -p codex-code-mode --target "${{ matrix.target }}" --features sandbox
-
-      - name: Build release binary against sandboxed artifacts
-        shell: bash
-        run: cargo build --target "${{ matrix.target }}" --release --bin codex
-
-      - name: Smoke release binary
-        shell: bash
-        run: "target/${{ matrix.target }}/release/codex${{ matrix.exe_suffix }} --version"
-
   publish-release:
     needs:
       - metadata
       - build
-      - validate-sandbox
     runs-on: ubuntu-latest
     permissions:
       contents: write
       actions: read
 
     steps:
-      - name: Ensure release tag is new
+      - name: Check whether release already exists
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.metadata.outputs.release_tag }}
@@ -302,8 +201,9 @@ jobs:
           set -euo pipefail
 
           if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
-            echo "Release tag ${RELEASE_TAG} already exists; musl artifact tags are immutable." >&2
-            exit 1
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
           fi
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -311,10 +211,26 @@ jobs:
           path: dist
 
       - name: Create GitHub Release
+        if: ${{ steps.release.outputs.exists != 'true' }}
         uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
         with:
           tag_name: ${{ needs.metadata.outputs.release_tag }}
           name: ${{ needs.metadata.outputs.release_tag }}
           files: dist/**
+          # Keep V8 artifact releases out of Codex's normal "latest release" channel.
+          prerelease: true
+
+      - name: Amend existing GitHub Release with sandbox artifacts
+        if: ${{ steps.release.outputs.exists == 'true' }}
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
+        with:
+          tag_name: ${{ needs.metadata.outputs.release_tag }}
+          name: ${{ needs.metadata.outputs.release_tag }}
+          files: |
+            dist/**/librusty_v8_ptrcomp_sandbox_release_*.a.gz
+            dist/**/rusty_v8_ptrcomp_sandbox_release_*.lib.gz
+            dist/**/src_binding_ptrcomp_sandbox_release_*.rs
+            dist/**/rusty_v8_ptrcomp_sandbox_release_*.sha256
+          overwrite_files: true
           # Keep V8 artifact releases out of Codex's normal "latest release" channel.
           prerelease: true

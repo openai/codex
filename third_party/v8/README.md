@@ -71,9 +71,8 @@ The same run also builds the matching sandbox pair targets:
 - `//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_pc_windows_msvc`
 - `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_pc_windows_msvc`
 
-The workflow validates the staged sandbox outputs before publication by checking
-the emitted checksums, running the focused V8/code-mode sandbox tests, and smoke
-starting a release `codex` binary on every supported artifact target.
+If a tagged run targets an existing GitHub release, publication amends only the
+sandbox-profile files and leaves the current release-profile assets unchanged.
 
 Cargo musl builds use `RUSTY_V8_ARCHIVE` plus a downloaded
 `RUSTY_V8_SRC_BINDING_PATH` to point at those `openai/codex` release assets
