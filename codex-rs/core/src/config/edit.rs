@@ -3,6 +3,7 @@ use crate::path_utils::write_atomically;
 use anyhow::Context;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
+use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_features::FEATURES;
 use codex_protocol::config_types::Personality;
@@ -88,6 +89,14 @@ pub fn syntax_theme_edit(name: &str) -> ConfigEdit {
     ConfigEdit::SetPath {
         segments: vec!["tui".to_string(), "theme".to_string()],
         value: value(name.to_string()),
+    }
+}
+
+/// Produces a config edit that sets `[tui].session_picker_view = "<mode>"`.
+pub fn session_picker_view_edit(mode: SessionPickerViewMode) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["tui".to_string(), "session_picker_view".to_string()],
+        value: value(mode.to_string()),
     }
 }
 
@@ -1313,6 +1322,25 @@ impl ConfigEditsBuilder {
             }
             self.edits.push(ConfigEdit::ClearPath { segments });
         }
+        self
+    }
+
+    pub fn set_session_picker_view(mut self, mode: SessionPickerViewMode) -> Self {
+        let segments = if let Some(profile) = self.profile.as_ref() {
+            vec![
+                "profiles".to_string(),
+                profile.clone(),
+                "tui".to_string(),
+                "session_picker_view".to_string(),
+            ]
+        } else {
+            vec!["tui".to_string(), "session_picker_view".to_string()]
+        };
+
+        self.edits.push(ConfigEdit::SetPath {
+            segments,
+            value: value(mode.to_string()),
+        });
         self
     }
 

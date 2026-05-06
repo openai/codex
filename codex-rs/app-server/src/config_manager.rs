@@ -140,6 +140,21 @@ impl ConfigManager {
         .await
     }
 
+    pub(crate) async fn load_latest_config_for_thread(
+        &self,
+        thread_config: &Config,
+    ) -> std::io::Result<Config> {
+        let refreshed_config = self
+            .load_latest_config(Some(thread_config.cwd.to_path_buf()))
+            .await?;
+        let mut config = thread_config
+            .rebuild_preserving_session_layers(&refreshed_config)
+            .await?;
+        self.apply_runtime_feature_enablement(&mut config);
+        self.apply_arg0_paths(&mut config);
+        Ok(config)
+    }
+
     pub(crate) async fn load_default_config(&self) -> std::io::Result<Config> {
         let mut config = Config::load_default_with_cli_overrides_for_codex_home(
             self.codex_home.clone(),

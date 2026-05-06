@@ -6,6 +6,7 @@ members = [
     "agent-identity",
     "backend-client",
     "builtin-mcps",
+    "bwrap",
     "ansi-escape",
     "async-utils",
     "app-server",

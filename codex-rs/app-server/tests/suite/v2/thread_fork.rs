@@ -17,6 +17,7 @@ use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -90,6 +91,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
             thread_id: conversation_id.clone(),
+            thread_source: Some(ThreadSource::User),
             ..Default::default()
         })
         .await?;
@@ -99,7 +101,9 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     )
     .await??;
     let fork_result = fork_resp.result.clone();
-    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+    let ThreadForkResponse {
+        session_id, thread, ..
+    } = to_response::<ThreadForkResponse>(fork_resp)?;
 
     // Wire contract: thread title field is `name`, serialized as null when unset.
     let thread_json = fork_result
@@ -119,6 +123,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     );
 
     assert_ne!(thread.id, conversation_id);
+    assert_eq!(session_id, thread.id);
     assert_eq!(thread.forked_from_id, Some(conversation_id.clone()));
     assert_eq!(thread.preview, preview);
     assert_eq!(thread.model_provider, "mock_provider");
@@ -128,6 +133,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     assert_ne!(thread_path.as_path(), original_path);
     assert!(thread.cwd.as_path().is_absolute());
     assert_eq!(thread.source, SessionSource::VsCode);
+    assert_eq!(thread.thread_source, Some(ThreadSource::User));
     assert_eq!(thread.name, None);
 
     assert_eq!(
@@ -187,6 +193,13 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         started_thread_json.get("turns"),
         Some(&json!([])),
         "thread/started must not emit copied fork turns"
+    );
+    assert_eq!(
+        started_thread_json
+            .get("threadSource")
+            .and_then(Value::as_str),
+        Some("user"),
+        "thread/started should preserve the caller-supplied fork origin"
     );
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
@@ -299,6 +312,7 @@ async fn thread_fork_emits_restored_token_usage_before_next_turn() -> Result<()>
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
             thread_id: conversation_id,
+            thread_source: Some(ThreadSource::User),
             ..Default::default()
         })
         .await?;
@@ -403,6 +417,7 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
             thread_id: conversation_id,
+            thread_source: Some(ThreadSource::User),
             ..Default::default()
         })
         .await?;
@@ -415,7 +430,7 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
 
     let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
     let event = thread_initialized_event(&payload)?;
-    assert_basic_thread_initialized_event(event, &thread.id, "mock-model", "forked");
+    assert_basic_thread_initialized_event(event, &thread.id, "mock-model", "forked", "user");
     Ok(())
 }
 

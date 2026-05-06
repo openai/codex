@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::Prompt;
+use crate::client::CompactConversationRequestSettings;
 use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
@@ -170,8 +171,11 @@ async fn run_remote_compact_task_inner_impl(
         .compact_conversation_history(
             &prompt,
             &turn_context.model_info,
-            turn_context.reasoning_effort,
-            turn_context.reasoning_summary,
+            CompactConversationRequestSettings {
+                effort: turn_context.reasoning_effort,
+                summary: turn_context.reasoning_summary,
+                service_tier: turn_context.config.service_tier,
+            },
             &turn_context.session_telemetry,
             &compaction_trace,
         )

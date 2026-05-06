@@ -78,6 +78,8 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
+use codex_protocol::SessionId;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ActivePermissionProfileModification;
@@ -694,7 +696,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let session_configured =
                 session_configured_from_thread_resume_response(&response, &config)
                     .map_err(anyhow::Error::msg)?;
-            (session_configured.session_id, session_configured)
+            (session_configured.thread_id, session_configured)
         } else {
             let response: ThreadStartResponse = send_request_with_response(
                 &client,
@@ -709,7 +711,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let session_configured =
                 session_configured_from_thread_start_response(&response, &config)
                     .map_err(anyhow::Error::msg)?;
-            (session_configured.session_id, session_configured)
+            (session_configured.thread_id, session_configured)
         }
     } else {
         let response: ThreadStartResponse = send_request_with_response(
@@ -724,7 +726,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         .map_err(anyhow::Error::msg)?;
         let session_configured = session_configured_from_thread_start_response(&response, &config)
             .map_err(anyhow::Error::msg)?;
-        (session_configured.session_id, session_configured)
+        (session_configured.thread_id, session_configured)
     };
 
     let primary_thread_id_for_span = primary_thread_id.to_string();
@@ -1058,6 +1060,7 @@ fn session_configured_from_thread_start_response(
     config: &Config,
 ) -> Result<SessionConfiguredEvent, String> {
     session_configured_from_thread_response(
+        &response.session_id,
         &response.thread.id,
         response.thread.name.clone(),
         response.thread.path.clone(),
@@ -1082,6 +1085,7 @@ fn session_configured_from_thread_resume_response(
     config: &Config,
 ) -> Result<SessionConfiguredEvent, String> {
     session_configured_from_thread_response(
+        &response.session_id,
         &response.thread.id,
         response.thread.name.clone(),
         response.thread.path.clone(),
@@ -1115,6 +1119,7 @@ fn review_target_to_api(target: ReviewTarget) -> ApiReviewTarget {
     reason = "session mapping keeps explicit fields"
 )]
 fn session_configured_from_thread_response(
+    session_id: &str,
     thread_id: &str,
     thread_name: Option<String>,
     rollout_path: Option<PathBuf>,
@@ -1128,12 +1133,16 @@ fn session_configured_from_thread_response(
     cwd: AbsolutePathBuf,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> Result<SessionConfiguredEvent, String> {
-    let session_id = codex_protocol::ThreadId::from_string(thread_id)
+    let session_id = SessionId::from_string(session_id)
+        .map_err(|err| format!("session id `{session_id}` is invalid: {err}"))?;
+    let thread_id = ThreadId::from_string(thread_id)
         .map_err(|err| format!("thread id `{thread_id}` is invalid: {err}"))?;
 
     Ok(SessionConfiguredEvent {
         session_id,
+        thread_id,
         forked_from_id: None,
+        thread_source: None,
         thread_name,
         model,
         model_provider_id,

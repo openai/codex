@@ -15,6 +15,7 @@ use codex_otel::MetricsConfig;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::current_span_w3c_trace_context;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
@@ -87,7 +88,8 @@ fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTr
 struct WebsocketTestHarness {
     _codex_home: TempDir,
     client: ModelClient,
-    conversation_id: ThreadId,
+    session_id: SessionId,
+    thread_id: ThreadId,
     model_info: ModelInfo,
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummary,
@@ -125,7 +127,15 @@ async fn responses_websocket_streams_request() {
     );
     assert_eq!(
         handshake.header(X_CLIENT_REQUEST_ID_HEADER),
-        Some(harness.conversation_id.to_string())
+        Some(harness.thread_id.to_string())
+    );
+    assert_eq!(
+        handshake.header("session_id"),
+        Some(harness.session_id.to_string())
+    );
+    assert_eq!(
+        handshake.header("thread_id"),
+        Some(harness.thread_id.to_string())
     );
     assert_eq!(
         handshake.header(USER_AGENT_HEADER),
@@ -1827,7 +1837,8 @@ async fn websocket_harness_with_provider_options(
     }
     let config = Arc::new(config);
     let model_info = codex_core::test_support::construct_model_info_offline(MODEL, &config);
-    let conversation_id = ThreadId::new();
+    let thread_id = ThreadId::new();
+    let session_id = SessionId::new();
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
     let exporter = InMemoryMetricExporter::default();
@@ -1837,7 +1848,7 @@ async fn websocket_harness_with_provider_options(
     )
     .expect("in-memory metrics client");
     let session_telemetry = SessionTelemetry::new(
-        conversation_id,
+        thread_id,
         MODEL,
         model_info.slug.as_str(),
         /*account_id*/ None,
@@ -1853,7 +1864,8 @@ async fn websocket_harness_with_provider_options(
     let summary = ReasoningSummary::Auto;
     let client = ModelClient::new(
         /*auth_manager*/ None,
-        conversation_id,
+        session_id,
+        thread_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         SessionSource::Exec,
@@ -1866,7 +1878,8 @@ async fn websocket_harness_with_provider_options(
     WebsocketTestHarness {
         _codex_home: codex_home,
         client,
-        conversation_id,
+        session_id,
+        thread_id,
         model_info,
         effort,
         summary,

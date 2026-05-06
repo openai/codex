@@ -13,6 +13,10 @@ pub(crate) struct Handler;
 impl ToolHandler for Handler {
     type Output = SpawnAgentResult;
 
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("spawn_agent")
+    }
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }

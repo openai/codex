@@ -7,6 +7,7 @@ use anyhow::Result;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -102,6 +103,23 @@ fn contains_defer_loading(value: &Value) -> bool {
         }
         Value::Array(values) => values.iter().any(contains_defer_loading),
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
+    }
+}
+
+fn canonical_json(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries = map.iter().collect::<Vec<_>>();
+            entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key.clone(), canonical_json(value)))
+                    .collect(),
+            )
+        }
+        Value::Array(values) => Value::Array(values.iter().map(canonical_json).collect()),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => value.clone(),
     }
 }
 
@@ -273,6 +291,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     .await?;
     let codex = harness.test().codex.clone();
     let session_id = harness.test().session_configured.session_id.to_string();
+    let thread_id = harness.test().session_configured.thread_id.to_string();
 
     let responses_mock = responses::mount_sse_sequence(
         harness.server(),
@@ -341,6 +360,10 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         compact_request.header("session_id").as_deref(),
         Some(session_id.as_str())
     );
+    assert_eq!(
+        compact_request.header("thread_id").as_deref(),
+        Some(thread_id.as_str())
+    );
     let compact_body = compact_request.body_json();
     assert_eq!(
         compact_body.get("model").and_then(|v| v.as_str()),
@@ -408,6 +431,267 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
             ]
         )
     );
+
+    Ok(())
+}
+
+async fn assert_remote_manual_compact_request_parity(
+    auth: CodexAuth,
+    configured_service_tier: Option<ServiceTier>,
+    expected_service_tier: Option<&str>,
+    snapshot_name: &str,
+    scenario: &str,
+) -> Result<()> {
+    let mut builder = test_codex().with_auth(auth);
+    if let Some(service_tier) = configured_service_tier {
+        builder = builder.with_config(move |config| {
+            config.service_tier = Some(service_tier);
+        });
+    }
+    let harness = TestCodexHarness::with_builder(builder).await?;
+    let codex = harness.test().codex.clone();
+    let image_url =
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+            .to_string();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("turn-one-assistant", "TURN_ONE_ASSISTANT"),
+                responses::ev_completed("turn-one-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_reasoning_item(
+                    "turn-two-reasoning",
+                    &["TURN_TWO_REASONING"],
+                    &["turn two raw content"],
+                ),
+                responses::ev_assistant_message("turn-two-assistant", "TURN_TWO_ASSISTANT"),
+                responses::ev_completed("turn-two-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_function_call("turn-three-call", DUMMY_FUNCTION_NAME, "{}"),
+                responses::ev_completed("turn-three-call-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("turn-three-assistant", "TURN_THREE_ASSISTANT"),
+                responses::ev_completed("turn-three-final-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_local_shell_call(
+                    "turn-four-local-shell",
+                    "completed",
+                    vec!["/bin/echo", "TURN_FOUR_LOCAL_SHELL"],
+                ),
+                responses::ev_completed("turn-four-local-shell-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("turn-four-assistant", "TURN_FOUR_ASSISTANT"),
+                responses::ev_completed("turn-four-final-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_reasoning_item(
+                    "turn-five-reasoning",
+                    &["TURN_FIVE_REASONING"],
+                    &["turn five raw content"],
+                ),
+                responses::ev_assistant_message("turn-five-assistant", "TURN_FIVE_ASSISTANT"),
+                responses::ev_completed("turn-five-response"),
+            ]),
+        ],
+    )
+    .await;
+    let compact_mock = responses::mount_compact_user_history_with_summary_once(
+        harness.server(),
+        "REMOTE_CACHE_TIER_SUMMARY",
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "TURN_ONE_USER".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![
+                UserInput::Text {
+                    text: "TURN_TWO_PREFIX".to_string(),
+                    text_elements: Vec::new(),
+                },
+                UserInput::Text {
+                    text: "TURN_TWO_SUFFIX".to_string(),
+                    text_elements: Vec::new(),
+                },
+            ],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "TURN_THREE_TOOL_USER".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![
+                UserInput::Image { image_url },
+                UserInput::Text {
+                    text: "TURN_FOUR_IMAGE_USER".to_string(),
+                    text_elements: Vec::new(),
+                },
+            ],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "TURN_FIVE_USER".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+
+    let response_requests = responses_mock.requests();
+    assert_eq!(
+        response_requests.len(),
+        7,
+        "expected five turns with one unsupported tool continuation and one local shell continuation"
+    );
+    assert_eq!(
+        compact_mock.requests().len(),
+        1,
+        "expected exactly one remote compact request"
+    );
+    let normal_request = response_requests
+        .last()
+        .cloned()
+        .expect("last turn request missing");
+    let compact_request = compact_mock.single_request();
+    let normal_body = normal_request.body_json();
+    let compact_body = compact_request.body_json();
+
+    let mut expected_compact_body_without_input = normal_body.clone();
+    let expected_compact_object = expected_compact_body_without_input
+        .as_object_mut()
+        .expect("responses request body should be an object");
+    for field in [
+        "input",
+        "client_metadata",
+        "include",
+        "store",
+        "stream",
+        "tool_choice",
+    ] {
+        expected_compact_object.remove(field);
+    }
+    if expected_service_tier.is_none() {
+        expected_compact_object.remove("service_tier");
+    }
+    let mut compact_body_without_input = compact_body.clone();
+    compact_body_without_input
+        .as_object_mut()
+        .expect("compact request body should be an object")
+        .remove("input");
+    let canonical_compact_body_without_input = canonical_json(&compact_body_without_input);
+    let canonical_expected_compact_body_without_input =
+        canonical_json(&expected_compact_body_without_input);
+
+    assert_eq!(
+        json!({
+            "compact_body_without_input": canonical_compact_body_without_input,
+            "expected_compact_body_without_input": canonical_expected_compact_body_without_input,
+            "prompt_cache_key_matches_responses": compact_body["prompt_cache_key"] == normal_body["prompt_cache_key"],
+            "prompt_cache_key_present": compact_body["prompt_cache_key"].is_string(),
+            "service_tier": compact_body.get("service_tier").and_then(Value::as_str),
+        }),
+        json!({
+            "compact_body_without_input": canonical_expected_compact_body_without_input,
+            "expected_compact_body_without_input": canonical_expected_compact_body_without_input,
+            "prompt_cache_key_matches_responses": true,
+            "prompt_cache_key_present": true,
+            "service_tier": expected_service_tier,
+        }),
+        "compact requests should carry the same shared request fields as /responses"
+    );
+
+    insta::assert_snapshot!(
+        snapshot_name,
+        context_snapshot::format_request_body_diff_snapshot(
+            scenario,
+            "Last Normal /responses Request",
+            &normal_request,
+            "Remote /responses/compact Request",
+            &compact_request,
+            &ContextSnapshotOptions::default(),
+        )
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_manual_compact_api_auth_reuses_prompt_cache_key() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    assert_remote_manual_compact_request_parity(
+        CodexAuth::from_api_key("dummy"),
+        Some(ServiceTier::Fast),
+        Some("priority"),
+        "remote_manual_compact_api_auth_prompt_cache_key_request_diff",
+        "After five varied API-key-auth turns, remote manual compaction reuses the normal responses service_tier and prompt_cache_key while omitting responses-only fields.",
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_manual_compact_chatgpt_auth_reuses_service_tier_and_prompt_cache_key() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    assert_remote_manual_compact_request_parity(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        Some(ServiceTier::Fast),
+        Some("priority"),
+        "remote_manual_compact_chatgpt_auth_service_tier_prompt_cache_key_request_diff",
+        "After five varied ChatGPT-auth turns, remote manual compaction reuses the normal responses service_tier and prompt_cache_key while omitting responses-only fields.",
+    )
+    .await?;
 
     Ok(())
 }
@@ -713,6 +997,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     .await?;
     let codex = harness.test().codex.clone();
     let session_id = harness.test().session_configured.session_id.to_string();
+    let thread_id = harness.test().session_configured.thread_id.to_string();
 
     mount_sse_once(
         harness.server(),
@@ -763,6 +1048,10 @@ async fn remote_compact_runs_automatically() -> Result<()> {
             .header("session_id")
             .as_deref(),
         Some(session_id.as_str())
+    );
+    assert_eq!(
+        compact_mock.single_request().header("thread_id").as_deref(),
+        Some(thread_id.as_str())
     );
     let follow_up_request = responses_mock.single_request();
     let follow_up_body = follow_up_request.body_json().to_string();

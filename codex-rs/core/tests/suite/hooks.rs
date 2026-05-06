@@ -3,8 +3,11 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_features::Feature;
+use codex_plugin::PluginHookSource;
+use codex_plugin::PluginId;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
@@ -16,6 +19,9 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::hooks::trust_discovered_hooks;
+use core_test_support::hooks::trust_hooks;
 use core_test_support::managed_network_requirements_loader;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
@@ -65,6 +71,23 @@ fn network_workspace_write_profile() -> PermissionProfile {
         /*exclude_tmpdir_env_var*/ false,
         /*exclude_slash_tmp*/ false,
     )
+}
+
+fn trust_plugin_hooks(config: &mut Config, plugin_hook_sources: Vec<PluginHookSource>) {
+    if let Err(err) = config.features.enable(Feature::CodexHooks) {
+        panic!("test config should allow feature update: {err}");
+    }
+    let listed = codex_hooks::list_hooks(codex_hooks::HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(config.config_layer_stack.clone()),
+        plugin_hook_sources,
+        ..codex_hooks::HooksConfig::default()
+    });
+    assert!(
+        !listed.hooks.is_empty(),
+        "trusted plugin hook fixture should discover at least one hook"
+    );
+    trust_hooks(config, listed.hooks);
 }
 
 fn write_stop_hook(home: &Path, block_prompts: &[&str]) -> Result<()> {
@@ -235,6 +258,22 @@ if mode == "json_deny":
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": reason
+        }}
+    }}))
+elif mode == "context":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PreToolUse",
+            "additionalContext": reason
+        }}
+    }}))
+elif mode == "json_deny_with_context":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+            "additionalContext": reason
         }}
     }}))
 elif mode == "exit_2":
@@ -819,12 +858,7 @@ async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
                 panic!("failed to write stop hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     test.submit_turn("hello from the sea").await?;
@@ -918,12 +952,7 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
                 panic!("failed to write session start hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     test.submit_turn("hello").await?;
@@ -968,12 +997,7 @@ async fn session_start_hook_spills_large_additional_context() -> Result<()> {
                 }
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     test.submit_turn("hello").await?;
@@ -1025,12 +1049,7 @@ async fn stop_hook_spills_large_continuation_prompt() -> Result<()> {
                 }
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     test.submit_turn("hello from the sea").await?;
@@ -1075,12 +1094,7 @@ async fn resumed_thread_keeps_stop_continuation_prompt_in_history() -> Result<()
                 panic!("failed to write stop hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let initial = initial_builder.build(&server).await?;
     let home = initial.home.clone();
     let rollout_path = initial
@@ -1103,12 +1117,7 @@ async fn resumed_thread_keeps_stop_continuation_prompt_in_history() -> Result<()
     )
     .await;
 
-    let mut resume_builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::CodexHooks)
-            .expect("test config should allow feature update");
-    });
+    let mut resume_builder = test_codex().with_config(trust_discovered_hooks);
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
 
     resumed.submit_turn("and now continue").await?;
@@ -1154,12 +1163,7 @@ async fn multiple_blocking_stop_hooks_persist_multiple_hook_prompt_fragments() -
                 panic!("failed to write parallel stop hook fixtures: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     test.submit_turn("hello again").await?;
@@ -1212,12 +1216,7 @@ async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() 
                 panic!("failed to write user prompt submit hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     test.submit_turn("blocked first prompt").await?;
@@ -1319,12 +1318,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
                 panic!("failed to write user prompt submit hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build_with_streaming_server(&server).await?;
 
     test.codex
@@ -1473,12 +1467,7 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
                 panic!("failed to write permission request hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     fs::write(&marker, "seed").context("create permission request marker")?;
@@ -1560,10 +1549,7 @@ async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result
         })
         .with_config(|config| {
             config.include_apply_patch_tool = true;
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
     let target_path = test.workspace_path(&patch_path);
@@ -1637,10 +1623,7 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
         })
         .with_config(|config| {
             config.use_experimental_unified_exec_tool = true;
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            trust_discovered_hooks(config);
             config
                 .features
                 .enable(Feature::UnifiedExec)
@@ -1725,10 +1708,7 @@ allow_local_binding = true
         })
         .with_cloud_requirements(managed_network_requirements_loader())
         .with_config(move |config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            trust_discovered_hooks(config);
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
             config
                 .permissions
@@ -1837,12 +1817,7 @@ async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Re
                 panic!("failed to write permission request hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
     let marker_path = test.workspace_path(marker);
     let _ = fs::remove_file(&marker_path);
@@ -1909,12 +1884,7 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
                 panic!("failed to write pre tool use hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     if marker.exists() {
@@ -1968,6 +1938,148 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
         hook_inputs[0]["turn_id"]
             .as_str()
             .is_some_and(|turn_id| !turn_id.is_empty())
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn pre_tool_use_records_additional_context_for_shell_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "pretooluse-shell-command-context";
+    let command = "printf pre-tool-output".to_string();
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "pre hook context observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let pre_context = "Remember the bash pre-tool note.";
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_pre_tool_use_hook(home, Some("^Bash$"), "context", pre_context)
+            {
+                panic!("failed to write pre tool use hook test fixture: {error}");
+            }
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run the shell command with pre hook")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .message_input_texts("developer")
+            .contains(&pre_context.to_string()),
+        "follow-up request should include pre tool use additional context",
+    );
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(
+        output.contains("pre-tool-output"),
+        "shell command output should still reach the model",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn blocked_pre_tool_use_records_additional_context_for_shell_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "pretooluse-shell-command-blocked-context";
+    let marker = std::env::temp_dir().join("pretooluse-shell-command-blocked-context-marker");
+    let command = format!("printf blocked > {}", marker.display());
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "blocked pre hook context observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let pre_context = "blocked by pre hook with context";
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_pre_tool_use_hook(home, Some("^Bash$"), "json_deny_with_context", pre_context)
+            {
+                panic!("failed to write pre tool use hook test fixture: {error}");
+            }
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    if marker.exists() {
+        fs::remove_file(&marker).context("remove leftover pre tool use marker")?;
+    }
+
+    test.submit_turn_with_permission_profile(
+        "run the blocked shell command with pre hook context",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .message_input_texts("developer")
+            .contains(&pre_context.to_string()),
+        "follow-up request should include blocked pre tool use additional context",
+    );
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(
+        output.contains("Command blocked by PreToolUse hook: blocked by pre hook with context"),
+        "blocked tool output should still surface the hook reason",
+    );
+    assert!(
+        !marker.exists(),
+        "blocked command should not create marker file"
     );
 
     Ok(())
@@ -2047,9 +2159,7 @@ print(json.dumps({{
         ),
     )
     .context("write plugin pre tool use hook script")?;
-    fs::write(
-        hooks_dir.join("hooks.json"),
-        r#"{
+    let plugin_hooks_json = r#"{
   "hooks": {
     "PreToolUse": [{
       "matcher": "^Bash$",
@@ -2059,21 +2169,34 @@ print(json.dumps({{
       }]
     }]
   }
-}"#,
-    )
-    .context("write plugin hooks config")?;
+}"#;
+    let plugin_hooks_path = hooks_dir.join("hooks.json");
+    fs::write(&plugin_hooks_path, plugin_hooks_json).context("write plugin hooks config")?;
+    let plugin_root_abs =
+        AbsolutePathBuf::try_from(plugin_root.clone()).context("absolute plugin root")?;
+    let plugin_hooks_path_abs =
+        AbsolutePathBuf::try_from(plugin_hooks_path).context("absolute plugin hooks path")?;
+    let plugin_data_root =
+        AbsolutePathBuf::try_from(plugin_root.join("data")).context("absolute plugin data root")?;
+    let plugin_hook_sources = vec![PluginHookSource {
+        plugin_id: PluginId::parse("sample@test").context("plugin id")?,
+        plugin_root: plugin_root_abs,
+        plugin_data_root,
+        source_path: plugin_hooks_path_abs,
+        source_relative_path: "hooks/hooks.json".to_string(),
+        hooks: serde_json::from_str::<codex_config::HooksFile>(plugin_hooks_json)
+            .context("parse plugin hooks")?
+            .hooks,
+    }];
 
     let mut builder = test_codex()
         .with_home(Arc::clone(&home))
-        .with_config(|config| {
+        .with_config(move |config| {
             config
                 .features
                 .enable(Feature::Plugins)
                 .expect("test config should allow feature update");
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            trust_plugin_hooks(config, plugin_hook_sources);
             config
                 .features
                 .enable(Feature::PluginHooks)
@@ -2147,18 +2270,20 @@ async fn pre_tool_use_blocks_shell_when_defined_in_config_toml() -> Result<()> {
     )
     .await;
 
-    let mut builder = test_codex().with_pre_build_hook(|home| {
-        if let Err(error) = write_pre_tool_use_hook_toml(
-            home,
-            "pre_tool_use_config_hook.py",
-            "pre_tool_use_config_hook_log.jsonl",
-            Some("^Bash$"),
-            "json_deny",
-            "blocked by config toml hook",
-        ) {
-            panic!("failed to write config.toml hook test fixture: {error}");
-        }
-    });
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_pre_tool_use_hook_toml(
+                home,
+                "pre_tool_use_config_hook.py",
+                "pre_tool_use_config_hook_log.jsonl",
+                Some("^Bash$"),
+                "json_deny",
+                "blocked by config toml hook",
+            ) {
+                panic!("failed to write config.toml hook test fixture: {error}");
+            }
+        })
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     if marker.exists() {
@@ -2229,21 +2354,23 @@ async fn pre_tool_use_merges_hooks_json_and_config_toml() -> Result<()> {
     )
     .await;
 
-    let mut builder = test_codex().with_pre_build_hook(|home| {
-        if let Err(error) = write_pre_tool_use_hook(home, Some("^Bash$"), "allow", "unused") {
-            panic!("failed to write hooks.json hook fixture: {error}");
-        }
-        if let Err(error) = write_pre_tool_use_hook_toml(
-            home,
-            "pre_tool_use_toml_hook.py",
-            "pre_tool_use_toml_hook_log.jsonl",
-            Some("^Bash$"),
-            "allow",
-            "unused",
-        ) {
-            panic!("failed to write config.toml hook fixture: {error}");
-        }
-    });
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_pre_tool_use_hook(home, Some("^Bash$"), "allow", "unused") {
+                panic!("failed to write hooks.json hook fixture: {error}");
+            }
+            if let Err(error) = write_pre_tool_use_hook_toml(
+                home,
+                "pre_tool_use_toml_hook.py",
+                "pre_tool_use_toml_hook_log.jsonl",
+                Some("^Bash$"),
+                "allow",
+                "unused",
+            ) {
+                panic!("failed to write config.toml hook fixture: {error}");
+            }
+        })
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     test.submit_turn("run the shell command with merged hook sources")
@@ -2342,12 +2469,7 @@ async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
                 panic!("failed to write pre tool use hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     if marker.exists() {
@@ -2435,10 +2557,7 @@ async fn pre_tool_use_blocks_exec_command_before_execution() -> Result<()> {
         })
         .with_config(|config| {
             config.use_experimental_unified_exec_tool = true;
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            trust_discovered_hooks(config);
             config
                 .features
                 .enable(Feature::UnifiedExec)
@@ -2525,10 +2644,7 @@ async fn pre_tool_use_blocks_apply_patch_before_execution() -> Result<()> {
         })
         .with_config(|config| {
             config.include_apply_patch_tool = true;
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
 
@@ -2599,10 +2715,7 @@ async fn pre_tool_use_blocks_apply_patch_with_write_alias() -> Result<()> {
         })
         .with_config(|config| {
             config.include_apply_patch_tool = true;
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
 
@@ -2675,12 +2788,7 @@ async fn pre_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
                 panic!("failed to write pre tool use hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     test.submit_turn("update the plan").await?;
@@ -2744,12 +2852,7 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
                 panic!("failed to write post tool use hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     test.submit_turn("run the shell command with post hook")
@@ -2841,12 +2944,7 @@ async fn post_tool_use_block_decision_replaces_shell_command_output_with_reason(
                 panic!("failed to write post tool use hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     test.submit_turn("run the shell command with blocking post hook")
@@ -2910,12 +3008,7 @@ async fn post_tool_use_continue_false_replaces_shell_command_output_with_stop_re
                 panic!("failed to write post tool use hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     test.submit_turn("run the shell command with stop-style post hook")
@@ -2981,12 +3074,7 @@ async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()
                 panic!("failed to write post tool use hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     test.submit_turn("run the local shell command with post hook")
@@ -3054,10 +3142,7 @@ async fn post_tool_use_exit_two_replaces_one_shot_exec_command_output_with_feedb
         })
         .with_config(|config| {
             config.use_experimental_unified_exec_tool = true;
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            trust_discovered_hooks(config);
             config
                 .features
                 .enable(Feature::UnifiedExec)
@@ -3132,10 +3217,7 @@ async fn post_tool_use_spills_large_feedback_message() -> Result<()> {
         })
         .with_config(|config| {
             config.use_experimental_unified_exec_tool = true;
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            trust_discovered_hooks(config);
             config
                 .features
                 .enable(Feature::UnifiedExec)
@@ -3220,10 +3302,7 @@ async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> R
         })
         .with_config(|config| {
             config.use_experimental_unified_exec_tool = true;
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            trust_discovered_hooks(config);
             config
                 .features
                 .enable(Feature::UnifiedExec)
@@ -3307,10 +3386,7 @@ async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()
         })
         .with_config(|config| {
             config.include_apply_patch_tool = true;
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
 
@@ -3398,10 +3474,7 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
         })
         .with_config(|config| {
             config.include_apply_patch_tool = true;
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
+            trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
 
@@ -3474,12 +3547,7 @@ async fn post_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
                 panic!("failed to write post tool use hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     test.submit_turn("update the plan").await?;

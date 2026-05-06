@@ -11,6 +11,20 @@ impl Session {
         request_id: RequestId,
         params: McpServerElicitationRequestParams,
     ) -> Option<ElicitationResponse> {
+        if self
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .elicitations_auto_deny()
+        {
+            return Some(ElicitationResponse {
+                action: codex_rmcp_client::ElicitationAction::Accept,
+                content: Some(serde_json::json!({})),
+                meta: None,
+            });
+        }
+
         let server_name = params.server_name.clone();
         let request = match params.request {
             McpServerElicitationRequest::Form {
@@ -219,6 +233,8 @@ impl Session {
             .tool_plugin_provenance(config.as_ref())
             .await;
         let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
+        let host_owned_codex_apps_enabled =
+            host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
         let auth_statuses =
             compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
         let mcp_runtime_environment = match turn_context.environments.primary() {
@@ -250,10 +266,15 @@ impl Session {
             mcp_runtime_environment,
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
+            host_owned_codex_apps_enabled,
             tool_plugin_provenance,
             auth.as_ref(),
         )
         .await;
+        {
+            let current_manager = self.services.mcp_connection_manager.read().await;
+            refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
+        }
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             if guard.is_cancelled() {

@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_arg0::Arg0DispatchPaths;
-use codex_core::StateDbHandle;
 use codex_core::ThreadManager;
+use codex_core::agent_graph_store_from_state_db;
 use codex_core::config::Config;
+use codex_core::init_state_db_from_config;
 use codex_core::thread_store_from_config;
 use codex_exec_server::EnvironmentManager;
 use codex_login::AuthManager;
@@ -54,30 +55,33 @@ impl MessageProcessor {
         arg0_paths: Arg0DispatchPaths,
         config: Arc<Config>,
         environment_manager: Arc<EnvironmentManager>,
-        state_db: Option<StateDbHandle>,
-    ) -> Self {
+    ) -> Option<Self> {
         let outgoing = Arc::new(outgoing);
         let auth_manager = AuthManager::shared_from_config(
             config.as_ref(),
             /*enable_codex_api_key_env*/ false,
         )
         .await;
+        let state_db = init_state_db_from_config(config.as_ref()).await?;
+        let thread_store = thread_store_from_config(config.as_ref(), state_db.clone());
+        let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager,
             SessionSource::Mcp,
             environment_manager,
             /*analytics_events_client*/ None,
-            thread_store_from_config(config.as_ref(), state_db.clone()),
-            state_db.clone(),
+            state_db,
+            thread_store,
+            agent_graph_store,
         ));
-        Self {
+        Some(Self {
             outgoing,
             initialized: false,
             arg0_paths,
             thread_manager,
             running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
-        }
+        })
     }
 
     pub(crate) async fn process_request(&mut self, request: JsonRpcRequest<ClientRequest>) {

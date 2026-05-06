@@ -1,6 +1,7 @@
 use crate::shell::Shell;
 use crate::shell::ShellType;
-use crate::tools::handlers::agent_jobs::BatchJobHandler;
+use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
+use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
 use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
@@ -76,11 +77,17 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::CodeModeExecuteHandler;
     use crate::tools::handlers::CodeModeWaitHandler;
+    use crate::tools::handlers::ContainerExecHandler;
+    use crate::tools::handlers::CreateGoalHandler;
     use crate::tools::handlers::DynamicToolHandler;
-    use crate::tools::handlers::GoalHandler;
+    use crate::tools::handlers::ExecCommandHandler;
+    use crate::tools::handlers::GetGoalHandler;
+    use crate::tools::handlers::ListMcpResourceTemplatesHandler;
+    use crate::tools::handlers::ListMcpResourcesHandler;
+    use crate::tools::handlers::LocalShellHandler;
     use crate::tools::handlers::McpHandler;
-    use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
+    use crate::tools::handlers::ReadMcpResourceHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestPluginInstallHandler;
     use crate::tools::handlers::RequestUserInputHandler;
@@ -89,8 +96,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::ToolSearchHandler;
     use crate::tools::handlers::UnavailableToolHandler;
-    use crate::tools::handlers::UnifiedExecHandler;
+    use crate::tools::handlers::UpdateGoalHandler;
     use crate::tools::handlers::ViewImageHandler;
+    use crate::tools::handlers::WriteStdinHandler;
     use crate::tools::handlers::multi_agents::CloseAgentHandler;
     use crate::tools::handlers::multi_agents::ResumeAgentHandler;
     use crate::tools::handlers::multi_agents::SendInputHandler;
@@ -150,30 +158,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
             },
         },
     );
-    let shell_handler = Arc::new(ShellHandler);
-    let unified_exec_handler = Arc::new(UnifiedExecHandler);
-    let plan_handler = Arc::new(PlanHandler);
-    let apply_patch_handler = Arc::new(ApplyPatchHandler);
-    let dynamic_tool_handler = Arc::new(DynamicToolHandler);
-    let goal_handler = Arc::new(GoalHandler);
-    let view_image_handler = Arc::new(ViewImageHandler);
-    let mcp_handler = Arc::new(McpHandler);
-    let mcp_resource_handler = Arc::new(McpResourceHandler);
-    let shell_command_handler = Arc::new(ShellCommandHandler::from(config.shell_command_backend));
-    let request_permissions_handler = Arc::new(RequestPermissionsHandler);
-    let request_user_input_handler = Arc::new(RequestUserInputHandler {
-        available_modes: config.request_user_input_available_modes.clone(),
-    });
     let deferred_dynamic_tools = dynamic_tools
         .iter()
         .filter(|tool| tool.defer_loading && (config.namespace_tools || tool.namespace.is_none()))
         .cloned()
         .collect::<Vec<_>>();
-    let mut tool_search_handler = None;
-    let request_plugin_install_handler = Arc::new(RequestPluginInstallHandler);
-    let code_mode_handler = Arc::new(CodeModeExecuteHandler);
-    let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
-    let unavailable_tool_handler = Arc::new(UnavailableToolHandler);
     let mut existing_spec_names = plan
         .specs
         .iter()
@@ -191,113 +180,137 @@ pub(crate) fn build_specs_with_discoverable_tools(
     }
 
     for handler in plan.handlers {
+        let name = handler.name;
         match handler.kind {
-            ToolHandlerKind::AgentJobs => {
-                builder.register_handler(handler.name, Arc::new(BatchJobHandler));
-            }
             ToolHandlerKind::ApplyPatch => {
-                builder.register_handler(handler.name, apply_patch_handler.clone());
+                builder.register_handler(Arc::new(ApplyPatchHandler));
             }
             ToolHandlerKind::CloseAgentV1 => {
-                builder.register_handler(handler.name, Arc::new(CloseAgentHandler));
+                builder.register_handler(Arc::new(CloseAgentHandler));
             }
             ToolHandlerKind::CloseAgentV2 => {
-                builder.register_handler(handler.name, Arc::new(CloseAgentHandlerV2));
+                builder.register_handler(Arc::new(CloseAgentHandlerV2));
             }
             ToolHandlerKind::CodeModeExecute => {
-                builder.register_handler(handler.name, code_mode_handler.clone());
+                builder.register_handler(Arc::new(CodeModeExecuteHandler));
             }
             ToolHandlerKind::CodeModeWait => {
-                builder.register_handler(handler.name, code_mode_wait_handler.clone());
+                builder.register_handler(Arc::new(CodeModeWaitHandler));
+            }
+            ToolHandlerKind::ContainerExec => {
+                builder.register_handler(Arc::new(ContainerExecHandler));
+            }
+            ToolHandlerKind::CreateGoal => {
+                builder.register_handler(Arc::new(CreateGoalHandler));
             }
             ToolHandlerKind::DynamicTool => {
-                builder.register_handler(handler.name, dynamic_tool_handler.clone());
+                builder.register_handler(Arc::new(DynamicToolHandler::new(name)));
+            }
+            ToolHandlerKind::ExecCommand => {
+                builder.register_handler(Arc::new(ExecCommandHandler));
             }
             ToolHandlerKind::FollowupTaskV2 => {
-                builder.register_handler(handler.name, Arc::new(FollowupTaskHandlerV2));
+                builder.register_handler(Arc::new(FollowupTaskHandlerV2));
             }
-            ToolHandlerKind::Goal => {
-                builder.register_handler(handler.name, goal_handler.clone());
+            ToolHandlerKind::GetGoal => {
+                builder.register_handler(Arc::new(GetGoalHandler));
             }
             ToolHandlerKind::ListAgentsV2 => {
-                builder.register_handler(handler.name, Arc::new(ListAgentsHandlerV2));
+                builder.register_handler(Arc::new(ListAgentsHandlerV2));
+            }
+            ToolHandlerKind::ListMcpResources => {
+                builder.register_handler(Arc::new(ListMcpResourcesHandler));
+            }
+            ToolHandlerKind::ListMcpResourceTemplates => {
+                builder.register_handler(Arc::new(ListMcpResourceTemplatesHandler));
+            }
+            ToolHandlerKind::LocalShell => {
+                builder.register_handler(Arc::new(LocalShellHandler));
             }
             ToolHandlerKind::Mcp => {
-                builder.register_handler(handler.name, mcp_handler.clone());
-            }
-            ToolHandlerKind::McpResource => {
-                builder.register_handler(handler.name, mcp_resource_handler.clone());
+                builder.register_handler(Arc::new(McpHandler::new(name)));
             }
             ToolHandlerKind::Plan => {
-                builder.register_handler(handler.name, plan_handler.clone());
+                builder.register_handler(Arc::new(PlanHandler));
+            }
+            ToolHandlerKind::ReadMcpResource => {
+                builder.register_handler(Arc::new(ReadMcpResourceHandler));
+            }
+            ToolHandlerKind::ReportAgentJobResult => {
+                builder.register_handler(Arc::new(ReportAgentJobResultHandler));
             }
             ToolHandlerKind::RequestPermissions => {
-                builder.register_handler(handler.name, request_permissions_handler.clone());
+                builder.register_handler(Arc::new(RequestPermissionsHandler));
             }
             ToolHandlerKind::RequestUserInput => {
-                builder.register_handler(handler.name, request_user_input_handler.clone());
+                builder.register_handler(Arc::new(RequestUserInputHandler {
+                    available_modes: config.request_user_input_available_modes.clone(),
+                }));
             }
             ToolHandlerKind::ResumeAgentV1 => {
-                builder.register_handler(handler.name, Arc::new(ResumeAgentHandler));
+                builder.register_handler(Arc::new(ResumeAgentHandler));
             }
             ToolHandlerKind::SendInputV1 => {
-                builder.register_handler(handler.name, Arc::new(SendInputHandler));
+                builder.register_handler(Arc::new(SendInputHandler));
             }
             ToolHandlerKind::SendMessageV2 => {
-                builder.register_handler(handler.name, Arc::new(SendMessageHandlerV2));
+                builder.register_handler(Arc::new(SendMessageHandlerV2));
             }
             ToolHandlerKind::Shell => {
-                builder.register_handler(handler.name, shell_handler.clone());
+                builder.register_handler(Arc::new(ShellHandler));
             }
             ToolHandlerKind::ShellCommand => {
-                builder.register_handler(handler.name, shell_command_handler.clone());
+                builder.register_handler(Arc::new(ShellCommandHandler::from(
+                    config.shell_command_backend,
+                )));
+            }
+            ToolHandlerKind::SpawnAgentsOnCsv => {
+                builder.register_handler(Arc::new(SpawnAgentsOnCsvHandler));
             }
             ToolHandlerKind::SpawnAgentV1 => {
-                builder.register_handler(handler.name, Arc::new(SpawnAgentHandler));
+                builder.register_handler(Arc::new(SpawnAgentHandler));
             }
             ToolHandlerKind::SpawnAgentV2 => {
-                builder.register_handler(handler.name, Arc::new(SpawnAgentHandlerV2));
+                builder.register_handler(Arc::new(SpawnAgentHandlerV2));
             }
             ToolHandlerKind::TestSync => {
-                builder.register_handler(handler.name, Arc::new(TestSyncHandler));
+                builder.register_handler(Arc::new(TestSyncHandler));
             }
             ToolHandlerKind::ToolSearch => {
-                if tool_search_handler.is_none() {
-                    let entries = build_tool_search_entries_for_config(
-                        config,
-                        deferred_mcp_tools.as_ref(),
-                        &deferred_dynamic_tools,
-                    );
-                    tool_search_handler = Some(Arc::new(ToolSearchHandler::new(entries)));
-                }
-                if let Some(tool_search_handler) = tool_search_handler.as_ref() {
-                    builder.register_handler(handler.name, tool_search_handler.clone());
-                }
+                let entries = build_tool_search_entries_for_config(
+                    config,
+                    deferred_mcp_tools.as_ref(),
+                    &deferred_dynamic_tools,
+                );
+                builder.register_handler(Arc::new(ToolSearchHandler::new(entries)));
             }
             ToolHandlerKind::RequestPluginInstall => {
-                builder.register_handler(handler.name, request_plugin_install_handler.clone());
+                builder.register_handler(Arc::new(RequestPluginInstallHandler));
             }
-            ToolHandlerKind::UnifiedExec => {
-                builder.register_handler(handler.name, unified_exec_handler.clone());
+            ToolHandlerKind::UpdateGoal => {
+                builder.register_handler(Arc::new(UpdateGoalHandler));
             }
             ToolHandlerKind::ViewImage => {
-                builder.register_handler(handler.name, view_image_handler.clone());
+                builder.register_handler(Arc::new(ViewImageHandler));
             }
             ToolHandlerKind::WaitAgentV1 => {
-                builder.register_handler(handler.name, Arc::new(WaitAgentHandler));
+                builder.register_handler(Arc::new(WaitAgentHandler));
             }
             ToolHandlerKind::WaitAgentV2 => {
-                builder.register_handler(handler.name, Arc::new(WaitAgentHandlerV2));
+                builder.register_handler(Arc::new(WaitAgentHandlerV2));
+            }
+            ToolHandlerKind::WriteStdin => {
+                builder.register_handler(Arc::new(WriteStdinHandler));
             }
         }
     }
     if let Some(deferred_mcp_tools) = deferred_mcp_tools.as_ref() {
-        for (name, _) in deferred_mcp_tools.iter().filter(|(name, _)| {
+        for (_, tool) in deferred_mcp_tools.iter().filter(|(name, _)| {
             !mcp_tools
                 .as_ref()
                 .is_some_and(|tools| tools.contains_key(*name))
         }) {
-            builder.register_handler(name.clone(), mcp_handler.clone());
+            builder.register_handler(Arc::new(McpHandler::new(tool.canonical_tool_name())));
         }
     }
 
@@ -326,7 +339,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             };
             builder.push_spec(spec);
         }
-        builder.register_handler(unavailable_tool, unavailable_tool_handler.clone());
+        builder.register_handler(Arc::new(UnavailableToolHandler::new(unavailable_tool)));
     }
     builder
 }

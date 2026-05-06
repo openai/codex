@@ -86,6 +86,66 @@ fn marketplace_plugin_source_to_info(source: MarketplacePluginSource) -> PluginS
     }
 }
 
+fn remote_plugin_share_discoverability(
+    discoverability: PluginShareDiscoverability,
+) -> codex_core_plugins::remote::RemotePluginShareDiscoverability {
+    match discoverability {
+        PluginShareDiscoverability::Listed => {
+            codex_core_plugins::remote::RemotePluginShareDiscoverability::Listed
+        }
+        PluginShareDiscoverability::Unlisted => {
+            codex_core_plugins::remote::RemotePluginShareDiscoverability::Unlisted
+        }
+        PluginShareDiscoverability::Private => {
+            codex_core_plugins::remote::RemotePluginShareDiscoverability::Private
+        }
+    }
+}
+
+fn remote_plugin_share_targets(
+    targets: Vec<PluginShareTarget>,
+) -> Vec<codex_core_plugins::remote::RemotePluginShareTarget> {
+    targets
+        .into_iter()
+        .map(
+            |target| codex_core_plugins::remote::RemotePluginShareTarget {
+                principal_type: match target.principal_type {
+                    PluginSharePrincipalType::User => {
+                        codex_core_plugins::remote::RemotePluginSharePrincipalType::User
+                    }
+                    PluginSharePrincipalType::Group => {
+                        codex_core_plugins::remote::RemotePluginSharePrincipalType::Group
+                    }
+                    PluginSharePrincipalType::Workspace => {
+                        codex_core_plugins::remote::RemotePluginSharePrincipalType::Workspace
+                    }
+                },
+                principal_id: target.principal_id,
+            },
+        )
+        .collect()
+}
+
+fn plugin_share_principal_from_remote(
+    principal: codex_core_plugins::remote::RemotePluginSharePrincipal,
+) -> PluginSharePrincipal {
+    PluginSharePrincipal {
+        principal_type: match principal.principal_type {
+            codex_core_plugins::remote::RemotePluginSharePrincipalType::User => {
+                PluginSharePrincipalType::User
+            }
+            codex_core_plugins::remote::RemotePluginSharePrincipalType::Group => {
+                PluginSharePrincipalType::Group
+            }
+            codex_core_plugins::remote::RemotePluginSharePrincipalType::Workspace => {
+                PluginSharePrincipalType::Workspace
+            }
+        },
+        principal_id: principal.principal_id,
+        name: principal.name,
+    }
+}
+
 impl PluginRequestProcessor {
     pub(crate) fn new(
         auth_manager: Arc<AuthManager>,
@@ -141,6 +201,15 @@ impl PluginRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn plugin_share_update_targets(
+        &self,
+        params: PluginShareUpdateTargetsParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.plugin_share_update_targets_response(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn plugin_share_list(
         &self,
         params: PluginShareListParams,
@@ -177,33 +246,35 @@ impl PluginRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
-    pub(crate) fn effective_plugins_changed_callback(
-        &self,
-        config: Config,
-    ) -> Arc<dyn Fn() + Send + Sync> {
+    pub(crate) fn effective_plugins_changed_callback(&self) -> Arc<dyn Fn() + Send + Sync> {
         let thread_manager = Arc::clone(&self.thread_manager);
+        let config_manager = self.config_manager.clone();
         Arc::new(move || {
-            Self::spawn_effective_plugins_changed_task(Arc::clone(&thread_manager), config.clone());
+            Self::spawn_effective_plugins_changed_task(
+                Arc::clone(&thread_manager),
+                config_manager.clone(),
+            );
         })
     }
 
-    fn on_effective_plugins_changed(&self, config: Config) {
-        Self::spawn_effective_plugins_changed_task(Arc::clone(&self.thread_manager), config);
+    fn on_effective_plugins_changed(&self) {
+        Self::spawn_effective_plugins_changed_task(
+            Arc::clone(&self.thread_manager),
+            self.config_manager.clone(),
+        );
     }
 
-    fn spawn_effective_plugins_changed_task(thread_manager: Arc<ThreadManager>, config: Config) {
+    fn spawn_effective_plugins_changed_task(
+        thread_manager: Arc<ThreadManager>,
+        config_manager: ConfigManager,
+    ) {
         tokio::spawn(async move {
             thread_manager.plugins_manager().clear_cache();
             thread_manager.skills_manager().clear_cache();
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
-            if let Err(err) =
-                McpRequestProcessor::queue_mcp_server_refresh_for_config(&thread_manager, &config)
-                    .await
-            {
-                warn!("failed to queue MCP refresh after effective plugins changed: {err:?}");
-            }
+            crate::mcp_refresh::queue_best_effort_refresh(&thread_manager, &config_manager).await;
         });
     }
 
@@ -219,11 +290,7 @@ impl PluginRequestProcessor {
         self.config_manager
             .load_latest_config(fallback_cwd)
             .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to reload config: {err}"),
-                data: None,
-            })
+            .map_err(|err| internal_error(format!("failed to reload config: {err}")))
     }
 
     async fn workspace_codex_plugins_enabled(
@@ -277,7 +344,7 @@ impl PluginRequestProcessor {
             &plugins_input,
             auth.clone(),
             &roots,
-            Some(self.effective_plugins_changed_callback(config.clone())),
+            Some(self.effective_plugins_changed_callback()),
         );
 
         let config_for_marketplace_listing = plugins_input.clone();
@@ -314,6 +381,7 @@ impl PluginRequestProcessor {
                                 auth_policy: plugin.policy.authentication.into(),
                                 availability: PluginAvailability::Available,
                                 interface: plugin.interface.map(local_plugin_interface_to_info),
+                                keywords: plugin.keywords,
                             })
                             .collect(),
                     })
@@ -469,6 +537,7 @@ impl PluginRequestProcessor {
                         auth_policy: outcome.plugin.policy.authentication.into(),
                         availability: PluginAvailability::Available,
                         interface: outcome.plugin.interface.map(local_plugin_interface_to_info),
+                        keywords: outcome.plugin.keywords,
                     },
                     description: outcome.plugin.description,
                     skills: plugin_skills_to_info(
@@ -572,15 +641,26 @@ impl PluginRequestProcessor {
         let PluginShareSaveParams {
             plugin_path,
             remote_plugin_id,
+            discoverability,
+            share_targets,
         } = params;
         if let Some(remote_plugin_id) = remote_plugin_id.as_ref()
             && (remote_plugin_id.is_empty() || !is_valid_remote_plugin_id(remote_plugin_id))
         {
             return Err(invalid_request("invalid remote plugin id"));
         }
+        if remote_plugin_id.is_some() && (discoverability.is_some() || share_targets.is_some()) {
+            return Err(invalid_request(
+                "discoverability and shareTargets are only supported when creating a plugin share; use plugin/share/updateTargets to update share targets",
+            ));
+        }
 
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
+        };
+        let access_policy = codex_core_plugins::remote::RemotePluginShareAccessPolicy {
+            discoverability: discoverability.map(remote_plugin_share_discoverability),
+            share_targets: share_targets.map(remote_plugin_share_targets),
         };
         let result = codex_core_plugins::remote::save_remote_plugin_share(
             &remote_plugin_service_config,
@@ -588,6 +668,7 @@ impl PluginRequestProcessor {
             config.codex_home.as_path(),
             &plugin_path,
             remote_plugin_id.as_deref(),
+            access_policy,
         )
         .await
         .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "save remote plugin share"))?;
@@ -596,6 +677,42 @@ impl PluginRequestProcessor {
         Ok(PluginShareSaveResponse {
             remote_plugin_id,
             share_url: result.share_url.unwrap_or_default(),
+        })
+    }
+
+    async fn plugin_share_update_targets_response(
+        &self,
+        params: PluginShareUpdateTargetsParams,
+    ) -> Result<PluginShareUpdateTargetsResponse, JSONRPCErrorError> {
+        let (config, auth) = self.load_plugin_share_config_and_auth().await?;
+        let PluginShareUpdateTargetsParams {
+            remote_plugin_id,
+            share_targets,
+        } = params;
+        if remote_plugin_id.is_empty() || !is_valid_remote_plugin_id(&remote_plugin_id) {
+            return Err(invalid_request("invalid remote plugin id"));
+        }
+
+        let remote_plugin_service_config = RemotePluginServiceConfig {
+            chatgpt_base_url: config.chatgpt_base_url.clone(),
+        };
+        let result = codex_core_plugins::remote::update_remote_plugin_share_targets(
+            &remote_plugin_service_config,
+            auth.as_ref(),
+            &remote_plugin_id,
+            remote_plugin_share_targets(share_targets),
+        )
+        .await
+        .map_err(|err| {
+            remote_plugin_catalog_error_to_jsonrpc(err, "update remote plugin share targets")
+        })?;
+        self.clear_plugin_related_caches();
+        Ok(PluginShareUpdateTargetsResponse {
+            principals: result
+                .principals
+                .into_iter()
+                .map(plugin_share_principal_from_remote)
+                .collect(),
         })
     }
 
@@ -725,7 +842,7 @@ impl PluginRequestProcessor {
             }
         };
 
-        self.on_effective_plugins_changed(config.clone());
+        self.on_effective_plugins_changed();
 
         let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
         if !plugin_mcp_servers.is_empty() {
@@ -836,7 +953,7 @@ impl PluginRequestProcessor {
             .maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
                 &config.plugins_config_input(),
                 auth.clone(),
-                Some(self.effective_plugins_changed_callback(config.clone())),
+                Some(self.effective_plugins_changed_callback()),
             );
 
         let mut plugin_metadata =
@@ -1029,7 +1146,7 @@ impl PluginRequestProcessor {
             .await
             .map_err(Self::plugin_uninstall_error)?;
         match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => self.on_effective_plugins_changed(config),
+            Ok(_) => self.on_effective_plugins_changed(),
             Err(err) => {
                 warn!(
                     "failed to reload config after plugin uninstall, clearing plugin-related caches only: {err:?}"
@@ -1130,12 +1247,12 @@ impl PluginRequestProcessor {
         ) {
             let plugins_manager = self.thread_manager.plugins_manager();
             if plugins_manager.clear_remote_installed_plugins_cache() {
-                self.on_effective_plugins_changed(config.clone());
+                self.on_effective_plugins_changed();
             }
             plugins_manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
                 &config.plugins_config_input(),
                 auth.clone(),
-                Some(self.effective_plugins_changed_callback(config.clone())),
+                Some(self.effective_plugins_changed_callback()),
             );
         }
 
@@ -1274,6 +1391,7 @@ fn remote_plugin_summary_to_info(summary: RemoteCatalogPluginSummary) -> PluginS
         auth_policy: summary.auth_policy,
         availability: summary.availability,
         interface: summary.interface,
+        keywords: summary.keywords,
     }
 }
 
@@ -1307,16 +1425,17 @@ fn remote_plugin_catalog_error_to_jsonrpc(
     err: RemotePluginCatalogError,
     context: &str,
 ) -> JSONRPCErrorError {
-    let code = match &err {
+    let message = format!("{context}: {err}");
+    match &err {
         RemotePluginCatalogError::AuthRequired | RemotePluginCatalogError::UnsupportedAuthMode => {
-            INVALID_REQUEST_ERROR_CODE
+            invalid_request(message)
         }
         RemotePluginCatalogError::UnexpectedStatus { status, .. } if status.as_u16() == 404 => {
-            INVALID_REQUEST_ERROR_CODE
+            invalid_request(message)
         }
         RemotePluginCatalogError::InvalidPluginPath { .. }
         | RemotePluginCatalogError::ArchiveTooLarge { .. }
-        | RemotePluginCatalogError::UnknownMarketplace { .. } => INVALID_REQUEST_ERROR_CODE,
+        | RemotePluginCatalogError::UnknownMarketplace { .. } => invalid_request(message),
         RemotePluginCatalogError::AuthToken(_)
         | RemotePluginCatalogError::Request { .. }
         | RemotePluginCatalogError::UnexpectedStatus { .. }
@@ -1330,12 +1449,7 @@ fn remote_plugin_catalog_error_to_jsonrpc(
         | RemotePluginCatalogError::ArchiveJoin(_)
         | RemotePluginCatalogError::MissingUploadEtag
         | RemotePluginCatalogError::UnexpectedResponse(_)
-        | RemotePluginCatalogError::CacheRemove(_) => INTERNAL_ERROR_CODE,
-    };
-    JSONRPCErrorError {
-        code,
-        message: format!("{context}: {err}"),
-        data: None,
+        | RemotePluginCatalogError::CacheRemove(_) => internal_error(message),
     }
 }
 

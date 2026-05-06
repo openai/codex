@@ -1944,6 +1944,7 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-tungstenite",
  "toml 0.9.11+spec-1.1.0",
@@ -2134,6 +2135,15 @@ dependencies = [
  "codex-memories-mcp",
  "codex-utils-absolute-path",
  "pretty_assertions",
+]
+
+[[package]]
+name = "codex-bwrap"
+version = "0.0.0"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
 ]
 
 [[package]]
@@ -2423,6 +2433,7 @@ dependencies = [
  "bm25",
  "chrono",
  "clap",
+ "codex-agent-graph-store",
  "codex-analytics",
  "codex-api",
  "codex-app-server-protocol",
@@ -2712,6 +2723,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "sha2",
  "tempfile",
  "test-case",
  "thiserror 2.0.18",
@@ -2720,6 +2732,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -2914,7 +2927,6 @@ dependencies = [
 name = "codex-linux-sandbox"
 version = "0.0.0"
 dependencies = [
- "cc",
  "clap",
  "codex-core",
  "codex-process-hardening",
@@ -2924,11 +2936,11 @@ dependencies = [
  "globset",
  "landlock",
  "libc",
- "pkg-config",
  "pretty_assertions",
  "seccompiler",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "url",
@@ -4232,6 +4244,7 @@ dependencies = [
  "codex-core",
  "codex-exec-server",
  "codex-features",
+ "codex-hooks",
  "codex-login",
  "codex-model-provider-info",
  "codex-models-manager",

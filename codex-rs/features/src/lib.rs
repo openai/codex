@@ -204,6 +204,8 @@ pub enum Feature {
     CollaborationModes,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
+    /// Prompt Codex Apps connector auth failures through MCP URL elicitations.
+    AuthElicitation,
     /// Enable personality selection in the TUI.
     Personality,
     /// Enable native artifact tools.
@@ -1044,6 +1046,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "tool_call_mcp_elicitation",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::AuthElicitation,
+        key: "auth_elicitation",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Personality,

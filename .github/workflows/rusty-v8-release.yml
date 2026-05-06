@@ -1,20 +1,12 @@
 name: rusty-v8-release
 
 on:
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: Optional release tag. Defaults to rusty-v8-v<resolved_v8_version>.
-        required: false
-        type: string
-      publish:
-        description: Publish the staged musl artifacts to a GitHub release.
-        required: false
-        default: true
-        type: boolean
+  push:
+    tags:
+      - "rusty-v8-v*.*.*"
 
 concurrency:
-  group: ${{ github.workflow }}::${{ inputs.release_tag || github.run_id }}
+  group: ${{ github.workflow }}::${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -43,15 +35,17 @@ jobs:
       - name: Resolve release tag
         id: release_tag
         env:
-          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
           V8_VERSION: ${{ steps.v8_version.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
 
-          release_tag="${RELEASE_TAG_INPUT}"
-          if [[ -z "${release_tag}" ]]; then
-            release_tag="rusty-v8-v${V8_VERSION}"
+          expected_release_tag="rusty-v8-v${V8_VERSION}"
+          release_tag="${GITHUB_REF_NAME}"
+          if [[ "${release_tag}" != "${expected_release_tag}" ]]; then
+            echo "Tag ${release_tag} does not match resolved v8 crate version ${V8_VERSION}." >&2
+            exit 1
           fi
 
           echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
@@ -111,6 +105,7 @@ jobs:
             -c
             opt
             "--platforms=@llvm//platforms:${PLATFORM}"
+            --config=v8-release-compat
             "${pair_target}"
             "${extra_targets[@]}"
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
@@ -134,6 +129,7 @@ jobs:
             --platform "${PLATFORM}" \
             --target "${TARGET}" \
             --compilation-mode opt \
+            --bazel-config v8-release-compat \
             --output-dir "dist/${TARGET}"
 
       - name: Upload staged musl artifacts
@@ -143,7 +139,6 @@ jobs:
           path: dist/${{ matrix.target }}/*
 
   publish-release:
-    if: ${{ inputs.publish }}
     needs:
       - metadata
       - build
@@ -153,16 +148,6 @@ jobs:
       actions: read
 
     steps:
-      - name: Ensure publishing from default branch
-        if: ${{ github.ref_name != github.event.repository.default_branch }}
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Publishing is only allowed from ${DEFAULT_BRANCH}; current ref is ${GITHUB_REF_NAME}." >&2
-          exit 1
-
       - name: Ensure release tag is new
         env:
           GH_TOKEN: ${{ github.token }}

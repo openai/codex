@@ -34,7 +34,8 @@ async fn emits_warning_when_unstable_features_enabled_via_config() {
     let thread_manager = codex_core::test_support::thread_manager_with_models_provider(
         CodexAuth::from_api_key("test"),
         config.model_provider.clone(),
-    );
+    )
+    .await;
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
 
@@ -81,7 +82,8 @@ async fn suppresses_warning_when_configured() {
     let thread_manager = codex_core::test_support::thread_manager_with_models_provider(
         CodexAuth::from_api_key("test"),
         config.model_provider.clone(),
-    );
+    )
+    .await;
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
 

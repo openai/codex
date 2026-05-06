@@ -7,7 +7,7 @@ pub(crate) struct ThreadGoalRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     config: Arc<Config>,
     thread_state_manager: ThreadStateManager,
-    state_db: Option<StateDbHandle>,
+    state_db: StateDbHandle,
 }
 
 impl ThreadGoalRequestProcessor {
@@ -16,7 +16,7 @@ impl ThreadGoalRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         config: Arc<Config>,
         thread_state_manager: ThreadStateManager,
-        state_db: Option<StateDbHandle>,
+        state_db: StateDbHandle,
     ) -> Self {
         Self {
             thread_manager,
@@ -72,23 +72,6 @@ impl ThreadGoalRequestProcessor {
         }
     }
 
-    pub(crate) async fn pending_resume_goal_state(
-        &self,
-        thread: &CodexThread,
-    ) -> (bool, Option<StateDbHandle>) {
-        let emit_thread_goal_update = self.config.features.enabled(Feature::Goals);
-        let thread_goal_state_db = if emit_thread_goal_update {
-            if let Some(state_db) = thread.state_db() {
-                Some(state_db)
-            } else {
-                self.state_db.clone()
-            }
-        } else {
-            None
-        };
-        (emit_thread_goal_update, thread_goal_state_db)
-    }
-
     async fn thread_goal_set_inner(
         &self,
         request_id: ConnectionRequestId,
@@ -110,7 +93,7 @@ impl ThreadGoalRequestProcessor {
             None => find_thread_path_by_id_str(
                 &self.config.codex_home,
                 &thread_id.to_string(),
-                self.state_db.as_deref(),
+                Some(self.state_db.as_ref()),
             )
             .await
             .map_err(|err| {
@@ -275,7 +258,7 @@ impl ThreadGoalRequestProcessor {
             None => find_thread_path_by_id_str(
                 &self.config.codex_home,
                 &thread_id.to_string(),
-                self.state_db.as_deref(),
+                Some(self.state_db.as_ref()),
             )
             .await
             .map_err(|err| {
@@ -339,7 +322,7 @@ impl ThreadGoalRequestProcessor {
             find_thread_path_by_id_str(
                 &self.config.codex_home,
                 &thread_id.to_string(),
-                self.state_db.as_deref(),
+                Some(self.state_db.as_ref()),
             )
             .await
             .map_err(|err| {
@@ -348,9 +331,7 @@ impl ThreadGoalRequestProcessor {
             .ok_or_else(|| invalid_request(format!("thread not found: {thread_id}")))?;
         }
 
-        self.state_db
-            .clone()
-            .ok_or_else(|| internal_error("sqlite state db unavailable for thread goals"))
+        Ok(self.state_db.clone())
     }
 
     async fn emit_thread_goal_snapshot(&self, thread_id: ThreadId) {

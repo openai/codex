@@ -52,6 +52,7 @@ codex_rust_crate(
     test_tags = ["no-sandbox"],
     unit_test_timeout = "long",
     extra_binaries = [
+        "//codex-rs/bwrap:bwrap",
         "//codex-rs/linux-sandbox:codex-linux-sandbox",
         "//codex-rs/rmcp-client:test_stdio_server",
         "//codex-rs/rmcp-client:test_streamable_http_server",

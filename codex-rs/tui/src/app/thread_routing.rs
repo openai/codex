@@ -262,31 +262,47 @@ impl App {
                 }),
             ),
             ServerRequest::McpServerElicitationRequest { request_id, params } => {
-                if let Some(request) = McpServerElicitationFormRequest::from_app_server_request(
+                if let Some(params) = AppLinkViewParams::from_url_app_server_request(
                     thread_id,
+                    &params.server_name,
                     request_id.clone(),
-                    params.clone(),
+                    &params.request,
                 ) {
+                    Some(ThreadInteractiveRequest::AppLink(params))
+                } else if let Some(request) =
+                    McpServerElicitationFormRequest::from_app_server_request(
+                        thread_id,
+                        request_id.clone(),
+                        params.clone(),
+                    )
+                {
                     Some(ThreadInteractiveRequest::McpServerElicitation(request))
                 } else {
-                    Some(ThreadInteractiveRequest::Approval(
-                        ApprovalRequest::McpElicitation {
-                            thread_id,
-                            thread_label,
-                            server_name: params.server_name.clone(),
-                            request_id: request_id.clone(),
-                            message: match &params.request {
-                                codex_app_server_protocol::McpServerElicitationRequest::Form {
-                                    message,
-                                    ..
-                                }
-                                | codex_app_server_protocol::McpServerElicitationRequest::Url {
-                                    message,
-                                    ..
-                                } => message.clone(),
+                    match &params.request {
+                        codex_app_server_protocol::McpServerElicitationRequest::Form {
+                            message,
+                            ..
+                        } => Some(ThreadInteractiveRequest::Approval(
+                            ApprovalRequest::McpElicitation {
+                                thread_id,
+                                thread_label,
+                                server_name: params.server_name.clone(),
+                                request_id: request_id.clone(),
+                                message: message.clone(),
                             },
-                        },
-                    ))
+                        )),
+                        codex_app_server_protocol::McpServerElicitationRequest::Url { .. } => {
+                            self.app_event_tx.resolve_elicitation(
+                                thread_id,
+                                params.server_name.clone(),
+                                request_id.clone(),
+                                codex_app_server_protocol::McpServerElicitationAction::Decline,
+                                /*content*/ None,
+                                /*meta*/ None,
+                            );
+                            None
+                        }
+                    }
                 }
             }
             ServerRequest::PermissionsRequestApproval { params, .. } => Some(
@@ -304,6 +320,9 @@ impl App {
 
     pub(super) fn push_thread_interactive_request(&mut self, request: ThreadInteractiveRequest) {
         match request {
+            ThreadInteractiveRequest::AppLink(params) => {
+                self.chat_widget.open_app_link_view(params);
+            }
             ThreadInteractiveRequest::Approval(request) => {
                 self.render_inactive_patch_preview(&request);
                 self.chat_widget.push_approval_request(request);

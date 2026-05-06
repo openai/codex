@@ -223,6 +223,7 @@ pub struct PluginDetail {
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
+    pub keywords: Vec<String>,
     pub installed: bool,
     pub enabled: bool,
     pub skills: Vec<SkillMetadata>,
@@ -252,6 +253,7 @@ pub struct ConfiguredMarketplacePlugin {
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
+    pub keywords: Vec<String>,
     pub installed: bool,
     pub enabled: bool,
 }
@@ -1196,6 +1198,7 @@ impl PluginsManager {
                             source: plugin.source,
                             policy: plugin.policy,
                             interface: plugin.interface,
+                            keywords: plugin.keywords,
                         })
                     })
                     .collect::<Vec<_>>();
@@ -1245,6 +1248,11 @@ impl PluginsManager {
                     source: plugin.source,
                     policy: plugin.policy,
                     interface: plugin.interface,
+                    keywords: plugin
+                        .manifest
+                        .as_ref()
+                        .map(|manifest| manifest.keywords.clone())
+                        .unwrap_or_default(),
                     installed: installed_plugins.contains(&plugin_key),
                     enabled: enabled_plugins.contains(&plugin_key),
                 },
@@ -1287,6 +1295,7 @@ impl PluginsManager {
                 source: plugin.source,
                 policy: plugin.policy,
                 interface: plugin.interface,
+                keywords: plugin.keywords,
                 installed: plugin.installed,
                 enabled: plugin.enabled,
                 skills: Vec::new(),
@@ -1363,6 +1372,7 @@ impl PluginsManager {
             source: plugin.source,
             policy: plugin.policy,
             interface,
+            keywords: manifest.keywords,
             installed: plugin.installed,
             enabled: plugin.enabled,
             skills: resolved_skills.skills,
