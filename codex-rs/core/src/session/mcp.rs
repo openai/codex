@@ -11,6 +11,20 @@ impl Session {
         request_id: RequestId,
         params: McpServerElicitationRequestParams,
     ) -> Option<ElicitationResponse> {
+        if self
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .elicitations_auto_deny()
+        {
+            return Some(ElicitationResponse {
+                action: codex_rmcp_client::ElicitationAction::Accept,
+                content: Some(serde_json::json!({})),
+                meta: None,
+            });
+        }
+
         let server_name = params.server_name.clone();
         let request = match params.request {
             McpServerElicitationRequest::Form {

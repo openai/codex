@@ -79,6 +79,7 @@ use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadSource as AppServerThreadSource;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
 use codex_app_server_protocol::Turn;
@@ -107,6 +108,7 @@ use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
@@ -118,14 +120,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::mpsc;
 
-fn sample_thread(thread_id: &str, ephemeral: bool) -> Thread {
-    sample_thread_with_source(thread_id, ephemeral, AppServerSessionSource::Exec)
-}
-
-fn sample_thread_with_source(
+fn sample_thread_with_metadata(
     thread_id: &str,
     ephemeral: bool,
     source: AppServerSessionSource,
+    thread_source: Option<AppServerThreadSource>,
 ) -> Thread {
     Thread {
         id: thread_id.to_string(),
@@ -140,6 +139,7 @@ fn sample_thread_with_source(
         cwd: test_path_buf("/tmp").abs(),
         cli_version: "0.0.0".to_string(),
         source,
+        thread_source,
         agent_nickname: None,
         agent_role: None,
         git_info: None,
@@ -154,7 +154,12 @@ fn sample_thread_start_response(
     model: &str,
 ) -> ClientResponsePayload {
     ClientResponsePayload::ThreadStart(ThreadStartResponse {
-        thread: sample_thread(thread_id, ephemeral),
+        thread: sample_thread_with_metadata(
+            thread_id,
+            ephemeral,
+            AppServerSessionSource::Exec,
+            Some(AppServerThreadSource::User),
+        ),
         model: model.to_string(),
         model_provider: "openai".to_string(),
         service_tier: None,
@@ -198,6 +203,7 @@ fn sample_thread_resume_response(
         ephemeral,
         model,
         AppServerSessionSource::Exec,
+        Some(AppServerThreadSource::User),
     )
 }
 
@@ -206,9 +212,10 @@ fn sample_thread_resume_response_with_source(
     ephemeral: bool,
     model: &str,
     source: AppServerSessionSource,
+    thread_source: Option<AppServerThreadSource>,
 ) -> ClientResponsePayload {
     ClientResponsePayload::ThreadResume(ThreadResumeResponse {
-        thread: sample_thread_with_source(thread_id, ephemeral, source),
+        thread: sample_thread_with_metadata(thread_id, ephemeral, source, thread_source),
         model: model.to_string(),
         model_provider: "openai".to_string(),
         service_tier: None,
@@ -753,7 +760,7 @@ fn compaction_event_serializes_expected_shape() {
             },
             sample_app_server_client_metadata(),
             sample_runtime_metadata(),
-            Some("user"),
+            Some(ThreadSource::User),
             /*subagent_source*/ None,
             /*parent_thread_id*/ None,
         ),
@@ -852,7 +859,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             },
             model: "gpt-5".to_string(),
             ephemeral: true,
-            thread_source: Some("user"),
+            thread_source: Some(ThreadSource::User),
             initialization_mode: ThreadInitializationMode::New,
             subagent_source: None,
             parent_thread_id: None,
@@ -1196,6 +1203,7 @@ async fn compaction_event_ingests_custom_fact() {
                         agent_nickname: None,
                         agent_role: None,
                     }),
+                    Some(AppServerThreadSource::Subagent),
                 )),
             },
             &mut events,
@@ -2116,7 +2124,7 @@ fn turn_event_serializes_expected_shape() {
             runtime: sample_runtime_metadata(),
             submission_type: None,
             ephemeral: false,
-            thread_source: Some("user".to_string()),
+            thread_source: Some(ThreadSource::User),
             initialization_mode: ThreadInitializationMode::New,
             subagent_source: None,
             parent_thread_id: None,

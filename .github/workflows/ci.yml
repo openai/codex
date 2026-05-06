@@ -52,10 +52,12 @@ jobs:
           CODEX_VERSION=0.125.0
           WORKFLOW_URL="https://github.com/openai/codex/actions/runs/24901475298"
           OUTPUT_DIR="${RUNNER_TEMP}"
+          # This reused workflow predates the standalone bwrap artifact.
           python3 ./scripts/stage_npm_packages.py \
             --release-version "$CODEX_VERSION" \
             --workflow-url "$WORKFLOW_URL" \
             --package codex \
+            --allow-missing-native-component bwrap \
             --output-dir "$OUTPUT_DIR"
           PACK_OUTPUT="${OUTPUT_DIR}/codex-npm-${CODEX_VERSION}.tgz"
           echo "pack_output=$PACK_OUTPUT" >> "$GITHUB_OUTPUT"

@@ -18,7 +18,7 @@ const MISSING_BWRAP_WARNING: &str = concat!(
     "Install bubblewrap with your OS package manager. ",
     "See the sandbox prerequisites: ",
     "https://developers.openai.com/codex/concepts/sandboxing#prerequisites. ",
-    "Codex will use the vendored bubblewrap in the meantime.",
+    "Codex will use the bundled bubblewrap in the meantime.",
 );
 const USER_NAMESPACE_WARNING: &str =
     "Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.";

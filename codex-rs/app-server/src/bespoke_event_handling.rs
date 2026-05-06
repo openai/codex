@@ -53,7 +53,6 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SkillsChangedNotification;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
 use codex_app_server_protocol::ThreadRealtimeErrorNotification;
 use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
@@ -1207,17 +1206,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 outgoing.send_response(request_id, response).await;
             }
         }
-        EventMsg::ThreadNameUpdated(thread_name_event) => {
-            let notification = ThreadNameUpdatedNotification {
-                thread_id: thread_name_event.thread_id.to_string(),
-                thread_name: thread_name_event.thread_name,
-            };
-            outgoing
-                .send_global_server_notification(ServerNotification::ThreadNameUpdated(
-                    notification,
-                ))
-                .await;
-        }
         EventMsg::ThreadGoalUpdated(thread_goal_event) => {
             let notification = ThreadGoalUpdatedNotification {
                 thread_id: thread_goal_event.thread_id.to_string(),
@@ -2194,6 +2182,7 @@ mod tests {
             cwd: test_path_buf("/tmp").abs().into(),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,
+            thread_source: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,

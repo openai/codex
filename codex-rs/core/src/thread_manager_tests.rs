@@ -15,6 +15,7 @@ use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use core_test_support::PathBufExt;
@@ -178,6 +179,7 @@ fn fork_thread_accepts_legacy_usize_snapshot_argument() {
             usize::MAX,
             config,
             path,
+            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         );
@@ -333,6 +335,7 @@ async fn start_thread_accepts_explicit_environment_when_default_environment_is_d
             config: config.clone(),
             initial_history: InitialHistory::New,
             session_source: None,
+            thread_source: None,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
@@ -370,6 +373,7 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
             session_source: Some(SessionSource::Internal(
                 InternalSessionSource::MemoryConsolidation,
             )),
+            thread_source: None,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
@@ -424,6 +428,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             config: config.clone(),
             initial_history: InitialHistory::New,
             session_source: None,
+            thread_source: None,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
@@ -480,6 +485,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             ForkSnapshot::Interrupted,
             config,
             rollout_path,
+            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
@@ -612,6 +618,86 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
         .expect("resume stopped source thread");
     assert_eq!(resumed.thread_id, source.thread_id);
     assert!(!Arc::ptr_eq(&resumed.thread, &source.thread));
+
+    resumed
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown resumed thread");
+}
+
+#[tokio::test]
+async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let (state_db, thread_store, agent_graph_store) = state_backed_stores(&config).await;
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+        state_db,
+        thread_store,
+        agent_graph_store,
+    );
+
+    let source = manager
+        .start_thread_with_options(StartThreadOptions {
+            config: config.clone(),
+            initial_history: InitialHistory::New,
+            session_source: None,
+            thread_source: Some(ThreadSource::User),
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+        })
+        .await
+        .expect("start source thread");
+    source.thread.ensure_rollout_materialized().await;
+    source
+        .thread
+        .flush_rollout()
+        .await
+        .expect("flush source rollout");
+    let rollout_path = source
+        .thread
+        .rollout_path()
+        .expect("source rollout path should exist");
+    source
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown source thread before resume");
+    let _ = manager.remove_thread(&source.thread_id).await;
+
+    let resumed = manager
+        .resume_thread_from_rollout(
+            config,
+            rollout_path,
+            auth_manager,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("resume source thread");
+
+    assert_eq!(
+        resumed
+            .thread
+            .config_snapshot()
+            .await
+            .thread_source
+            .as_ref(),
+        Some(&ThreadSource::User)
+    );
 
     resumed
         .thread
@@ -891,6 +977,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
             ForkSnapshot::Interrupted,
             config.clone(),
             source_path,
+            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
@@ -1007,6 +1094,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
             ForkSnapshot::Interrupted,
             config.clone(),
             source_path,
+            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
@@ -1088,6 +1176,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             ForkSnapshot::Interrupted,
             config.clone(),
             source_path,
+            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
@@ -1128,6 +1217,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             ForkSnapshot::Interrupted,
             config.clone(),
             forked_path,
+            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )

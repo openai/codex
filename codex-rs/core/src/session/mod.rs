@@ -110,6 +110,7 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
@@ -266,8 +267,9 @@ pub(crate) struct PreviousTurnSettings {
     pub(crate) realtime_active: Option<bool>,
 }
 
-use crate::SkillError;
+#[cfg(test)]
 use crate::SkillLoadOutcome;
+#[cfg(test)]
 use crate::SkillMetadata;
 use crate::SkillsManager;
 use crate::agents_md::AgentsMdManager;
@@ -343,11 +345,6 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionNetworkProxyRuntime;
-use codex_protocol::protocol::SkillDependencies as ProtocolSkillDependencies;
-use codex_protocol::protocol::SkillErrorInfo;
-use codex_protocol::protocol::SkillInterface as ProtocolSkillInterface;
-use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
-use codex_protocol::protocol::SkillToolDependency as ProtocolSkillToolDependency;
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
@@ -396,6 +393,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) skills_watcher: Arc<SkillsWatcher>,
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
+    pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) agent_control: AgentControl,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) persist_extended_history: bool,
@@ -458,6 +456,7 @@ impl Codex {
             skills_watcher,
             conversation_history,
             session_source,
+            thread_source,
             agent_control,
             dynamic_tools,
             persist_extended_history,
@@ -617,6 +616,7 @@ impl Codex {
             app_server_client_name: None,
             app_server_client_version: None,
             session_source,
+            thread_source,
             dynamic_tools,
             persist_extended_history,
             inherited_shell_snapshot,
@@ -985,6 +985,7 @@ impl Session {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn codex_home(&self) -> AbsolutePathBuf {
         let state = self.state.lock().await;
         state.session_configuration.codex_home().clone()
@@ -3292,60 +3293,6 @@ pub(crate) fn emit_subagent_session_started(
         subagent_source,
         created_at,
     });
-}
-
-fn skills_to_info(
-    skills: &[SkillMetadata],
-    disabled_paths: &HashSet<AbsolutePathBuf>,
-) -> Vec<ProtocolSkillMetadata> {
-    skills
-        .iter()
-        .map(|skill| ProtocolSkillMetadata {
-            name: skill.name.clone(),
-            description: skill.description.clone(),
-            short_description: skill.short_description.clone(),
-            interface: skill
-                .interface
-                .clone()
-                .map(|interface| ProtocolSkillInterface {
-                    display_name: interface.display_name,
-                    short_description: interface.short_description,
-                    icon_small: interface.icon_small,
-                    icon_large: interface.icon_large,
-                    brand_color: interface.brand_color,
-                    default_prompt: interface.default_prompt,
-                }),
-            dependencies: skill.dependencies.clone().map(|dependencies| {
-                ProtocolSkillDependencies {
-                    tools: dependencies
-                        .tools
-                        .into_iter()
-                        .map(|tool| ProtocolSkillToolDependency {
-                            r#type: tool.r#type,
-                            value: tool.value,
-                            description: tool.description,
-                            transport: tool.transport,
-                            command: tool.command,
-                            url: tool.url,
-                        })
-                        .collect(),
-                }
-            }),
-            path: skill.path_to_skills_md.clone(),
-            scope: skill.scope,
-            enabled: !disabled_paths.contains(&skill.path_to_skills_md),
-        })
-        .collect()
-}
-
-fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
-    errors
-        .iter()
-        .map(|err| SkillErrorInfo {
-            path: err.path.to_path_buf(),
-            message: err.message.clone(),
-        })
-        .collect()
 }
 
 use codex_memories_read::build_memory_tool_developer_instructions;

@@ -272,6 +272,7 @@ fn stored_thread_from_state(
         cwd: PathBuf::new(),
         cli_version: "test".to_string(),
         source: created.source.clone(),
+        thread_source: created.thread_source,
         agent_nickname: None,
         agent_role: None,
         agent_path: None,

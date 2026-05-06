@@ -1130,6 +1130,62 @@ impl Config {
         }
     }
 
+    pub async fn rebuild_preserving_session_layers(
+        &self,
+        refreshed_config: &Config,
+    ) -> std::io::Result<Self> {
+        let mut layers = refreshed_config
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .into_iter()
+            .filter(|layer| !is_session_layer(&layer.name))
+            .cloned()
+            .collect::<Vec<_>>();
+        layers.extend(
+            self.config_layer_stack
+                .get_layers(
+                    ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                    /*include_disabled*/ true,
+                )
+                .into_iter()
+                .filter(|layer| is_session_layer(&layer.name))
+                .cloned(),
+        );
+        layers.sort_by_key(|layer| layer.name.precedence());
+
+        let config_layer_stack = ConfigLayerStack::new(
+            layers,
+            refreshed_config.config_layer_stack.requirements().clone(),
+            refreshed_config
+                .config_layer_stack
+                .requirements_toml()
+                .clone(),
+        )?
+        .with_user_and_project_exec_policy_rules_ignored(
+            refreshed_config
+                .config_layer_stack
+                .ignore_user_and_project_exec_policy_rules(),
+        );
+        let cfg: ConfigToml = config_layer_stack
+            .effective_config()
+            .try_into()
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+        Self::load_config_with_layer_stack(
+            LOCAL_FS.as_ref(),
+            cfg,
+            ConfigOverrides {
+                cwd: Some(self.cwd.to_path_buf()),
+                ..Default::default()
+            },
+            refreshed_config.codex_home.clone(),
+            config_layer_stack,
+        )
+        .await
+    }
+
     /// This is the preferred way to create an instance of [Config].
     pub async fn load_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
@@ -1678,6 +1734,10 @@ fn thread_store_config(
             ThreadStoreConfig::Remote { endpoint }
         }),
     }
+}
+
+fn is_session_layer(source: &ConfigLayerSource) -> bool {
+    matches!(source, ConfigLayerSource::SessionFlags)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

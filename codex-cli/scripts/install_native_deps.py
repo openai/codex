@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install Codex native binaries (Rust CLI plus ripgrep helpers)."""
+"""Install Codex native binaries (Rust CLI, bwrap, and ripgrep helpers)."""
 
 import argparse
 from contextlib import contextmanager
@@ -42,8 +42,15 @@ class BinaryComponent:
 
 
 WINDOWS_TARGETS = tuple(target for target in BINARY_TARGETS if "windows" in target)
+LINUX_TARGETS = tuple(target for target in BINARY_TARGETS if "linux" in target)
 
 BINARY_COMPONENTS = {
+    "bwrap": BinaryComponent(
+        artifact_prefix="bwrap",
+        dest_dir="codex-resources",
+        binary_basename="bwrap",
+        targets=LINUX_TARGETS,
+    ),
     "codex": BinaryComponent(
         artifact_prefix="codex",
         dest_dir="codex",
@@ -135,7 +142,7 @@ def parse_args() -> argparse.Namespace:
         choices=tuple(list(BINARY_COMPONENTS) + ["rg"]),
         help=(
             "Limit installation to the specified components."
-            " May be repeated. Defaults to codex, codex-windows-sandbox-setup,"
+            " May be repeated. Defaults to bwrap, codex, codex-windows-sandbox-setup,"
             " codex-command-runner, and rg."
         ),
     )
@@ -159,6 +166,7 @@ def main() -> int:
     vendor_dir.mkdir(parents=True, exist_ok=True)
 
     components = args.components or [
+        "bwrap",
         "codex",
         "codex-windows-sandbox-setup",
         "codex-command-runner",

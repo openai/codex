@@ -74,6 +74,7 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::McpElicitationSchema;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_execpolicy::Decision;
@@ -124,6 +125,7 @@ use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_rmcp_client::ElicitationAction;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::context_snapshot;
@@ -291,6 +293,49 @@ async fn regular_turn_emits_turn_started_without_waiting_for_startup_prewarm() {
     ));
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+}
+
+#[tokio::test]
+async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled() {
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+    session
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .set_elicitations_auto_deny(/*auto_deny*/ true);
+
+    let requested_schema: McpElicitationSchema = serde_json::from_value(json!({
+        "type": "object",
+        "properties": {},
+    }))
+    .expect("schema should deserialize");
+    let response = session
+        .request_mcp_server_elicitation(
+            turn_context.as_ref(),
+            RequestId::String("request-1".into()),
+            McpServerElicitationRequestParams {
+                thread_id: session.conversation_id.to_string(),
+                turn_id: Some(turn_context.sub_id.clone()),
+                server_name: "codex_apps".to_string(),
+                request: McpServerElicitationRequest::Form {
+                    meta: None,
+                    message: "Allow this request?".to_string(),
+                    requested_schema,
+                },
+            },
+        )
+        .await;
+
+    assert_eq!(
+        response,
+        Some(ElicitationResponse {
+            action: ElicitationAction::Accept,
+            content: Some(json!({})),
+            meta: None,
+        })
+    );
+    assert!(rx.try_recv().is_err());
 }
 
 #[tokio::test]
@@ -1722,6 +1767,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             usize::MAX,
             fork_config.clone(),
             rollout_path,
+            /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
@@ -2411,6 +2457,7 @@ async fn set_rate_limits_retains_previous_credits() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -2514,6 +2561,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -2766,6 +2814,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
             thread_id: session.conversation_id,
             forked_from_id: None,
             source: SessionSource::Exec,
+            thread_source: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             metadata: ThreadPersistenceMetadata {
@@ -2972,6 +3021,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -3495,6 +3545,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -3607,6 +3658,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -3829,6 +3881,7 @@ async fn make_session_with_config_and_rx(
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -4793,6 +4846,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
             thread_id: session.conversation_id,
             forked_from_id: None,
             source: SessionSource::Exec,
+            thread_source: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             metadata: ThreadPersistenceMetadata {
@@ -5116,6 +5170,7 @@ where
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        thread_source: None,
         dynamic_tools,
         persist_extended_history: false,
         inherited_shell_snapshot: None,
