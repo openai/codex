@@ -932,11 +932,12 @@ impl Session {
             sess.start_skills_watcher_listener();
             let mut required_mcp_servers: Vec<String> = mcp_servers
                 .iter()
-                .filter(|(_, server)| server.enabled && server.required)
+                .filter(|(_, server)| server.enabled() && server.required())
                 .map(|(name, _)| name.clone())
                 .collect();
             required_mcp_servers.sort();
-            let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
+            let enabled_mcp_server_count =
+                mcp_servers.values().filter(|server| server.enabled()).count();
             let required_mcp_server_count = required_mcp_servers.len();
             let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref()).await;
             let host_owned_codex_apps_enabled = config

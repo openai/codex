@@ -2131,10 +2131,10 @@ name = "codex-builtin-mcps"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "codex-config",
  "codex-memories-mcp",
  "codex-utils-absolute-path",
  "pretty_assertions",
+ "tokio",
 ]
 
 [[package]]
@@ -2182,7 +2182,6 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-app-server-test-client",
  "codex-arg0",
- "codex-builtin-mcps",
  "codex-chatgpt",
  "codex-cloud-tasks",
  "codex-config",

@@ -1149,6 +1149,7 @@ pub(crate) async fn built_tools(
         .list_all_tools()
         .or_cancel(cancellation_token)
         .await?;
+    let parallel_mcp_server_names = mcp_connection_manager.parallel_tool_call_server_names();
     drop(mcp_connection_manager);
     let loaded_plugins = sess
         .services
@@ -1247,18 +1248,6 @@ pub(crate) async fn built_tools(
     } else {
         Vec::new()
     };
-
-    let parallel_mcp_server_names = turn_context
-        .config
-        .mcp_servers
-        .get()
-        .iter()
-        .filter_map(|(server_name, server_config)| {
-            server_config
-                .supports_parallel_tool_calls
-                .then_some(server_name.clone())
-        })
-        .collect::<HashSet<_>>();
 
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
