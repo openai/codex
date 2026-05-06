@@ -44,9 +44,7 @@ pub async fn build_prompt_input(
         &config,
         Arc::clone(&auth_manager),
         SessionSource::Exec,
-        Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::new(
-            local_runtime_paths,
-        ))),
+        Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await),
         /*analytics_events_client*/ None,
         thread_store,
         state_db.clone(),

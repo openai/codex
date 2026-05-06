@@ -761,12 +761,15 @@ pub async fn run_main(
         }
     };
 
-    let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::new(
-        ExecServerRuntimePaths::from_optional_paths(
-            arg0_paths.codex_self_exe.clone(),
-            arg0_paths.codex_linux_sandbox_exe.clone(),
-        )?,
-    )));
+    let environment_manager = Arc::new(
+        EnvironmentManager::new(EnvironmentManagerArgs::new(
+            ExecServerRuntimePaths::from_optional_paths(
+                arg0_paths.codex_self_exe.clone(),
+                arg0_paths.codex_linux_sandbox_exe.clone(),
+            )?,
+        ))
+        .await,
+    );
     let cwd = cli.cwd.clone();
     let config_cwd =
         config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
@@ -2136,7 +2139,8 @@ mod tests {
                 std::env::current_exe().expect("current exe"),
                 /*codex_linux_sandbox_exe*/ None,
             )?,
-        );
+        )
+        .await;
 
         let config_cwd =
             config_cwd_for_app_server_target(Some(remote_only_cwd), &target, &environment_manager)?;

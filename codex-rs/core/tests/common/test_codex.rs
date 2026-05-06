@@ -389,11 +389,13 @@ impl TestCodexBuilder {
             std::env::current_exe()?,
             /*codex_linux_sandbox_exe*/ None,
         )?;
-        let environment_manager =
-            Arc::new(codex_exec_server::EnvironmentManager::create_for_tests(
+        let environment_manager = Arc::new(
+            codex_exec_server::EnvironmentManager::create_for_tests(
                 exec_server_url,
                 local_runtime_paths,
-            ));
+            )
+            .await,
+        );
         let file_system = test_env.environment().get_filesystem();
         let mut workspace_setups = vec![];
         swap(&mut self.workspace_setups, &mut workspace_setups);
