@@ -1,6 +1,8 @@
 use crate::command_safety::is_safe_command::is_safe_git_command;
 use crate::command_safety::powershell_parser::PowershellParseOutcome;
 use crate::command_safety::powershell_parser::parse_with_powershell_ast;
+use crate::command_safety::ripgrep::RipgrepArgCase;
+use crate::command_safety::ripgrep::is_safe_ripgrep_command;
 use std::path::Path;
 
 /// On Windows, we conservatively allow only clearly read-only PowerShell invocations
@@ -190,7 +192,7 @@ pub(crate) fn is_safe_powershell_words(words: &[String]) -> bool {
 
         "git" => is_safe_git_command(words),
 
-        "rg" => is_safe_ripgrep(words),
+        "rg" => is_safe_ripgrep_command(words, RipgrepArgCase::AsciiInsensitive),
 
         // Extra safety: explicitly prohibit common side-effecting cmdlets regardless of args.
         "set-content" | "add-content" | "out-file" | "new-item" | "remove-item" | "move-item"
@@ -204,21 +206,6 @@ pub(crate) fn is_safe_powershell_words(words: &[String]) -> bool {
             false
         }
     }
-}
-
-/// Checks that an `rg` invocation avoids options that can spawn arbitrary executables.
-fn is_safe_ripgrep(words: &[String]) -> bool {
-    const UNSAFE_RIPGREP_OPTIONS_WITH_ARGS: &[&str] = &["--pre", "--hostname-bin"];
-    const UNSAFE_RIPGREP_OPTIONS_WITHOUT_ARGS: &[&str] = &["--search-zip", "-z"];
-
-    !words.iter().skip(1).any(|arg| {
-        let arg_lc = arg.to_ascii_lowercase();
-        // Examples rejected here: "pwsh -Command 'rg --pre cat pattern'" and "pwsh -Command 'rg --search-zip pattern'".
-        UNSAFE_RIPGREP_OPTIONS_WITHOUT_ARGS.contains(&arg_lc.as_str())
-            || UNSAFE_RIPGREP_OPTIONS_WITH_ARGS
-                .iter()
-                .any(|opt| arg_lc == *opt || arg_lc.starts_with(&format!("{opt}=")))
-    })
 }
 
 #[cfg(all(test, windows))]

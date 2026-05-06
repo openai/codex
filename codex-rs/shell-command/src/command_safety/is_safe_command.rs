@@ -4,6 +4,8 @@ use crate::command_safety::is_dangerous_command::executable_name_lookup_key;
 // may appear before it (e.g., `-C`, `-c`, `--git-dir`).
 // Implemented in `is_dangerous_command` and shared here.
 use crate::command_safety::is_dangerous_command::find_git_subcommand;
+use crate::command_safety::ripgrep::RipgrepArgCase;
+use crate::command_safety::ripgrep::is_safe_ripgrep_command;
 use crate::command_safety::windows_safe_commands::is_safe_command_windows;
 #[cfg(windows)]
 use crate::command_safety::windows_safe_commands::is_safe_powershell_words as is_safe_powershell_words_windows;
@@ -127,7 +129,7 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         }
 
         // Ripgrep
-        Some("rg") => is_safe_ripgrep_command(command),
+        Some("rg") => is_safe_ripgrep_command(command, RipgrepArgCase::Sensitive),
 
         // Git
         Some("git") => is_safe_git_command(command),
@@ -146,60 +148,6 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         // ── anything else ─────────────────────────────────────────────────
         _ => false,
     }
-}
-
-fn is_safe_ripgrep_command(command: &[String]) -> bool {
-    !command
-        .iter()
-        .skip(1)
-        .map(String::as_str)
-        .any(is_unsafe_ripgrep_arg)
-}
-
-fn is_unsafe_ripgrep_arg(arg: &str) -> bool {
-    match arg {
-        // Takes an arbitrary command that is executed for each match.
-        "--pre"
-        // Takes a command that can be used to obtain the local hostname.
-        | "--hostname-bin"
-        // Calls out to other decompression tools, so do not auto-approve
-        // out of an abundance of caution.
-        | "--search-zip"
-        | "-z" => true,
-        _ => {
-            arg.starts_with("--pre=")
-                || arg.starts_with("--hostname-bin=")
-                || arg.starts_with("--search-zip=")
-                || ripgrep_short_options_contain_search_zip(arg)
-        }
-    }
-}
-
-fn ripgrep_short_options_contain_search_zip(arg: &str) -> bool {
-    let Some(short_options) = arg.strip_prefix('-') else {
-        return false;
-    };
-    if short_options.is_empty() || short_options.starts_with('-') {
-        return false;
-    }
-
-    for option in short_options.chars() {
-        if option == 'z' {
-            return true;
-        }
-        if ripgrep_short_option_takes_value(option) {
-            return false;
-        }
-    }
-
-    false
-}
-
-fn ripgrep_short_option_takes_value(option: char) -> bool {
-    matches!(
-        option,
-        'A' | 'B' | 'C' | 'E' | 'M' | 'T' | 'd' | 'e' | 'f' | 'g' | 'j' | 'm' | 'r' | 't'
-    )
 }
 
 pub(crate) fn is_safe_git_command(command: &[String]) -> bool {
