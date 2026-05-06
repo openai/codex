@@ -6,10 +6,13 @@ use codex_core::config::Config;
 use codex_core::config::find_codex_home;
 use codex_core_plugins::PluginMarketplaceUpgradeOutcome;
 use codex_core_plugins::PluginsManager;
+use codex_core_plugins::installed_marketplaces::marketplace_install_root;
+use codex_core_plugins::installed_marketplaces::resolve_configured_marketplace_root;
 use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
 use codex_core_plugins::marketplace_add::add_marketplace;
 use codex_core_plugins::marketplace_remove::MarketplaceRemoveRequest;
 use codex_core_plugins::marketplace_remove::remove_marketplace;
+use codex_plugin::validate_plugin_segment;
 use codex_utils_cli::CliConfigOverrides;
 
 #[derive(Debug, Parser)]
@@ -25,6 +28,7 @@ pub struct MarketplaceCli {
 #[derive(Debug, clap::Subcommand)]
 enum MarketplaceSubcommand {
     Add(AddMarketplaceArgs),
+    List,
     Upgrade(UpgradeMarketplaceArgs),
     Remove(RemoveMarketplaceArgs),
 }
@@ -73,6 +77,7 @@ impl MarketplaceCli {
 
         match subcommand {
             MarketplaceSubcommand::Add(args) => run_add(args).await?,
+            MarketplaceSubcommand::List => run_list(overrides).await?,
             MarketplaceSubcommand::Upgrade(args) => run_upgrade(overrides, args).await?,
             MarketplaceSubcommand::Remove(args) => run_remove(args).await?,
         }
@@ -114,6 +119,48 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
         "Installed marketplace root: {}",
         outcome.installed_root.as_path().display()
     );
+
+    Ok(())
+}
+
+async fn run_list(overrides: Vec<(String, toml::Value)>) -> Result<()> {
+    let config = Config::load_with_cli_overrides(overrides)
+        .await
+        .context("failed to load configuration")?;
+    let configured_marketplaces = config
+        .config_layer_stack
+        .get_user_layer()
+        .and_then(|layer| layer.config.get("marketplaces"))
+        .and_then(toml::Value::as_table);
+    let Some(configured_marketplaces) = configured_marketplaces else {
+        println!("No configured plugin marketplaces.");
+        return Ok(());
+    };
+
+    if configured_marketplaces.is_empty() {
+        println!("No configured plugin marketplaces.");
+        return Ok(());
+    }
+
+    let default_install_root = marketplace_install_root(config.codex_home.as_path());
+    for (marketplace_name, marketplace) in configured_marketplaces {
+        if !marketplace.is_table() {
+            eprintln!("Ignoring invalid marketplace `{marketplace_name}`: expected table.");
+            continue;
+        }
+        if let Err(err) = validate_plugin_segment(marketplace_name, "marketplace name") {
+            eprintln!("Ignoring invalid marketplace `{marketplace_name}`: {err}.");
+            continue;
+        }
+        let root = resolve_configured_marketplace_root(
+            marketplace_name,
+            marketplace,
+            default_install_root.as_path(),
+        )
+        .map(|root| root.display().to_string())
+        .unwrap_or_else(|| "<invalid source>".to_string());
+        println!("{marketplace_name}\t{root}");
+    }
 
     Ok(())
 }
