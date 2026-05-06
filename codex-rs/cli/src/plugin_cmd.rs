@@ -204,19 +204,23 @@ struct PluginSelection {
     plugin_key: String,
 }
 
+impl PluginSelection {
+    fn from_plugin_id(plugin_id: PluginId) -> Self {
+        let plugin_key = plugin_id.as_key();
+        Self {
+            plugin_name: plugin_id.plugin_name,
+            marketplace_name: plugin_id.marketplace_name,
+            plugin_key,
+        }
+    }
+}
+
 fn parse_plugin_selection(
     plugin: String,
     marketplace_name: Option<String>,
 ) -> Result<PluginSelection> {
     match (PluginId::parse(&plugin), marketplace_name) {
-        (Ok(plugin_id), None) => {
-            let plugin_key = plugin_id.as_key();
-            Ok(PluginSelection {
-                plugin_name: plugin_id.plugin_name,
-                marketplace_name: plugin_id.marketplace_name,
-                plugin_key,
-            })
-        }
+        (Ok(plugin_id), None) => Ok(PluginSelection::from_plugin_id(plugin_id)),
         (Ok(plugin_id), Some(marketplace_name)) => {
             if plugin_id.marketplace_name != marketplace_name {
                 bail!(
@@ -226,22 +230,12 @@ fn parse_plugin_selection(
                     marketplace_name
                 );
             }
-            let plugin_key = plugin_id.as_key();
-            Ok(PluginSelection {
-                plugin_name: plugin_id.plugin_name,
-                marketplace_name: plugin_id.marketplace_name,
-                plugin_key,
-            })
+            Ok(PluginSelection::from_plugin_id(plugin_id))
         }
-        (Err(_), Some(marketplace_name)) => {
-            let plugin_id = PluginId::new(plugin, marketplace_name)?;
-            let plugin_key = plugin_id.as_key();
-            Ok(PluginSelection {
-                plugin_name: plugin_id.plugin_name,
-                marketplace_name: plugin_id.marketplace_name,
-                plugin_key,
-            })
-        }
+        (Err(_), Some(marketplace_name)) => Ok(PluginSelection::from_plugin_id(PluginId::new(
+            plugin,
+            marketplace_name,
+        )?)),
         (Err(_), None) => {
             bail!("plugin requires --marketplace unless passed as <plugin>@<marketplace>")
         }

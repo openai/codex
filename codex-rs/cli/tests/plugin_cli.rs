@@ -58,8 +58,7 @@ fn write_marketplace_source(source: &Path) -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn marketplace_list_shows_configured_marketplace_names() -> Result<()> {
+fn setup_local_marketplace() -> Result<(TempDir, TempDir)> {
     let codex_home = TempDir::new()?;
     let source = TempDir::new()?;
     write_plugins_enabled_config(codex_home.path())?;
@@ -70,6 +69,12 @@ async fn marketplace_list_shows_configured_marketplace_names() -> Result<()> {
         "debug",
         &configured_local_marketplace(&source_path),
     )?;
+    Ok((codex_home, source))
+}
+
+#[tokio::test]
+async fn marketplace_list_shows_configured_marketplace_names() -> Result<()> {
+    let (codex_home, source) = setup_local_marketplace()?;
 
     codex_command(codex_home.path())?
         .args(["plugin", "marketplace", "list"])
@@ -83,16 +88,7 @@ async fn marketplace_list_shows_configured_marketplace_names() -> Result<()> {
 
 #[tokio::test]
 async fn plugin_list_shows_plugins_grouped_by_marketplace() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let source = TempDir::new()?;
-    write_plugins_enabled_config(codex_home.path())?;
-    write_marketplace_source(source.path())?;
-    let source_path = source.path().to_string_lossy().into_owned();
-    record_user_marketplace(
-        codex_home.path(),
-        "debug",
-        &configured_local_marketplace(&source_path),
-    )?;
+    let (codex_home, _source) = setup_local_marketplace()?;
 
     codex_command(codex_home.path())?
         .args(["plugin", "list"])
@@ -106,16 +102,7 @@ async fn plugin_list_shows_plugins_grouped_by_marketplace() -> Result<()> {
 
 #[tokio::test]
 async fn plugin_add_and_remove_updates_installed_plugin_config() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let source = TempDir::new()?;
-    write_plugins_enabled_config(codex_home.path())?;
-    write_marketplace_source(source.path())?;
-    let source_path = source.path().to_string_lossy().into_owned();
-    record_user_marketplace(
-        codex_home.path(),
-        "debug",
-        &configured_local_marketplace(&source_path),
-    )?;
+    let (codex_home, _source) = setup_local_marketplace()?;
 
     codex_command(codex_home.path())?
         .args(["plugin", "add", "sample@debug"])
@@ -142,16 +129,7 @@ async fn plugin_add_and_remove_updates_installed_plugin_config() -> Result<()> {
 
 #[tokio::test]
 async fn plugin_remove_works_after_marketplace_is_removed() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let source = TempDir::new()?;
-    write_plugins_enabled_config(codex_home.path())?;
-    write_marketplace_source(source.path())?;
-    let source_path = source.path().to_string_lossy().into_owned();
-    record_user_marketplace(
-        codex_home.path(),
-        "debug",
-        &configured_local_marketplace(&source_path),
-    )?;
+    let (codex_home, _source) = setup_local_marketplace()?;
 
     codex_command(codex_home.path())?
         .args(["plugin", "add", "sample", "--marketplace", "debug"])
