@@ -239,6 +239,11 @@ pub struct ResponseCreateWsRequest {
     pub client_metadata: Option<HashMap<String, String>>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ResponseProcessedWsRequest {
+    pub response_id: String,
+}
+
 pub fn response_create_client_metadata(
     client_metadata: Option<HashMap<String, String>>,
     trace: Option<&W3cTraceContext>,
@@ -267,6 +272,8 @@ pub fn response_create_client_metadata(
 pub enum ResponsesWsRequest {
     #[serde(rename = "response.create")]
     ResponseCreate(ResponseCreateWsRequest),
+    #[serde(rename = "response.processed")]
+    ResponseProcessed(ResponseProcessedWsRequest),
 }
 
 pub fn create_text_param_for_request(

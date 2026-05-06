@@ -2852,11 +2852,11 @@ impl ChatComposer {
             return None;
         }
         if self.reject_slash_command_if_unavailable(cmd) {
-            self.stage_slash_command_history();
+            self.stage_slash_command_history(cmd);
             self.record_pending_slash_command_history();
             return Some(InputResult::None);
         }
-        self.stage_slash_command_history();
+        self.stage_slash_command_history(cmd);
         self.textarea.set_text_clearing_elements("");
         self.is_bash_mode = false;
         Some(InputResult::Command(cmd))
@@ -2884,12 +2884,12 @@ impl ChatComposer {
             return None;
         }
         if self.reject_slash_command_if_unavailable(cmd) {
-            self.stage_slash_command_history();
+            self.stage_slash_command_history(cmd);
             self.record_pending_slash_command_history();
             return Some(InputResult::None);
         }
 
-        self.stage_slash_command_history();
+        self.stage_slash_command_history(cmd);
 
         let mut args_elements =
             Self::slash_command_args_elements(rest, rest_offset, &self.textarea.text_elements());
@@ -2965,7 +2965,10 @@ impl ChatComposer {
     /// Staging snapshots the rich composer state before the textarea is cleared. `ChatWidget`
     /// commits the staged entry after dispatch so command recall follows the submitted text, not
     /// the command outcome.
-    fn stage_slash_command_history(&mut self) {
+    fn stage_slash_command_history(&mut self, cmd: SlashCommand) {
+        if cmd == SlashCommand::Clear {
+            return;
+        }
         self.stage_slash_command_history_text(self.textarea.text().trim().to_string());
     }
 
@@ -2974,6 +2977,9 @@ impl ChatComposer {
     /// Popup filtering text can be partial, so recording the selected command avoids recalling
     /// `/di` after the user actually accepted `/diff`.
     fn stage_selected_slash_command_history(&mut self, cmd: SlashCommand) {
+        if cmd == SlashCommand::Clear {
+            return;
+        }
         self.stage_slash_command_history_text(format!("/{}", cmd.command()));
     }
 

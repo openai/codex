@@ -130,6 +130,22 @@ fn remote_compaction_v2_is_under_development() {
 }
 
 #[test]
+fn responses_websocket_response_processed_is_under_development() {
+    assert_eq!(
+        Feature::ResponsesWebsocketResponseProcessed.stage(),
+        Stage::UnderDevelopment
+    );
+    assert_eq!(
+        Feature::ResponsesWebsocketResponseProcessed.default_enabled(),
+        false
+    );
+    assert_eq!(
+        feature_for_key("responses_websocket_response_processed"),
+        Some(Feature::ResponsesWebsocketResponseProcessed)
+    );
+}
+
+#[test]
 fn builtin_mcp_is_under_development() {
     assert_eq!(Feature::BuiltInMcp.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::BuiltInMcp.default_enabled(), false);

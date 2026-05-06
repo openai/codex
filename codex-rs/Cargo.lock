@@ -4275,6 +4275,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "shlex",
+ "similar",
  "tempfile",
  "tokio",
  "tokio-tungstenite",

@@ -172,6 +172,93 @@ async fn responses_websocket_streams_without_feature_flag_when_provider_supports
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_sends_response_processed_when_feature_enabled() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-prewarm"),
+            ev_completed("resp-prewarm"),
+        ],
+        vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hi"),
+            ev_completed("resp-1"),
+        ],
+        vec![],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::ResponsesWebsocketResponseProcessed)
+            .expect("test config should allow feature update");
+    });
+    let test = builder
+        .build_with_websocket_server(&server)
+        .await
+        .expect("build websocket codex");
+
+    test.submit_turn("hello")
+        .await
+        .expect("submission should send response.processed after processing");
+
+    let processed = server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 2)
+        .await;
+    assert_eq!(
+        processed.body_json(),
+        json!({
+            "type": "response.processed",
+            "response_id": "resp-1",
+        })
+    );
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 3);
+    assert_eq!(
+        connection[1].body_json()["type"].as_str(),
+        Some("response.create")
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_omits_response_processed_without_feature() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-prewarm"),
+            ev_completed("resp-prewarm"),
+        ],
+        vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hi"),
+            ev_completed("resp-1"),
+        ],
+        vec![],
+    ]])
+    .await;
+    let mut builder = test_codex();
+    let test = builder
+        .build_with_websocket_server(&server)
+        .await
+        .expect("build websocket codex");
+
+    test.submit_turn("hello")
+        .await
+        .expect("submission should complete without response.processed");
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
     skip_if_no_network!();
 

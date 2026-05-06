@@ -231,6 +231,8 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
     ResponsesWebsocketsV2,
+    /// Send `response.processed` over Responses API websockets after a turn response is recorded.
+    ResponsesWebsocketResponseProcessed,
     /// Enable remote compaction v2 over the normal Responses API.
     RemoteCompactionV2,
     /// Enable workspace dependency support.
@@ -1137,6 +1139,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ResponsesWebsocketsV2,
         key: "responses_websockets_v2",
         stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResponsesWebsocketResponseProcessed,
+        key: "responses_websocket_response_processed",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

@@ -469,7 +469,7 @@ async fn writer_state_retries_write_error_before_reporting_flush_success() -> st
 }
 
 #[tokio::test]
-async fn metadata_irrelevant_events_touch_state_db_updated_at() -> std::io::Result<()> {
+async fn metadata_irrelevant_events_coalesce_state_db_updated_at() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
 
@@ -519,8 +519,6 @@ async fn metadata_irrelevant_events_touch_state_db_updated_at() -> std::io::Resu
     let initial_title = initial_thread.title.clone();
     let initial_first_user_message = initial_thread.first_user_message.clone();
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
-
     recorder
         .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
             AgentMessageEvent {
@@ -538,14 +536,120 @@ async fn metadata_irrelevant_events_touch_state_db_updated_at() -> std::io::Resu
         .expect("thread should load after agent message")
         .expect("thread should still exist");
 
-    assert!(updated_thread.updated_at > initial_updated_at);
+    assert_eq!(updated_thread.updated_at, initial_updated_at);
     assert_eq!(updated_thread.title, initial_title);
     assert_eq!(
         updated_thread.first_user_message,
         initial_first_user_message
     );
 
+    tokio::time::sleep(THREAD_UPDATED_AT_TOUCH_INTERVAL + Duration::from_millis(10)).await;
+
+    recorder
+        .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
+            AgentMessageEvent {
+                message: "more assistant text".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+        ))])
+        .await?;
+    recorder.flush().await?;
+
+    let refreshed_thread = state_db
+        .get_thread(thread_id)
+        .await
+        .expect("thread should load after refresh")
+        .expect("thread should still exist");
+    assert!(refreshed_thread.updated_at > initial_updated_at);
+    assert_eq!(refreshed_thread.title, initial_title);
+    assert_eq!(
+        refreshed_thread.first_user_message,
+        initial_first_user_message
+    );
+
     recorder.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_flushes_pending_metadata_irrelevant_updated_at() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+
+    let state_db = StateRuntime::init(home.path().to_path_buf(), config.model_provider_id.clone())
+        .await
+        .expect("state db should initialize");
+    state_db
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await
+        .expect("backfill should be complete");
+
+    let thread_id = ThreadId::new();
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            thread_id,
+            /*forked_from_id*/ None,
+            SessionSource::Cli,
+            /*thread_source*/ None,
+            BaseInstructions::default(),
+            Vec::new(),
+            EventPersistenceMode::Limited,
+        ),
+        Some(state_db.clone()),
+        /*state_builder*/ None,
+    )
+    .await?;
+
+    recorder
+        .record_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
+            UserMessageEvent {
+                message: "first-user-message".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        ))])
+        .await?;
+    recorder.persist().await?;
+    recorder.flush().await?;
+    let initial_updated_at = state_db
+        .get_thread(thread_id)
+        .await
+        .expect("thread should load")
+        .expect("thread should exist")
+        .updated_at;
+
+    recorder
+        .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
+            AgentMessageEvent {
+                message: "assistant text".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+        ))])
+        .await?;
+    recorder.flush().await?;
+    assert_eq!(
+        state_db
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load before shutdown")
+            .expect("thread should still exist")
+            .updated_at,
+        initial_updated_at
+    );
+
+    recorder.shutdown().await?;
+
+    let shutdown_updated_at = state_db
+        .get_thread(thread_id)
+        .await
+        .expect("thread should load after shutdown")
+        .expect("thread should still exist")
+        .updated_at;
+    assert!(shutdown_updated_at > initial_updated_at);
     Ok(())
 }
 
@@ -574,6 +678,7 @@ async fn metadata_irrelevant_events_fall_back_to_upsert_when_thread_missing() ->
         },
     ))];
 
+    let mut thread_updated_at_touch = ThreadUpdatedAtTouch::default();
     sync_thread_state_after_write(
         Some(state_db.as_ref()),
         rollout_path.as_path(),
@@ -581,6 +686,7 @@ async fn metadata_irrelevant_events_fall_back_to_upsert_when_thread_missing() ->
         items.as_slice(),
         config.model_provider_id.as_str(),
         /*new_thread_memory_mode*/ None,
+        &mut thread_updated_at_touch,
     )
     .await;
 

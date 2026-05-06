@@ -523,6 +523,9 @@
             "request_rule": {
               "type": "boolean"
             },
+            "responses_websocket_response_processed": {
+              "type": "boolean"
+            },
             "responses_websockets": {
               "type": "boolean"
             },
@@ -4076,6 +4079,9 @@
           "type": "boolean"
         },
         "request_rule": {
+          "type": "boolean"
+        },
+        "responses_websocket_response_processed": {
           "type": "boolean"
         },
         "responses_websockets": {

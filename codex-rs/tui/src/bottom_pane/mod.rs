@@ -17,6 +17,8 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use crate::app::app_server_requests::ResolvedAppServerRequest;
+use crate::app_command::AppCommand;
+use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::pending_input_preview::PendingInputPreview;
@@ -777,7 +779,10 @@ impl BottomPane {
     }
 
     pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
-        self.composer.clear_for_ctrl_c();
+        if let Some(text) = self.composer.clear_for_ctrl_c() {
+            self.app_event_tx
+                .send(AppEvent::CodexOp(AppCommand::add_to_history(text)));
+        }
         self.request_redraw();
     }
 

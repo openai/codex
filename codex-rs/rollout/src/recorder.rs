@@ -8,7 +8,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
+use std::time::Instant;
 
+use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_protocol::ThreadId;
@@ -1430,7 +1433,26 @@ struct RolloutWriterState {
     state_builder: Option<ThreadMetadataBuilder>,
     default_provider: String,
     generate_memories: bool,
+    thread_updated_at_touch: ThreadUpdatedAtTouch,
     last_logged_error: Option<String>,
+}
+
+#[cfg(not(test))]
+const THREAD_UPDATED_AT_TOUCH_INTERVAL: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const THREAD_UPDATED_AT_TOUCH_INTERVAL: Duration = Duration::from_millis(50);
+
+#[derive(Default)]
+struct ThreadUpdatedAtTouch {
+    last_persisted_at: Option<Instant>,
+    pending_touch: Option<(ThreadId, DateTime<Utc>)>,
+}
+
+impl ThreadUpdatedAtTouch {
+    fn mark_persisted(&mut self, now: Instant) {
+        self.last_persisted_at = Some(now);
+        self.pending_touch = None;
+    }
 }
 
 impl RolloutWriterState {
@@ -1460,6 +1482,7 @@ impl RolloutWriterState {
             state_builder,
             default_provider,
             generate_memories,
+            thread_updated_at_touch: ThreadUpdatedAtTouch::default(),
             last_logged_error: None,
         }
     }
@@ -1492,7 +1515,19 @@ impl RolloutWriterState {
         if self.is_deferred() && self.pending_items.is_empty() {
             return Ok(());
         }
-        self.write_pending_with_recovery("shutdown").await
+        self.write_pending_with_recovery("shutdown").await?;
+        if let Some((thread_id, updated_at)) = self.thread_updated_at_touch.pending_touch.take()
+            && state_db::touch_thread_updated_at(
+                self.state_db_ctx.as_deref(),
+                Some(thread_id),
+                updated_at,
+                "rollout_writer_shutdown",
+            )
+            .await
+        {
+            self.thread_updated_at_touch.mark_persisted(Instant::now());
+        }
+        Ok(())
     }
 
     async fn write_pending_with_recovery(&mut self, operation: &str) -> std::io::Result<()> {
@@ -1569,6 +1604,7 @@ impl RolloutWriterState {
             &mut self.state_builder,
             self.default_provider.as_str(),
             self.generate_memories,
+            &mut self.thread_updated_at_touch,
         )
         .await?;
         self.meta = None;
@@ -1612,6 +1648,7 @@ impl RolloutWriterState {
                 written_items.as_slice(),
                 self.default_provider.as_str(),
                 /*new_thread_memory_mode*/ None,
+                &mut self.thread_updated_at_touch,
             )
             .await;
         }
@@ -1683,6 +1720,7 @@ async fn write_session_meta(
     state_builder: &mut Option<ThreadMetadataBuilder>,
     default_provider: &str,
     generate_memories: bool,
+    thread_updated_at_touch: &mut ThreadUpdatedAtTouch,
 ) -> std::io::Result<()> {
     let git_info = collect_git_info(cwd).await.map(|info| ProtocolGitInfo {
         commit_hash: info.commit_hash,
@@ -1708,6 +1746,7 @@ async fn write_session_meta(
         std::slice::from_ref(&rollout_item),
         default_provider,
         (!generate_memories).then_some("disabled"),
+        thread_updated_at_touch,
     )
     .await;
     Ok(())
@@ -1720,8 +1759,10 @@ async fn sync_thread_state_after_write(
     items: &[RolloutItem],
     default_provider: &str,
     new_thread_memory_mode: Option<&str>,
+    thread_updated_at_touch: &mut ThreadUpdatedAtTouch,
 ) {
     let updated_at = Utc::now();
+    let now = Instant::now();
     if new_thread_memory_mode.is_some()
         || items
             .iter()
@@ -1738,15 +1779,27 @@ async fn sync_thread_state_after_write(
             Some(updated_at),
         )
         .await;
+        thread_updated_at_touch.mark_persisted(now);
         return;
     }
 
     let thread_id = state_builder
         .map(|builder| builder.id)
         .or_else(|| metadata::builder_from_items(items, rollout_path).map(|builder| builder.id));
+    if thread_updated_at_touch
+        .last_persisted_at
+        .is_some_and(|last_persisted_at| {
+            now.duration_since(last_persisted_at) < THREAD_UPDATED_AT_TOUCH_INTERVAL
+        })
+    {
+        thread_updated_at_touch.pending_touch = thread_id.map(|thread_id| (thread_id, updated_at));
+        return;
+    }
+
     if state_db::touch_thread_updated_at(state_db_ctx, thread_id, updated_at, "rollout_writer")
         .await
     {
+        thread_updated_at_touch.mark_persisted(now);
         return;
     }
     state_db::apply_rollout_items(
@@ -1760,6 +1813,7 @@ async fn sync_thread_state_after_write(
         Some(updated_at),
     )
     .await;
+    thread_updated_at_touch.mark_persisted(now);
 }
 
 /// Append one already-filtered rollout item to an existing rollout JSONL file.

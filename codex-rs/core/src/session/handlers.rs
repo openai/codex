@@ -24,8 +24,6 @@ use crate::tasks::CompactTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
-use codex_mcp::collect_mcp_snapshot_from_manager;
-use codex_mcp::compute_auth_statuses;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -472,35 +470,6 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
     sess.reload_user_config_layer().await;
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "MCP tool listing reads through the session-owned manager guard"
-)]
-pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
-    let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
-    let auth = sess.services.auth_manager.auth().await;
-    let mcp_servers = sess
-        .services
-        .mcp_manager
-        .effective_servers(config, auth.as_ref())
-        .await;
-    let snapshot = collect_mcp_snapshot_from_manager(
-        &mcp_connection_manager,
-        compute_auth_statuses(
-            mcp_servers.iter(),
-            config.mcp_oauth_credentials_store_mode,
-            auth.as_ref(),
-        )
-        .await,
-    )
-    .await;
-    let event = Event {
-        id: sub_id,
-        msg: EventMsg::McpListToolsResponse(snapshot),
-    };
-    sess.send_event_raw(event).await;
-}
-
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
@@ -865,10 +834,6 @@ pub(super) async fn submission_loop(
                 }
                 Op::DynamicToolResponse { id, response } => {
                     dynamic_tool_response(&sess, id, response).await;
-                    false
-                }
-                Op::ListMcpTools => {
-                    list_mcp_tools(&sess, &config, sub.id.clone()).await;
                     false
                 }
                 Op::RefreshMcpServers { config } => {

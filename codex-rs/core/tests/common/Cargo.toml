@@ -33,6 +33,7 @@ opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 regex-lite = { workspace = true }
 serde_json = { workspace = true }
+similar = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["net", "time"] }
 tokio-tungstenite = { workspace = true }
