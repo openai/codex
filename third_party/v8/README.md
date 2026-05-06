@@ -66,6 +66,10 @@ release artifacts as the statically linked form:
 
 The same run also builds the matching sandbox pair targets:
 
+- `//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_apple_darwin`
+- `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_apple_darwin`
+- `//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_unknown_linux_gnu`
+- `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_unknown_linux_gnu`
 - `//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_unknown_linux_musl`
 - `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_unknown_linux_musl`
 - `//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_pc_windows_msvc`

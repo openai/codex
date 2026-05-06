@@ -329,6 +329,18 @@ filegroup(
 )
 
 cc_static_library(
+    name = "v8_147_4_0_aarch64_apple_darwin_bazel",
+    deps = [":v8_147_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
+    name = "v8_147_4_0_aarch64_unknown_linux_gnu_bazel",
+    deps = [":v8_147_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
     name = "v8_147_4_0_aarch64_unknown_linux_musl_release_base",
     deps = [":v8_147_4_0_binding"],
     features = V8_STATIC_LIBRARY_FEATURES,
@@ -359,6 +371,18 @@ EOF
 )
 
 cc_static_library(
+    name = "v8_147_4_0_x86_64_apple_darwin_bazel",
+    deps = [":v8_147_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
+    name = "v8_147_4_0_x86_64_unknown_linux_gnu_bazel",
+    deps = [":v8_147_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
     name = "v8_147_4_0_x86_64_unknown_linux_musl_release",
     deps = [":v8_147_4_0_binding"],
     features = V8_STATIC_LIBRARY_FEATURES,
@@ -374,6 +398,26 @@ cc_static_library(
     name = "v8_147_4_0_x86_64_pc_windows_msvc_bazel",
     deps = [":v8_147_4_0_binding"],
     features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+filegroup(
+    name = "src_binding_release_aarch64_apple_darwin_147_4_0_release",
+    srcs = ["@v8_crate_147_4_0//:src_binding_release_aarch64_apple_darwin"],
+)
+
+filegroup(
+    name = "src_binding_release_x86_64_apple_darwin_147_4_0_release",
+    srcs = ["@v8_crate_147_4_0//:src_binding_release_x86_64_apple_darwin"],
+)
+
+filegroup(
+    name = "src_binding_release_aarch64_unknown_linux_gnu_147_4_0_release",
+    srcs = ["@v8_crate_147_4_0//:src_binding_release_aarch64_unknown_linux_gnu"],
+)
+
+filegroup(
+    name = "src_binding_release_x86_64_unknown_linux_gnu_147_4_0_release",
+    srcs = ["@v8_crate_147_4_0//:src_binding_release_x86_64_unknown_linux_gnu"],
 )
 
 filegroup(
@@ -457,6 +501,38 @@ filegroup(
     srcs = [
         ":v8_146_4_0_aarch64_pc_windows_msvc",
         ":src_binding_release_aarch64_pc_windows_msvc",
+    ],
+)
+
+filegroup(
+    name = "rusty_v8_sandbox_release_pair_x86_64_apple_darwin",
+    srcs = [
+        ":v8_147_4_0_x86_64_apple_darwin_bazel",
+        ":src_binding_release_x86_64_apple_darwin_147_4_0_release",
+    ],
+)
+
+filegroup(
+    name = "rusty_v8_sandbox_release_pair_aarch64_apple_darwin",
+    srcs = [
+        ":v8_147_4_0_aarch64_apple_darwin_bazel",
+        ":src_binding_release_aarch64_apple_darwin_147_4_0_release",
+    ],
+)
+
+filegroup(
+    name = "rusty_v8_sandbox_release_pair_x86_64_unknown_linux_gnu",
+    srcs = [
+        ":v8_147_4_0_x86_64_unknown_linux_gnu_bazel",
+        ":src_binding_release_x86_64_unknown_linux_gnu_147_4_0_release",
+    ],
+)
+
+filegroup(
+    name = "rusty_v8_sandbox_release_pair_aarch64_unknown_linux_gnu",
+    srcs = [
+        ":v8_147_4_0_aarch64_unknown_linux_gnu_bazel",
+        ":src_binding_release_aarch64_unknown_linux_gnu_147_4_0_release",
     ],
 )
 
