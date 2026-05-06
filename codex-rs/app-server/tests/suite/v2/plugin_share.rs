@@ -12,6 +12,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInterface;
+use codex_app_server_protocol::PluginShareContext;
 use codex_app_server_protocol::PluginShareDeleteResponse;
 use codex_app_server_protocol::PluginShareListItem;
 use codex_app_server_protocol::PluginShareListResponse;
@@ -161,6 +162,7 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
                 plugin: PluginSummary {
                     id: "plugins_123".to_string(),
                     name: "demo-plugin".to_string(),
+                    share_context: Some(expected_share_context("plugins_123")),
                     source: PluginSource::Remote,
                     installed: true,
                     enabled: true,
@@ -385,6 +387,7 @@ async fn plugin_share_list_returns_created_workspace_plugins() -> Result<()> {
                 plugin: PluginSummary {
                     id: "plugins_123".to_string(),
                     name: "demo-plugin".to_string(),
+                    share_context: Some(expected_share_context("plugins_123")),
                     source: PluginSource::Remote,
                     installed: true,
                     enabled: true,
@@ -565,6 +568,7 @@ async fn plugin_share_delete_removes_created_workspace_plugin() -> Result<()> {
                 plugin: PluginSummary {
                     id: "plugins_123".to_string(),
                     name: "demo-plugin".to_string(),
+                    share_context: Some(expected_share_context("plugins_123")),
                     source: PluginSource::Remote,
                     installed: true,
                     enabled: true,
@@ -652,6 +656,14 @@ fn expected_plugin_interface() -> PluginInterface {
         logo_url: None,
         screenshots: Vec::new(),
         screenshot_urls: Vec::new(),
+    }
+}
+
+fn expected_share_context(plugin_id: &str) -> PluginShareContext {
+    PluginShareContext {
+        remote_plugin_id: plugin_id.to_string(),
+        creator_account_user_id: None,
+        creator_name: None,
     }
 }
 

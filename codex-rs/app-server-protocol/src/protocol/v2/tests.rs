@@ -2843,7 +2843,33 @@ fn plugin_list_params_ignore_removed_force_remote_sync_field() {
             "forceRemoteSync": true,
         }))
         .unwrap(),
-        PluginListParams { cwds: None },
+        PluginListParams {
+            cwds: None,
+            marketplace_kinds: None,
+        },
+    );
+}
+
+#[test]
+fn plugin_list_params_serializes_marketplace_kind_filter() {
+    assert_eq!(
+        serde_json::to_value(PluginListParams {
+            cwds: None,
+            marketplace_kinds: Some(vec![
+                PluginListMarketplaceKind::Local,
+                PluginListMarketplaceKind::WorkspaceDirectory,
+                PluginListMarketplaceKind::SharedWithMe,
+            ]),
+        })
+        .unwrap(),
+        json!({
+            "cwds": null,
+            "marketplaceKinds": [
+                "local",
+                "workspace-directory",
+                "shared-with-me",
+            ],
+        }),
     );
 }
 
@@ -3099,6 +3125,7 @@ fn plugin_share_list_response_serializes_share_items() {
                 plugin: PluginSummary {
                     id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
                     name: "gmail".to_string(),
+                    share_context: None,
                     source: PluginSource::Remote,
                     installed: false,
                     enabled: false,
@@ -3118,6 +3145,7 @@ fn plugin_share_list_response_serializes_share_items() {
                 "plugin": {
                     "id": "plugins~Plugin_00000000000000000000000000000000",
                     "name": "gmail",
+                    "shareContext": null,
                     "source": { "type": "remote" },
                     "installed": false,
                     "enabled": false,
@@ -3149,6 +3177,7 @@ fn plugin_summary_defaults_missing_availability_to_available() {
     .unwrap();
 
     assert_eq!(summary.availability, PluginAvailability::Available);
+    assert_eq!(summary.share_context, None);
 }
 
 #[test]

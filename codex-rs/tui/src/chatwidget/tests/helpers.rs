@@ -1435,6 +1435,7 @@ pub(super) fn plugins_test_summary(
     PluginSummary {
         id: id.to_string(),
         name: name.to_string(),
+        share_context: None,
         source: PluginSource::Local {
             path: plugins_test_absolute_path(&format!("plugins/{name}")),
         },

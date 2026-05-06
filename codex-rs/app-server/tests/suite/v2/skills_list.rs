@@ -299,7 +299,10 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
     }
 
     let plugin_list_request_id = mcp
-        .send_plugin_list_request(PluginListParams { cwds: None })
+        .send_plugin_list_request(PluginListParams {
+            cwds: None,
+            marketplace_kinds: None,
+        })
         .await?;
     let plugin_list_response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
