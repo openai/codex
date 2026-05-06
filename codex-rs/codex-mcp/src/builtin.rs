@@ -2,7 +2,6 @@ use std::io;
 use std::path::PathBuf;
 
 use codex_builtin_mcps::BuiltinMcpServer;
-use codex_builtin_mcps::serve_builtin_mcp_server;
 use codex_rmcp_client::InProcessTransportFactory;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -26,9 +25,7 @@ impl InProcessTransportFactory for BuiltinMcpServerFactory {
         async move {
             let (client_transport, server_transport) = tokio::io::duplex(64 * 1024);
             tokio::spawn(async move {
-                if let Err(err) =
-                    serve_builtin_mcp_server(server, &codex_home, server_transport).await
-                {
+                if let Err(err) = server.serve(&codex_home, server_transport).await {
                     tracing::warn!(
                         server = server.name(),
                         "built-in MCP server exited: {err:#}"

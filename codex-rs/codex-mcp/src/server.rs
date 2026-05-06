@@ -2,13 +2,6 @@ use codex_builtin_mcps::BuiltinMcpServer;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 
-/// How MCP output should be classified for memory-mode policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum McpContextClass {
-    External,
-    LocalCodexState,
-}
-
 /// The runtime launch strategy for an effective MCP server.
 #[derive(Debug, Clone)]
 pub(crate) enum McpServerLaunch {
@@ -92,7 +85,7 @@ impl McpServerOrigin {
 /// Semantic metadata that must survive after the server is launched.
 #[derive(Debug, Clone)]
 pub(crate) struct McpServerMetadata {
-    pub context_class: McpContextClass,
+    pub pollutes_memory: bool,
     pub origin: Option<McpServerOrigin>,
     pub supports_parallel_tool_calls: bool,
 }
@@ -101,14 +94,12 @@ impl From<&EffectiveMcpServer> for McpServerMetadata {
     fn from(server: &EffectiveMcpServer) -> Self {
         match server.launch() {
             McpServerLaunch::Configured(config) => Self {
-                context_class: McpContextClass::External,
+                pollutes_memory: true,
                 origin: McpServerOrigin::from_transport(&config.transport),
                 supports_parallel_tool_calls: config.supports_parallel_tool_calls,
             },
             McpServerLaunch::Builtin(server) => Self {
-                context_class: match server {
-                    BuiltinMcpServer::Memories => McpContextClass::LocalCodexState,
-                },
+                pollutes_memory: server.pollutes_memory(),
                 origin: Some(McpServerOrigin::InProcess),
                 supports_parallel_tool_calls: server.supports_parallel_tool_calls(),
             },

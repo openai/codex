@@ -18,16 +18,45 @@ pub enum BuiltinMcpServer {
     Memories,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct BuiltinMcpServerMetadata {
+    name: &'static str,
+    supports_parallel_tool_calls: bool,
+    pollutes_memory: bool,
+}
+
 impl BuiltinMcpServer {
-    pub const fn name(self) -> &'static str {
+    const fn metadata(self) -> BuiltinMcpServerMetadata {
         match self {
-            Self::Memories => MEMORIES_MCP_SERVER_NAME,
+            Self::Memories => BuiltinMcpServerMetadata {
+                name: MEMORIES_MCP_SERVER_NAME,
+                supports_parallel_tool_calls: true,
+                pollutes_memory: false,
+            },
         }
     }
 
+    pub const fn name(self) -> &'static str {
+        self.metadata().name
+    }
+
     pub const fn supports_parallel_tool_calls(self) -> bool {
+        self.metadata().supports_parallel_tool_calls
+    }
+
+    pub const fn pollutes_memory(self) -> bool {
+        self.metadata().pollutes_memory
+    }
+
+    pub async fn serve<T>(self, codex_home: &Path, transport: T) -> anyhow::Result<()>
+    where
+        T: AsyncRead + AsyncWrite + Send + 'static,
+    {
         match self {
-            Self::Memories => true,
+            Self::Memories => {
+                let codex_home = codex_utils_absolute_path::AbsolutePathBuf::try_from(codex_home)?;
+                codex_memories_mcp::run_server(&codex_home, transport).await
+            }
         }
     }
 }
@@ -43,22 +72,6 @@ pub fn enabled_builtin_mcp_servers(options: BuiltinMcpServerOptions) -> Vec<Buil
         servers.push(BuiltinMcpServer::Memories);
     }
     servers
-}
-
-pub async fn serve_builtin_mcp_server<T>(
-    server: BuiltinMcpServer,
-    codex_home: &Path,
-    transport: T,
-) -> anyhow::Result<()>
-where
-    T: AsyncRead + AsyncWrite + Send + 'static,
-{
-    match server {
-        BuiltinMcpServer::Memories => {
-            let codex_home = codex_utils_absolute_path::AbsolutePathBuf::try_from(codex_home)?;
-            codex_memories_mcp::run_server(&codex_home, transport).await
-        }
-    }
 }
 
 #[cfg(test)]

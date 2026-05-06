@@ -30,7 +30,6 @@ use crate::rmcp_client::list_tools_for_client_uncached;
 use crate::runtime::McpRuntimeEnvironment;
 use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
-use crate::server::McpContextClass;
 use crate::server::McpServerMetadata;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
@@ -123,10 +122,10 @@ impl McpConnectionManager {
             .map(super::server::McpServerOrigin::as_str)
     }
 
-    pub fn server_context_class(&self, server_name: &str) -> Option<McpContextClass> {
+    pub fn server_pollutes_memory(&self, server_name: &str) -> bool {
         self.server_metadata
             .get(server_name)
-            .map(|metadata| metadata.context_class)
+            .is_none_or(|metadata| metadata.pollutes_memory)
     }
 
     pub fn parallel_tool_call_server_names(&self) -> HashSet<String> {

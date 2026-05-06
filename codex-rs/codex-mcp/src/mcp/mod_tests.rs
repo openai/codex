@@ -358,10 +358,7 @@ fn effective_mcp_servers_preserve_builtin_runtime_shape() {
         .get(codex_builtin_mcps::MEMORIES_MCP_SERVER_NAME)
         .expect("memories server should exist");
 
-    assert_eq!(
-        crate::server::McpServerMetadata::from(memories).context_class,
-        crate::server::McpContextClass::LocalCodexState
-    );
+    assert!(!crate::server::McpServerMetadata::from(memories).pollutes_memory);
     assert!(matches!(
         memories.launch(),
         crate::server::McpServerLaunch::Builtin(codex_builtin_mcps::BuiltinMcpServer::Memories)

@@ -42,7 +42,6 @@ use codex_features::Feature;
 use codex_hooks::PermissionRequestDecision;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
-use codex_mcp::McpContextClass;
 use codex_mcp::McpPermissionPromptAutoApproveContext;
 use codex_mcp::SandboxState;
 use codex_mcp::auth_elicitation_completed_result;
@@ -451,6 +450,7 @@ fn mcp_tool_call_span(
 ) -> Span {
     let transport = match fields.server_origin {
         Some("stdio") => "stdio",
+        Some("in_process") => "in_process",
         Some(_) => "streamable_http",
         None => "",
     };
@@ -746,14 +746,13 @@ async fn maybe_mark_thread_memory_mode_polluted(
     if !turn_context.config.memories.disable_on_external_context {
         return;
     }
-    let context_class = sess
+    let pollutes_memory = sess
         .services
         .mcp_connection_manager
         .read()
         .await
-        .server_context_class(server)
-        .unwrap_or(McpContextClass::External);
-    if context_class != McpContextClass::External {
+        .server_pollutes_memory(server);
+    if !pollutes_memory {
         return;
     }
     state_db::mark_thread_memory_mode_polluted(
