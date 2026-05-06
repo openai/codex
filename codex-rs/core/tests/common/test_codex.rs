@@ -18,6 +18,7 @@ use codex_core::ThreadManager;
 use codex_core::agent_graph_store_from_state_db;
 use codex_core::config::Config;
 use codex_core::init_state_db_from_config;
+use codex_core::resolve_installation_id;
 use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
 use codex_core::thread_store_from_config;
@@ -431,6 +432,7 @@ impl TestCodexBuilder {
                 .expect("test codex requires state db");
             let thread_store = thread_store_from_config(&config, state_db.clone());
             let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
+            let installation_id = resolve_installation_id(&config.codex_home).await?;
             ThreadManager::new(
                 &config,
                 codex_core::test_support::auth_manager_from_auth(auth.clone()),
@@ -440,6 +442,7 @@ impl TestCodexBuilder {
                 state_db,
                 thread_store,
                 agent_graph_store,
+                installation_id,
             )
         } else {
             codex_core::test_support::thread_manager_with_models_provider_and_home(
@@ -651,7 +654,7 @@ impl TestCodex {
             prompt,
             AskForApproval::Never,
             PermissionProfile::Disabled,
-            Some(service_tier),
+            Some(service_tier.map(|service_tier| service_tier.request_value().to_string())),
             /*environments*/ None,
         )
         .await
@@ -713,7 +716,7 @@ impl TestCodex {
         prompt: &str,
         approval_policy: AskForApproval,
         permission_profile: PermissionProfile,
-        service_tier: Option<Option<ServiceTier>>,
+        service_tier: Option<Option<String>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> Result<()> {
         self.submit_turn_with_context(
@@ -731,7 +734,7 @@ impl TestCodex {
         prompt: &str,
         approval_policy: AskForApproval,
         permission_profile: PermissionProfile,
-        service_tier: Option<Option<ServiceTier>>,
+        service_tier: Option<Option<String>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> Result<()> {
         let (sandbox_policy, permission_profile) =

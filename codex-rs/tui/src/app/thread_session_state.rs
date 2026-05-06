@@ -63,7 +63,10 @@ impl App {
                 thread_name: None,
                 model: self.chat_widget.current_model().to_string(),
                 model_provider_id: self.config.model_provider_id.clone(),
-                service_tier: self.chat_widget.current_service_tier(),
+                service_tier: self
+                    .chat_widget
+                    .current_service_tier()
+                    .map(|service_tier| service_tier.request_value().to_string()),
                 approval_policy: AskForApproval::from(
                     self.config.permissions.approval_policy.value(),
                 ),
@@ -73,8 +76,7 @@ impl App {
                 cwd: thread.cwd.clone(),
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: self.chat_widget.current_reasoning_effort(),
-                history_log_id: 0,
-                history_entry_count: 0,
+                message_history: None,
                 network_proxy: None,
                 rollout_path: thread.path.clone(),
             });
@@ -93,8 +95,7 @@ impl App {
         } else if thread.path.is_some() {
             session.model.clear();
         }
-        session.history_log_id = 0;
-        session.history_entry_count = 0;
+        session.message_history = None;
         session
     }
 
@@ -150,8 +151,7 @@ mod tests {
             cwd: cwd.abs(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
-            history_log_id: 0,
-            history_entry_count: 0,
+            message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
         }
@@ -322,6 +322,7 @@ mod tests {
         };
         let read_thread = Thread {
             id: read_thread_id.to_string(),
+            session_id: read_thread_id.to_string(),
             forked_from_id: None,
             preview: "read thread".to_string(),
             ephemeral: false,
@@ -333,6 +334,7 @@ mod tests {
             cwd: test_path_buf("/tmp/read").abs(),
             cli_version: "0.0.0".to_string(),
             source: codex_app_server_protocol::SessionSource::Unknown,
+            thread_source: None,
             agent_nickname: None,
             agent_role: None,
             git_info: None,

@@ -4,7 +4,6 @@ use crate::command_safety::is_dangerous_command::executable_name_lookup_key;
 // may appear before it (e.g., `-C`, `-c`, `--git-dir`).
 // Implemented in `is_dangerous_command` and shared here.
 use crate::command_safety::is_dangerous_command::find_git_subcommand;
-use crate::command_safety::is_dangerous_command::git_global_option_requires_prompt;
 use crate::command_safety::windows_safe_commands::is_safe_command_windows;
 #[cfg(windows)]
 use crate::command_safety::windows_safe_commands::is_safe_powershell_words as is_safe_powershell_words_windows;
@@ -151,36 +150,7 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         }
 
         // Git
-        Some("git") => {
-            // Global options that redirect config, repository, or helper
-            // lookup can make otherwise read-only git commands execute
-            // attacker-controlled code, so they must never be auto-approved.
-            if git_has_unsafe_global_option(command) {
-                return false;
-            }
-
-            let Some((subcommand_idx, subcommand)) =
-                find_git_subcommand(command, &["status", "log", "diff", "show", "branch"])
-            else {
-                return false;
-            };
-
-            let subcommand_args = &command[subcommand_idx + 1..];
-
-            match subcommand {
-                "status" | "log" | "diff" | "show" => {
-                    git_subcommand_args_are_read_only(subcommand_args)
-                }
-                "branch" => {
-                    git_subcommand_args_are_read_only(subcommand_args)
-                        && git_branch_is_read_only(subcommand_args)
-                }
-                other => {
-                    debug_assert!(false, "unexpected git subcommand from matcher: {other}");
-                    false
-                }
-            }
-        }
+        Some("git") => is_safe_git_command(command),
 
         // Special-case `sed -n {N|M,N}p`
         Some("sed")
@@ -195,6 +165,33 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
 
         // ── anything else ─────────────────────────────────────────────────
         _ => false,
+    }
+}
+
+pub(crate) fn is_safe_git_command(command: &[String]) -> bool {
+    let Some((subcommand_idx, subcommand)) =
+        find_git_subcommand(command, &["status", "log", "diff", "show", "branch"])
+    else {
+        return false;
+    };
+
+    let global_args = &command[1..subcommand_idx];
+    if git_has_unsafe_global_option(global_args) {
+        return false;
+    }
+
+    let subcommand_args = &command[subcommand_idx + 1..];
+
+    match subcommand {
+        "status" | "log" | "diff" | "show" => git_subcommand_args_are_read_only(subcommand_args),
+        "branch" => {
+            git_subcommand_args_are_read_only(subcommand_args)
+                && git_branch_is_read_only(subcommand_args)
+        }
+        other => {
+            debug_assert!(false, "unexpected git subcommand from matcher: {other}");
+            false
+        }
     }
 }
 
@@ -226,30 +223,71 @@ fn git_branch_is_read_only(branch_args: &[String]) -> bool {
     saw_read_only_flag
 }
 
-fn git_has_unsafe_global_option(command: &[String]) -> bool {
-    command
+#[derive(Clone, Copy)]
+enum GitOptionPattern {
+    Exact(&'static str),
+    ShortWithInlineValue(&'static str),
+    Prefix(&'static str),
+}
+
+const UNSAFE_GIT_GLOBAL_OPTIONS: &[GitOptionPattern] = &[
+    GitOptionPattern::Exact("-C"),
+    GitOptionPattern::ShortWithInlineValue("-C"),
+    GitOptionPattern::Exact("-c"),
+    GitOptionPattern::ShortWithInlineValue("-c"),
+    GitOptionPattern::Exact("-p"),
+    GitOptionPattern::Exact("--config-env"),
+    GitOptionPattern::Prefix("--config-env="),
+    GitOptionPattern::Exact("--exec-path"),
+    GitOptionPattern::Prefix("--exec-path="),
+    GitOptionPattern::Exact("--git-dir"),
+    GitOptionPattern::Prefix("--git-dir="),
+    GitOptionPattern::Exact("--namespace"),
+    GitOptionPattern::Prefix("--namespace="),
+    GitOptionPattern::Exact("--paginate"),
+    GitOptionPattern::Exact("--super-prefix"),
+    GitOptionPattern::Prefix("--super-prefix="),
+    GitOptionPattern::Exact("--work-tree"),
+    GitOptionPattern::Prefix("--work-tree="),
+];
+
+const UNSAFE_GIT_SUBCOMMAND_OPTIONS: &[GitOptionPattern] = &[
+    GitOptionPattern::Exact("--output"),
+    GitOptionPattern::Prefix("--output="),
+    GitOptionPattern::Exact("--ext-diff"),
+    GitOptionPattern::Exact("--textconv"),
+    GitOptionPattern::Exact("--exec"),
+    GitOptionPattern::Prefix("--exec="),
+];
+
+impl GitOptionPattern {
+    fn matches(self, arg: &str) -> bool {
+        match self {
+            GitOptionPattern::Exact(option) => arg == option,
+            GitOptionPattern::ShortWithInlineValue(option) => {
+                arg.starts_with(option) && arg.len() > option.len()
+            }
+            GitOptionPattern::Prefix(prefix) => arg.starts_with(prefix),
+        }
+    }
+}
+
+fn git_matches_option_pattern(arg: &str, patterns: &[GitOptionPattern]) -> bool {
+    patterns.iter().any(|pattern| pattern.matches(arg))
+}
+
+fn git_has_unsafe_global_option(global_args: &[String]) -> bool {
+    global_args
         .iter()
-        .skip(1)
         .map(String::as_str)
-        .any(git_global_option_requires_prompt)
+        .any(|arg| git_matches_option_pattern(arg, UNSAFE_GIT_GLOBAL_OPTIONS))
 }
 
 fn git_subcommand_args_are_read_only(args: &[String]) -> bool {
-    // Flags that can write to disk or execute external tools should never be
-    // auto-approved on an unsandboxed machine.
-    const UNSAFE_GIT_FLAGS: &[&str] = &[
-        "--output",
-        "--ext-diff",
-        "--textconv",
-        "--exec",
-        "--paginate",
-    ];
-
-    !args.iter().map(String::as_str).any(|arg| {
-        UNSAFE_GIT_FLAGS.contains(&arg)
-            || arg.starts_with("--output=")
-            || arg.starts_with("--exec=")
-    })
+    !args
+        .iter()
+        .map(String::as_str)
+        .any(|arg| git_matches_option_pattern(arg, UNSAFE_GIT_SUBCOMMAND_OPTIONS))
 }
 
 // (bash parsing helpers implemented in crate::bash)
@@ -392,6 +430,43 @@ mod tests {
             "show",
             "--output=/tmp/git-show-out-test",
             "HEAD",
+        ])));
+    }
+
+    #[test]
+    fn git_global_pagination_flags_are_not_safe() {
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git",
+            "--paginate",
+            "log",
+            "-1",
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git", "-p", "log", "-1",
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "git --paginate log -1",
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "git -p log -1",
+        ])));
+    }
+
+    #[test]
+    fn git_subcommand_patch_flags_remain_safe() {
+        assert!(is_known_safe_command(&vec_str(&["git", "log", "-p", "-1"])));
+        assert!(is_known_safe_command(&vec_str(&["git", "diff", "-p"])));
+        assert!(is_known_safe_command(&vec_str(&[
+            "git", "show", "-p", "HEAD",
+        ])));
+        assert!(is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "git log -p -1",
         ])));
     }
 
@@ -542,8 +617,15 @@ mod tests {
             return;
         }
 
+        let Some(powershell) = crate::powershell::try_find_pwsh_executable_blocking()
+            .or_else(crate::powershell::try_find_powershell_executable_blocking)
+        else {
+            return;
+        };
+        let powershell = powershell.as_path().to_str().unwrap();
+
         assert!(is_known_safe_command(&vec_str(&[
-            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            powershell,
             "-Command",
             "Get-Location",
         ])));

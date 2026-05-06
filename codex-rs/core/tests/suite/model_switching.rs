@@ -487,7 +487,7 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
     let test = builder.build(&server).await?;
     let saved_path = image_generation_artifact_path(
         test.codex_home_path(),
-        &test.session_configured.session_id.to_string(),
+        &test.session_configured.thread_id.to_string(),
         "ig_123",
     );
     let _ = std::fs::remove_file(&saved_path);
@@ -601,7 +601,7 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
     let test = builder.build(&server).await?;
     let saved_path = image_generation_artifact_path(
         test.codex_home_path(),
-        &test.session_configured.session_id.to_string(),
+        &test.session_configured.thread_id.to_string(),
         "ig_123",
     );
     let _ = std::fs::remove_file(&saved_path);
@@ -717,7 +717,7 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
     let test = builder.build(&server).await?;
     let saved_path = image_generation_artifact_path(
         test.codex_home_path(),
-        &test.session_configured.session_id.to_string(),
+        &test.session_configured.thread_id.to_string(),
         "ig_rollback",
     );
     let _ = std::fs::remove_file(&saved_path);

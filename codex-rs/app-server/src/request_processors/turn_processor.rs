@@ -438,7 +438,7 @@ impl TurnRequestProcessor {
                     model: model.clone(),
                     effort,
                     summary,
-                    service_tier,
+                    service_tier: service_tier.clone(),
                     collaboration_mode: collaboration_mode.clone(),
                     personality,
                 })
@@ -904,6 +904,7 @@ impl TurnRequestProcessor {
                     history: parent_history.items,
                     rollout_path: parent_thread.rollout_path(),
                 }),
+                /*thread_source*/ None,
                 /*persist_extended_history*/ false,
                 self.request_trace_context(request_id).await,
             )
@@ -934,6 +935,7 @@ impl TurnRequestProcessor {
             Ok(stored_thread) => {
                 let (mut thread, _) =
                     thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
+                thread.session_id = review_thread.session_configured().session_id.to_string();
                 self.thread_watch_manager
                     .upsert_thread_silently(thread.clone())
                     .await;

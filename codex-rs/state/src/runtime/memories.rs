@@ -137,6 +137,7 @@ SELECT
     threads.created_at_ms AS created_at,
     threads.updated_at_ms AS updated_at,
     threads.source,
+    threads.thread_source,
     threads.agent_path,
     threads.agent_nickname,
     threads.agent_role,

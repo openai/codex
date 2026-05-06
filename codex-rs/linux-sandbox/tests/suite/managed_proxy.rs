@@ -15,7 +15,7 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
 
-const BWRAP_UNAVAILABLE_ERR: &str = "build-time bubblewrap is not available in this build.";
+const BWRAP_UNAVAILABLE_ERR: &str = "bubblewrap is unavailable: no system bwrap was found";
 const NETWORK_TIMEOUT_MS: u64 = 4_000;
 const MANAGED_PROXY_PERMISSION_ERR_SNIPPETS: &[&str] = &[
     "loopback: Failed RTM_NEWADDR",
@@ -82,7 +82,7 @@ fn is_managed_proxy_permission_error(stderr: &str) -> bool {
 
 async fn managed_proxy_skip_reason() -> Option<String> {
     if should_skip_bwrap_tests().await {
-        return Some("vendored bwrap was not built in this environment".to_string());
+        return Some("bubblewrap is unavailable in this environment".to_string());
     }
 
     let mut env = create_env_from_core_vars();

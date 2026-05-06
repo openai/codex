@@ -16,6 +16,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
@@ -75,6 +76,7 @@ pub(crate) async fn run_codex_thread_interactive(
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
+        installation_id: parent_session.installation_id.clone(),
         auth_manager,
         models_manager,
         environment_manager: Arc::clone(&parent_session.services.environment_manager),
@@ -84,6 +86,7 @@ pub(crate) async fn run_codex_thread_interactive(
         skills_watcher: Arc::clone(&parent_session.services.skills_watcher),
         conversation_history: initial_history.unwrap_or(InitialHistory::New),
         session_source: SessionSource::SubAgent(subagent_source.clone()),
+        thread_source: Some(ThreadSource::Subagent),
         agent_control: parent_session.services.agent_control.clone(),
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -265,10 +268,6 @@ async fn forward_events(
                     Event {
                         id: _,
                         msg: EventMsg::SessionConfigured(_),
-                    } => {}
-                    Event {
-                        id: _,
-                        msg: EventMsg::ThreadNameUpdated(_),
                     } => {}
                     Event {
                         id,

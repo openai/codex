@@ -53,7 +53,6 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SkillsChangedNotification;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
 use codex_app_server_protocol::ThreadRealtimeErrorNotification;
 use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
@@ -1191,6 +1190,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
                 let response = match thread_rollback_response_from_stored_thread(
                     stored_thread,
+                    conversation.session_configured().session_id.to_string(),
                     fallback_model_provider.as_str(),
                     &fallback_cwd,
                     loaded_status,
@@ -1206,17 +1206,6 @@ pub(crate) async fn apply_bespoke_event_handling(
 
                 outgoing.send_response(request_id, response).await;
             }
-        }
-        EventMsg::ThreadNameUpdated(thread_name_event) => {
-            let notification = ThreadNameUpdatedNotification {
-                thread_id: thread_name_event.thread_id.to_string(),
-                thread_name: thread_name_event.thread_name,
-            };
-            outgoing
-                .send_global_server_notification(ServerNotification::ThreadNameUpdated(
-                    notification,
-                ))
-                .await;
         }
         EventMsg::ThreadGoalUpdated(thread_goal_event) => {
             let notification = ThreadGoalUpdatedNotification {
@@ -1555,6 +1544,7 @@ async fn handle_thread_rollback_failed(
 
 fn thread_rollback_response_from_stored_thread(
     stored_thread: codex_thread_store::StoredThread,
+    session_id: String,
     fallback_model_provider: &str,
     fallback_cwd: &AbsolutePathBuf,
     loaded_status: ThreadStatus,
@@ -1562,6 +1552,7 @@ fn thread_rollback_response_from_stored_thread(
     let thread_id = stored_thread.thread_id;
     let (mut thread, history) =
         thread_from_stored_thread(stored_thread, fallback_model_provider, fallback_cwd);
+    thread.session_id = session_id;
     let Some(history) = history else {
         return Err(format!(
             "thread {thread_id} did not include persisted history after rollback"
@@ -2194,6 +2185,7 @@ mod tests {
             cwd: test_path_buf("/tmp").abs().into(),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,
+            thread_source: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -2211,6 +2203,7 @@ mod tests {
 
         let response = thread_rollback_response_from_stored_thread(
             stored_thread,
+            thread_id.to_string(),
             "fallback-provider",
             &fallback_cwd,
             ThreadStatus::NotLoaded,

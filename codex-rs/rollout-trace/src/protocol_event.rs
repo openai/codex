@@ -236,7 +236,6 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         | EventMsg::AgentReasoningRawContent(_)
         | EventMsg::AgentReasoningSectionBreak(_)
         | EventMsg::SessionConfigured(_)
-        | EventMsg::ThreadNameUpdated(_)
         | EventMsg::McpStartupUpdate(_)
         | EventMsg::McpStartupComplete(_)
         | EventMsg::WebSearchBegin(_)
@@ -260,9 +259,6 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         | EventMsg::StreamError(_)
         | EventMsg::PatchApplyUpdated(_)
         | EventMsg::TurnDiff(_)
-        | EventMsg::GetHistoryEntryResponse(_)
-        | EventMsg::McpListToolsResponse(_)
-        | EventMsg::ListSkillsResponse(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
         | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)
@@ -290,7 +286,6 @@ pub(crate) fn wrapped_protocol_event_type(event: &EventMsg) -> Option<&'static s
         EventMsg::TurnStarted(_) => Some("turn_started"),
         EventMsg::TurnComplete(_) => Some("turn_complete"),
         EventMsg::TurnAborted(_) => Some("turn_aborted"),
-        EventMsg::ThreadNameUpdated(_) => Some("thread_name_updated"),
         EventMsg::ThreadRolledBack(_) => Some("thread_rolled_back"),
         EventMsg::Error(_) => Some("error"),
         EventMsg::Warning(_) => Some("warning"),
@@ -337,9 +332,6 @@ pub(crate) fn wrapped_protocol_event_type(event: &EventMsg) -> Option<&'static s
         | EventMsg::PatchApplyUpdated(_)
         | EventMsg::PatchApplyEnd(_)
         | EventMsg::TurnDiff(_)
-        | EventMsg::GetHistoryEntryResponse(_)
-        | EventMsg::McpListToolsResponse(_)
-        | EventMsg::ListSkillsResponse(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
         | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)

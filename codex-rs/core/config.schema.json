@@ -370,10 +370,16 @@
             "apps_mcp_path_override": {
               "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
             },
+            "auth_elicitation": {
+              "type": "boolean"
+            },
             "browser_use": {
               "type": "boolean"
             },
             "browser_use_external": {
+              "type": "boolean"
+            },
+            "builtin_mcp": {
               "type": "boolean"
             },
             "child_agents_md": {
@@ -515,6 +521,9 @@
               "type": "boolean"
             },
             "request_rule": {
+              "type": "boolean"
+            },
+            "responses_websocket_response_processed": {
               "type": "boolean"
             },
             "responses_websockets": {
@@ -3919,10 +3928,16 @@
         "apps_mcp_path_override": {
           "$ref": "#/definitions/FeatureToml_for_AppsMcpPathOverrideConfigToml"
         },
+        "auth_elicitation": {
+          "type": "boolean"
+        },
         "browser_use": {
           "type": "boolean"
         },
         "browser_use_external": {
+          "type": "boolean"
+        },
+        "builtin_mcp": {
           "type": "boolean"
         },
         "child_agents_md": {
@@ -4064,6 +4079,9 @@
           "type": "boolean"
         },
         "request_rule": {
+          "type": "boolean"
+        },
+        "responses_websocket_response_processed": {
           "type": "boolean"
         },
         "responses_websockets": {

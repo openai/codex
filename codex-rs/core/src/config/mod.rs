@@ -70,7 +70,9 @@ use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
+use codex_mcp::BuiltinMcpServerOptions;
 use codex_mcp::McpConfig;
+use codex_mcp::configured_builtin_mcp_servers;
 use codex_memories_read::memory_root;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -133,7 +135,6 @@ mod network_proxy_spec;
 mod permissions;
 #[cfg(test)]
 mod schema;
-pub(crate) mod template_interpolation;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
@@ -401,8 +402,8 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: Option<String>,
 
-    /// Effective service tier preference for new turns (`fast` or `flex`).
-    pub service_tier: Option<ServiceTier>,
+    /// Effective service tier request id preference for new turns.
+    pub service_tier: Option<String>,
 
     /// Model used specifically for review sessions.
     pub review_model: Option<String>,
@@ -1088,6 +1089,13 @@ impl Config {
     ) -> McpConfig {
         let plugins_input = self.plugins_config_input();
         let loaded_plugins = plugins_manager.plugins_for_config(&plugins_input).await;
+        let builtin_mcp_servers = configured_builtin_mcp_servers(BuiltinMcpServerOptions {
+            codex_self_exe: self.codex_self_exe.as_deref(),
+            codex_home: self.codex_home.as_path(),
+            memories_enabled: self.features.enabled(Feature::BuiltInMcp)
+                && self.features.enabled(Feature::MemoryTool)
+                && self.memories.use_memories,
+        });
         let mut configured_mcp_servers = self.mcp_servers.get().clone();
         for plugin in loaded_plugins
             .plugins()
@@ -1107,9 +1115,12 @@ impl Config {
         if let Some(mcp_requirements) = self.config_layer_stack.requirements().mcp_servers.as_ref()
             && mcp_requirements.value.is_empty()
         {
-            // A present empty allowlist bans all MCPs, including plugin MCPs merged above.
+            // A present empty allowlist bans configurable MCPs, including plugin MCPs merged
+            // above. Built-ins are product-owned and stay available regardless of admin
+            // allowlists.
             filter_mcp_servers_by_requirements(&mut configured_mcp_servers, Some(mcp_requirements));
         }
+        configured_mcp_servers.extend(builtin_mcp_servers);
 
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
@@ -1128,6 +1139,62 @@ impl Config {
             configured_mcp_servers,
             plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
         }
+    }
+
+    pub async fn rebuild_preserving_session_layers(
+        &self,
+        refreshed_config: &Config,
+    ) -> std::io::Result<Self> {
+        let mut layers = refreshed_config
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .into_iter()
+            .filter(|layer| !is_session_layer(&layer.name))
+            .cloned()
+            .collect::<Vec<_>>();
+        layers.extend(
+            self.config_layer_stack
+                .get_layers(
+                    ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                    /*include_disabled*/ true,
+                )
+                .into_iter()
+                .filter(|layer| is_session_layer(&layer.name))
+                .cloned(),
+        );
+        layers.sort_by_key(|layer| layer.name.precedence());
+
+        let config_layer_stack = ConfigLayerStack::new(
+            layers,
+            refreshed_config.config_layer_stack.requirements().clone(),
+            refreshed_config
+                .config_layer_stack
+                .requirements_toml()
+                .clone(),
+        )?
+        .with_user_and_project_exec_policy_rules_ignored(
+            refreshed_config
+                .config_layer_stack
+                .ignore_user_and_project_exec_policy_rules(),
+        );
+        let cfg: ConfigToml = config_layer_stack
+            .effective_config()
+            .try_into()
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+        Self::load_config_with_layer_stack(
+            LOCAL_FS.as_ref(),
+            cfg,
+            ConfigOverrides {
+                cwd: Some(self.cwd.to_path_buf()),
+                ..Default::default()
+            },
+            refreshed_config.codex_home.clone(),
+            config_layer_stack,
+        )
+        .await
     }
 
     /// This is the preferred way to create an instance of [Config].
@@ -1680,6 +1747,10 @@ fn thread_store_config(
     }
 }
 
+fn is_session_layer(source: &ConfigLayerSource) -> bool {
+    matches!(source, ConfigLayerSource::SessionFlags)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PermissionConfigSyntax {
     Legacy,
@@ -1796,7 +1867,7 @@ pub struct ConfigOverrides {
     pub permission_profile: Option<PermissionProfile>,
     pub default_permissions: Option<String>,
     pub model_provider: Option<String>,
-    pub service_tier: Option<Option<ServiceTier>>,
+    pub service_tier: Option<Option<String>>,
     pub config_profile: Option<String>,
     pub codex_self_exe: Option<PathBuf>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
@@ -2018,63 +2089,6 @@ impl Config {
     }
 
     pub(crate) async fn load_config_with_layer_stack(
-        fs: &dyn ExecutorFileSystem,
-        cfg: ConfigToml,
-        overrides: ConfigOverrides,
-        codex_home: AbsolutePathBuf,
-        config_layer_stack: ConfigLayerStack,
-    ) -> std::io::Result<Self> {
-        let config = Self::build_config_with_layer_stack(
-            fs,
-            cfg.clone(),
-            overrides.clone(),
-            codex_home.clone(),
-            config_layer_stack.clone(),
-        )
-        .await?;
-        let mut interpolation_source_cfg = cfg.clone();
-        template_interpolation::apply_resolved_config_fields(
-            &config,
-            &mut interpolation_source_cfg,
-        )
-        .map_err(|err| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("failed to materialize config for interpolation: {err}"),
-            )
-        })?;
-        let interpolation_source =
-            toml::Value::try_from(interpolation_source_cfg).map_err(|err| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("failed to serialize config for interpolation: {err}"),
-                )
-            })?;
-        let mut interpolated_cfg = cfg;
-        let interpolated = template_interpolation::interpolate_config_string_fields(
-            &mut interpolated_cfg,
-            &interpolation_source,
-        )
-        .map_err(|err| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("failed to interpolate config template fields: {err}"),
-            )
-        })?;
-        if interpolated {
-            return Self::build_config_with_layer_stack(
-                fs,
-                interpolated_cfg,
-                overrides,
-                codex_home,
-                config_layer_stack,
-            )
-            .await;
-        }
-        Ok(config)
-    }
-
-    async fn build_config_with_layer_stack(
         fs: &dyn ExecutorFileSystem,
         cfg: ConfigToml,
         overrides: ConfigOverrides,
@@ -2721,16 +2735,20 @@ impl Config {
                 notices.fast_default_opt_out = Some(true);
                 None
             }
-            None => config_profile.service_tier.or(cfg.service_tier),
+            None => config_profile
+                .service_tier
+                .or(cfg.service_tier)
+                .map(|service_tier| service_tier.request_value().to_string()),
         };
-        let service_tier = match service_tier {
-            Some(ServiceTier::Fast) if features.enabled(Feature::FastMode) => {
-                Some(ServiceTier::Fast)
+        let service_tier = service_tier.and_then(|service_tier| {
+            match ServiceTier::from_request_value(&service_tier) {
+                Some(ServiceTier::Fast) => features
+                    .enabled(Feature::FastMode)
+                    .then(|| ServiceTier::Fast.request_value().to_string()),
+                Some(ServiceTier::Flex) => Some(ServiceTier::Flex.request_value().to_string()),
+                None => Some(service_tier),
             }
-            Some(ServiceTier::Fast) => None,
-            Some(ServiceTier::Flex) => Some(ServiceTier::Flex),
-            None => None,
-        };
+        });
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
             let trimmed = value.trim();
