@@ -138,6 +138,7 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
 
 fn sample_thread_fork_response() -> ClientResponsePayload {
     ClientResponsePayload::ThreadFork(ThreadForkResponse {
+        session_id: "session-3".to_string(),
         thread: sample_thread("thread-3"),
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
