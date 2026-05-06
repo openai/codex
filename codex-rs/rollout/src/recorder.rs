@@ -1516,17 +1516,16 @@ impl RolloutWriterState {
             return Ok(());
         }
         self.write_pending_with_recovery("shutdown").await?;
-        if let Some((thread_id, updated_at)) = self.thread_updated_at_touch.pending_touch.take() {
-            if state_db::touch_thread_updated_at(
+        if let Some((thread_id, updated_at)) = self.thread_updated_at_touch.pending_touch.take()
+            && state_db::touch_thread_updated_at(
                 self.state_db_ctx.as_deref(),
                 Some(thread_id),
                 updated_at,
                 "rollout_writer_shutdown",
             )
             .await
-            {
-                self.thread_updated_at_touch.mark_persisted(Instant::now());
-            }
+        {
+            self.thread_updated_at_touch.mark_persisted(Instant::now());
         }
         Ok(())
     }
