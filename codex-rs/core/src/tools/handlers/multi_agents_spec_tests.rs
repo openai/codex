@@ -1,9 +1,9 @@
 use super::*;
-use crate::JsonSchemaPrimitiveType;
-use crate::JsonSchemaType;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_tools::JsonSchemaPrimitiveType;
+use codex_tools::JsonSchemaType;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 

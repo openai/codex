@@ -21,6 +21,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
+use crate::tools::handlers::apply_patch_spec::ApplyPatchToolArgs;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
@@ -46,7 +47,6 @@ use codex_protocol::protocol::PatchApplyUpdatedEvent;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
-use codex_tools::ApplyPatchToolArgs;
 use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 

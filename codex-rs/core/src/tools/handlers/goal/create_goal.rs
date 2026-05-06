@@ -3,10 +3,10 @@ use crate::goals::CreateGoalRequest;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::goal_spec::CREATE_GOAL_TOOL_NAME;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_tools::CREATE_GOAL_TOOL_NAME;
 use codex_tools::ToolName;
 
 use super::CompletionBudgetReport;

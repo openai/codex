@@ -1,6 +1,6 @@
-use crate::JsonSchema;
-use crate::ResponsesApiTool;
-use crate::ToolSpec;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolSpec;
 use std::collections::BTreeMap;
 
 pub fn create_update_plan_tool() -> ToolSpec {

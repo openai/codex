@@ -1,6 +1,6 @@
-use crate::JsonSchema;
-use crate::ResponsesApiTool;
-use crate::ToolSpec;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolSpec;
 use std::collections::BTreeMap;
 
 pub fn create_list_mcp_resources_tool() -> ToolSpec {
@@ -94,5 +94,5 @@ pub fn create_read_mcp_resource_tool() -> ToolSpec {
 }
 
 #[cfg(test)]
-#[path = "mcp_resource_tool_tests.rs"]
+#[path = "mcp_resource_spec_tests.rs"]
 mod tests;

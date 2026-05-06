@@ -1,6 +1,6 @@
-use crate::JsonSchema;
-use crate::ResponsesApiTool;
-use crate::ToolSpec;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolSpec;
 use std::collections::BTreeMap;
 
 pub fn create_spawn_agents_on_csv_tool() -> ToolSpec {
@@ -103,5 +103,5 @@ pub fn create_report_agent_job_result_tool() -> ToolSpec {
 }
 
 #[cfg(test)]
-#[path = "agent_job_tool_tests.rs"]
+#[path = "agent_jobs_spec_tests.rs"]
 mod tests;

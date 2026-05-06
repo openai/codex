@@ -1,6 +1,8 @@
 mod execute_handler;
+pub(crate) mod execute_spec;
 mod response_adapter;
 mod wait_handler;
+pub(crate) mod wait_spec;
 
 use std::collections::HashSet;
 use std::sync::Arc;
