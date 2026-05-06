@@ -1,0 +1,21 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-builtin-mcps"
+version.workspace = true
+
+[lib]
+name = "codex_builtin_mcps"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+codex-config = { workspace = true }
+codex-memories-mcp = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

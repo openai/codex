@@ -41,8 +41,11 @@ use codex_config::types::AppToolApproval;
 use codex_features::Feature;
 use codex_hooks::PermissionRequestDecision;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_mcp::McpPermissionPromptAutoApproveContext;
 use codex_mcp::SandboxState;
+use codex_mcp::auth_elicitation_completed_result;
+use codex_mcp::build_auth_elicitation_plan;
 use codex_mcp::declared_openai_file_input_param_names;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_otel::sanitize_metric_tag_value;
@@ -52,6 +55,7 @@ use codex_protocol::items::McpToolCallStatus;
 use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
@@ -340,9 +344,10 @@ async fn handle_approved_mcp_tool_call(
         let result = execute_mcp_tool_call(
             sess,
             turn_context,
-            &server,
-            &tool_name,
+            call_id,
+            &invocation,
             rewritten_arguments,
+            metadata,
             request_meta,
         )
         .await;
@@ -541,28 +546,145 @@ fn truncate_str_to_char_boundary(value: &str, max_chars: usize) -> &str {
 async fn execute_mcp_tool_call(
     sess: &Session,
     turn_context: &TurnContext,
-    server: &str,
-    tool_name: &str,
+    call_id: &str,
+    invocation: &McpInvocation,
     rewritten_arguments: Option<JsonValue>,
+    metadata: Option<&McpToolApprovalMetadata>,
     request_meta: Option<JsonValue>,
 ) -> Result<CallToolResult, String> {
     let request_meta =
         with_mcp_tool_call_thread_id_meta(request_meta, &sess.conversation_id.to_string());
-    let request_meta =
-        augment_mcp_tool_request_meta_with_sandbox_state(sess, turn_context, server, request_meta)
-            .await
-            .map_err(|e| format!("failed to build MCP tool request metadata: {e:#}"))?;
+    let request_meta = augment_mcp_tool_request_meta_with_sandbox_state(
+        sess,
+        turn_context,
+        &invocation.server,
+        request_meta,
+    )
+    .await
+    .map_err(|e| format!("failed to build MCP tool request metadata: {e:#}"))?;
     let result = sess
-        .call_tool(server, tool_name, rewritten_arguments, request_meta)
+        .call_tool(
+            &invocation.server,
+            &invocation.tool,
+            rewritten_arguments,
+            request_meta,
+        )
         .await
         .map_err(|e| format!("tool call error: {e:?}"))?;
-    sanitize_mcp_tool_result_for_model(
+    let result = sanitize_mcp_tool_result_for_model(
         turn_context
             .model_info
             .input_modalities
             .contains(&InputModality::Image),
         Ok(result),
+    )?;
+    Ok(maybe_request_codex_apps_auth_elicitation(
+        sess,
+        turn_context,
+        call_id,
+        &invocation.server,
+        metadata,
+        result,
     )
+    .await)
+}
+
+async fn maybe_request_codex_apps_auth_elicitation(
+    sess: &Session,
+    turn_context: &TurnContext,
+    call_id: &str,
+    server: &str,
+    metadata: Option<&McpToolApprovalMetadata>,
+    result: CallToolResult,
+) -> CallToolResult {
+    if !sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .is_host_owned_codex_apps_server(server)
+    {
+        return result;
+    }
+
+    if !turn_context.features.enabled(Feature::AuthElicitation) {
+        return result;
+    }
+
+    match turn_context.approval_policy.value() {
+        AskForApproval::Never => return result,
+        AskForApproval::Granular(granular_config) if !granular_config.allows_mcp_elicitations() => {
+            return result;
+        }
+        AskForApproval::OnFailure
+        | AskForApproval::OnRequest
+        | AskForApproval::UnlessTrusted
+        | AskForApproval::Granular(_) => {}
+    }
+
+    let connector_id = metadata.and_then(|metadata| metadata.connector_id.as_deref());
+    let connector_name = metadata.and_then(|metadata| metadata.connector_name.as_deref());
+    let install_url = connector_id.map(|connector_id| {
+        codex_connectors::metadata::connector_install_url(
+            connector_name.unwrap_or(connector_id),
+            connector_id,
+        )
+    });
+    let Some(plan) =
+        build_auth_elicitation_plan(call_id, &result, connector_id, connector_name, install_url)
+    else {
+        return result;
+    };
+
+    let request_id = rmcp::model::RequestId::String(plan.elicitation.elicitation_id.clone().into());
+    let params = McpServerElicitationRequestParams {
+        thread_id: sess.conversation_id.to_string(),
+        turn_id: Some(turn_context.sub_id.clone()),
+        server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        request: McpServerElicitationRequest::Url {
+            meta: Some(plan.elicitation.meta),
+            message: plan.elicitation.message,
+            url: plan.elicitation.url,
+            elicitation_id: plan.elicitation.elicitation_id,
+        },
+    };
+    let response = sess
+        .request_mcp_server_elicitation(turn_context, request_id, params)
+        .await;
+    if !response
+        .as_ref()
+        .is_some_and(|response| response.action == ElicitationAction::Accept)
+    {
+        return result;
+    }
+
+    refresh_codex_apps_after_connector_auth(sess, turn_context).await;
+    auth_elicitation_completed_result(&plan.auth_failure, result.meta)
+}
+
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "Codex Apps cache refresh reads through the session-owned manager guard"
+)]
+async fn refresh_codex_apps_after_connector_auth(sess: &Session, turn_context: &TurnContext) {
+    let mcp_tools_result = {
+        let manager = sess.services.mcp_connection_manager.read().await;
+        manager.hard_refresh_codex_apps_tools_cache().await
+    };
+
+    match mcp_tools_result {
+        Ok(mcp_tools) => {
+            let auth = sess.services.auth_manager.auth().await;
+            connectors::refresh_accessible_connectors_cache_from_mcp_tools(
+                &turn_context.config,
+                auth.as_ref(),
+                &mcp_tools,
+            );
+        }
+        Err(err) => {
+            tracing::warn!("failed to refresh Codex Apps tools after connector auth: {err:#}");
+        }
+    }
 }
 
 #[expect(
@@ -834,7 +956,6 @@ pub(crate) struct McpToolApprovalMetadata {
     openai_file_input_params: Option<Vec<String>>,
 }
 
-const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";

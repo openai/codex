@@ -70,6 +70,7 @@ use url::Url;
 pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     server_origins: HashMap<String, String>,
+    host_owned_codex_apps_enabled: bool,
     elicitation_requests: ElicitationRequestManager,
     startup_cancellation_token: CancellationToken,
 }
@@ -82,6 +83,7 @@ impl McpConnectionManager {
         Self {
             clients: HashMap::new(),
             server_origins: HashMap::new(),
+            host_owned_codex_apps_enabled: false,
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
                 permission_profile.get().clone(),
@@ -116,6 +118,10 @@ impl McpConnectionManager {
         self.server_origins.get(server_name).map(String::as_str)
     }
 
+    pub fn is_host_owned_codex_apps_server(&self, server_name: &str) -> bool {
+        self.host_owned_codex_apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME
+    }
+
     pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
         if let Ok(mut policy) = self.elicitation_requests.approval_policy.lock() {
             *policy = approval_policy.value();
@@ -148,6 +154,7 @@ impl McpConnectionManager {
         runtime_environment: McpRuntimeEnvironment,
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
+        host_owned_codex_apps_enabled: bool,
         tool_plugin_provenance: ToolPluginProvenance,
         auth: Option<&CodexAuth>,
     ) -> (Self, CancellationToken) {
@@ -248,6 +255,7 @@ impl McpConnectionManager {
         let manager = Self {
             clients,
             server_origins,
+            host_owned_codex_apps_enabled,
             elicitation_requests: elicitation_requests.clone(),
             startup_cancellation_token: cancel_token.clone(),
         };

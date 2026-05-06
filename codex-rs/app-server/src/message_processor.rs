@@ -259,6 +259,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) installation_id: String,
     pub(crate) rpc_transport: AppServerRpcTransport,
     pub(crate) remote_control_handle: Option<RemoteControlHandle>,
     pub(crate) plugin_startup_tasks: crate::PluginStartupTasks,
@@ -281,6 +282,7 @@ impl MessageProcessor {
             config_warnings,
             session_source,
             auth_manager,
+            installation_id,
             rpc_transport,
             remote_control_handle,
             plugin_startup_tasks,
@@ -302,6 +304,7 @@ impl MessageProcessor {
             state_db.clone(),
             Arc::clone(&thread_store),
             agent_graph_store.clone(),
+            installation_id,
         ));
         thread_manager
             .plugins_manager()
@@ -416,7 +419,7 @@ impl MessageProcessor {
         if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
             // Keep plugin startup warmups aligned at app-server startup.
             let on_effective_plugins_changed =
-                plugin_processor.effective_plugins_changed_callback((*config).clone());
+                plugin_processor.effective_plugins_changed_callback();
             thread_manager
                 .plugins_manager()
                 .maybe_start_plugin_startup_tasks_for_config(
@@ -1086,6 +1089,11 @@ impl MessageProcessor {
             }
             ClientRequest::PluginShareSave { params, .. } => {
                 self.plugin_processor.plugin_share_save(params).await
+            }
+            ClientRequest::PluginShareUpdateTargets { params, .. } => {
+                self.plugin_processor
+                    .plugin_share_update_targets(params)
+                    .await
             }
             ClientRequest::PluginShareList { params, .. } => {
                 self.plugin_processor.plugin_share_list(params).await

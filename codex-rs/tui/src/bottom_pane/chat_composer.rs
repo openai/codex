@@ -207,6 +207,7 @@ use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
+use codex_protocol::ThreadId;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
@@ -849,10 +850,15 @@ impl ChatComposer {
             && self.remote_image_urls.is_empty()
     }
 
-    /// Record the history metadata advertised by `SessionConfiguredEvent` so
-    /// that the composer can navigate cross-session history.
-    pub(crate) fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {
-        self.history.set_metadata(log_id, entry_count);
+    /// Record local persistent-history metadata so the composer can navigate
+    /// cross-session history.
+    pub(crate) fn set_history_metadata(
+        &mut self,
+        thread_id: ThreadId,
+        log_id: u64,
+        entry_count: usize,
+    ) {
+        self.history.set_metadata(thread_id, log_id, entry_count);
     }
 
     /// Integrate an asynchronous response to an on-demand history lookup.

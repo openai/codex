@@ -244,6 +244,7 @@ async fn resume_lookup_model_providers_filters_only_last_lookup() {
 fn turn_items_for_thread_returns_matching_turn_items() {
     let thread = AppServerThread {
         id: "thread-1".to_string(),
+        session_id: "thread-1".to_string(),
         forked_from_id: None,
         preview: String::new(),
         ephemeral: false,
@@ -255,6 +256,7 @@ fn turn_items_for_thread_returns_matching_turn_items() {
         cwd: test_path_buf("/tmp/project").abs(),
         cli_version: "0.0.0-test".to_string(),
         source: codex_app_server_protocol::SessionSource::Exec,
+        thread_source: None,
         agent_nickname: None,
         agent_role: None,
         git_info: None,
@@ -440,6 +442,14 @@ async fn session_configured_from_thread_response_uses_review_policy_from_respons
     let event = session_configured_from_thread_start_response(&response, &config)
         .expect("build bootstrap session configured event");
 
+    assert_eq!(
+        event.session_id.to_string(),
+        "67e55044-10b1-426f-9247-bb680e5fe0c7"
+    );
+    assert_eq!(
+        event.thread_id.to_string(),
+        "67e55044-10b1-426f-9247-bb680e5fe0c8"
+    );
     assert_eq!(event.approvals_reviewer, ApprovalsReviewer::AutoReview);
 }
 
@@ -466,6 +476,7 @@ fn sample_thread_start_response() -> ThreadStartResponse {
     ThreadStartResponse {
         thread: codex_app_server_protocol::Thread {
             id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+            session_id: "67e55044-10b1-426f-9247-bb680e5fe0c7".to_string(),
             forked_from_id: None,
             preview: String::new(),
             ephemeral: false,
@@ -477,6 +488,7 @@ fn sample_thread_start_response() -> ThreadStartResponse {
             cwd: test_path_buf("/tmp").abs(),
             cli_version: "0.0.0".to_string(),
             source: codex_app_server_protocol::SessionSource::Cli,
+            thread_source: None,
             agent_nickname: None,
             agent_role: None,
             git_info: None,

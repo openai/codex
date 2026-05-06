@@ -58,6 +58,7 @@ use codex_core_api::built_in_model_providers;
 use codex_core_api::find_codex_home;
 use codex_core_api::init_state_db_from_config;
 use codex_core_api::item_event_to_server_notification;
+use codex_core_api::resolve_installation_id;
 use codex_core_api::set_default_originator;
 use codex_core_api::thread_store_from_config;
 
@@ -119,6 +120,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
     let environment_manager =
         Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::new(local_runtime_paths)).await);
+    let installation_id = resolve_installation_id(&config.codex_home).await?;
     let thread_manager = ThreadManager::new(
         &config,
         auth_manager,
@@ -128,6 +130,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         state_db,
         Arc::clone(&thread_store),
         agent_graph_store,
+        installation_id,
     );
 
     let NewThread {

@@ -1894,7 +1894,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
 
 #[tokio::test]
 async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> anyhow::Result<()> {
-    const TEST_STACK_SIZE_BYTES: usize = 2 * 1024 * 1024;
+    const TEST_STACK_SIZE_BYTES: usize = 4 * 1024 * 1024;
 
     let handle =
         std::thread::Builder::new()
