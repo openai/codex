@@ -554,66 +554,6 @@ async fn explicit_installation_id_skips_codex_home_file() {
 }
 
 #[tokio::test]
-async fn thread_with_different_codex_home_resolves_installation_id_from_thread_home() {
-    let manager_temp_dir = tempdir().expect("tempdir");
-    let thread_temp_dir = tempdir().expect("tempdir");
-    let mut manager_config = test_config().await;
-    manager_config.codex_home = manager_temp_dir.path().join("manager-codex-home").abs();
-    manager_config.cwd = manager_config.codex_home.abs();
-    std::fs::create_dir_all(&manager_config.codex_home).expect("create manager codex home");
-
-    let auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let (state_db, thread_store, agent_graph_store) = state_backed_stores(&manager_config).await;
-    let manager = ThreadManager::new(
-        &manager_config,
-        auth_manager,
-        SessionSource::Exec,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        /*analytics_events_client*/ None,
-        state_db,
-        thread_store,
-        agent_graph_store,
-        TEST_INSTALLATION_ID.to_string(),
-    );
-
-    let mut thread_config = manager_config.clone();
-    thread_config.codex_home = thread_temp_dir.path().join("thread-codex-home").abs();
-    thread_config.cwd = thread_config.codex_home.abs();
-    std::fs::create_dir_all(&thread_config.codex_home).expect("create thread codex home");
-
-    let thread = manager
-        .start_thread(thread_config.clone())
-        .await
-        .expect("start thread with per-thread codex home");
-
-    let resolved_installation_id =
-        std::fs::read_to_string(thread_config.codex_home.join(INSTALLATION_ID_FILENAME))
-            .expect("read per-thread installation id");
-    assert_eq!(
-        thread.thread.codex.session.installation_id,
-        resolved_installation_id
-    );
-    assert_ne!(
-        thread.thread.codex.session.installation_id,
-        TEST_INSTALLATION_ID
-    );
-    assert!(
-        !manager_config
-            .codex_home
-            .join(INSTALLATION_ID_FILENAME)
-            .exists()
-    );
-
-    thread
-        .thread
-        .shutdown_and_wait()
-        .await
-        .expect("shutdown thread");
-    let _ = manager.remove_thread(&thread.thread_id).await;
-}
-
-#[tokio::test]
 async fn resume_active_thread_from_rollout_returns_running_thread() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;

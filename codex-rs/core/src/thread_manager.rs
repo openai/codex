@@ -254,7 +254,6 @@ pub(crate) struct ThreadManagerState {
     state_db: StateDbHandle,
     agent_graph_store: Arc<dyn AgentGraphStore>,
     session_source: SessionSource,
-    codex_home: AbsolutePathBuf,
     installation_id: String,
     analytics_events_client: Option<AnalyticsEventsClient>,
     // Captures submitted ops for testing purpose when test mode is enabled.
@@ -350,7 +349,6 @@ impl ThreadManager {
                 agent_graph_store,
                 auth_manager,
                 session_source,
-                codex_home,
                 installation_id,
                 analytics_events_client,
                 ops_log: should_use_test_thread_manager_behavior()
@@ -481,7 +479,6 @@ impl ThreadManager {
                 agent_graph_store,
                 auth_manager,
                 session_source: SessionSource::Exec,
-                codex_home: skills_codex_home,
                 installation_id,
                 analytics_events_client: None,
                 ops_log: should_use_test_thread_manager_behavior()
@@ -1219,16 +1216,11 @@ impl ThreadManagerState {
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
         let tracked_session_source = session_source.clone();
-        let installation_id = if config.codex_home == self.codex_home {
-            self.installation_id.clone()
-        } else {
-            resolve_installation_id(&config.codex_home).await?
-        };
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
             config,
-            installation_id,
+            installation_id: self.installation_id.clone(),
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
             environment_manager: Arc::clone(&self.environment_manager),
