@@ -19,7 +19,6 @@ pub use mcp::with_codex_apps_mcp;
 pub use mcp::McpServerStatusSnapshot;
 pub use mcp::McpSnapshotDetail;
 pub use mcp::collect_mcp_server_status_snapshot_with_detail;
-pub use mcp::collect_mcp_snapshot_from_manager;
 pub use mcp::read_mcp_resource;
 
 pub use mcp::McpAuthStatusEntry;
