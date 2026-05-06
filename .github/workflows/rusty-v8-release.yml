@@ -46,14 +46,14 @@ jobs:
           expected_release_tag="rusty-v8-v${V8_VERSION}"
           release_tag="${GITHUB_REF_NAME}"
           if [[ "${release_tag}" != "${expected_release_tag}" ]]; then
-            echo "Tag ${release_tag} does not match resolved v8 crate version ${V8_VERSION}." >&2
+            echo "Tag ${release_tag} does not match expected release tag ${expected_release_tag}." >&2
             exit 1
           fi
 
           echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build ${{ matrix.target }}
+    name: Build ${{ matrix.variant }} ${{ matrix.target }}
     needs: metadata
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -65,10 +65,34 @@ jobs:
         include:
           - runner: ubuntu-24.04
             platform: linux_amd64_musl
+            sandbox: false
             target: x86_64-unknown-linux-musl
+            variant: release
           - runner: ubuntu-24.04-arm
             platform: linux_arm64_musl
+            sandbox: false
             target: aarch64-unknown-linux-musl
+            variant: release
+          - runner: ubuntu-24.04
+            platform: linux_amd64_musl
+            sandbox: true
+            target: x86_64-unknown-linux-musl
+            variant: ptrcomp-sandbox
+          - runner: ubuntu-24.04-arm
+            platform: linux_arm64_musl
+            sandbox: true
+            target: aarch64-unknown-linux-musl
+            variant: ptrcomp-sandbox
+          - runner: ubuntu-24.04
+            platform: windows_amd64
+            sandbox: true
+            target: x86_64-pc-windows-msvc
+            variant: ptrcomp-sandbox
+          - runner: ubuntu-24.04-arm
+            platform: windows_arm64
+            sandbox: true
+            target: aarch64-pc-windows-msvc
+            variant: ptrcomp-sandbox
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -89,13 +113,20 @@ jobs:
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
           PLATFORM: ${{ matrix.platform }}
+          SANDBOX: ${{ matrix.sandbox }}
           TARGET: ${{ matrix.target }}
         shell: bash
         run: |
           set -euo pipefail
 
           target_suffix="${TARGET//-/_}"
-          pair_target="//third_party/v8:rusty_v8_release_pair_${target_suffix}"
+          pair_kind="release_pair"
+          bazel_config_args=(--config=v8-release-compat)
+          if [[ "${SANDBOX}" == "true" ]]; then
+            pair_kind="sandbox_release_pair"
+            bazel_config_args=()
+          fi
+          pair_target="//third_party/v8:rusty_v8_${pair_kind}_${target_suffix}"
           extra_targets=()
           if [[ "${TARGET}" == *-unknown-linux-musl ]]; then
             extra_targets=(
@@ -109,7 +140,7 @@ jobs:
             -c
             opt
             "--platforms=@llvm//platforms:${PLATFORM}"
-            --config=v8-release-compat
+            "${bazel_config_args[@]}"
             "${pair_target}"
             "${extra_targets[@]}"
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
@@ -124,28 +155,138 @@ jobs:
       - name: Stage release pair
         env:
           PLATFORM: ${{ matrix.platform }}
+          SANDBOX: ${{ matrix.sandbox }}
           TARGET: ${{ matrix.target }}
         shell: bash
         run: |
           set -euo pipefail
 
-          python3 .github/scripts/rusty_v8_bazel.py stage-release-pair \
-            --platform "${PLATFORM}" \
-            --target "${TARGET}" \
-            --compilation-mode opt \
-            --bazel-config v8-release-compat \
+          stage_args=(
+            --platform "${PLATFORM}"
+            --target "${TARGET}"
+            --compilation-mode opt
             --output-dir "dist/${TARGET}"
+          )
+          if [[ "${SANDBOX}" == "true" ]]; then
+            stage_args+=(--sandbox)
+          else
+            stage_args+=(--bazel-config v8-release-compat)
+          fi
 
-      - name: Upload staged musl artifacts
+          python3 .github/scripts/rusty_v8_bazel.py stage-release-pair "${stage_args[@]}"
+
+      - name: Upload staged artifacts
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: rusty-v8-${{ needs.metadata.outputs.v8_version }}-${{ matrix.target }}
+          name: rusty-v8-${{ needs.metadata.outputs.v8_version }}-${{ matrix.variant }}-${{ matrix.target }}
           path: dist/${{ matrix.target }}/*
+
+  validate-sandbox:
+    name: Validate sandbox artifacts - ${{ matrix.target }}
+    needs:
+      - metadata
+      - build
+    runs-on: ${{ matrix.runs_on }}
+    defaults:
+      run:
+        working-directory: codex-rs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            exe_suffix: ""
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-x64
+          - target: aarch64-unknown-linux-musl
+            exe_suffix: ""
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-arm64
+          - target: x86_64-pc-windows-msvc
+            exe_suffix: ".exe"
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+          - target: aarch64-pc-windows-msvc
+            exe_suffix: ".exe"
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-arm64
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - if: ${{ runner.os == 'Linux' }}
+        name: Install Linux build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            pkg-config \
+            libcap-dev
+
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Download staged sandbox artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: rusty-v8-${{ needs.metadata.outputs.v8_version }}-ptrcomp-sandbox-${{ matrix.target }}
+          path: ${{ runner.temp }}/rusty_v8_sandbox
+
+      - name: Configure sandboxed rusty_v8 artifact overrides
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/rusty_v8_sandbox
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          artifact_profile="ptrcomp_sandbox_release"
+          binding_path="${ARTIFACT_DIR}/src_binding_${artifact_profile}_${TARGET}.rs"
+          checksums_path="${ARTIFACT_DIR}/rusty_v8_${artifact_profile}_${TARGET}.sha256"
+
+          if [[ "${TARGET}" == *-pc-windows-msvc ]]; then
+            archive_name="rusty_v8_${artifact_profile}_${TARGET}.lib.gz"
+          else
+            archive_name="librusty_v8_${artifact_profile}_${TARGET}.a.gz"
+          fi
+          archive_path="${ARTIFACT_DIR}/${archive_name}"
+
+          if [[ "$(wc -l < "${checksums_path}")" -ne 2 ]]; then
+            echo "Expected exactly two checksums for ${TARGET} in ${checksums_path}" >&2
+            exit 1
+          fi
+
+          (cd "${ARTIFACT_DIR}" && sha256sum -c "${checksums_path}")
+          echo "RUSTY_V8_ARCHIVE=${archive_path}" >> "${GITHUB_ENV}"
+          echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "${GITHUB_ENV}"
+
+      - name: Run sandboxed V8 probe tests
+        shell: bash
+        run: cargo test -p codex-v8-poc --target "${{ matrix.target }}" --features sandbox
+
+      - name: Run sandboxed code-mode tests
+        shell: bash
+        run: cargo test -p codex-code-mode --target "${{ matrix.target }}" --features sandbox
+
+      - name: Build release binary against sandboxed artifacts
+        shell: bash
+        run: cargo build --target "${{ matrix.target }}" --release --bin codex
+
+      - name: Smoke release binary
+        shell: bash
+        run: "target/${{ matrix.target }}/release/codex${{ matrix.exe_suffix }} --version"
 
   publish-release:
     needs:
       - metadata
       - build
+      - validate-sandbox
     runs-on: ubuntu-latest
     permissions:
       contents: write

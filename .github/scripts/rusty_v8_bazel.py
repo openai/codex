@@ -29,6 +29,8 @@ MUSL_RUNTIME_ARCHIVE_LABELS = [
 ]
 LLVM_AR_LABEL = "@llvm//tools:llvm-ar"
 LLVM_RANLIB_LABEL = "@llvm//tools:llvm-ranlib"
+RELEASE_ARTIFACT_PROFILE = "release"
+SANDBOX_ARTIFACT_PROFILE = "ptrcomp_sandbox_release"
 
 
 def bazel_execroot() -> Path:
@@ -126,9 +128,10 @@ def ensure_bazel_output_files(
     return outputs
 
 
-def release_pair_label(target: str) -> str:
+def release_pair_label(target: str, sandbox: bool = False) -> str:
     target_suffix = target.replace("-", "_")
-    return f"//third_party/v8:rusty_v8_release_pair_{target_suffix}"
+    pair_kind = "sandbox_release_pair" if sandbox else "release_pair"
+    return f"//third_party/v8:rusty_v8_{pair_kind}_{target_suffix}"
 
 
 def resolved_v8_crate_version() -> str:
@@ -180,10 +183,18 @@ def command_manifest_path(manifest: Path | None, version: str) -> Path:
     return ROOT / manifest
 
 
-def staged_archive_name(target: str, source_path: Path) -> str:
+def staged_archive_name(target: str, source_path: Path, artifact_profile: str) -> str:
     if source_path.suffix == ".lib":
-        return f"rusty_v8_release_{target}.lib.gz"
-    return f"librusty_v8_release_{target}.a.gz"
+        return f"rusty_v8_{artifact_profile}_{target}.lib.gz"
+    return f"librusty_v8_{artifact_profile}_{target}.a.gz"
+
+
+def staged_binding_name(target: str, artifact_profile: str) -> str:
+    return f"src_binding_{artifact_profile}_{target}.rs"
+
+
+def staged_checksums_name(target: str, artifact_profile: str) -> str:
+    return f"rusty_v8_{artifact_profile}_{target}.sha256"
 
 
 def is_musl_archive_target(target: str, source_path: Path) -> bool:
@@ -285,10 +296,11 @@ def stage_release_pair(
     output_dir: Path,
     compilation_mode: str = "fastbuild",
     bazel_configs: list[str] | None = None,
+    sandbox: bool = False,
 ) -> None:
     outputs = ensure_bazel_output_files(
         platform,
-        [release_pair_label(target)],
+        [release_pair_label(target, sandbox)],
         compilation_mode,
         bazel_configs,
     )
@@ -304,8 +316,9 @@ def stage_release_pair(
         raise SystemExit(f"missing Rust binding output for {target}") from exc
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    staged_library = output_dir / staged_archive_name(target, lib_path)
-    staged_binding = output_dir / f"src_binding_release_{target}.rs"
+    artifact_profile = SANDBOX_ARTIFACT_PROFILE if sandbox else RELEASE_ARTIFACT_PROFILE
+    staged_library = output_dir / staged_archive_name(target, lib_path, artifact_profile)
+    staged_binding = output_dir / staged_binding_name(target, artifact_profile)
     source_archive = (
         merged_musl_archive(platform, lib_path, compilation_mode, bazel_configs)
         if is_musl_archive_target(target, lib_path)
@@ -324,7 +337,7 @@ def stage_release_pair(
 
     shutil.copyfile(binding_path, staged_binding)
 
-    staged_checksums = output_dir / f"rusty_v8_release_{target}.sha256"
+    staged_checksums = output_dir / staged_checksums_name(target, artifact_profile)
     with staged_checksums.open("w", encoding="utf-8") as checksums:
         for path in [staged_library, staged_binding]:
             digest = hashlib.sha256()
@@ -346,6 +359,7 @@ def parse_args() -> argparse.Namespace:
     stage_release_pair_parser.add_argument("--platform", required=True)
     stage_release_pair_parser.add_argument("--target", required=True)
     stage_release_pair_parser.add_argument("--output-dir", required=True)
+    stage_release_pair_parser.add_argument("--sandbox", action="store_true")
     stage_release_pair_parser.add_argument(
         "--bazel-config",
         action="append",
@@ -390,6 +404,7 @@ def main() -> int:
             output_dir=Path(args.output_dir),
             compilation_mode=args.compilation_mode,
             bazel_configs=args.bazel_configs,
+            sandbox=args.sandbox,
         )
         return 0
     if args.command == "resolved-v8-crate-version":
