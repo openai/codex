@@ -149,7 +149,7 @@ pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
 pub(crate) struct CompactConversationRequestSettings {
     pub(crate) effort: Option<ReasoningEffortConfig>,
     pub(crate) summary: ReasoningSummaryConfig,
-    pub(crate) service_tier: Option<ServiceTier>,
+    pub(crate) service_tier: Option<String>,
 }
 
 /// Session-scoped state shared by all [`ModelClient`] clones.
