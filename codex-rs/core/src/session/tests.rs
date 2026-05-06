@@ -303,7 +303,7 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
         .mcp_connection_manager
         .read()
         .await
-        .set_elicitations_auto_deny(true);
+        .set_elicitations_auto_deny(/*auto_deny*/ true);
 
     let requested_schema: McpElicitationSchema = serde_json::from_value(json!({
         "type": "object",
