@@ -111,7 +111,7 @@ pub(crate) struct AnalyticsReducer {
     turns: HashMap<String, TurnState>,
     connections: HashMap<u64, ConnectionState>,
     threads: HashMap<String, ThreadAnalyticsState>,
-    tool_items: HashMap<(String, String, String), ToolItemState>,
+    tool_items_started_at_ms: HashMap<ToolItemKey, u64>,
 }
 
 struct ConnectionState {
@@ -267,8 +267,11 @@ struct TurnState {
     steer_count: usize,
 }
 
-struct ToolItemState {
-    started_at_ms: u64,
+#[derive(Hash, Eq, PartialEq)]
+struct ToolItemKey {
+    thread_id: String,
+    turn_id: String,
+    item_id: String,
 }
 
 impl AnalyticsReducer {
@@ -751,25 +754,25 @@ impl AnalyticsReducer {
                 else {
                     return;
                 };
-                self.tool_items.insert(
-                    (
-                        notification.thread_id,
-                        notification.turn_id,
-                        item_id.to_string(),
-                    ),
-                    ToolItemState { started_at_ms },
+                self.tool_items_started_at_ms.insert(
+                    ToolItemKey {
+                        thread_id: notification.thread_id,
+                        turn_id: notification.turn_id,
+                        item_id: item_id.to_string(),
+                    },
+                    started_at_ms,
                 );
             }
             ServerNotification::ItemCompleted(notification) => {
                 let Some(item_id) = tracked_tool_item_id(&notification.item) else {
                     return;
                 };
-                let key = (
-                    notification.thread_id.clone(),
-                    notification.turn_id.clone(),
-                    item_id.to_string(),
-                );
-                let Some(tool_item_state) = self.tool_items.remove(&key) else {
+                let key = ToolItemKey {
+                    thread_id: notification.thread_id.clone(),
+                    turn_id: notification.turn_id.clone(),
+                    item_id: item_id.to_string(),
+                };
+                let Some(started_at_ms) = self.tool_items_started_at_ms.remove(&key) else {
                     tracing::warn!(
                         thread_id = %notification.thread_id,
                         turn_id = %notification.turn_id,
@@ -791,7 +794,7 @@ impl AnalyticsReducer {
                     &notification.thread_id,
                     &notification.turn_id,
                     &notification.item,
-                    tool_item_state.started_at_ms,
+                    started_at_ms,
                     completed_at_ms,
                     connection_state,
                     thread_metadata,
@@ -1101,7 +1104,15 @@ fn tracked_tool_item_id(item: &ThreadItem) -> Option<&str> {
         | ThreadItem::CollabAgentToolCall { id, .. }
         | ThreadItem::WebSearch { id, .. }
         | ThreadItem::ImageGeneration { id, .. } => Some(id),
-        _ => None,
+        ThreadItem::UserMessage { .. }
+        | ThreadItem::HookPrompt { .. }
+        | ThreadItem::AgentMessage { .. }
+        | ThreadItem::Plan { .. }
+        | ThreadItem::Reasoning { .. }
+        | ThreadItem::ImageView { .. }
+        | ThreadItem::EnteredReviewMode { .. }
+        | ThreadItem::ExitedReviewMode { .. }
+        | ThreadItem::ContextCompaction { .. } => None,
     }
 }
 
