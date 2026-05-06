@@ -843,7 +843,7 @@ async fn thread_list_filters_by_source_kind_subagent_thread_spawn() -> Result<()
         /*git_info*/ None,
     )?;
 
-    let parent_thread_id = ThreadId::from_string(&cli_id)?;
+    let parent_thread_id = ThreadId::from_string(&Uuid::new_v4().to_string())?;
     let subagent_id = create_fake_rollout_with_source(
         codex_home.path(),
         "2025-02-01T11-00-00",
@@ -879,7 +879,7 @@ async fn thread_list_filters_by_source_kind_subagent_thread_spawn() -> Result<()
     assert_eq!(ids, vec![subagent_id.as_str()]);
     assert_ne!(cli_id, subagent_id);
     assert!(matches!(data[0].source, SessionSource::SubAgent(_)));
-    assert_eq!(data[0].session_id, cli_id);
+    assert_eq!(data[0].session_id, subagent_id);
 
     Ok(())
 }

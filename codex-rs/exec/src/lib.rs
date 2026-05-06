@@ -1060,7 +1060,7 @@ fn session_configured_from_thread_start_response(
     config: &Config,
 ) -> Result<SessionConfiguredEvent, String> {
     session_configured_from_thread_response(
-        &response.session_id,
+        &response.thread.session_id,
         &response.thread.id,
         response.thread.name.clone(),
         response.thread.path.clone(),
@@ -1085,7 +1085,7 @@ fn session_configured_from_thread_resume_response(
     config: &Config,
 ) -> Result<SessionConfiguredEvent, String> {
     session_configured_from_thread_response(
-        &response.session_id,
+        &response.thread.session_id,
         &response.thread.id,
         response.thread.name.clone(),
         response.thread.path.clone(),

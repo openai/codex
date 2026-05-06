@@ -962,7 +962,7 @@ mod thread_processor_behavior_tests {
 
         let summary = read_summary_from_rollout(path.as_path(), "fallback").await?;
         let fallback_cwd = AbsolutePathBuf::from_absolute_path("/")?;
-        let thread = summary_to_thread(summary, conversation_id.to_string(), &fallback_cwd);
+        let thread = summary_to_thread(summary, &fallback_cwd);
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));
@@ -1102,7 +1102,7 @@ mod thread_processor_behavior_tests {
         );
 
         let fallback_cwd = AbsolutePathBuf::from_absolute_path("/")?;
-        let thread = summary_to_thread(summary, conversation_id.to_string(), &fallback_cwd);
+        let thread = summary_to_thread(summary, &fallback_cwd);
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));

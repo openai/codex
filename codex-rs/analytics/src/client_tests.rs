@@ -76,6 +76,7 @@ fn sample_thread_archive_request() -> ClientRequest {
 fn sample_thread(thread_id: &str) -> Thread {
     Thread {
         id: thread_id.to_string(),
+        session_id: format!("session-{thread_id}"),
         forked_from_id: None,
         preview: "first prompt".to_string(),
         ephemeral: false,
@@ -102,7 +103,6 @@ fn sample_permission_profile() -> AppServerPermissionProfile {
 
 fn sample_thread_start_response() -> ClientResponsePayload {
     ClientResponsePayload::ThreadStart(ThreadStartResponse {
-        session_id: "session-1".to_string(),
         thread: sample_thread("thread-1"),
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
@@ -120,7 +120,6 @@ fn sample_thread_start_response() -> ClientResponsePayload {
 
 fn sample_thread_resume_response() -> ClientResponsePayload {
     ClientResponsePayload::ThreadResume(ThreadResumeResponse {
-        session_id: "session-2".to_string(),
         thread: sample_thread("thread-2"),
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
@@ -138,7 +137,6 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
 
 fn sample_thread_fork_response() -> ClientResponsePayload {
     ClientResponsePayload::ThreadFork(ThreadForkResponse {
-        session_id: "session-3".to_string(),
         thread: sample_thread("thread-3"),
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
