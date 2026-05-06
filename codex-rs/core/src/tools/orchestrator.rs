@@ -197,7 +197,8 @@ impl ToolOrchestrator {
                     &otel,
                 )
                 .await?;
-                Self::reject_if_not_approved(tool_ctx, None, decision).await?;
+                Self::reject_if_not_approved(tool_ctx, /*guardian_review_id*/ None, decision)
+                    .await?;
                 already_approved = true;
             }
             (None, ExecApprovalRequirement::Skip { .. }) => {
