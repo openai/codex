@@ -101,7 +101,9 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     )
     .await??;
     let fork_result = fork_resp.result.clone();
-    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+    let ThreadForkResponse {
+        session_id, thread, ..
+    } = to_response::<ThreadForkResponse>(fork_resp)?;
 
     // Wire contract: thread title field is `name`, serialized as null when unset.
     let thread_json = fork_result
@@ -121,6 +123,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     );
 
     assert_ne!(thread.id, conversation_id);
+    assert_eq!(session_id, thread.id);
     assert_eq!(thread.forked_from_id, Some(conversation_id.clone()));
     assert_eq!(thread.preview, preview);
     assert_eq!(thread.model_provider, "mock_provider");
