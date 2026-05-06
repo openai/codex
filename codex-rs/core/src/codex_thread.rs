@@ -1,6 +1,5 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
-use crate::file_watcher::WatchRegistration;
 use crate::goals::ExternalGoalSet;
 use crate::goals::GoalRuntimeEvent;
 use crate::session::Codex;
@@ -31,6 +30,7 @@ use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::StoredThread;
@@ -101,7 +101,6 @@ pub struct CodexThread {
     session_configured: SessionConfiguredEvent,
     rollout_path: Option<PathBuf>,
     out_of_band_elicitation_count: Mutex<u64>,
-    _watch_registration: WatchRegistration,
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread
@@ -112,7 +111,6 @@ impl CodexThread {
         session_configured: SessionConfiguredEvent,
         rollout_path: Option<PathBuf>,
         session_source: SessionSource,
-        watch_registration: WatchRegistration,
     ) -> Self {
         Self {
             codex,
@@ -120,7 +118,6 @@ impl CodexThread {
             session_configured,
             rollout_path,
             out_of_band_elicitation_count: Mutex::new(0),
-            _watch_registration: watch_registration,
         }
     }
 
@@ -462,6 +459,10 @@ impl CodexThread {
 
     pub async fn config(&self) -> Arc<crate::config::Config> {
         self.codex.session.get_config().await
+    }
+
+    pub async fn environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
+        self.codex.thread_environment_selections().await
     }
 
     pub async fn read_mcp_resource(

@@ -5,7 +5,6 @@ use crate::config::Config;
 use crate::config::ThreadStoreConfig;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::resolve_environment_selections;
-use crate::file_watcher::FileWatcher;
 use crate::mcp::McpManager;
 use crate::resolve_installation_id;
 use crate::rollout::RolloutRecorder;
@@ -15,8 +14,6 @@ use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::shell_snapshot::ShellSnapshot;
-use crate::skills_watcher::SkillsWatcher;
-use crate::skills_watcher::SkillsWatcherEvent;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_agent_graph_store::AgentGraphStore;
@@ -73,8 +70,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use tokio::runtime::Handle;
-use tokio::runtime::RuntimeFlavor;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
 use tracing::warn;
@@ -106,47 +101,6 @@ impl Drop for TempCodexHomeGuard {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
     }
-}
-
-fn build_skills_watcher(skills_manager: Arc<SkillsManager>) -> Arc<SkillsWatcher> {
-    if should_use_test_thread_manager_behavior()
-        && let Ok(handle) = Handle::try_current()
-        && handle.runtime_flavor() == RuntimeFlavor::CurrentThread
-    {
-        // The real watcher spins background tasks that can starve the
-        // current-thread test runtime and cause event waits to time out.
-        warn!("using noop skills watcher under current-thread test runtime");
-        return Arc::new(SkillsWatcher::noop());
-    }
-
-    let file_watcher = match FileWatcher::new() {
-        Ok(file_watcher) => Arc::new(file_watcher),
-        Err(err) => {
-            warn!("failed to initialize file watcher: {err}");
-            Arc::new(FileWatcher::noop())
-        }
-    };
-    let skills_watcher = Arc::new(SkillsWatcher::new(&file_watcher));
-
-    let mut rx = skills_watcher.subscribe();
-    let skills_manager = Arc::clone(&skills_manager);
-    if let Ok(handle) = Handle::try_current() {
-        handle.spawn(async move {
-            loop {
-                match rx.recv().await {
-                    Ok(SkillsWatcherEvent::SkillsChanged { .. }) => {
-                        skills_manager.clear_cache();
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                }
-            }
-        });
-    } else {
-        warn!("skills watcher listener skipped: no Tokio runtime available");
-    }
-
-    skills_watcher
 }
 
 /// Represents a newly created Codex thread (formerly called a conversation), including the first event
@@ -249,7 +203,6 @@ pub(crate) struct ThreadManagerState {
     skills_manager: Arc<SkillsManager>,
     plugins_manager: Arc<PluginsManager>,
     mcp_manager: Arc<McpManager>,
-    skills_watcher: Arc<SkillsWatcher>,
     thread_store: Arc<dyn ThreadStore>,
     state_db: StateDbHandle,
     agent_graph_store: Arc<dyn AgentGraphStore>,
@@ -333,7 +286,6 @@ impl ThreadManager {
             config.bundled_skills_enabled(),
             restriction_product,
         ));
-        let skills_watcher = build_skills_watcher(Arc::clone(&skills_manager));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -343,7 +295,6 @@ impl ThreadManager {
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
-                skills_watcher,
                 thread_store,
                 state_db,
                 agent_graph_store,
@@ -452,7 +403,6 @@ impl ThreadManager {
             /*bundled_skills_enabled*/ true,
             restriction_product,
         ));
-        let skills_watcher = build_skills_watcher(Arc::clone(&skills_manager));
         // This test constructor has no Config input. Tests that need a non-local
         // process store should construct ThreadManager::new with an explicit store.
         let thread_store: Arc<dyn ThreadStore> = Arc::new(LocalThreadStore::new(
@@ -473,7 +423,6 @@ impl ThreadManager {
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
-                skills_watcher,
                 thread_store,
                 state_db,
                 agent_graph_store,
@@ -1199,19 +1148,6 @@ impl ThreadManagerState {
         }
         let environment_selections =
             resolve_environment_selections(self.environment_manager.as_ref(), &environments)?;
-        let watch_registration = match environment_selections.primary() {
-            Some(turn_environment) if !turn_environment.environment.is_remote() => {
-                self.skills_watcher
-                    .register_config(
-                        &config,
-                        self.skills_manager.as_ref(),
-                        self.plugins_manager.as_ref(),
-                        Some(turn_environment.environment.get_filesystem()),
-                    )
-                    .await
-            }
-            Some(_) | None => crate::file_watcher::WatchRegistration::default(),
-        };
         let parent_rollout_thread_trace = self
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
@@ -1227,7 +1163,6 @@ impl ThreadManagerState {
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
-            skills_watcher: Arc::clone(&self.skills_watcher),
             conversation_history: initial_history,
             session_source,
             thread_source,
@@ -1247,7 +1182,7 @@ impl ThreadManagerState {
         })
         .await?;
         let new_thread = self
-            .finalize_thread_spawn(codex, thread_id, tracked_session_source, watch_registration)
+            .finalize_thread_spawn(codex, thread_id, tracked_session_source)
             .await?;
         if is_resumed_thread
             && let Err(err) = new_thread.thread.apply_goal_resume_runtime_effects().await
@@ -1262,7 +1197,6 @@ impl ThreadManagerState {
         codex: Codex,
         thread_id: ThreadId,
         session_source: SessionSource,
-        watch_registration: crate::file_watcher::WatchRegistration,
     ) -> CodexResult<NewThread> {
         let event = codex.next_event().await?;
         let session_configured = match event {
@@ -1283,7 +1217,6 @@ impl ThreadManagerState {
                     session_configured.clone(),
                     session_configured.rollout_path.clone(),
                     session_source,
-                    watch_registration,
                 ));
                 e.insert(thread.clone());
                 return Ok(NewThread {
